@@ -17,10 +17,11 @@ extern function msNetSocket(): int32;
 extern function msNetConnect(fd: int32, host: string, port: int32): int32;
 extern function msNetSend(fd: int32, data: string): int32;
 extern function msNetSendBytes(fd: int32, data: Readonly<Span<uint8>>): int32;
-extern function msNetRecvBytes(fd: int32, maxBytes: int32): Buffer;
+extern function msNetRecvBytes(fd: int32, maxBytes: int32): Vec<uint8>;
 extern function msNetClose(fd: int32): void;
 extern function msNetSetTimeout(fd: int32, ms: int32): int32;
 
+import { adoptBuffer } from "std/core/buffer/bytes";
 import {
 	HttpMethod, HttpResponse, RequestOptions, FetchOptions, ParsedUrl, HttpHeaders,
 	methodToString, parseMethod,
@@ -174,7 +175,7 @@ export function doRequestOver(
 		const chunkPieces: Buffer[] = [];
 		let chunkTail: Buffer = Buffer.alloc(0);
 		let chunkTotal = 0;
-		let more: Buffer = [...data[bodyStart..data.length]] as Buffer;
+		let more: Buffer = Buffer.from(data.subarray(bodyStart, data.length));
 		while (true) {
 			chunkPieces.push(more);
 			const window = Buffer.concat(chunkTail, more);
@@ -214,7 +215,7 @@ export function doRequestOver(
 function lastBytes(data: Buffer, count: int32): Buffer {
 	const length = data.length as int32;
 	const from = length > count ? length - count : 0;
-	return [...data[from..data.length]] as Buffer;
+	return Buffer.from(data.subarray(from, data.length));
 }
 
 function indexOfText(data: Buffer, needle: string): int32 {
@@ -224,9 +225,9 @@ function indexOfText(data: Buffer, needle: string): int32 {
 function readFullBodyOver(recvFn: (maxBytes: int32) => Buffer, initialData: Buffer, bodyStart: int32, contentLength: int32): Result<Buffer, HttpError> {
 	const available = (initialData.length as int32) - bodyStart;
 	if (available >= contentLength) {
-		return Result.ok([...initialData[bodyStart..(bodyStart + contentLength)]] as Buffer);
+		return Result.ok(Buffer.from(initialData.subarray(bodyStart, (bodyStart + contentLength))));
 	}
-	const pieces: Buffer[] = [[...initialData[bodyStart..initialData.length]] as Buffer];
+	const pieces: Buffer[] = [Buffer.from(initialData.subarray(bodyStart, initialData.length))];
 	let remaining = contentLength - available;
 	while (remaining > 0) {
 		const chunk = recvFn(remaining);
@@ -240,7 +241,7 @@ function readFullBodyOver(recvFn: (maxBytes: int32) => Buffer, initialData: Buff
 }
 
 function readUntilCloseOver(recvFn: (maxBytes: int32) => Buffer, initialData: Buffer, bodyStart: int32): Buffer {
-	const pieces: Buffer[] = [[...initialData[bodyStart..initialData.length]] as Buffer];
+	const pieces: Buffer[] = [Buffer.from(initialData.subarray(bodyStart, initialData.length))];
 	while (true) {
 		const chunk = recvFn(RECV_CHUNK_SIZE);
 		if (chunk.length == 0) break;
@@ -333,7 +334,7 @@ function doRequestPlain(options: RequestOptions): Result<HttpResponse, HttpError
 			if (typeof data == "string") return msNetSend(fd, data);
 			return msNetSendBytes(fd, data);
 		},
-		(maxBytes: int32) => msNetRecvBytes(fd, maxBytes),
+		(maxBytes: int32) => adoptBuffer(msNetRecvBytes(fd, maxBytes)),
 		() => msNetClose(fd),
 	);
 }
@@ -428,7 +429,7 @@ test "a head terminator split across reads at every offset is found" {
 	const wire = wireOf(head, [0x68, 0x69]);
 	const headEnd = head.length as int32;
 	for (let cut = headEnd - 3; cut < headEnd; cut++) {
-		const response = fetchOver([[...wire[0..cut]] as Buffer, [...wire[cut..wire.length]] as Buffer]);
+		const response = fetchOver([Buffer.from(wire.subarray(0, cut)), Buffer.from(wire.subarray(cut, wire.length))]);
 		assert response.ok;
 		if (response.ok) assert response.value.bytes.toHex() == "6869";
 	}
@@ -440,7 +441,7 @@ test "a chunked terminator split across reads at every offset is found" {
 	const wire = Buffer.concatList([wireOf(head, []), Buffer.fromString("1\r\nA", "utf8"), Buffer.fromString(tailText, "utf8")]);
 	const tailStart = (wire.length as int32) - (tailText.length as int32);
 	for (let cut = tailStart + 1; cut < tailStart + 5; cut++) {
-		const response = fetchOver([[...wire[0..cut]] as Buffer, [...wire[cut..wire.length]] as Buffer]);
+		const response = fetchOver([Buffer.from(wire.subarray(0, cut)), Buffer.from(wire.subarray(cut, wire.length))]);
 		assert response.ok;
 		if (response.ok) assert response.value.bytes.toHex() == "41";
 	}

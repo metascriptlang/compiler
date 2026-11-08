@@ -9,14 +9,14 @@
 
 import { Buffer } from "std/core/buffer";
 import { ByteInput } from "std/core/buffer/bytes";
-import { bytesOf } from "../pure/bytes";
+import { bytesOf, outputArray, outputBuffer } from "../pure/bytes";
 import { keyWords, xchachaSealInto, xchachaOpenInto } from "../pure/chacha";
 import { randomBytesSync } from "../index";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
 
 when (nodejs) {
-	import { NodeInput, nodeInput, nodeInputLength, nodeInputHead } from "../pure/nodeCrypto";
+	import { NodeInput, nodeInput, nodeInputLength, nodeInputHead, bufferOver } from "../pure/nodeCrypto";
 	import { xchachaSubkey } from "../pure/chacha";
 
 	@import("node:crypto", { createCipheriv, createDecipheriv });
@@ -27,9 +27,12 @@ when (nodejs) {
 function msChaNodeOut(parts) {
 	let n = 0;
 	for (const p of parts) n += p.length;
-	const out = new Array(n);
+	const out = new Uint8Array(n);
 	let at = 0;
-	for (const p of parts) for (let i = 0; i < p.length; i++) out[at++] = p[i];
+	for (const p of parts) {
+		out.set(p, at);
+		at += p.length;
+	}
 	return out;
 }
 function msChaNodeIv(nonce) {
@@ -59,32 +62,32 @@ function msChaNodeOpen(subkey, sealed, aad) {
 	}
 }`);
 
-	extern function nodeSeal(subkey: Buffer, nonce: Buffer, plain: NodeInput, aad: NodeInput): Buffer from "msChaNodeSeal(#, #, #, #)";
-	extern function nodeOpen(subkey: Buffer, sealed: NodeInput, aad: NodeInput): Buffer | null from "msChaNodeOpen(#, #, #)";
+	extern function nodeSeal(subkey: Readonly<uint8[]>, nonce: Uint8Array, plain: NodeInput, aad: NodeInput): Uint8Array from "msChaNodeSeal(#, #, #, #)";
+	extern function nodeOpen(subkey: Readonly<uint8[]>, sealed: NodeInput, aad: NodeInput): Uint8Array | null from "msChaNodeOpen(#, #, #)";
 
 	function sealNode(key: ChaChaKey, plain: NodeInput, aad: NodeInput): Result<Buffer, CryptoError> {
 		const nonce = randomBytesSync(24);
 		if (!nonce.ok) {
 			return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "seal", "the platform random source failed"));
 		}
-		return Result.ok(nodeSeal(xchachaSubkey(key._words, nonce.value) as Buffer, nonce.value, plain, aad));
+		return Result.ok(bufferOver(nodeSeal(xchachaSubkey(key._words, [...nonce.value]), nonce.value, plain, aad)));
 	}
 
 	function openNode(key: ChaChaKey, sealed: NodeInput, aad: NodeInput): Result<Buffer, CryptoError> {
 		if (nodeInputLength(sealed) < 40) {
 			return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "open", "sealed data too short (need nonce+mac)"));
 		}
-		const plain = nodeOpen(xchachaSubkey(key._words, nodeInputHead(sealed, 24)) as Buffer, sealed, aad);
+		const plain = nodeOpen(xchachaSubkey(key._words, nodeInputHead(sealed, 24)), sealed, aad);
 		if (plain == null) {
 			return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "open", "authentication tag mismatch"));
 		}
-		return Result.ok(plain);
+		return Result.ok(bufferOver(plain));
 	}
 }
 
 /** An XChaCha20-Poly1305 key (32 bytes). */
 export class ChaChaKey {
-	_raw: Buffer;
+	_raw: uint8[];
 	_words: uint32[];
 
 	/** From exactly 32 raw bytes. */
@@ -109,7 +112,7 @@ export class ChaChaKey {
 
 	/** A copy of the raw key bytes, for the caller that must store it. */
 	exportRaw(): Buffer {
-		return this._raw.slice(0);
+		return Buffer.from(this._raw);
 	}
 }
 
@@ -124,16 +127,16 @@ export function sealSync<P extends ByteInput, A extends ByteInput>(key: ChaChaKe
 	}
 }
 
-function sealSyncOwned(key: ChaChaKey, plainText: Buffer, aad: Buffer): Result<Buffer, CryptoError> {
+function sealSyncOwned(key: ChaChaKey, plainText: uint8[], aad: uint8[]): Result<Buffer, CryptoError> {
 	const nonce = randomBytesSync(24);
 	if (!nonce.ok) {
 		return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "seal", "the platform random source failed"));
 	}
 	const text = plainText;
-	const sealed = Buffer.alloc(24 + text.length + 16);
+	const sealed = outputArray(24 + text.length + 16);
 	for (let i = 0; i < 24; i++) sealed[i] = nonce.value[i];
 	xchachaSealInto(key._words, aad, text, sealed);
-	return Result.ok(sealed);
+	return Result.ok(outputBuffer(sealed));
 }
 
 export function seal<P extends ByteInput, A extends ByteInput>(key: ChaChaKey, plainText: P, aad: A = ""): Promise<Result<Buffer, CryptoError>> {
@@ -144,7 +147,7 @@ export function seal<P extends ByteInput, A extends ByteInput>(key: ChaChaKey, p
 	}
 }
 
-async function sealOwned(key: ChaChaKey, plainText: Buffer, aad: Buffer): Promise<Result<Buffer, CryptoError>> { return sealSyncOwned(key, plainText, aad); }
+async function sealOwned(key: ChaChaKey, plainText: uint8[], aad: uint8[]): Promise<Result<Buffer, CryptoError>> { return sealSyncOwned(key, plainText, aad); }
 
 export function openSync<S extends ByteInput, A extends ByteInput>(key: ChaChaKey, sealedBytes: S, aad: A = ""): Result<Buffer, CryptoError> {
 	when (nodejs) {
@@ -154,16 +157,16 @@ export function openSync<S extends ByteInput, A extends ByteInput>(key: ChaChaKe
 	}
 }
 
-function openSyncOwned(key: ChaChaKey, sealedBytes: Buffer, aad: Buffer): Result<Buffer, CryptoError> {
+function openSyncOwned(key: ChaChaKey, sealedBytes: uint8[], aad: uint8[]): Result<Buffer, CryptoError> {
 	const sealed = sealedBytes;
 	if (sealed.length < 40) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "open", "sealed data too short (need nonce+mac)"));
 	}
-	const plain = Buffer.alloc(sealed.length - 40);
+	const plain = outputArray(sealed.length - 40);
 	if (!xchachaOpenInto(key._words, aad, sealed, plain)) {
 		return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "open", "authentication tag mismatch"));
 	}
-	return Result.ok(plain);
+	return Result.ok(outputBuffer(plain));
 }
 
 export function open<S extends ByteInput, A extends ByteInput>(key: ChaChaKey, sealedBytes: S, aad: A = ""): Promise<Result<Buffer, CryptoError>> {
@@ -174,4 +177,4 @@ export function open<S extends ByteInput, A extends ByteInput>(key: ChaChaKey, s
 	}
 }
 
-async function openOwned(key: ChaChaKey, sealedBytes: Buffer, aad: Buffer): Promise<Result<Buffer, CryptoError>> { return openSyncOwned(key, sealedBytes, aad); }
+async function openOwned(key: ChaChaKey, sealedBytes: uint8[], aad: uint8[]): Promise<Result<Buffer, CryptoError>> { return openSyncOwned(key, sealedBytes, aad); }

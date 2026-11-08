@@ -47,10 +47,10 @@ function findCRLF(data: string, pos: int32): int32 {
 }
 
 function joinPieces(pieces: Readonly<Buffer[]>): Buffer {
-	let total = 0;
+	let total: number = 0;
 	for (const piece of pieces) total += piece.length;
-	const out = new Array<uint8>(total as int64) as Buffer;
-	let at = 0;
+	const out = new Buffer(total);
+	let at: number = 0;
 	for (const piece of pieces) {
 		for (let i = 0; i < piece.length; i++) out[at + i] = piece[i];
 		at += piece.length;
@@ -277,7 +277,7 @@ export function decodeChunked(data: Readonly<Span<uint8>>): Result<Buffer, HttpE
 		const dataEnd = dataStart + chunkSize;
 		if (dataEnd + 2 > len) return Result.err(invalidResponse("truncated chunk data"));
 
-		pieces.push([...data[dataStart..dataEnd]] as Buffer);
+		pieces.push(Buffer.from(data[dataStart..dataEnd]));
 		pos = dataEnd + 2; // skip trailing \r\n
 	}
 	return Result.err(invalidResponse("chunked body not terminated"));
@@ -348,7 +348,7 @@ export function tryDecodeChunked(data: Readonly<Span<uint8>>): ChunkedDecodeResu
 		if (dataEnd + 2 > len) return chunkedNeedMore();
 		if (!isCRLFAt(data, dataEnd as int32)) return chunkedMalformed();
 
-		pieces.push([...data[dataStart..dataEnd]] as Buffer);
+		pieces.push(Buffer.from(data[dataStart..dataEnd]));
 		pos = (dataEnd + 2) as int32;
 	}
 	return chunkedNeedMore();
@@ -423,7 +423,7 @@ export function frameRequest(
 	if (hasCL) {
 		if (cl > maxBodySize) return frameReject(413);
 		if ((bufferAfterHeaders.length as int32) < cl) return frameNeedMore();
-		return frameReady([...bufferAfterHeaders[0..cl]] as Buffer, cl);
+		return frameReady(Buffer.from(bufferAfterHeaders[0..cl]), cl);
 	}
 
 	// Neither header — POST/PUT/PATCH require length, others have no body.

@@ -59,8 +59,8 @@ class SocketTransport extends TlsTransport {
 		this.timedOut = false;
 	}
 
-	receive(maxBytes: int32): uint8[] {
-		const chunk: uint8[] = receiveSocket(this.fd, maxBytes);
+	receive(maxBytes: int32): Buffer {
+		const chunk = receiveSocket(this.fd, maxBytes);
 		this.timedOut = chunk.length == 0 && recvTimedOut();
 		return chunk;
 	}
@@ -230,19 +230,19 @@ export function read(this conn: TlsConnection, maxBytes: int32 = 4096): Buffer {
 	conn.timedOut = false;
 	if (client == null) {
 		conn.lastError = tlsClosedMessage;
-		return new Array<uint8>(0) as Buffer;
+		return new Buffer(0);
 	}
 	conn.lastError = "";
-	if (maxBytes <= 0) return new Array<uint8>(0) as Buffer;
+	if (maxBytes <= 0) return new Buffer(0);
 	conn._transport.timedOut = false;
 	const got = clientRead(client, maxBytes);
-	if (got.ok) return got.value as Buffer;
+	if (got.ok) return Buffer.from(got.value);
 	conn.timedOut = conn._transport.timedOut;
 	const message = got.error.message;
 	if (conn.timedOut) conn.lastError = "TLS read timed out";
 	else if (message == "TlsConnectionTruncated") conn.lastError = "TLS connection closed without close_notify";
 	else conn.lastError = "TLS read failed: " + message;
-	return new Array<uint8>(0) as Buffer;
+	return new Buffer(0);
 }
 
 // Bytes written, 0 for empty data, -1 on failure.

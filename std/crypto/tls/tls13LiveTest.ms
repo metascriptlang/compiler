@@ -4,6 +4,7 @@
  * separated); without it the test connects nowhere and passes.
  */
 
+import { Buffer } from "std/core/buffer";
 import { env } from "std/process";
 import { createSocket, connect, send, recv, close as closeSocket, setTimeout } from "std/net";
 import { TlsTransport, connectTls13, entropyLength, read, write, close, updateKeys } from "./client";
@@ -16,9 +17,8 @@ class SocketTransport extends TlsTransport {
 		this.fd = fd;
 	}
 
-	receive(maxBytes: int32): uint8[] {
-		const chunk: uint8[] = recv(this.fd, maxBytes);
-		return chunk;
+	receive(maxBytes: int32): Buffer {
+		return recv(this.fd, maxBytes);
 	}
 
 	send(data: Readonly<uint8[]>): boolean {

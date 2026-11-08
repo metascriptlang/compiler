@@ -1,8 +1,6 @@
-import { Buffer } from "std/core/buffer";
-
 export interface PemBlock {
 	label: string;
-	der: Buffer;
+	der: uint8[];
 }
 
 export function pemDecode(text: string): PemBlock | null {
@@ -24,11 +22,11 @@ export function pemDecode(text: string): PemBlock | null {
 	if (body.length == 0) return null;
 	const der = body.decodeBase64();
 	if (der.length == 0) return null;
-	return { label, der: der as Buffer };
+	return { label, der };
 }
 
-export function pemEncode(label: string, der: Readonly<uint8[]>): string {
-	const body = (der as Buffer).encodeBase64();
+export function pemEncode(label: string, der: Readonly<Span<uint8>>): string {
+	const body = der.encodeBase64();
 	const lines: string[] = [`-----BEGIN ${label}-----`];
 	for (let at = 0; at < body.length; at += 64) lines.push(body.slice(at, at + 64));
 	lines.push(`-----END ${label}-----`);

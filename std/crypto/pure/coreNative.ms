@@ -1,15 +1,16 @@
 import { Buffer } from "std/core/buffer";
 import { ByteInput } from "std/core/buffer/bytes";
 import {
-	encodeHex, decodeHex, encodeBase64, decodeBase64,
+	encodeHex, encodeBase64,
 } from "../../core/encoding";
 import { hashKind, hashOf } from "./hash";
+import { hashOutputSize } from "./state";
 import {
 	Ripemd160State,
-	newRipemd160, updateRipemd160, finishRipemd160, ripemd160Of,
+	newRipemd160, updateRipemd160, finishRipemd160, finishRipemd160Into, ripemd160Of,
 } from "./ripemd160";
 import {
-	Sha3State, newSha3, updateSha3, finishSha3, sha3Of,
+	Sha3State, newSha3, updateSha3, finishSha3, finishSha3Into,
 } from "./sha3";
 import { wipeBytes } from "./secret";
 import {
@@ -23,15 +24,15 @@ export type HashAlgorithm =
 	| "sha3-224" | "sha3-256" | "sha3-384" | "sha3-512";
 
 when (js) {
-	import { randomOctets } from "./bigint";
+	import { randomFill } from "./random";
 }
 
 when (!(js && nodejs)) {
 	import { bytesOf, wipeIfCopied } from "./bytes";
-	import { HashState } from "./state";
-	import { newHash, updateHash, finishHash } from "./hash";
+	import { HashState, wipeHashState } from "./state";
+	import { newHash, updateHash, finishHashInto, hashInto } from "./hash";
 	import {
-		HmacState, newHmac, updateHmac, finishHmac, hmacOf, wipeHmac,
+		HmacState, newHmac, updateHmac, finishHmacInto, hmacInto, wipeHmac,
 	} from "./hmac";
 }
 
@@ -49,15 +50,17 @@ when (c) {
 	): int32 from "ms_random_fill";
 }
 
-function drawBytes(size: int32): uint8[] | null {
+function drawBytes(size: int32): Buffer | null {
 	when (js) {
 		try {
-			return randomOctets(size);
+			const out = new Buffer(size);
+			randomFill(out);
+			return out;
 		} catch (e) {
 			return null;
 		}
 	} else {
-		const out = new Array<uint8>(size);
+		const out = new Buffer(size);
 		if (size == 0) return out;
 		const span: Span<uint8> = out;
 		if (osRandomFill(span as Ptr<uint8>, size as uint64) != 0) return null;
@@ -81,7 +84,7 @@ export function randomBytesSync(
 	if (drawn == null) {
 		return Result.err(randomFailed("Random byte generation failed"));
 	}
-	return Result.ok(drawn as Buffer);
+	return Result.ok(drawn);
 }
 
 export async function randomBytes(
@@ -242,18 +245,36 @@ test "RIPEMD finalization clears empty and long-key chaining states" {
 	}
 }
 
+function extOutputSize(algorithm: string): int32 {
+	if (algorithm == "ripemd160") return 20;
+	const bits = sha3BitsOf(algorithm);
+	if (bits < 0) throw new Error("bad ext algorithm: " + algorithm);
+	return bits >> 3;
+}
+
+function extOneShotInto(
+	algorithm: string,
+	data: Readonly<uint8[]>,
+	out: Span<uint8>,
+): void {
+	if (algorithm == "ripemd160") {
+		const state = newRipemd160();
+		updateRipemd160(state, data);
+		finishRipemd160Into(state, out);
+		return;
+	}
+	const state = newSha3(sha3BitsOf(algorithm));
+	updateSha3(state, data);
+	finishSha3Into(state, out);
+}
+
 function extOneShot(
 	algorithm: string,
 	data: Readonly<uint8[]>,
 ): uint8[] {
-	if (algorithm == "ripemd160") {
-		const state = newRipemd160();
-		updateRipemd160(state, data);
-		return finishRipemd160(state);
-	}
-	const bits = sha3BitsOf(algorithm);
-	if (bits < 0) throw new Error("bad ext algorithm: " + algorithm);
-	return sha3Of(bits, data);
+	const out = new Array<uint8>(extOutputSize(algorithm));
+	extOneShotInto(algorithm, data, out);
+	return out;
 }
 
 class ExtHmacCtx {
@@ -310,22 +331,24 @@ function updateExtHmac(
 	}
 }
 
-function finishExtHmac(ctx: ExtHmacCtx): uint8[] {
+function finishExtHmac(ctx: ExtHmacCtx): Buffer {
 	const inner = ctx._inner;
-	let result: uint8[];
+	let result: Buffer;
 	if (inner instanceof Ripemd160State) {
 		const id = finishRipemd160(inner);
 		const outer = newRipemd160();
 		updateRipemd160(outer, ctx._opad);
 		updateRipemd160(outer, id);
-		result = finishRipemd160(outer);
+		result = new Buffer(20);
+		finishRipemd160Into(outer, result);
 		wipeBytes(id);
 	} else {
 		const id = finishSha3(inner);
 		const outer = newSha3(inner.bits);
 		updateSha3(outer, ctx._opad);
 		updateSha3(outer, id);
-		result = finishSha3(outer);
+		result = new Buffer(outer.bits >> 3);
+		finishSha3Into(outer, result);
 		wipeBytes(id);
 	}
 	wipeBytes(ctx._opad);
@@ -350,16 +373,20 @@ export function digestSync<D extends ByteInput>(
 		return Result.ok(nodeDigest(algorithm, nodeInput(data)));
 	} else {
 		if (kind >= 0) {
+			const out = new Buffer(hashOutputSize(kind));
 			when (c) {
-				return Result.ok(hashOf(kind, typeof data == "string" ? data.asBytes() : data) as Buffer);
+				hashInto(kind, typeof data == "string" ? data.asBytes() : data, out);
 			} else {
-				return Result.ok(hashOf(kind, bytesOf(data)) as Buffer);
+				hashInto(kind, bytesOf(data), out);
 			}
+			return Result.ok(out);
 		}
 		if (!isExtAlg(algorithm)) {
 			return Result.err(invalidAlgorithm(algorithm));
 		}
-		return Result.ok(extOneShot(algorithm, bytesOf(data)) as Buffer);
+		const out = new Buffer(extOutputSize(algorithm));
+		extOneShotInto(algorithm, bytesOf(data), out);
+		return Result.ok(out);
 	}
 }
 
@@ -374,18 +401,20 @@ export function hmacSync<K extends ByteInput, D extends ByteInput>(
 		return Result.ok(nodeHmac(algorithm, nodeInput(key), nodeInput(data)));
 	} else {
 		if (kind >= 0) {
+			const mac = new Buffer(hashOutputSize(kind));
 			when (c) {
-				return Result.ok(hmacOf(
+				hmacInto(
 					kind,
 					typeof key == "string" ? key.asBytes() : key,
 					typeof data == "string" ? data.asBytes() : data,
-				) as Buffer);
+					mac,
+				);
 			} else {
 				const secret = bytesOf(key);
-				const mac = hmacOf(kind, secret, bytesOf(data));
+				hmacInto(kind, secret, bytesOf(data), mac);
 				wipeIfCopied(key, secret);
-				return Result.ok(mac as Buffer);
 			}
+			return Result.ok(mac);
 		}
 		if (!isExtAlg(algorithm)) {
 			return Result.err(invalidAlgorithm(algorithm));
@@ -394,7 +423,7 @@ export function hmacSync<K extends ByteInput, D extends ByteInput>(
 		const ctx = newExtHmac(algorithm, secret);
 		wipeIfCopied(key, secret);
 		updateExtHmac(ctx, bytesOf(data));
-		return Result.ok(finishExtHmac(ctx) as Buffer);
+		return Result.ok(finishExtHmac(ctx));
 	}
 }
 
@@ -463,7 +492,7 @@ when (js && nodejs) {
 		}
 
 		digest(): Buffer {
-			if (this._done) return new Array<uint8>(0) as Buffer;
+			if (this._done) return new Buffer(0);
 			this._done = true;
 			return nodeHashDigest(this._hash);
 		}
@@ -486,7 +515,7 @@ when (js && nodejs) {
 		}
 
 		digest(): Buffer {
-			if (this._done) return new Array<uint8>(0) as Buffer;
+			if (this._done) return new Buffer(0);
 			this._done = true;
 			return nodeHashDigest(this._hash);
 		}
@@ -533,14 +562,22 @@ when (js && nodejs) {
 		digest(): Buffer {
 			const ctx = this._ctx;
 			if (ctx instanceof HashState) {
-				if (ctx.finished) return new Array<uint8>(0) as Buffer;
-				return finishHash(ctx) as Buffer;
+				if (ctx.finished) return new Buffer(0);
+				const out = new Buffer(ctx.outputSize);
+				finishHashInto(ctx, out);
+				wipeHashState(ctx);
+				return out;
 			} else if (ctx instanceof Ripemd160State) {
-				if (ctx.finished) return new Array<uint8>(0) as Buffer;
-				return finishRipemd160(ctx) as Buffer;
+				if (ctx.finished) return new Buffer(0);
+				const out = new Buffer(20);
+				finishRipemd160Into(ctx, out);
+				return out;
 			} else {
-				if (ctx.finished) return new Array<uint8>(0) as Buffer;
-				return finishSha3(ctx) as Buffer;
+				if (ctx.finished) return new Buffer(0);
+				const sha3: Sha3State = ctx;
+				const out = new Buffer(sha3.bits >> 3);
+				finishSha3Into(sha3, out);
+				return out;
 			}
 		}
 	}
@@ -580,15 +617,16 @@ when (js && nodejs) {
 		}
 
 		digest(): Buffer {
-			if (this._done) return new Array<uint8>(0) as Buffer;
+			if (this._done) return new Buffer(0);
 			this._done = true;
 			const ctx = this._ctx;
 			if (ctx instanceof HmacState) {
-				const buf = finishHmac(ctx);
+				const buf = new Buffer(ctx.inner.outputSize);
+				finishHmacInto(ctx, buf);
 				wipeHmac(ctx);
-				return buf as Buffer;
+				return buf;
 			}
-			return finishExtHmac(ctx) as Buffer;
+			return finishExtHmac(ctx);
 		}
 	}
 }
@@ -645,11 +683,9 @@ export function toHex<D extends ByteInput>(data: D): string {
 }
 
 export function fromHex(hex: string): Result<Buffer, CryptoError> {
-	if (hex.byteLength == 0) {
-		return Result.ok(new Array<uint8>(0) as Buffer);
-	}
-	const raw = hex.decodeHex();
-	if (raw.length == 0) {
+	const length = hex.decodedHexLength();
+	const raw = new Buffer(length < 0 ? 0 : length as number);
+	if (length < 0 || !hex.decodeHexInto(raw)) {
 		return Result.err(
 			invalidEncoding(
 				"fromHex",
@@ -657,7 +693,7 @@ export function fromHex(hex: string): Result<Buffer, CryptoError> {
 			),
 		);
 	}
-	return Result.ok(raw as Buffer);
+	return Result.ok(raw);
 }
 
 export function toBase64<D extends ByteInput>(data: D): string {
@@ -666,10 +702,11 @@ export function toBase64<D extends ByteInput>(data: D): string {
 
 export function fromBase64(b64: string): Result<Buffer, CryptoError> {
 	if (b64.byteLength == 0) {
-		return Result.ok(new Array<uint8>(0) as Buffer);
+		return Result.ok(new Buffer(0));
 	}
-	const raw = b64.decodeBase64();
-	if (raw.length == 0) {
+	const length = b64.decodedBase64Length();
+	const raw = new Buffer(length < 0 ? 0 : length as number);
+	if (length < 0 || !b64.decodeBase64Into(raw)) {
 		return Result.err(
 			invalidEncoding(
 				"fromBase64",
@@ -677,5 +714,5 @@ export function fromBase64(b64: string): Result<Buffer, CryptoError> {
 			),
 		);
 	}
-	return Result.ok(raw as Buffer);
+	return Result.ok(raw);
 }

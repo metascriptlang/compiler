@@ -65,7 +65,7 @@ function pemBlockOf(text: string): PemBlock | null {
 	if (body.length == 0) return null;
 	const der = body.decodeBase64();
 	if (der.length == 0) return null;
-	return { label, der: der as Buffer };
+	return { label, der };
 }
 
 function publicOfPem(pem: string): EcPublicData | null {
@@ -226,7 +226,7 @@ export function ecdsaSignSync<D extends ByteInput>(
 	const digest = hashOf(kind, bytesOf(data));
 	const raw = ecdsaSignRaw(key._data.curve, kind, key._data.d, digest);
 	if (raw == null) return Result.err(signFailed(hash));
-	return Result.ok(ecdsaRawToDer(raw) as Buffer);
+	return Result.ok(Buffer.from(ecdsaRawToDer(raw)));
 }
 
 export function ecdsaSign<D extends ByteInput>(
@@ -273,7 +273,7 @@ export function ecdhSync(
 	}
 	const shared = ecdhShared(curve, privateKey._data.d, publicKey._data.point);
 	if (shared == null) return Result.err(agreementFailed());
-	return Result.ok(shared as Buffer);
+	return Result.ok(Buffer.from(shared));
 }
 
 export async function ecdh(

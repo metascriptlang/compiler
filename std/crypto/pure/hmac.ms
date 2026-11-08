@@ -1,4 +1,4 @@
-import { HashBytes, HashState, kindSha256, kindMd5, wipeHashState } from "./state";
+import { HashBytes, HashState, kindSha256, kindMd5, wipeHashState, hashOutputSize } from "./state";
 import { newHash, copyHash, updateHash, finishHash, finishHashInto, hashOf } from "./hash";
 import { wipeBytes } from "./secret";
 
@@ -64,7 +64,7 @@ export function updateHmac(hmac: HmacState, data: HashBytes): void {
 }
 
 /** Writes the MAC to `out` and restarts the state on the same key. */
-export function finishHmacInto(hmac: HmacState, out: uint8[]): void {
+export function finishHmacInto(hmac: HmacState, out: Span<uint8>): void {
 	if (out.length < hmac.inner.outputSize) {
 		throw new Error("hmac: output is shorter than the digest");
 	}
@@ -83,7 +83,8 @@ export function finishHmac(hmac: HmacState): uint8[] {
 	return out;
 }
 
-export function hmacOf(kind: int32, key: HashBytes, data: HashBytes): uint8[] {
+/** Writes the MAC of `data` under `key` to `out`, which holds at least the digest's size. */
+export function hmacInto(kind: int32, key: HashBytes, data: HashBytes, out: Span<uint8>): void {
 	requireKind(kind);
 	const inner = newHash(kind);
 	const outer = newHash(kind);
@@ -92,15 +93,31 @@ export function hmacOf(kind: int32, key: HashBytes, data: HashBytes): uint8[] {
 	const innerDigest = finishHash(inner);
 	updateHash(outer, innerDigest);
 	wipeBytes(innerDigest);
-	return finishHash(outer);
+	finishHashInto(outer, out);
+	wipeHashState(outer);
+}
+
+export function hmacOf(kind: int32, key: HashBytes, data: HashBytes): uint8[] {
+	const out = new Array<uint8>(hashOutputSize(kind));
+	hmacInto(kind, key, data, out);
+	return out;
 }
 
 export function pbkdf2Of(kind: int32, password: Readonly<uint8[]>, salt: Readonly<uint8[]>, iterations: int32, length: int32): uint8[] {
 	if (iterations < 1) throw new Error("pbkdf2: iterations must be at least 1");
 	if (length < 1 || length > pbkdf2MaxLength) throw new Error(`pbkdf2: keyLength must be between 1 and ${pbkdf2MaxLength}`);
+	const out = new Array<uint8>(length);
+	pbkdf2Into(kind, password, salt, iterations, out);
+	return out;
+}
+
+/** Derives `out.length` bytes of PBKDF2 into `out`. */
+export function pbkdf2Into(kind: int32, password: Readonly<uint8[]>, salt: Readonly<uint8[]>, iterations: int32, out: Span<uint8>): void {
+	const length = out.length as int32;
+	if (iterations < 1) throw new Error("pbkdf2: iterations must be at least 1");
+	if (length < 1 || length > pbkdf2MaxLength) throw new Error(`pbkdf2: keyLength must be between 1 and ${pbkdf2MaxLength}`);
 	const hmac = newHmac(kind, password);
 	const size = hmac.inner.outputSize;
-	const out = new Array<uint8>(length);
 	const block = new Array<uint8>(size);
 	const running = new Array<uint8>(size);
 	const counter = new Array<uint8>(4);
@@ -129,18 +146,27 @@ export function pbkdf2Of(kind: int32, password: Readonly<uint8[]>, salt: Readonl
 	wipeBytes(block);
 	wipeBytes(running);
 	wipeHmac(hmac);
-	return out;
 }
 
 export function hkdfOf(kind: int32, ikm: Readonly<uint8[]>, salt: Readonly<uint8[]>, info: Readonly<uint8[]>, length: int32): uint8[] {
 	requireKind(kind);
-	const size = newHash(kind).outputSize;
+	if (length < 1) throw new Error("hkdf: length must be at least 1");
+	if (length > 255 * hashOutputSize(kind)) throw new Error(`hkdf: length must be at most ${255 * hashOutputSize(kind)}`);
+	const out = new Array<uint8>(length);
+	hkdfInto(kind, ikm, salt, info, out);
+	return out;
+}
+
+/** Derives `out.length` bytes of HKDF into `out`. */
+export function hkdfInto(kind: int32, ikm: Readonly<uint8[]>, salt: Readonly<uint8[]>, info: Readonly<uint8[]>, out: Span<uint8>): void {
+	requireKind(kind);
+	const length = out.length as int32;
+	const size = hashOutputSize(kind);
 	if (length < 1) throw new Error("hkdf: length must be at least 1");
 	if (length > 255 * size) throw new Error(`hkdf: length must be at most ${255 * size}`);
 	const zeros = new Array<uint8>(size);
 	const prk = hmacOf(kind, salt.length == 0 ? zeros : salt, ikm);
 	const hmac = newHmac(kind, prk);
-	const out = new Array<uint8>(length);
 	const block = new Array<uint8>(size);
 	const counter = new Array<uint8>(1);
 	let written = 0;
@@ -160,5 +186,4 @@ export function hkdfOf(kind: int32, ikm: Readonly<uint8[]>, salt: Readonly<uint8
 	wipeBytes(prk);
 	wipeBytes(block);
 	wipeHmac(hmac);
-	return out;
 }

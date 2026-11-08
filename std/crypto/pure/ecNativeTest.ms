@@ -86,8 +86,8 @@ function got<T>(result: Result<T, CryptoError>): T {
 	return result.value;
 }
 
-function rawHex(der: Readonly<uint8[]>, size: int32): string {
-	const raw = ecdsaDerToRaw(der, size);
+function rawHex(der: Readonly<Span<uint8>>, size: int32): string {
+	const raw = ecdsaDerToRaw([...der], size);
 	if (raw == null) throw new Error("not a DER ECDSA signature");
 	return raw.encodeHex();
 }

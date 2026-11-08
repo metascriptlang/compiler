@@ -20,10 +20,10 @@ function below(rng: Seeded, limit: int32): int32 {
 	return ((next(rng) % (limit as uint32)) as int32);
 }
 
-function randomData(rng: Seeded, length: int32): Buffer {
+function randomData(rng: Seeded, length: int32): uint8[] {
 	const bytes = new Array<uint8>(length);
 	for (let i = 0; i < length; i++) bytes[i] = (next(rng) & 255) as uint8;
-	return bytes as Buffer;
+	return bytes;
 }
 
 function randomText(rng: Seeded, alphabet: string, length: int32): string {
@@ -99,7 +99,7 @@ test "streaming hash and HMAC match the vendor over random splits" {
 			let at = 0;
 			while (at < data.length) {
 				const step = below(rng, 150);
-				const piece = data.slice(at, at + step) as Buffer;
+				const piece = data.slice(at, at + step);
 				h.update(piece);
 				m.update(piece);
 				at += step;

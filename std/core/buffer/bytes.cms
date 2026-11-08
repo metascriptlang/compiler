@@ -5,11 +5,24 @@ export type Bytes = string | uint8[];
 
 export type ByteInput = string | Uint8Array | Readonly<Span<uint8>>;
 
-export function rawString(data: Bytes): string {
-	if (typeof data == "string") return data;
-	return wellFormedString(data);
+export function rawString<K extends ByteInput>(data: K): string {
+	return typeof data == "string" ? data : rawStringOf(data);
+}
+
+function rawStringOf(bytes: Readonly<Span<uint8>>): string {
+	return wellFormedString(bytes);
 }
 
 export function rawBuffer(raw: string): Buffer {
-	return raw.asBytes().slice(0) as Buffer;
+	const bytes = raw.asBytes();
+	const out = new Buffer(bytes.length);
+	out.set(bytes);
+	return out;
+}
+
+/** A Buffer over bytes the runtime produced, without a copy. */
+export function adoptBuffer(sink bytes: Vec<uint8>): Buffer {
+	const store = new ArrayBuffer(0);
+	store.bytes = move bytes;
+	return new Buffer(store);
 }

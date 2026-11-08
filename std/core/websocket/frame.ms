@@ -85,7 +85,7 @@ function xorByte(b: number, k: number): int32 {
 	return (b as int32) ^ (k as int32);
 }
 
-export function maskPayload(payload: uint8[], maskKey: uint8[]): uint8[] {
+export function maskPayload(payload: Readonly<Span<uint8>>, maskKey: Readonly<Span<uint8>>): uint8[] {
 	const keyLen = maskKey.length;
 	const payloadLen = payload.length;
 	let bytes: uint8[] = [];
@@ -111,7 +111,7 @@ export function maskPayload(payload: uint8[], maskKey: uint8[]): uint8[] {
 //   payload — raw bytes
 //   maskKey — exactly 4 bytes (from std/crypto.randomBytes(4) at the call site)
 // Returns the full frame bytes (header + masked payload).
-export function buildFrame(opcode: int32, fin: boolean, payload: uint8[], maskKey: uint8[]): uint8[] {
+export function buildFrame(opcode: int32, fin: boolean, payload: Readonly<Span<uint8>>, maskKey: Readonly<Span<uint8>>): uint8[] {
 	const len = payload.length;
 	let frame: uint8[] = [];
 
@@ -162,7 +162,7 @@ export function buildFrame(opcode: int32, fin: boolean, payload: uint8[], maskKe
 
 // Build an unmasked frame (for tests / hypothetical server use).
 // NEVER use this for client-to-server send — RFC 6455 mandates masking.
-export function buildFrameUnmasked(opcode: int32, fin: boolean, payload: uint8[]): uint8[] {
+export function buildFrameUnmasked(opcode: int32, fin: boolean, payload: Readonly<Span<uint8>>): uint8[] {
 	const len = payload.length;
 	let frame: uint8[] = [];
 

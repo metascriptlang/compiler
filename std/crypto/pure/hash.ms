@@ -1,30 +1,20 @@
-import { HashState, HashBytes, newHashState, wipeHashState, kindSha256, kindSha224, kindSha512, kindSha384, kindSha1, kindMd5 } from "./state";
+import { HashState, HashBytes, newHashState, wipeHashState, hashOutputSize, kindSha256, kindSha224, kindSha512, kindSha384, kindSha1, kindMd5 } from "./state";
 import { sha2Iv } from "./sha2";
 import { initSha1 } from "./sha1";
 import { initMd5 } from "./md5";
 import { encodeHex } from "../../core/encoding";
 
 when (!js) {
-	import { Buffer } from "std/core/buffer";
 	import { sha256HwBlocks, sha512HwBlocks, pureCpuFeatures } from "./hw";
 	import { compress256Words, compress512Words } from "./sha2";
 	import { compressSha1Words } from "./sha1";
 	import { compressMd5Words } from "./md5";
-	import { hashOutputSize, stateWords } from "./state";
+	import { stateWords } from "./state";
 	import { wipeBytes, wipeWords } from "./secret";
-
-	/** The digest array; finishHashInto writes every byte, so it is not zeroed first. */
-	function digestArray(size: int32): uint8[] {
-		return Buffer.allocUnsafe(size);
-	}
 } else {
 	import { compress256, compress512 } from "./sha2";
 	import { compressSha1 } from "./sha1";
 	import { compressMd5 } from "./md5";
-
-	function digestArray(size: int32): uint8[] {
-		return new Array<uint8>(size);
-	}
 }
 
 /** The kind number of a hash name, or -1 when the portable code has no such hash. */
@@ -170,7 +160,7 @@ function padInto(block: Span<uint8>, filled: int32, size: int32, length: number,
 }
 
 /** The first `words` chaining words as digest bytes: little-endian words for MD5, big-endian for the others. */
-function writeDigest(state: Readonly<Span<uint32>>, out: uint8[], words: int32, md5: boolean): void {
+function writeDigest(state: Readonly<Span<uint32>>, out: Span<uint8>, words: int32, md5: boolean): void {
 	for (let w = 0; w < words; w++) {
 		const word = state[w];
 		if (md5) {
@@ -188,7 +178,7 @@ function writeDigest(state: Readonly<Span<uint32>>, out: uint8[], words: int32, 
 }
 
 /** Pads, compresses the last block(s) and writes the digest to `out`; the state is finished afterwards. */
-export function finishHashInto(h: HashState, out: uint8[]): void {
+export function finishHashInto(h: HashState, out: Span<uint8>): void {
 	if (h.finished) throw new Error("hash already finished");
 	if (out.length < h.outputSize) {
 		throw new Error("hash: output is shorter than the digest");
@@ -202,7 +192,7 @@ export function finishHashInto(h: HashState, out: uint8[]): void {
 }
 
 export function finishHash(h: HashState): uint8[] {
-	const out = digestArray(h.outputSize);
+	const out = new Array<uint8>(h.outputSize);
 	finishHashInto(h, out);
 	wipeHashState(h);
 	return out;
@@ -213,7 +203,7 @@ export function finishHash(h: HashState): uint8[] {
 // measured 7-10 ns faster at 64 B on arm64 than the shared path; with room for three blocks,
 // the shared path compresses the last whole block of the input with the padding.
 when (!js) {
-	function digestWith(kind: int32, data: HashBytes, state: Span<uint32>, block: Span<uint8>): uint8[] {
+	function digestWith(kind: int32, data: HashBytes, state: Span<uint32>, block: Span<uint8>, out: Span<uint8>): void {
 		const md5 = kind == kindMd5;
 		const size = kind == kindSha512 || kind == kindSha384 ? 128 : 64;
 		initWords(kind, state);
@@ -225,16 +215,14 @@ when (!js) {
 		for (let i = 0; i < rest; i++) block[i] = data[direct * size + i];
 		const blocks = padInto(block, rest, size, length as number, md5);
 		compressWords(kind, state, block, 0, blocks);
-		const out = digestArray(hashOutputSize(kind));
-		writeDigest(state, out, out.length >> 2, md5);
+		writeDigest(state, out, hashOutputSize(kind) >> 2, md5);
 		wipeWords(state[0..stateWords(kind)]);
 		wipeBytes(block[0..blocks * size]);
-		return out;
 	}
 
-	function sha2HwOneShot(kind: int32, data: HashBytes): uint8[] | null {
+	function sha2HwOneShot(kind: int32, data: HashBytes, out: Span<uint8>): boolean {
 		const wide = kind == kindSha512 || kind == kindSha384;
-		if ((pureCpuFeatures() & (wide ? 2 : 1)) == 0) return null;
+		if ((pureCpuFeatures() & (wide ? 2 : 1)) == 0) return false;
 		const size = wide ? 128 : 64;
 		let state: uint32[16] = [0];
 		let block: uint8[256] = [0];
@@ -250,37 +238,42 @@ when (!js) {
 		const blocks = padInto(block, rest, size, length as number, false);
 		if (wide) sha512HwBlocks(state, block, 0, blocks);
 		else sha256HwBlocks(state, block, 0, blocks);
-		const out = digestArray(hashOutputSize(kind));
-		writeDigest(state, out, out.length >> 2, false);
+		writeDigest(state, out, hashOutputSize(kind) >> 2, false);
 		wipeWords(state[0..(wide ? 16 : 8)]);
 		wipeBytes(block[0..blocks * size]);
-		return out;
+		return true;
 	}
 
-	function oneShot(kind: int32, data: HashBytes): uint8[] {
-		if (kind != kindSha1 && kind != kindMd5) {
-			const out = sha2HwOneShot(kind, data);
-			if (out != null) return out;
-		}
+	function oneShot(kind: int32, data: HashBytes, out: Span<uint8>): void {
+		if (kind != kindSha1 && kind != kindMd5 && sha2HwOneShot(kind, data, out)) return;
 		if (kind == kindSha512 || kind == kindSha384) {
 			let state: uint32[16] = [0];
 			let block: uint8[256] = [0];
-			return digestWith(kind, data, state, block);
+			digestWith(kind, data, state, block, out);
+			return;
 		}
 		let state: uint32[8] = [0];
 		let block: uint8[192] = [0];
-		return digestWith(kind, data, state, block);
+		digestWith(kind, data, state, block, out);
+	}
+}
+
+/** Writes the digest of `data` to `out`, which holds at least the digest's size. */
+export function hashInto(kind: int32, data: HashBytes, out: Span<uint8>): void {
+	when (!js) {
+		oneShot(kind, data, out);
+	} else {
+		const h = newHash(kind);
+		updateHash(h, data);
+		finishHashInto(h, out);
+		wipeHashState(h);
 	}
 }
 
 export function hashOf(kind: int32, data: HashBytes): uint8[] {
-	when (!js) {
-		return oneShot(kind, data);
-	} else {
-		const h = newHash(kind);
-		updateHash(h, data);
-		return finishHash(h);
-	}
+	const out = new Array<uint8>(hashOutputSize(kind));
+	hashInto(kind, data, out);
+	return out;
 }
 
 function hex(kind: int32, text: string): string {

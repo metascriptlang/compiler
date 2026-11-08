@@ -4,6 +4,7 @@
  * the RFC 8439 AEAD vector and the record layer's seal, open and refusals.
  */
 
+import { Buffer } from "std/core/buffer";
 import { encodeHex, decodeHex } from "../../core/encoding";
 import { kindSha256 } from "../pure/state";
 import { hkdfLabel, hkdfExpandLabel, deriveSecret, emptyHash } from "./keySchedule";
@@ -122,9 +123,9 @@ class ScriptedTransport extends TlsTransport {
 		this.sent = [];
 	}
 
-	receive(maxBytes: int32): uint8[] {
+	receive(maxBytes: int32): Buffer {
 		const take = Math.min(this.incoming.length, maxBytes) as int32;
-		const out = this.incoming.slice(0, take);
+		const out = Buffer.from(this.incoming.slice(0, take));
 		this.incoming = this.incoming.slice(take);
 		return out;
 	}

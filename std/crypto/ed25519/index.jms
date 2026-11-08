@@ -88,25 +88,25 @@ function msEdRandom() {
 interface Imported {
 	key: unknown;
 	pub: unknown;
-	raw: Buffer;
+	raw: uint8[];
 	error: string;
 }
 
 interface Signed {
-	value: Buffer;
+	value: uint8[];
 	error: string;
 }
 
-extern function edFromSeed(seed: Buffer): Promise<Imported> from "msEdFromSeed(#)";
-extern function edImportPublic(raw: Buffer): Promise<Imported> from "msEdImportPublic(#)";
-extern function edSign(key: unknown, message: Buffer): Promise<Signed> from "msEdSign(#, #)";
-extern function edVerify(pub: unknown, signature: Buffer, message: Buffer): Promise<boolean> from "msEdVerify(#, #, #)";
+extern function edFromSeed(seed: Readonly<uint8[]>): Promise<Imported> from "msEdFromSeed(#)";
+extern function edImportPublic(raw: Readonly<uint8[]>): Promise<Imported> from "msEdImportPublic(#)";
+extern function edSign(key: unknown, message: Readonly<uint8[]>): Promise<Signed> from "msEdSign(#, #)";
+extern function edVerify(pub: unknown, signature: Readonly<uint8[]>, message: Readonly<uint8[]>): Promise<boolean> from "msEdVerify(#, #, #)";
 extern function edNone(): unknown from "msEdNone()";
 extern function edIsNone(key: unknown): boolean from "(# === null)";
-extern function edRandomSeed(): Buffer from "msEdRandom()";
+extern function edRandomSeed(): uint8[] from "msEdRandom()";
 
 when (nodejs) {
-	import { NodeInput, nodeInput } from "../pure/nodeCrypto";
+	import { NodeInput, nodeInput, bufferOver } from "../pure/nodeCrypto";
 
 	@emit(`const msEdNode = globalThis.process.getBuiltinModule("node:crypto");
 const msEdPkcs8 = Uint8Array.from([0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20]);
@@ -134,7 +134,7 @@ function msEdNodeIn(x) {
 	return typeof x === "string" ? new TextEncoder().encode(x) : x;
 }
 function msEdNodeSign(key, message) {
-	return msEdBytes(msEdNode.sign(null, msEdNodeIn(message), key));
+	return msEdNode.sign(null, msEdNodeIn(message), key);
 }
 function msEdNodeVerify(pub, signature, message) {
 	try {
@@ -144,16 +144,16 @@ function msEdNodeVerify(pub, signature, message) {
 	}
 }`);
 
-	extern function nodePrivate(seed: Buffer): Imported from "msEdNodePrivate(#)";
-	extern function nodePublic(raw: Buffer): unknown from "msEdNodePublic(#)";
-	extern function nodeSign(key: unknown, message: NodeInput): Buffer from "msEdNodeSign(#, #)";
-	extern function nodeVerify(pub: unknown, signature: Buffer, message: NodeInput): boolean from "msEdNodeVerify(#, #, #)";
+	extern function nodePrivate(seed: Readonly<uint8[]>): Imported from "msEdNodePrivate(#)";
+	extern function nodePublic(raw: Readonly<uint8[]>): unknown from "msEdNodePublic(#)";
+	extern function nodeSign(key: unknown, message: NodeInput): Uint8Array from "msEdNodeSign(#, #)";
+	extern function nodeVerify(pub: unknown, signature: Readonly<uint8[]>, message: NodeInput): boolean from "msEdNodeVerify(#, #, #)";
 
 	function signNode(key: Ed25519PrivateKey, message: NodeInput): Buffer {
-		return nodeSign(key._key, message);
+		return bufferOver(nodeSign(key._key, message));
 	}
 
-	function verifyNode(key: Ed25519PublicKey, signature: Buffer, message: NodeInput): boolean {
+	function verifyNode(key: Ed25519PublicKey, signature: uint8[], message: NodeInput): boolean {
 		if (!ed25519Acceptable(key._raw, signature)) return false;
 		return nodeVerify(key._key, signature, message);
 	}
@@ -164,7 +164,7 @@ function invalidKey(operation: string, message: string): CryptoError {
 }
 
 export class Ed25519PublicKey {
-	_raw: Buffer;
+	_raw: uint8[];
 	_key: unknown;
 
 	static importSync<R extends ByteInput>(raw: R): Result<Ed25519PublicKey, CryptoError> {
@@ -180,14 +180,14 @@ export class Ed25519PublicKey {
 	}
 
 	exportSync(): Result<Buffer, CryptoError> {
-		return Result.ok(this._raw.slice(0));
+		return Result.ok(Buffer.from(this._raw));
 	}
 
 	async export(): Promise<Result<Buffer, CryptoError>> { return this.exportSync(); }
 }
 
 export class Ed25519PrivateKey {
-	_seed: Buffer;
+	_seed: uint8[];
 	_key: unknown;
 	_public: Ed25519PublicKey;
 
@@ -216,7 +216,7 @@ export class Ed25519PrivateKey {
 	}
 
 	exportSeedSync(): Result<Buffer, CryptoError> {
-		return Result.ok(this._seed.slice(0));
+		return Result.ok(Buffer.from(this._seed));
 	}
 
 	async exportSeed(): Promise<Result<Buffer, CryptoError>> { return this.exportSeedSync(); }
@@ -233,8 +233,8 @@ export function signSync<M extends ByteInput>(key: Ed25519PrivateKey, message: M
 	return signSyncOwned(key, bytesOf(message));
 }
 
-function signSyncOwned(key: Ed25519PrivateKey, message: Buffer): Result<Buffer, CryptoError> {
-	return Result.ok(ed25519Sign(key._seed, key._public._raw, message) as Buffer);
+function signSyncOwned(key: Ed25519PrivateKey, message: uint8[]): Result<Buffer, CryptoError> {
+	return Result.ok(Buffer.from(ed25519Sign(key._seed, key._public._raw, message)));
 }
 
 export function sign<M extends ByteInput>(key: Ed25519PrivateKey, message: M): Promise<Result<Buffer, CryptoError>> {
@@ -245,11 +245,11 @@ export function sign<M extends ByteInput>(key: Ed25519PrivateKey, message: M): P
 	}
 }
 
-async function signOwned(key: Ed25519PrivateKey, message: Buffer): Promise<Result<Buffer, CryptoError>> {
+async function signOwned(key: Ed25519PrivateKey, message: uint8[]): Promise<Result<Buffer, CryptoError>> {
 	if (edIsNone(key._key)) return signSyncOwned(key, message);
 	const done = await edSign(key._key, message);
 	if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "ed25519.sign", done.error));
-	return Result.ok(done.value);
+	return Result.ok(Buffer.from(done.value));
 }
 
 // False on any failure: a bad signature, a malformed input, a small-order key or R, or S not below L.
@@ -260,7 +260,7 @@ export function verifySync<S extends ByteInput, M extends ByteInput>(key: Ed2551
 	return verifySyncOwned(key, bytesOf(signature), bytesOf(message));
 }
 
-function verifySyncOwned(key: Ed25519PublicKey, signature: Buffer, message: Buffer): boolean {
+function verifySyncOwned(key: Ed25519PublicKey, signature: uint8[], message: uint8[]): boolean {
 	const sig = signature;
 	if (!ed25519Acceptable(key._raw, sig)) return false;
 	return ed25519Verify(key._raw, sig, message);
@@ -274,28 +274,28 @@ export function verify<S extends ByteInput, M extends ByteInput>(key: Ed25519Pub
 	}
 }
 
-async function verifyOwned(key: Ed25519PublicKey, signature: Buffer, message: Buffer): Promise<boolean> {
+async function verifyOwned(key: Ed25519PublicKey, signature: uint8[], message: uint8[]): Promise<boolean> {
 	if (edIsNone(key._key)) return verifySyncOwned(key, signature, message);
 	const sig = signature;
 	if (!ed25519Acceptable(key._raw, sig)) return false;
 	return await edVerify(key._key, sig, message);
 }
 
-async function importEd25519Public(bytes: Buffer): Promise<Result<Ed25519PublicKey, CryptoError>> {
+async function importEd25519Public(bytes: uint8[]): Promise<Result<Ed25519PublicKey, CryptoError>> {
 	if (bytes.length != 32) return Result.err(invalidKey("Ed25519PublicKey.import", "public key must be 32 bytes"));
 	const done = await edImportPublic(bytes);
 	if (done.error != "") return ed25519PublicOwned(bytes);
 	return Result.ok({ _raw: bytes.slice(0), _key: done.pub });
 }
 
-async function ed25519FromSeed(bytes: Buffer): Promise<Result<Ed25519PrivateKey, CryptoError>> {
+async function ed25519FromSeed(bytes: uint8[]): Promise<Result<Ed25519PrivateKey, CryptoError>> {
 	if (bytes.length != 32) return Result.err(invalidKey("Ed25519PrivateKey.fromSeed", "seed must be 32 bytes"));
 	const done = await edFromSeed(bytes);
 	if (done.error != "") return ed25519PrivateOwned(bytes);
 	return Result.ok({ _seed: bytes.slice(0), _key: done.key, _public: { _raw: done.raw, _key: done.pub } });
 }
 
-function ed25519PublicOwned(bytes: Buffer): Result<Ed25519PublicKey, CryptoError> {
+function ed25519PublicOwned(bytes: uint8[]): Result<Ed25519PublicKey, CryptoError> {
 	if (bytes.length != 32) return Result.err(invalidKey("Ed25519PublicKey.import", "public key must be 32 bytes"));
 	when (nodejs) {
 		return Result.ok({ _raw: bytes.slice(0), _key: nodePublic(bytes) });
@@ -304,12 +304,12 @@ function ed25519PublicOwned(bytes: Buffer): Result<Ed25519PublicKey, CryptoError
 	}
 }
 
-function ed25519PrivateOwned(bytes: Buffer): Result<Ed25519PrivateKey, CryptoError> {
+function ed25519PrivateOwned(bytes: uint8[]): Result<Ed25519PrivateKey, CryptoError> {
 	if (bytes.length != 32) return Result.err(invalidKey("Ed25519PrivateKey.fromSeed", "seed must be 32 bytes"));
 	when (nodejs) {
 		const made = nodePrivate(bytes);
 		return Result.ok({ _seed: bytes.slice(0), _key: made.key, _public: { _raw: made.raw, _key: made.pub } });
 	} else {
-		return Result.ok({ _seed: bytes.slice(0), _key: edNone(), _public: { _raw: ed25519PublicFromSeed(bytes) as Buffer, _key: edNone() } });
+		return Result.ok({ _seed: bytes.slice(0), _key: edNone(), _public: { _raw: ed25519PublicFromSeed(bytes), _key: edNone() } });
 	}
 }

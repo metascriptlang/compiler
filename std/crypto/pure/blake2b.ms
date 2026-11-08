@@ -1,5 +1,5 @@
 import { wipeBytes, wipeWords64 } from "./secret";
-import { InputBytes } from "./bytes";
+import { InputBytes, OutputBytes } from "./bytes";
 
 const iv: uint64[8] = [
 	0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
@@ -1265,7 +1265,7 @@ export function updateBlake2b(s: Blake2bState, data: InputBytes, off: int32, len
 }
 
 /** Pads, compresses the last block and writes the digest to `out` at `outOff`; the state is finished afterwards. */
-export function finishBlake2bInto(s: Blake2bState, out: uint8[], outOff: int32): void {
+export function finishBlake2bInto(s: Blake2bState, out: OutputBytes, outOff: int32): void {
 	if (s.finished) throw new Error("hash already finished");
 	for (let i = s.filled; i < 128; i++) s.block[i] = 0;
 	compress(s, s.block, 0, true);

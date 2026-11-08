@@ -41,11 +41,7 @@ const MAX_COLLECTION_SIZE: number = 100000000;
 // float decode path; previously inlined in 3 places.
 function bytesToBuffer(src: Readonly<Span<uint8>>, start: number, length: number): Buffer {
 	const buf = Buffer.alloc(length);
-	let i = 0;
-	while (i < length) {
-		buf.set(i, src[start + i] & 0xff);
-		i = i + 1;
-	}
+	buf.set(src[start .. start + length]);
 	return buf;
 }
 
@@ -506,8 +502,8 @@ function pow2(exp: int32): number {
 // relying on `0.0/0.0`-style arithmetic (MS runtime may catch divide-by-zero).
 function bitsToDouble(b0: number, b1: number): number {
 	const buf = Buffer.alloc(8);
-	buf.set(0, b0);
-	buf.set(1, b1);
+	buf[0] = (b0) as uint8;
+	buf[1] = (b1) as uint8;
 	// bytes 2-7 default to zero — produces the exact IEEE 754 bit pattern
 	return buf.readDoubleBE(0);
 }
@@ -547,10 +543,10 @@ function decodeHalfFloat(arg: int64): CborValue {
 function decodeSingleFloat(arg: int64): CborValue {
 	const buf = Buffer.alloc(4);
 	const v32 = Number(arg);
-	buf.set(0, Math.floor(v32 / 16777216) % 256);
-	buf.set(1, Math.floor(v32 / 65536) % 256);
-	buf.set(2, Math.floor(v32 / 256) % 256);
-	buf.set(3, v32 % 256);
+	buf[0] = (Math.floor(v32 / 16777216) % 256) as uint8;
+	buf[1] = (Math.floor(v32 / 65536) % 256) as uint8;
+	buf[2] = (Math.floor(v32 / 256) % 256) as uint8;
+	buf[3] = (v32 % 256) as uint8;
 	return cborFloat(buf.readFloatBE(0));
 }
 

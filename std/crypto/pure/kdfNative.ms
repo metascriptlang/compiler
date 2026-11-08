@@ -12,7 +12,7 @@ when (js && nodejs) {
 when (!(js && nodejs)) {
 	import { bytesOf, wipeIfCopied } from "./bytes";
 	import { hashKind } from "./hash";
-	import { pbkdf2Of, hkdfOf } from "./hmac";
+	import { pbkdf2Into, hkdfInto } from "./hmac";
 }
 import {
 	CryptoError, invalidInput, keyDerivationFailed,
@@ -24,8 +24,8 @@ function extendedPassword(
 	salt: uint8[],
 	iterations: int32,
 	length: int32,
-): uint8[] {
-	const out = new Array<uint8>(length);
+): Buffer {
+	const out = new Buffer(length);
 	const counter = new Array<uint8>(4);
 	let written: int32 = 0;
 	let index: int32 = 1;
@@ -65,13 +65,13 @@ function extendedKey(
 	salt: uint8[],
 	info: uint8[],
 	length: int32,
-): uint8[] {
+): Buffer {
 	const extract = createHmac(algorithm, salt);
 	extract.update(ikm);
 	const prk = extract.digest();
-	const out = new Array<uint8>(length);
+	const out = new Buffer(length);
 	const counter = new Array<uint8>(1);
-	let previous = new Array<uint8>(0) as Buffer;
+	let previous = new Buffer(0);
 	let written: int32 = 0;
 	let index: int32 = 1;
 	while (written < length) {
@@ -129,13 +129,13 @@ export function pbkdf2Sync<D extends ByteInput, K extends ByteInput>(
 		const kind = hashKind(digest);
 		try {
 			if (kind >= 0) {
-				return Result.ok(
-					pbkdf2Of(kind, key, saltBytes, iterations, keyLength) as Buffer,
-				);
+				const out = new Buffer(keyLength);
+				pbkdf2Into(kind, key, saltBytes, iterations, out);
+				return Result.ok(out);
 			}
 			return Result.ok(extendedPassword(
 				digest, key, saltBytes, iterations, keyLength,
-			) as Buffer);
+			));
 		} finally {
 			wipeIfCopied(password, key);
 		}
@@ -170,13 +170,13 @@ export function hkdfSync<D extends ByteInput, K extends ByteInput, S extends Byt
 		const kind = hashKind(algorithm);
 		try {
 			if (kind >= 0) {
-				return Result.ok(
-					hkdfOf(kind, key, saltBytes, infoBytes, length) as Buffer,
-				);
+				const out = new Buffer(length);
+				hkdfInto(kind, key, saltBytes, infoBytes, out);
+				return Result.ok(out);
 			}
 			return Result.ok(extendedKey(
 				algorithm, key, saltBytes, infoBytes, length,
-			) as Buffer);
+			));
 		} finally {
 			wipeIfCopied(ikm, key);
 		}

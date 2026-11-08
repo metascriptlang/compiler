@@ -16,7 +16,7 @@ export { CryptoError, CryptoErrorKind, cryptoError } from "./errors";
 
 extern function msCryptoInit(): boolean from "msCryptoInit";
 extern function msCryptoCleanup(): void from "msCryptoCleanup";
-extern function digestOfBytes(algorithm: string, data: Readonly<Span<uint8>>): Buffer from "msCryptoDigest";
+extern function digestOfBytes(algorithm: string, data: Readonly<Span<uint8>>): uint8[] from "msCryptoDigest";
 
 export type HashAlgorithm =
 	| "sha256" | "sha512" | "sha384" | "sha224"
@@ -32,7 +32,7 @@ export function cleanup(): void {
 }
 
 export function digestSync<D extends ByteInput>(algorithm: HashAlgorithm, data: D): Result<Buffer, CryptoError> {
-	const out = digestOfBytes(algorithm, typeof data == "string" ? data.asBytes() : data);
+	const out = Buffer.from(digestOfBytes(algorithm, typeof data == "string" ? data.asBytes() : data));
 	if (out.length == 0) {
 		return Result.err(hashFailed(algorithm, "Hash computation failed"));
 	}

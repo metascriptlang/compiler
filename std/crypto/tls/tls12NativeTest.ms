@@ -5,6 +5,7 @@
  * checks a scripted server can reach without a key exchange.
  */
 
+import { Buffer } from "std/core/buffer";
 import { encodeHex, decodeHex } from "../../core/encoding";
 import { kindSha256, kindSha384 } from "../pure/state";
 import { tls12Prf } from "./keySchedule";
@@ -28,9 +29,9 @@ class ScriptedTransport extends TlsTransport {
 		this.sent = [];
 	}
 
-	receive(maxBytes: int32): uint8[] {
+	receive(maxBytes: int32): Buffer {
 		const take = Math.min(this.incoming.length, maxBytes) as int32;
-		const out = this.incoming.slice(0, take);
+		const out = Buffer.from(this.incoming.slice(0, take));
 		this.incoming = this.incoming.slice(take);
 		return out;
 	}

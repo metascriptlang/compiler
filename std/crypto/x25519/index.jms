@@ -77,21 +77,21 @@ function msXRandom() {
 interface Imported {
 	key: unknown;
 	pub: unknown;
-	raw: Buffer;
+	raw: uint8[];
 	error: string;
 }
 
 interface Derived {
-	value: Buffer;
+	value: uint8[];
 	error: string;
 }
 
-extern function xFromRaw(raw: Buffer): Promise<Imported> from "msXFromRaw(#)";
-extern function xImportPublic(raw: Buffer): Promise<Imported> from "msXImportPublic(#)";
+extern function xFromRaw(raw: Readonly<uint8[]>): Promise<Imported> from "msXFromRaw(#)";
+extern function xImportPublic(raw: Readonly<uint8[]>): Promise<Imported> from "msXImportPublic(#)";
 extern function xDerive(key: unknown, pub: unknown): Promise<Derived> from "msXDerive(#, #)";
 extern function xNone(): unknown from "msXNone()";
 extern function xIsNone(key: unknown): boolean from "(# === null)";
-extern function xRandom(): Buffer from "msXRandom()";
+extern function xRandom(): uint8[] from "msXRandom()";
 
 when (nodejs) {
 	@emit(`const msXNode = globalThis.process.getBuiltinModule("node:crypto");
@@ -124,9 +124,9 @@ function msXNodeDerive(privateKey, publicKey) {
 	}
 }`);
 
-	extern function nodePrivate(secret: Buffer): Imported from "msXNodePrivate(#)";
-	extern function nodePublic(raw: Buffer): unknown from "msXNodePublic(#)";
-	extern function nodeDerive(privateKey: unknown, publicKey: unknown): Buffer | null from "msXNodeDerive(#, #)";
+	extern function nodePrivate(secret: Readonly<uint8[]>): Imported from "msXNodePrivate(#)";
+	extern function nodePublic(raw: Readonly<uint8[]>): unknown from "msXNodePublic(#)";
+	extern function nodeDerive(privateKey: unknown, publicKey: unknown): uint8[] | null from "msXNodeDerive(#, #)";
 }
 
 function invalidKey(operation: string, message: string): CryptoError {
@@ -138,7 +138,7 @@ function basePointBytes(): uint8[] {
 }
 
 export class X25519PublicKey {
-	_raw: Buffer;
+	_raw: uint8[];
 	_key: unknown;
 
 	static importSync<R extends ByteInput>(raw: R): Result<X25519PublicKey, CryptoError> {
@@ -154,14 +154,14 @@ export class X25519PublicKey {
 	}
 
 	exportSync(): Result<Buffer, CryptoError> {
-		return Result.ok(this._raw.slice(0));
+		return Result.ok(Buffer.from(this._raw));
 	}
 
 	async export(): Promise<Result<Buffer, CryptoError>> { return this.exportSync(); }
 }
 
 export class X25519PrivateKey {
-	_secret: Buffer;
+	_secret: uint8[];
 	_key: unknown;
 	_public: X25519PublicKey;
 
@@ -198,7 +198,7 @@ function refused(): Result<Buffer, CryptoError> {
 	return Result.err(cryptoError(CryptoErrorKind.KeyDerivationFailed, "x25519.sharedSecret", "key agreement failed"));
 }
 
-function nonZero(value: Buffer): boolean {
+function nonZero(value: uint8[]): boolean {
 	let any: uint8 = 0;
 	for (let i = 0; i < value.length; i++) any = any | value[i];
 	return any != 0;
@@ -210,12 +210,12 @@ export function sharedSecretSync(privateKey: X25519PrivateKey, publicKey: X25519
 		if (!xIsNone(privateKey._key) && !xIsNone(publicKey._key)) {
 			const derived = nodeDerive(privateKey._key, publicKey._key);
 			if (derived == null || !nonZero(derived)) return refused();
-			return Result.ok(derived);
+			return Result.ok(Buffer.from(derived));
 		}
 	}
-	const shared = x25519(privateKey._secret, publicKey._raw) as Buffer;
+	const shared = x25519(privateKey._secret, publicKey._raw);
 	if (!nonZero(shared)) return refused();
-	return Result.ok(shared);
+	return Result.ok(Buffer.from(shared));
 }
 
 export async function sharedSecret(privateKey: X25519PrivateKey, publicKey: X25519PublicKey): Promise<Result<Buffer, CryptoError>> {
@@ -225,24 +225,24 @@ export async function sharedSecret(privateKey: X25519PrivateKey, publicKey: X255
 	if (xIsNone(privateKey._key) || xIsNone(publicKey._key)) return sharedSecretSync(privateKey, publicKey);
 	const done = await xDerive(privateKey._key, publicKey._key);
 	if (done.error != "" || !nonZero(done.value)) return refused();
-	return Result.ok(done.value);
+	return Result.ok(Buffer.from(done.value));
 }
 
-async function importX25519Public(bytes: Buffer): Promise<Result<X25519PublicKey, CryptoError>> {
+async function importX25519Public(bytes: uint8[]): Promise<Result<X25519PublicKey, CryptoError>> {
 	if (bytes.length != 32) return Result.err(invalidKey("X25519PublicKey.import", "public key must be 32 bytes"));
 	const done = await xImportPublic(bytes);
 	if (done.error != "") return x25519PublicOwned(bytes);
 	return Result.ok({ _raw: bytes.slice(0), _key: done.pub });
 }
 
-async function x25519FromRaw(bytes: Buffer): Promise<Result<X25519PrivateKey, CryptoError>> {
+async function x25519FromRaw(bytes: uint8[]): Promise<Result<X25519PrivateKey, CryptoError>> {
 	if (bytes.length != 32) return Result.err(invalidKey("X25519PrivateKey.fromRaw", "private key must be 32 bytes"));
 	const done = await xFromRaw(bytes);
 	if (done.error != "") return x25519PrivateOwned(bytes);
 	return Result.ok({ _secret: bytes.slice(0), _key: done.key, _public: { _raw: done.raw, _key: done.pub } });
 }
 
-function x25519PublicOwned(bytes: Buffer): Result<X25519PublicKey, CryptoError> {
+function x25519PublicOwned(bytes: uint8[]): Result<X25519PublicKey, CryptoError> {
 	if (bytes.length != 32) return Result.err(invalidKey("X25519PublicKey.import", "public key must be 32 bytes"));
 	when (nodejs) {
 		return Result.ok({ _raw: bytes.slice(0), _key: nodePublic(bytes) });
@@ -251,12 +251,12 @@ function x25519PublicOwned(bytes: Buffer): Result<X25519PublicKey, CryptoError> 
 	}
 }
 
-function x25519PrivateOwned(bytes: Buffer): Result<X25519PrivateKey, CryptoError> {
+function x25519PrivateOwned(bytes: uint8[]): Result<X25519PrivateKey, CryptoError> {
 	if (bytes.length != 32) return Result.err(invalidKey("X25519PrivateKey.fromRaw", "private key must be 32 bytes"));
 	when (nodejs) {
 		const made = nodePrivate(bytes);
 		return Result.ok({ _secret: bytes.slice(0), _key: made.key, _public: { _raw: made.raw, _key: made.pub } });
 	} else {
-		return Result.ok({ _secret: bytes.slice(0), _key: xNone(), _public: { _raw: x25519(bytes, basePointBytes()) as Buffer, _key: xNone() } });
+		return Result.ok({ _secret: bytes.slice(0), _key: xNone(), _public: { _raw: x25519(bytes, basePointBytes()), _key: xNone() } });
 	}
 }

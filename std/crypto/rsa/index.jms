@@ -109,16 +109,16 @@ function msRsaGenerate(bits) {
 }`);
 
 interface Settled {
-	value: Buffer;
+	value: uint8[];
 	error: string;
 }
 
 extern function newCache(): unknown from "msRsaPkCache()";
 extern function wcHasSubtle(): boolean from "msRsaHasSubtle()";
-extern function wcSign(cache: unknown, pkcs8: Buffer, pss: boolean, hash: string, data: Buffer): Promise<Settled> from "msRsaSign(#, #, #, #, #)";
-extern function wcVerify(cache: unknown, spki: Buffer, pss: boolean, hash: string, data: Buffer, signature: Buffer): Promise<boolean> from "msRsaVerify(#, #, #, #, #, #)";
-extern function wcEncrypt(cache: unknown, spki: Buffer, data: Buffer): Promise<Settled> from "msRsaEncrypt(#, #, #)";
-extern function wcDecrypt(cache: unknown, pkcs8: Buffer, data: Buffer): Promise<Settled> from "msRsaDecrypt(#, #, #)";
+extern function wcSign(cache: unknown, pkcs8: Readonly<uint8[]>, pss: boolean, hash: string, data: Readonly<uint8[]>): Promise<Settled> from "msRsaSign(#, #, #, #, #)";
+extern function wcVerify(cache: unknown, spki: Readonly<uint8[]>, pss: boolean, hash: string, data: Readonly<uint8[]>, signature: Readonly<uint8[]>): Promise<boolean> from "msRsaVerify(#, #, #, #, #, #)";
+extern function wcEncrypt(cache: unknown, spki: Readonly<uint8[]>, data: Readonly<uint8[]>): Promise<Settled> from "msRsaEncrypt(#, #, #)";
+extern function wcDecrypt(cache: unknown, pkcs8: Readonly<uint8[]>, data: Readonly<uint8[]>): Promise<Settled> from "msRsaDecrypt(#, #, #)";
 extern function wcGenerate(bits: number): Promise<Settled> from "msRsaGenerate(#)";
 
 export type RsaPadding = "pkcs1v15" | "pss";
@@ -190,33 +190,33 @@ function msRsaNodeGenerate(bits) {
 	function nodeHashKnown(hash: string): boolean {
 		return nodeHashTable(hash);
 	}
-	extern function nodeSign(cache: unknown, pkcs8: Buffer, pss: boolean, hash: string, data: NodeInput): Settled from "msRsaNodeSign(#, #, #, #, #)";
-	extern function nodeVerify(cache: unknown, spki: Buffer, pss: boolean, hash: string, data: NodeInput, signature: Buffer): boolean from "msRsaNodeVerify(#, #, #, #, #, #)";
-	extern function nodeEncrypt(cache: unknown, spki: Buffer, data: NodeInput): Settled from "msRsaNodeEncrypt(#, #, #)";
-	extern function nodeDecrypt(cache: unknown, pkcs8: Buffer, data: NodeInput): Settled from "msRsaNodeDecrypt(#, #, #)";
+	extern function nodeSign(cache: unknown, pkcs8: Readonly<uint8[]>, pss: boolean, hash: string, data: NodeInput): Settled from "msRsaNodeSign(#, #, #, #, #)";
+	extern function nodeVerify(cache: unknown, spki: Readonly<uint8[]>, pss: boolean, hash: string, data: NodeInput, signature: Readonly<uint8[]>): boolean from "msRsaNodeVerify(#, #, #, #, #, #)";
+	extern function nodeEncrypt(cache: unknown, spki: Readonly<uint8[]>, data: NodeInput): Settled from "msRsaNodeEncrypt(#, #, #)";
+	extern function nodeDecrypt(cache: unknown, pkcs8: Readonly<uint8[]>, data: NodeInput): Settled from "msRsaNodeDecrypt(#, #, #)";
 	extern function nodeGenerate(bits: number): Settled from "msRsaNodeGenerate(#)";
 
 	function signNode(key: RsaPrivateKey, data: NodeInput, hash: string, padding: RsaPadding): Result<Buffer, CryptoError> {
 		if (hash == "sha1" || !nodeHashKnown(hash)) return Result.err(signFailed(hash, padding, ""));
-		const done = nodeSign(key._cache, rsaPrivateToPkcs8(key._data) as Buffer, padding == "pss", hash, data);
+		const done = nodeSign(key._cache, rsaPrivateToPkcs8(key._data), padding == "pss", hash, data);
 		if (done.error != "") return Result.err(signFailed(hash, padding, `: ${done.error}`));
-		return Result.ok(done.value);
+		return Result.ok(Buffer.from(done.value));
 	}
 
-	function verifyNode(key: RsaPublicKey, data: NodeInput, signature: Buffer, hash: string, padding: RsaPadding): boolean {
-		return nodeVerify(key._cache, rsaPublicToSpki(key._data) as Buffer, padding == "pss", hash, data, signature);
+	function verifyNode(key: RsaPublicKey, data: NodeInput, signature: uint8[], hash: string, padding: RsaPadding): boolean {
+		return nodeVerify(key._cache, rsaPublicToSpki(key._data), padding == "pss", hash, data, signature);
 	}
 
 	function encryptNode(key: RsaPublicKey, data: NodeInput): Result<Buffer, CryptoError> {
-		const done = nodeEncrypt(key._cache, rsaPublicToSpki(key._data) as Buffer, data);
+		const done = nodeEncrypt(key._cache, rsaPublicToSpki(key._data), data);
 		if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "rsa.encrypt", `RSA-OAEP encryption failed: ${done.error}`));
-		return Result.ok(done.value);
+		return Result.ok(Buffer.from(done.value));
 	}
 
 	function decryptNode(key: RsaPrivateKey, data: NodeInput): Result<Buffer, CryptoError> {
-		const done = nodeDecrypt(key._cache, rsaPrivateToPkcs8(key._data) as Buffer, data);
+		const done = nodeDecrypt(key._cache, rsaPrivateToPkcs8(key._data), data);
 		if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "rsa.decrypt", "RSA-OAEP decryption failed"));
-		return Result.ok(done.value);
+		return Result.ok(Buffer.from(done.value));
 	}
 
 	function generateNode(bits: int32): Result<RsaPrivateKey, CryptoError> {
@@ -322,12 +322,12 @@ export function signSync<D extends ByteInput>(key: RsaPrivateKey, data: D, hash:
 	}
 }
 
-function signSyncOwned(key: RsaPrivateKey, data: Buffer, hash: string, padding: RsaPadding): Result<Buffer, CryptoError> {
+function signSyncOwned(key: RsaPrivateKey, data: uint8[], hash: string, padding: RsaPadding): Result<Buffer, CryptoError> {
 	if (hash == "sha1") return Result.err(signFailed(hash, padding, ""));
 	const message = data;
 	const signature = padding == "pss" ? rsaSignPss(key._data, hash, message) : rsaSignPkcs1(key._data, hash, message);
 	if (signature == null) return Result.err(signFailed(hash, padding, ""));
-	return Result.ok(signature as Buffer);
+	return Result.ok(Buffer.from(signature));
 }
 
 export function sign<D extends ByteInput>(key: RsaPrivateKey, data: D, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Promise<Result<Buffer, CryptoError>> {
@@ -338,12 +338,12 @@ export function sign<D extends ByteInput>(key: RsaPrivateKey, data: D, hash: str
 	}
 }
 
-async function signOwned(key: RsaPrivateKey, data: Buffer, hash: string, padding: RsaPadding): Promise<Result<Buffer, CryptoError>> {
+async function signOwned(key: RsaPrivateKey, data: uint8[], hash: string, padding: RsaPadding): Promise<Result<Buffer, CryptoError>> {
 	if (!wcHasSubtle()) return signSyncOwned(key, data, hash, padding);
 	if (hash == "sha1") return Result.err(signFailed(hash, padding, ""));
-	const done = await wcSign(key._cache, rsaPrivateToPkcs8(key._data) as Buffer, padding == "pss", hash, data);
+	const done = await wcSign(key._cache, rsaPrivateToPkcs8(key._data), padding == "pss", hash, data);
 	if (done.error != "") return Result.err(signFailed(hash, padding, `: ${done.error}`));
-	return Result.ok(done.value);
+	return Result.ok(Buffer.from(done.value));
 }
 
 // False on any failure: a bad signature, a malformed input or an unknown hash.
@@ -354,7 +354,7 @@ export function verifySync<D extends ByteInput, S extends ByteInput>(key: RsaPub
 	return verifySyncOwned(key, bytesOf(data), bytesOf(signature), hash, padding);
 }
 
-function verifySyncOwned(key: RsaPublicKey, data: Buffer, signature: Buffer, hash: string, padding: RsaPadding): boolean {
+function verifySyncOwned(key: RsaPublicKey, data: uint8[], signature: uint8[], hash: string, padding: RsaPadding): boolean {
 	const message = data;
 	const sig = signature;
 	return padding == "pss" ? rsaVerifyPss(key._data, hash, message, sig) : rsaVerifyPkcs1(key._data, hash, message, sig);
@@ -368,9 +368,9 @@ export function verify<D extends ByteInput, S extends ByteInput>(key: RsaPublicK
 	}
 }
 
-async function verifyOwned(key: RsaPublicKey, data: Buffer, signature: Buffer, hash: string, padding: RsaPadding): Promise<boolean> {
+async function verifyOwned(key: RsaPublicKey, data: uint8[], signature: uint8[], hash: string, padding: RsaPadding): Promise<boolean> {
 	if (!wcHasSubtle()) return verifySyncOwned(key, data, signature, hash, padding);
-	return await wcVerify(key._cache, rsaPublicToSpki(key._data) as Buffer, padding == "pss", hash, data, signature);
+	return await wcVerify(key._cache, rsaPublicToSpki(key._data), padding == "pss", hash, data, signature);
 }
 
 // RSA-OAEP with SHA-256.
@@ -382,10 +382,10 @@ export function encryptSync<D extends ByteInput>(key: RsaPublicKey, data: D): Re
 	}
 }
 
-function encryptSyncOwned(key: RsaPublicKey, data: Buffer): Result<Buffer, CryptoError> {
+function encryptSyncOwned(key: RsaPublicKey, data: uint8[]): Result<Buffer, CryptoError> {
 	const encrypted = rsaOaepEncrypt(key._data, data);
 	if (encrypted == null) return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "rsa.encrypt", "RSA-OAEP encryption failed"));
-	return Result.ok(encrypted as Buffer);
+	return Result.ok(Buffer.from(encrypted));
 }
 
 export function encrypt<D extends ByteInput>(key: RsaPublicKey, data: D): Promise<Result<Buffer, CryptoError>> {
@@ -396,11 +396,11 @@ export function encrypt<D extends ByteInput>(key: RsaPublicKey, data: D): Promis
 	}
 }
 
-async function encryptOwned(key: RsaPublicKey, data: Buffer): Promise<Result<Buffer, CryptoError>> {
+async function encryptOwned(key: RsaPublicKey, data: uint8[]): Promise<Result<Buffer, CryptoError>> {
 	if (!wcHasSubtle()) return encryptSyncOwned(key, data);
-	const done = await wcEncrypt(key._cache, rsaPublicToSpki(key._data) as Buffer, data);
+	const done = await wcEncrypt(key._cache, rsaPublicToSpki(key._data), data);
 	if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "rsa.encrypt", `RSA-OAEP encryption failed: ${done.error}`));
-	return Result.ok(done.value);
+	return Result.ok(Buffer.from(done.value));
 }
 
 export function decryptSync<D extends ByteInput>(key: RsaPrivateKey, data: D): Result<Buffer, CryptoError> {
@@ -411,10 +411,10 @@ export function decryptSync<D extends ByteInput>(key: RsaPrivateKey, data: D): R
 	}
 }
 
-function decryptSyncOwned(key: RsaPrivateKey, data: Buffer): Result<Buffer, CryptoError> {
+function decryptSyncOwned(key: RsaPrivateKey, data: uint8[]): Result<Buffer, CryptoError> {
 	const decrypted = rsaOaepDecrypt(key._data, data);
 	if (decrypted == null) return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "rsa.decrypt", "RSA-OAEP decryption failed"));
-	return Result.ok(decrypted as Buffer);
+	return Result.ok(Buffer.from(decrypted));
 }
 
 export function decrypt<D extends ByteInput>(key: RsaPrivateKey, data: D): Promise<Result<Buffer, CryptoError>> {
@@ -425,9 +425,9 @@ export function decrypt<D extends ByteInput>(key: RsaPrivateKey, data: D): Promi
 	}
 }
 
-async function decryptOwned(key: RsaPrivateKey, data: Buffer): Promise<Result<Buffer, CryptoError>> {
+async function decryptOwned(key: RsaPrivateKey, data: uint8[]): Promise<Result<Buffer, CryptoError>> {
 	if (!wcHasSubtle()) return decryptSyncOwned(key, data);
-	const done = await wcDecrypt(key._cache, rsaPrivateToPkcs8(key._data) as Buffer, data);
+	const done = await wcDecrypt(key._cache, rsaPrivateToPkcs8(key._data), data);
 	if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "rsa.decrypt", `RSA-OAEP decryption failed: ${done.error}`));
-	return Result.ok(done.value);
+	return Result.ok(Buffer.from(done.value));
 }

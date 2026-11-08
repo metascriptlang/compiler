@@ -41,7 +41,7 @@ import {
 	heapObjectFieldCount, heapObjectFieldNameAt, heapObjectFieldValueAt, heapObjectGetField,
 	heapArrayLen, heapArrayGet, heapStringText, heapAllocArray, heapArrayPush, heapAllocStoredString, rcIncref, raiserArray,
 	raiserObject, raiserInt, createStructHeap, createArrayHeap, raiserEqual, handleIndex, stringBytesHandle, setStringBytesHandle,
-	heapObjectSetField, heapAllocBytesOf, heapArrayAssignBytes, heapAllocStringOfBytes,
+	heapAllocBytesOf, heapArrayAssignBytes, heapAllocStringOfBytes,
 } from "../../raiser/value";
 import { ADAPTEE_FIELD } from "../../transform/coercion/implicitConvLower";
 import {
@@ -177,17 +177,6 @@ function _stdFsReadFile(args: RaiserValue[]): RaiserValue {
 	return _vmStringResult(readFile(_readForBuild(unboxString(args[0]))));
 }
 
-function _stdFsReadFileBytes(vm: RaiserVM): void {
-	const r = readFileBytes(_readForBuild(hostArgString(vm, 0)));
-	if (!r.ok) {
-		hostReturn(vm, copyToVm(vm.arrayHeap, vm.objectHeap, _vmFailure(r.error)));
-		return;
-	}
-	const result = copyToVm(vm.arrayHeap, vm.objectHeap, _vmSuccess(hostValue(raiserNil())));
-	heapObjectSetField(vm.arrayHeap, vm.objectHeap, result.intVal, "value", raiserArray(heapAllocBytesOf(vm.arrayHeap, bufferData(r.value) as int64, r.value.length as int64)));
-	hostReturn(vm, result);
-}
-
 function _stdFsReadLines(args: RaiserValue[]): RaiserValue {
 	return _vmStringsResult(readLines(_readForBuild(unboxString(args[0]))));
 }
@@ -209,9 +198,11 @@ function _stdFsWriteFileBytes(vm: RaiserVM): void {
 }
 
 @include("runtime/core/buffer.h");
-extern function bufferData(buf: Readonly<uint8[]>): Ptr<uint8> from "msBufferData";
+function bufferData(bytes: Readonly<Span<uint8>>): Readonly<Ptr<uint8>> {
+	return (bytes as Readonly<Ptr<void>>) as Readonly<Ptr<uint8>>;
+}
 
-function _vmBytesText(bytes: Readonly<uint8[]>): RaiserValue {
+function _vmBytesText(bytes: Readonly<Span<uint8>>): RaiserValue {
 	const heap = activeHostArrayHeap();
 	if (heap == null) throw new Error("internal: a std routine callback ran with no active VM heaps");
 	return heapAllocStringOfBytes(heap, bufferData(bytes) as int64, bytes.length as int64);
@@ -879,9 +870,10 @@ function _bridgeMsCryptoDigest(vm: RaiserVM): void {
 		raiseFromHost(`internal: the ${algorithm} digest failed on ${data.len} bytes`, true);
 		return;
 	}
-	const size = digest.value.length as int64;
+	const bytes: Readonly<Span<uint8>> = digest.value;
+	const size = bytes.length as int64;
 	const out = hostReturnBytesToFill(vm, size) as Ptr<uint8>;
-	for (let i: int64 = 0; i < size; i++) out[i] = digest.value[i];
+	for (let i: int64 = 0; i < size; i++) out[i] = bytes[i];
 }
 
 // --- Macro Node child accessors ---
@@ -1667,7 +1659,6 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msFsChangedTime",    _bridgeMsFsChangedTime, HostCapability.FileRead);
 	registerHostFn("msFsChangeStamp",    _bridgeMsFsChangeStamp, HostCapability.FileRead);
 	registerHostFn("std/fs.readFile",    _stdFsReadFile, HostCapability.FileRead);
-	registerInPlaceHostFn("std/fs.readFileBytes", _stdFsReadFileBytes, HostCapability.FileRead);
 	registerHostFn("std/fs.readLines",   _stdFsReadLines, HostCapability.FileRead);
 	registerHostFn("std/fs.readDir",     _stdFsReadDir, HostCapability.FileRead);
 	registerHostFn("std/fs.exists",      _stdFsExists, HostCapability.FileRead);

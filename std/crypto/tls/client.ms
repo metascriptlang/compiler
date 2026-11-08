@@ -10,6 +10,7 @@
  * server selects. Static-RSA key exchange is not offered.
  */
 
+import { Buffer } from "std/core/buffer";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 import { HashState, kindSha256, kindSha384, kindSha512 } from "../pure/state";
 import { newHash, copyHash, updateHash, finishHash, hashOf } from "../pure/hash";
@@ -37,7 +38,7 @@ import { wipeBytes } from "../pure/secret";
 /** The byte stream a connection runs over. */
 export abstract class TlsTransport {
 	/** Up to `maxBytes` received bytes; empty at the end of the stream or on failure. */
-	abstract receive(maxBytes: int32): uint8[];
+	abstract receive(maxBytes: int32): Buffer;
 	/** Sends all of `data`; false when the stream failed. */
 	abstract send(data: Readonly<uint8[]>): boolean;
 }

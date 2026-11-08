@@ -31,24 +31,24 @@ export function blake2bSync<D extends ByteInput>(data: D, hashSize: int32 = 32):
 	return blake2bSyncOwned(bytesOf(data), hashSize);
 }
 
-function blake2bSyncOwned(data: Buffer, hashSize: int32): Result<Buffer, CryptoError> {
+function blake2bSyncOwned(data: uint8[], hashSize: int32): Result<Buffer, CryptoError> {
 	const bad = badHashSize(hashSize, "blake2b");
 	if (bad != null) return Result.err(bad);
-	return Result.ok(blake2bOf(hashSize, [], data) as Buffer);
+	return Result.ok(Buffer.from(blake2bOf(hashSize, [], data)));
 }
 
 export function blake2bKeyedSync<K extends ByteInput, D extends ByteInput>(keyBytes: K, data: D, hashSize: int32 = 32): Result<Buffer, CryptoError> {
 	return blake2bKeyedSyncOwned(bytesOf(keyBytes), bytesOf(data), hashSize);
 }
 
-function blake2bKeyedSyncOwned(keyBytes: Buffer, data: Buffer, hashSize: int32): Result<Buffer, CryptoError> {
+function blake2bKeyedSyncOwned(keyBytes: uint8[], data: uint8[], hashSize: int32): Result<Buffer, CryptoError> {
 	const key = keyBytes;
 	if (key.length < 1 || key.length > 64) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "blake2bKeyed", "key must be 1-64 bytes"));
 	}
 	const bad = badHashSize(hashSize, "blake2bKeyed");
 	if (bad != null) return Result.err(bad);
-	return Result.ok(blake2bOf(hashSize, key, data) as Buffer);
+	return Result.ok(Buffer.from(blake2bOf(hashSize, key, data)));
 }
 
 export function blake2b<D extends ByteInput>(data: D, hashSize: int32 = 32): Promise<Result<Buffer, CryptoError>> {
@@ -58,7 +58,7 @@ export function blake2b<D extends ByteInput>(data: D, hashSize: int32 = 32): Pro
 	return blake2bOwned(bytesOf(data), hashSize);
 }
 
-async function blake2bOwned(data: Buffer, hashSize: int32): Promise<Result<Buffer, CryptoError>> {
+async function blake2bOwned(data: uint8[], hashSize: int32): Promise<Result<Buffer, CryptoError>> {
 	return blake2bSyncOwned(data, hashSize);
 }
 
@@ -66,7 +66,7 @@ export function blake2bKeyed<K extends ByteInput, D extends ByteInput>(keyBytes:
 	return blake2bKeyedOwned(bytesOf(keyBytes), bytesOf(data), hashSize);
 }
 
-async function blake2bKeyedOwned(keyBytes: Buffer, data: Buffer, hashSize: int32): Promise<Result<Buffer, CryptoError>> {
+async function blake2bKeyedOwned(keyBytes: uint8[], data: uint8[], hashSize: int32): Promise<Result<Buffer, CryptoError>> {
 	return blake2bKeyedSyncOwned(keyBytes, data, hashSize);
 }
 
@@ -84,7 +84,7 @@ export class Blake2b {
 
 	digest(): Buffer {
 		if (this._state.finished) throw new Error("Blake2b.digest: the hasher already produced its digest");
-		return finishBlake2b(this._state) as Buffer;
+		return Buffer.from(finishBlake2b(this._state));
 	}
 }
 

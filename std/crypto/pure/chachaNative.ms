@@ -1,7 +1,7 @@
 import { Buffer } from "std/core/buffer";
 import { ByteInput } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
-import { bytesOf, wipeIfCopied } from "./bytes";
+import { bytesOf, wipeIfCopied, outputArray, outputBuffer } from "./bytes";
 import { randomOctets, randomInto } from "./random";
 import { store32LE } from "./endian";
 import { wipeBytes, wipeWords } from "./secret";
@@ -45,11 +45,11 @@ export class ChaChaKey {
 
 	exportRaw(): Buffer {
 		const words = liveWords(this, "ChaChaKey.exportRaw");
-		const rawBytes = new Array<uint8>(32);
+		const rawBytes = new Buffer(32);
 		for (let i: int32 = 0; i < 8; i++) {
 			store32LE(rawBytes, i * 4, words[i]);
 		}
-		return rawBytes as Buffer;
+		return rawBytes;
 	}
 
 	onDestroy(): void {
@@ -72,7 +72,7 @@ export function sealSync<P extends ByteInput, A extends ByteInput>(
 ): Result<Buffer, CryptoError> {
 	const words = liveWords(key, "seal");
 	const plain = (typeof plainText == "string" ? plainText.asBytes() : plainText);
-	const sealed = new Array<uint8>(plain.length + 40);
+	const sealed = outputArray(plain.length + 40);
 	let success = false;
 	try {
 		randomInto(sealed, 24);
@@ -86,7 +86,7 @@ export function sealSync<P extends ByteInput, A extends ByteInput>(
 			"seal", "XChaCha20-Poly1305 encryption failed",
 		));
 	}
-	return Result.ok(sealed as Buffer);
+	return Result.ok(outputBuffer(sealed));
 }
 
 export function seal<P extends ByteInput, A extends ByteInput>(
@@ -110,14 +110,14 @@ export function openSync<S extends ByteInput, A extends ByteInput>(
 			"open", "sealed data too short (need nonce+mac)",
 		));
 	}
-	const plain = new Array<uint8>(sealed.length - 40);
+	const plain = outputArray(sealed.length - 40);
 	if (!xchachaOpenInto(words, (typeof aad == "string" ? aad.asBytes() : aad), sealed, plain)) {
 		return Result.err(cryptoError(
 			CryptoErrorKind.AuthenticationFailed,
 			"open", "authentication tag mismatch",
 		));
 	}
-	return Result.ok(plain as Buffer);
+	return Result.ok(outputBuffer(plain));
 }
 
 export function open<S extends ByteInput, A extends ByteInput>(

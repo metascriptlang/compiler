@@ -1,4 +1,4 @@
-import { InputBytes } from "./bytes";
+import { InputBytes, OutputBytes } from "./bytes";
 import { wipeBytes, wipeWords } from "./secret";
 when (!js) {
 	import { load32LE } from "./endian";
@@ -295,7 +295,7 @@ function absorb(
 /** Writes the 16-byte tag to `out` at `outOff` and wipes the state. */
 export function finishPoly1305(
 	s: Poly1305State,
-	out: uint8[],
+	out: OutputBytes,
 	outOff: int32,
 ): void {
 	when (js) {

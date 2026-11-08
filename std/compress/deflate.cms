@@ -14,6 +14,7 @@
 @compile("vendor/miniz/miniz_tdef.c");
 @compile("vendor/miniz/miniz_tinfl.c");
 
+import { adoptBuffer } from "std/core/buffer/bytes";
 import { Buffer } from "std/core/buffer";
 import { ByteInput } from "std/core/buffer/bytes";
 import { CompressError, CompressErrorKind, CompressFormat, compressError } from "./errors";
@@ -25,16 +26,16 @@ export { CompressFormat, CompressError, CompressErrorKind } from "./errors";
 
 extern function msDeflateNew(format: int32, level: int32): int64;
 extern function msDeflateFeed(handle: int64, chunk: Readonly<Span<uint8>>, isLast: int32): int32;
-extern function msDeflateDrain(handle: int64, maxBytes: int32): Buffer;
+extern function msDeflateDrain(handle: int64, maxBytes: int32): Vec<uint8>;
 extern function msDeflateFree(handle: int64): void;
-extern function msDeflateOneShot(data: Readonly<Span<uint8>>, format: int32, level: int32): Buffer;
+extern function msDeflateOneShot(data: Readonly<Span<uint8>>, format: int32, level: int32): Vec<uint8>;
 
 function feedBytes(handle: int64, chunk: Readonly<Span<uint8>>, isLast: int32): int32 {
 	return msDeflateFeed(handle, chunk, isLast);
 }
 
 function oneShot(data: Readonly<Span<uint8>>, format: int32, level: int32): Buffer {
-	return msDeflateOneShot(data, format, level);
+	return adoptBuffer(msDeflateOneShot(data, format, level));
 }
 
 // ===== Streaming API =====
@@ -70,7 +71,7 @@ function deflateFeedSpan(s: DeflateStream, chunk: Readonly<Span<uint8>>): Result
 	if (st < 0) {
 		return Result.err(compressError(CompressErrorKind.CompressionFailed, "compression failed"));
 	}
-	return Result.ok(msDeflateDrain(s.handle, 0));
+	return Result.ok(adoptBuffer(msDeflateDrain(s.handle, 0)));
 }
 
 // Signal end of input, flush the compressor, drain the remaining output,
@@ -87,7 +88,7 @@ export function deflateFinish(s: DeflateStream): Result<Buffer, CompressError> {
 		s.handle = 0;
 		return Result.err(compressError(CompressErrorKind.CompressionFailed, "flush failed"));
 	}
-	const tail = msDeflateDrain(s.handle, 0);
+	const tail = adoptBuffer(msDeflateDrain(s.handle, 0));
 	msDeflateFree(s.handle);
 	s.handle = 0;
 	return Result.ok(tail);

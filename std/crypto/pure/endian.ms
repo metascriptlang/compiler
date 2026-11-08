@@ -1,6 +1,6 @@
 /** Little- and big-endian word loads and stores on byte arrays, shared by the portable kernels. */
 
-import { InputBytes } from "./bytes";
+import { InputBytes, OutputBytes } from "./bytes";
 
 @inline
 export function load32LE(data: InputBytes, at: int32): uint32 {
@@ -8,7 +8,7 @@ export function load32LE(data: InputBytes, at: int32): uint32 {
 }
 
 @inline
-export function store32LE(out: uint8[], at: int32, word: uint32): void {
+export function store32LE(out: OutputBytes, at: int32, word: uint32): void {
 	out[at] = (word & 0xff) as uint8;
 	out[at + 1] = ((word >> 8) & 0xff) as uint8;
 	out[at + 2] = ((word >> 16) & 0xff) as uint8;
@@ -21,7 +21,7 @@ export function load32BE(data: InputBytes, at: int32): uint32 {
 }
 
 @inline
-export function store32BE(out: uint8[], at: int32, value: uint32): void {
+export function store32BE(out: OutputBytes, at: int32, value: uint32): void {
 	out[at] = (value >> 24) as uint8;
 	out[at + 1] = ((value >> 16) & 0xff) as uint8;
 	out[at + 2] = ((value >> 8) & 0xff) as uint8;
@@ -34,6 +34,6 @@ export function load64BE(data: InputBytes, at: int32): uint64 {
 }
 
 @inline
-export function store64BE(out: uint8[], at: int32, value: uint64): void {
+export function store64BE(out: OutputBytes, at: int32, value: uint64): void {
 	for (let i = 0; i < 8; i++) out[at + i] = ((value >> ((56 - 8 * i) as uint64)) & 0xff) as uint8;
 }

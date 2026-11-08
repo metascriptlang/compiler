@@ -22,7 +22,7 @@ function randomBytes(r: Rng, n: int32): uint8[] {
 	return b;
 }
 
-function sameBytes(a: Readonly<uint8[]>, b: Readonly<uint8[]>): boolean {
+function sameBytes(a: Readonly<Span<uint8>>, b: Readonly<Span<uint8>>): boolean {
 	if (a.length != b.length) return false;
 	for (let i = 0; i < a.length; i++) if (a[i] != b[i]) return false;
 	return true;
@@ -43,7 +43,7 @@ test "pure BLAKE2b equals the Monocypher oracle on seeded inputs, keyed and unke
 		const outLen = (1 + nextU32(r) % 64) as int32;
 		const keyLen = (nextU32(r) % 65) as int32;
 		const key = randomBytes(r, keyLen);
-		const expected = keyLen == 0 ? vendorSync(data as Buffer, outLen) : vendorKeyedSync(key as Buffer, data as Buffer, outLen);
+		const expected = keyLen == 0 ? vendorSync(data, outLen) : vendorKeyedSync(key, data, outLen);
 		if (!expected.ok) throw new Error("vendor refused a valid input");
 		assert sameBytes(blake2bOf(outLen, key, data), expected.value);
 		if (keyLen == 0) {
@@ -53,7 +53,7 @@ test "pure BLAKE2b equals the Monocypher oracle on seeded inputs, keyed and unke
 			updateBlake2b(s, data, cut, n - cut);
 			const v = vendorCreate(outLen);
 			if (!v.ok) throw new Error("vendor refused a valid size");
-			v.value.update((data as Buffer).slice(0, cut)).update((data as Buffer).slice(cut, n));
+			v.value.update(data.slice(0, cut)).update(data.slice(cut, n));
 			assert sameBytes(finishBlake2b(s), v.value.digest());
 		}
 		checked++;
@@ -63,5 +63,5 @@ test "pure BLAKE2b equals the Monocypher oracle on seeded inputs, keyed and unke
 
 test "the oracle and the pure surface refuse the same sizes" {
 	for (const outLen of [0, 65, -1]) assert vendorSync("abc", outLen).ok == blake2bSync("abc", outLen).ok;
-	for (const keyLen of [0, 1, 64, 65]) assert vendorKeyedSync(Buffer.alloc(keyLen), "abc").ok == blake2bKeyedSync(Buffer.alloc(keyLen), "abc").ok;
+	for (const keyLen of [0, 1, 64, 65]) assert vendorKeyedSync(new Array<uint8>(keyLen), "abc").ok == blake2bKeyedSync(Buffer.alloc(keyLen), "abc").ok;
 }

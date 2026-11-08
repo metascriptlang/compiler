@@ -19,13 +19,13 @@ function nextWord(rng: Rng): uint32 {
 	return x;
 }
 
-function randomBytes(rng: Rng, size: int32): Buffer {
-	const out = Buffer.alloc(size);
+function randomBytes(rng: Rng, size: int32): uint8[] {
+	const out = new Array<uint8>(size);
 	for (let i = 0; i < size; i++) out[i] = (nextWord(rng) & 0xff) as uint8;
 	return out;
 }
 
-function keyOf(raw: Buffer): AesKey {
+function keyOf(raw: uint8[]): AesKey {
 	const key = AesKey.import(raw);
 	if (!key.ok) throw new Error(key.error.message);
 	return key.value;
@@ -36,7 +36,7 @@ function bytesOf(result: Result<Buffer, CryptoError>, what: string): Buffer {
 	return result.value;
 }
 
-function sameBytes(a: Readonly<uint8[]>, b: Readonly<uint8[]>): boolean {
+function sameBytes(a: Readonly<Span<uint8>>, b: Readonly<Span<uint8>>): boolean {
 	if (a.length != b.length) return false;
 	for (let i = 0; i < a.length; i++) if (a[i] != b[i]) return false;
 	return true;
@@ -61,15 +61,15 @@ function gcmRound(rng: Rng, keySize: int32, size: int32, count: Count): void {
 	const plain = randomBytes(rng, size);
 	const aad = randomBytes(rng, (nextWord(rng) % 40) as int32);
 	const vendor = bytesOf(sealSync(key, plain, aad), "sealSync");
-	const pure = gcmSealWithNonce(xk, vendor.slice(0, 12), plain, aad);
+	const pure = gcmSealWithNonce(xk, [...vendor.slice(0, 12)], plain, aad);
 	const label = `gcm key=${keySize} size=${size}`;
 	count.cases += 1;
 	if (!sameBytes(vendor, pure)) count.mismatches.push(`${label}: sealed bytes differ`);
-	const opened = gcmOpen(xk, vendor, aad);
+	const opened = gcmOpen(xk, [...vendor], aad);
 	if (opened == null || !sameBytes(opened, plain)) count.mismatches.push(`${label}: pure open of the vendor blob`);
 	const back = openSync(key, pure, aad);
 	if (!back.ok || !sameBytes(back.value, plain)) count.mismatches.push(`${label}: vendor open of the pure blob`);
-	const forged = pure.slice(0);
+	const forged: uint8[] = [...pure];
 	const at = (nextWord(rng) % (forged.length as uint32)) as int32;
 	forged[at] = forged[at] ^ ((1 << (nextWord(rng) % 8)) as uint8);
 	if (gcmOpen(xk, forged, aad) != null || openSync(key, forged, aad).ok) count.mismatches.push(`${label}: a forged byte at ${at} was accepted`);
@@ -86,9 +86,9 @@ function cbcRound(rng: Rng, keySize: int32, size: int32, count: Count): void {
 	const pure = cbcEncrypt(expandKey(raw), iv, plain);
 	if (!sameBytes(vendor, pure)) count.mismatches.push(`${label}: cipher text differs`);
 	const xkD = expandKeyDecrypt(raw);
-	const opened = cbcDecrypt(xkD, iv, vendor);
+	const opened = cbcDecrypt(xkD, iv, [...vendor]);
 	if (opened == null || !sameBytes(opened, plain)) count.mismatches.push(`${label}: pure decrypt of the vendor cipher text`);
-	const forged = Buffer.copy(vendor);
+	const forged: uint8[] = [...vendor];
 	forged[forged.length - 1] = forged[forged.length - 1] ^ ((1 + nextWord(rng) % 255) as uint8);
 	const pureForged = cbcDecrypt(xkD, iv, forged);
 	const vendorForged = cbcDecryptSync(key, forged, iv);

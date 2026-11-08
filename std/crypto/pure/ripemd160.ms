@@ -912,6 +912,13 @@ export function updateRipemd160(s: Ripemd160State, data: Readonly<uint8[]>): voi
 }
 
 export function finishRipemd160(s: Ripemd160State): uint8[] {
+	const out = new Array<uint8>(20);
+	finishRipemd160Into(s, out);
+	return out;
+}
+
+/** Pads, compresses and writes the 20-byte digest to `out`; the state is wiped afterwards. */
+export function finishRipemd160Into(s: Ripemd160State, out: Span<uint8>): void {
 	if (s.finished) throw new Error("ripemd160: already finished");
 	let filled = s.filled;
 	s.block[filled] = 0x80;
@@ -933,7 +940,6 @@ export function finishRipemd160(s: Ripemd160State): uint8[] {
 	compress(s, s.block, 0);
 	wipeBytes(s.block);
 	s.finished = true;
-	const out = new Array<uint8>(20);
 	for (let i = 0; i < 5; i++) {
 		const word = s.h[i];
 		out[4 * i + 0] = (word & 255) as uint8;
@@ -942,7 +948,6 @@ export function finishRipemd160(s: Ripemd160State): uint8[] {
 		out[4 * i + 3] = ((word >> 24) & 255) as uint8;
 	}
 	wipeWords(s.h);
-	return out;
 }
 
 export function ripemd160Of(data: Readonly<uint8[]>): uint8[] {

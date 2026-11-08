@@ -1,7 +1,7 @@
 import { Buffer } from "std/core/buffer";
 import { ByteInput } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
-import { bytesOf, wipeIfCopied } from "./bytes";
+import { bytesOf, wipeIfCopied, outputBuffer } from "./bytes";
 import { randomOctets } from "./random";
 import { wipeBytes } from "./secret";
 import {
@@ -55,7 +55,7 @@ export class AesKey {
 
 	exportRaw(): Buffer {
 		liveSchedule(this, "AesKey.exportRaw");
-		return this._raw.slice(0) as Buffer;
+		return Buffer.from(this._raw);
 	}
 
 	onDestroy(): void {
@@ -89,9 +89,9 @@ export function sealSync<P extends ByteInput, A extends ByteInput>(
 		));
 	}
 	try {
-		return Result.ok(gcmSealWithNonce(
+		return Result.ok(outputBuffer(gcmSealWithNonce(
 			schedule, nonce, (typeof plainTextBytes == "string" ? plainTextBytes.asBytes() : plainTextBytes), (typeof aadBytes == "string" ? aadBytes.asBytes() : aadBytes),
-		) as Buffer);
+		)));
 	} catch (_error) {
 		return Result.err(cryptoError(
 			CryptoErrorKind.EncryptionFailed,
@@ -127,7 +127,7 @@ export function openSync<S extends ByteInput, A extends ByteInput>(
 			"open", "authentication tag mismatch",
 		));
 	}
-	return Result.ok(plain as Buffer);
+	return Result.ok(outputBuffer(plain));
 }
 
 export function open<S extends ByteInput, A extends ByteInput>(
@@ -152,7 +152,7 @@ export function cbcEncryptSync<P extends ByteInput, I extends ByteInput>(
 	}
 	try {
 		return Result.ok(
-			encryptCbc(schedule, iv, (typeof plainTextBytes == "string" ? plainTextBytes.asBytes() : plainTextBytes)) as Buffer,
+			outputBuffer(encryptCbc(schedule, iv, (typeof plainTextBytes == "string" ? plainTextBytes.asBytes() : plainTextBytes))),
 		);
 	} catch (_error) {
 		return Result.err(cryptoError(
@@ -189,7 +189,7 @@ export function cbcDecryptSync<C extends ByteInput, I extends ByteInput>(
 			"cbcDecrypt", "AES-CBC decryption failed (bad padding or key)",
 		));
 	}
-	return Result.ok(plain as Buffer);
+	return Result.ok(outputBuffer(plain));
 }
 
 export function cbcDecrypt<C extends ByteInput, I extends ByteInput>(

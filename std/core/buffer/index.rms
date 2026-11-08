@@ -1,4 +1,5 @@
-import { Buffer } from "./type";
+import { Buffer, allocSize } from "./type";
+import { decodeUtf8 } from "../typed/utf8";
 import { Math } from "std/core/math";
 import { encodeHex, encodeBase64 } from "std/core/encoding";
 import {
@@ -7,29 +8,30 @@ import {
 	encodingOf, textEncoding, sliceEncoding, encodedLength, writeText, ucs2Text,
 	needBytes, checkedInt, storedInt, needWideValue, needBigValue, widthOrZero, badByteLength,
 } from "./codec";
-import { utf8Text } from "../string/bytes";
 export { Buffer } from "./type";
-export { toJSON, inspect } from "./protocols";
+export { inspect } from "./protocols";
+export { BufferJson } from "./type";
 
-/** Decodes the bytes as UTF-8 the way Node does: an ill-formed sequence becomes U+FFFD. */
-export function toString(this buf: Buffer): string {
-	return utf8Text(msRawString(buf), false);
+
+function putByte(this buf: Buffer, index: number, value: number): void {
+	const bufBytes: Span<uint8> = buf;
+	const at = index as int64;
+	if (at >= 0 && at < bufBytes.length) bufBytes[at] = (((value as int64) & 255) as uint8);
 }
 
-extern function msRawString(data: Readonly<uint8[]>): string from "msRawString";
-
 export function alloc(this typeof Buffer, size: number): Buffer {
-	return new Array<uint8>(size as int64) as Buffer;
+	return new Buffer(allocSize(size));
 }
 
 export function allocUnsafe(this typeof Buffer, size: number): Buffer {
-	return new Array<uint8>(size as int64) as Buffer;
+	return new Buffer(allocSize(size));
 }
 
 function copyOf(value: Readonly<Span<uint8>>): Buffer {
 	const length = value.length as int64;
 	const buf = Buffer.alloc(length as number);
-	for (let i: int64 = 0; i < length; i++) buf[i] = value[i];
+	const into: Span<uint8> = buf;
+	for (let i: int64 = 0; i < length; i++) into[i] = value[i];
 	return buf;
 }
 
@@ -38,8 +40,7 @@ function decodeText(value: string, base64: boolean): Buffer {
 	const capacity = base64 ? base64Capacity(text) : hexCapacity(text);
 	const buf = Buffer.alloc(capacity as number);
 	const written = base64 ? writeBase64(text, buf, 0, capacity) : writeHex(text, buf, 0, capacity);
-	if (written < capacity) buf.setLength(written as number);
-	return buf;
+	return written < capacity ? buf.subarray(0, written as number) : buf;
 }
 
 export function fromString(this typeof Buffer, value: string, name: string): Buffer {
@@ -52,19 +53,13 @@ function decodeString(value: string, encoding: int32): Buffer {
 	const capacity = encodedLength(value, encoding) as int64;
 	const buf = Buffer.alloc(capacity as number);
 	const written = writeText(value.asBytes(), buf, 0, capacity, encoding);
-	if (written < capacity) buf.setLength(written as number);
-	return buf;
+	return written < capacity ? buf.subarray(0, written as number) : buf;
 }
 
 export function fromArray(this typeof Buffer, arr: number[]): Buffer {
 	const buf = Buffer.alloc(arr.length);
-	for (let i = 0; i < arr.length; i++) buf.set(i, arr[i]);
+	for (let i = 0; i < arr.length; i++) buf.putByte(i, arr[i]);
 	return buf;
-}
-
-export function slice(this buf: Buffer, start: number = 0, end: number = 9007199254740991): Buffer {
-	const bytes: Readonly<Span<uint8>> = buf;
-	return bytes.slice(start, end) as Buffer;
 }
 
 export function copy(this typeof Buffer, value: Buffer): Buffer {
@@ -72,11 +67,13 @@ export function copy(this typeof Buffer, value: Buffer): Buffer {
 }
 
 export function compare(this typeof Buffer, a: Buffer, b: Buffer): number {
-	const shared = a.length < b.length ? a.length : b.length;
+	const aBytes: Span<uint8> = a;
+	const bBytes: Span<uint8> = b;
+	const shared = aBytes.length < bBytes.length ? aBytes.length : bBytes.length;
 	for (let i = 0; i < shared; i++) {
-		if (a[i] != b[i]) return a[i] < b[i] ? -1 : 1;
+		if (aBytes[i] != bBytes[i]) return aBytes[i] < bBytes[i] ? -1 : 1;
 	}
-	return a.length == b.length ? 0 : a.length < b.length ? -1 : 1;
+	return aBytes.length == bBytes.length ? 0 : aBytes.length < bBytes.length ? -1 : 1;
 }
 
 export function concat(this typeof Buffer, a: Buffer, b: Buffer): Buffer {
@@ -87,17 +84,19 @@ export function concat(this typeof Buffer, a: Buffer, b: Buffer): Buffer {
 }
 
 export function isAscii(this typeof Buffer, value: Buffer): boolean {
-	for (let i = 0; i < value.length; i++) {
-		if (value[i] >= 128) return false;
+	const valueBytes: Span<uint8> = value;
+	for (let i = 0; i < valueBytes.length; i++) {
+		if (valueBytes[i] >= 128) return false;
 	}
 	return true;
 }
 
 export function isUtf8(this typeof Buffer, value: Buffer): boolean {
+	const valueBytes: Span<uint8> = value;
 	let i = 0;
-	const n = value.length;
+	const n = valueBytes.length;
 	while (i < n) {
-		const b0 = value[i] as int32;
+		const b0 = valueBytes[i] as int32;
 		if (b0 < 128) {
 			i += 1;
 			continue;
@@ -120,7 +119,7 @@ export function isUtf8(this typeof Buffer, value: Buffer): boolean {
 		if (i + need >= n) return false;
 		let cp = b0 & (31 >> (need - 1));
 		for (let k = 1; k <= need; k++) {
-			const bk = value[i + k] as int32;
+			const bk = valueBytes[i + k] as int32;
 			if ((bk & 192) != 128) return false;
 			cp = (cp << 6) | (bk & 63);
 		}
@@ -139,10 +138,10 @@ export function isBufferEncoding(this typeof Buffer, encoding: string): boolean 
 }
 
 export function concatList(this typeof Buffer, buffers: Buffer[]): Buffer {
-	let total = 0;
+	let total: number = 0;
 	for (let i = 0; i < buffers.length; i++) total += buffers[i].length;
 	const result = Buffer.alloc(total);
-	let offset = 0;
+	let offset: number = 0;
 	for (let i = 0; i < buffers.length; i++) {
 		buffers[i].copyTo(result, offset, 0, buffers[i].length);
 		offset += buffers[i].length;
@@ -150,18 +149,10 @@ export function concatList(this typeof Buffer, buffers: Buffer[]): Buffer {
 	return result;
 }
 
-export function byteLength(this buf: Buffer): number {
-	return buf.length;
-}
-
 export function byteAt(this buf: Buffer, index: number): int32 {
+	const bufBytes: Span<uint8> = buf;
 	const at = index as int64;
-	return at >= 0 && at < buf.length ? buf[at] as int32 : -1;
-}
-
-export function set(this buf: Buffer, index: number, value: number): void {
-	const at = index as int64;
-	if (at >= 0 && at < buf.length) buf[at] = (((value as int64) & 255) as uint8);
+	return at >= 0 && at < bufBytes.length ? bufBytes[at] as int32 : -1;
 }
 
 export function toHex(this buf: Buffer): string {
@@ -173,15 +164,18 @@ export function toBase64(this buf: Buffer): string {
 }
 
 function slicedBytes(buf: Buffer, from: int64, to: int64): Buffer {
+	const bufBytes: Span<uint8> = buf;
 	const out = Buffer.alloc((to - from) as number);
-	for (let i = from; i < to; i++) out[i - from] = buf[i];
+	const into: Span<uint8> = out;
+	for (let i = from; i < to; i++) into[i - from] = bufBytes[i];
 	return out;
 }
 
 function mappedString(buf: Buffer, from: int64, to: int64, mask: uint8, wide: boolean): string {
+	const bufBytes: Span<uint8> = buf;
 	const out: uint8[] = [];
 	for (let i = from; i < to; i++) {
-		const byte = buf[i] & mask;
+		const byte = bufBytes[i] & mask;
 		if (wide && byte >= 128) {
 			out.push(192 | (byte >> 6));
 			out.push(128 | (byte & 63));
@@ -203,46 +197,51 @@ export function toStringEncoded(this buf: Buffer, name: string, start: number, e
 	if (encoding == base64UrlEncoding) return encodeBase64Url(slicedBytes(buf, from, to));
 	if (encoding == asciiEncoding) return mappedString(buf, from, to, 127, false);
 	if (encoding == latin1Encoding) return mappedString(buf, from, to, 255, true);
-	if (encoding == utf8Encoding) return utf8Text(msRawString(slicedBytes(buf, from, to)), false);
+	if (encoding == utf8Encoding) return decodeUtf8(slicedBytes(buf, from, to));
 	return ucs2Text(slicedBytes(buf, from, to));
 }
 
 export function copyTo(this buf: Buffer, target: Buffer, targetStart: number, sourceStart: number, sourceEnd: number): number {
-	const sourceLength = buf.length as int64;
+	const bufBytes: Span<uint8> = buf;
+	const targetBytes: Span<uint8> = target;
+	const sourceLength = bufBytes.length as int64;
 	const from = sourceStart < 0 ? 0 : (sourceStart as int64);
 	const end = (sourceEnd as int64) > sourceLength ? sourceLength : (sourceEnd as int64);
 	const to = targetStart < 0 ? 0 : (targetStart as int64);
 	if (from >= end) return 0;
-	const room = (target.length as int64) - to;
+	const room = (targetBytes.length as int64) - to;
 	const count = end - from > room ? room : end - from;
 	if (count <= 0) return 0;
 	if (from < to) {
-		for (let i = count - 1; i >= 0; i--) target[to + i] = buf[from + i];
+		for (let i = count - 1; i >= 0; i--) targetBytes[to + i] = bufBytes[from + i];
 	} else {
-		for (let i: int64 = 0; i < count; i++) target[to + i] = buf[from + i];
+		for (let i: int64 = 0; i < count; i++) targetBytes[to + i] = bufBytes[from + i];
 	}
 	return count as number;
 }
 
 function fillRepeated(buf: Buffer, from: int64, to: int64, pattern: Readonly<Span<uint8>>): void {
+	const bufBytes: Span<uint8> = buf;
 	const patternLength = pattern.length as int64;
-	for (let i = from; i < to; i++) buf[i] = pattern[(i - from) % patternLength];
+	for (let i = from; i < to; i++) bufBytes[i] = pattern[(i - from) % patternLength];
 }
 
-export function fill(this buf: Buffer, value: number, start: number, end: number): void {
+export function fillByte(this buf: Buffer, value: number, start: number, end: number): void {
+	const bufBytes: Span<uint8> = buf;
 	const first = start as int64;
 	const last = end as int64;
 	const from = first < 0 ? 0 : first;
-	const to = last > (buf.length as int64) ? (buf.length as int64) : last;
+	const to = last > (bufBytes.length as int64) ? (bufBytes.length as int64) : last;
 	const byte = (((value as int64) & 255) as uint8);
-	for (let i = from; i < to; i++) buf[i] = byte;
+	for (let i = from; i < to; i++) bufBytes[i] = byte;
 }
 
 function byteSearchIndex(buf: Buffer, value: number, byteOffset: number): int64 {
+	const bufBytes: Span<uint8> = buf;
 	const offset = byteOffset as int64;
 	const needle = (((value as int64) & 255) as uint8);
-	for (let i = offset < 0 ? 0 : offset; i < buf.length; i++) {
-		if (buf[i] == needle) return i;
+	for (let i = offset < 0 ? 0 : offset; i < bufBytes.length; i++) {
+		if (bufBytes[i] == needle) return i;
 	}
 	return -1;
 }
@@ -252,11 +251,12 @@ export function indexOf(this buf: Buffer, value: number, byteOffset: number): nu
 }
 
 export function lastIndexOf(this buf: Buffer, value: number, byteOffset: number): number {
-	const length = buf.length as int64;
+	const bufBytes: Span<uint8> = buf;
+	const length = bufBytes.length as int64;
 	const offset = byteOffset as int64;
 	const needle = (((value as int64) & 255) as uint8);
 	let at = offset < 0 || offset >= length ? length - 1 : offset;
-	while (at >= 0 && buf[at] != needle) at -= 1;
+	while (at >= 0 && bufBytes[at] != needle) at -= 1;
 	return at as number;
 }
 
@@ -265,8 +265,10 @@ export function includes(this buf: Buffer, value: number, byteOffset: number): b
 }
 
 function matchesAt(buf: Buffer, needle: Buffer, at: int64): boolean {
-	for (let k = 0; k < needle.length; k++) {
-		if (buf[at + k] != needle[k]) return false;
+	const bufBytes: Span<uint8> = buf;
+	const needleBytes: Span<uint8> = needle;
+	for (let k = 0; k < needleBytes.length; k++) {
+		if (bufBytes[at + k] != needleBytes[k]) return false;
 	}
 	return true;
 }
@@ -342,19 +344,21 @@ export function fillBuffer(this buf: Buffer, value: Buffer, start: number, end: 
 }
 
 function loadField(buf: Buffer, at: int64, width: int64, bigEndian: boolean): int64 {
+	const bufBytes: Span<uint8> = buf;
 	let value: int64 = 0;
 	for (let i: int64 = 0; i < width; i++) {
-		const byte = (bigEndian ? buf[at + width - 1 - i] : buf[at + i]) as int64;
+		const byte = (bigEndian ? bufBytes[at + width - 1 - i] : bufBytes[at + i]) as int64;
 		value |= byte << (i << 3);
 	}
 	return value;
 }
 
 function storeField(buf: Buffer, at: int64, width: int64, bigEndian: boolean, value: int64): void {
+	const bufBytes: Span<uint8> = buf;
 	for (let i: int64 = 0; i < width; i++) {
 		const byte = ((value >> (i << 3)) & 255) as uint8;
-		if (bigEndian) buf[at + width - 1 - i] = byte;
-		else buf[at + i] = byte;
+		if (bigEndian) bufBytes[at + width - 1 - i] = byte;
+		else bufBytes[at + i] = byte;
 	}
 }
 
@@ -572,13 +576,14 @@ export function writeDoubleBE(this buf: Buffer, value: number, offset: number): 
 }
 
 function swapWords(buf: Buffer, width: int64): void {
-	const length = buf.length as int64;
+	const bufBytes: Span<uint8> = buf;
+	const length = bufBytes.length as int64;
 	if (length % width != 0) return;
 	for (let at: int64 = 0; at < length; at += width) {
 		for (let k: int64 = 0; k < width / 2; k++) {
-			const byte = buf[at + k];
-			buf[at + k] = buf[at + width - 1 - k];
-			buf[at + width - 1 - k] = byte;
+			const byte = bufBytes[at + k];
+			bufBytes[at + k] = bufBytes[at + width - 1 - k];
+			bufBytes[at + width - 1 - k] = byte;
 		}
 	}
 }
@@ -594,12 +599,13 @@ export function swap64(this buf: Buffer): void {
 }
 
 export function bufReverse(this buf: Buffer): void {
+	const bufBytes: Span<uint8> = buf;
 	let left: int64 = 0;
-	let right = (buf.length as int64) - 1;
+	let right = (bufBytes.length as int64) - 1;
 	while (left < right) {
-		const byte = buf[left];
-		buf[left] = buf[right];
-		buf[right] = byte;
+		const byte = bufBytes[left];
+		bufBytes[left] = bufBytes[right];
+		bufBytes[right] = byte;
 		left += 1;
 		right -= 1;
 	}

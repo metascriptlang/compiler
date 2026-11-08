@@ -1,3 +1,5 @@
+import { OutputBytes } from "./bytes";
+
 /** Random bytes for the portable code: the OS CSPRNG on C, `crypto.getRandomValues` on JS. */
 
 when (js) {
@@ -6,8 +8,17 @@ when (js) {
 	for (let at = 0; at < size; at += 65536) globalThis.crypto.getRandomValues(out.subarray(at, Math.min(at + 65536, size)));
 	return Array.from(out);
 }`);
+	@emit(`function msPureRandomFill(out) {
+	for (let at = 0; at < out.length; at += 65536) globalThis.crypto.getRandomValues(out.subarray(at, Math.min(at + 65536, out.length)));
+}`);
 
 	extern function pureRandom(size: int32): uint8[] from "msPureRandom(#)";
+	extern function pureRandomFill(out: Uint8Array): void from "msPureRandomFill(#)";
+
+	/** Fills `out` from `crypto.getRandomValues`, in place. */
+	export function randomFill(out: Uint8Array): void {
+		pureRandomFill(out);
+	}
 }
 
 when (c) {
@@ -70,7 +81,7 @@ test "randomInto accepts empty full and prefix destinations" {
 	assert dst.length == 3;
 }
 
-export function randomInto(dst: uint8[], size: int32): void {
+export function randomInto(dst: OutputBytes, size: int32): void {
 	if (size < 0 || size > dst.length) {
 		throw new Error("randomInto: size must be within the destination");
 	}

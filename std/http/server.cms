@@ -469,7 +469,7 @@ export function bodyText(this req: HttpRequest): string {
 test "a request keeps its body bytes and bodyText decodes them as valid text" {
 	const req: HttpRequest = {
 		method: HttpMethod.POST, path: "/", version: "HTTP/1.1", headers: hdrs.createHeaders(),
-		bytes: [0x61, 0xC3, 0xA9, 0xFF, 0x80] as Buffer, clientFd: -1,
+		bytes: Buffer.fromArray([0x61, 0xC3, 0xA9, 0xFF, 0x80]), clientFd: -1,
 	};
 	assert req.bytes.length == 5;
 	assert req.bytes[3] == 0xFF;

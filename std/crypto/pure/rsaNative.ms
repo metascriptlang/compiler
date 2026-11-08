@@ -195,7 +195,7 @@ export function signSync<D extends ByteInput>(
 			`signing failed (hash ${hash}, ${padding}; sha1 is refused)`,
 		));
 	}
-	return Result.ok(signature as Buffer);
+	return Result.ok(Buffer.from(signature));
 }
 
 export function sign<D extends ByteInput>(
@@ -258,7 +258,7 @@ export function encryptSync<D extends ByteInput>(
 			"rsa.encrypt", "RSA-OAEP encryption failed",
 		));
 	}
-	return Result.ok(encrypted as Buffer);
+	return Result.ok(Buffer.from(encrypted));
 }
 
 export function encrypt<D extends ByteInput>(
@@ -287,7 +287,7 @@ export function decryptSync<D extends ByteInput>(
 			"rsa.decrypt", "RSA-OAEP decryption failed",
 		));
 	}
-	return Result.ok(decrypted as Buffer);
+	return Result.ok(Buffer.from(decrypted));
 }
 
 export function decrypt<D extends ByteInput>(

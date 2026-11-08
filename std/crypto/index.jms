@@ -22,21 +22,15 @@ export {
 export { pbkdf2Sync, hkdfSync } from "./pure/kdfNative";
 export { CryptoError, CryptoErrorKind, cryptoError } from "./errors";
 
-@emit(`function msWcBytes(u8) {
-	const n = u8.length;
-	const out = new Array(n).fill(0);
-	for (let i = 0; i < n; i++) out[i] = u8[i];
-	return out;
-}
-function msWcHasSubtle() {
+@emit(`function msWcHasSubtle() {
 	const c = globalThis.crypto;
 	return !!(c && c.subtle);
 }
 async function msWcRun(job) {
 	try {
-		return { value: msWcBytes(new Uint8Array(await job(globalThis.crypto.subtle))), error: "" };
+		return { value: await job(globalThis.crypto.subtle), error: "" };
 	} catch (e) {
-		return { value: [], error: String(e && e.message ? e.message : e) };
+		return { value: new ArrayBuffer(0), error: String(e && e.message ? e.message : e) };
 	}
 }
 function msWcDigest(name, data) {
@@ -62,15 +56,15 @@ function msWcHkdf(name, ikm, salt, info, length) {
 }`);
 
 interface Settled {
-	value: Buffer;
+	value: ArrayBuffer;
 	error: string;
 }
 
 extern function wcHasSubtle(): boolean from "msWcHasSubtle()";
-extern function wcDigest(name: string, data: Buffer): Promise<Settled> from "msWcDigest(#, #)";
-extern function wcHmac(name: string, key: Buffer, data: Buffer): Promise<Settled> from "msWcHmac(#, #, #)";
-extern function wcPbkdf2(name: string, password: Buffer, salt: Buffer, iterations: number, length: number): Promise<Settled> from "msWcPbkdf2(#, #, #, #, #)";
-extern function wcHkdf(name: string, ikm: Buffer, salt: Buffer, info: Buffer, length: number): Promise<Settled> from "msWcHkdf(#, #, #, #, #)";
+extern function wcDigest(name: string, data: Readonly<uint8[]>): Promise<Settled> from "msWcDigest(#, #)";
+extern function wcHmac(name: string, key: Readonly<uint8[]>, data: Readonly<uint8[]>): Promise<Settled> from "msWcHmac(#, #, #)";
+extern function wcPbkdf2(name: string, password: Readonly<uint8[]>, salt: Readonly<uint8[]>, iterations: number, length: number): Promise<Settled> from "msWcPbkdf2(#, #, #, #, #)";
+extern function wcHkdf(name: string, ikm: Readonly<uint8[]>, salt: Readonly<uint8[]>, info: Readonly<uint8[]>, length: number): Promise<Settled> from "msWcHkdf(#, #, #, #, #)";
 
 /** The WebCrypto name of a hash `crypto.subtle` runs here, or "" when the port runs it. */
 function subtleName(algorithm: string): string {
@@ -90,12 +84,12 @@ export function digest<D extends ByteInput>(algorithm: HashAlgorithm, data: D): 
 	}
 }
 
-async function digestOwned(algorithm: HashAlgorithm, data: Buffer): Promise<Result<Buffer, CryptoError>> {
+async function digestOwned(algorithm: HashAlgorithm, data: uint8[]): Promise<Result<Buffer, CryptoError>> {
 	const name = subtleName(algorithm);
 	if (name == "") return digestSync(algorithm, data);
 	const done = await wcDigest(name, data);
 	if (done.error != "") return Result.err(hashFailed(algorithm, done.error));
-	return Result.ok(done.value);
+	return Result.ok(new Buffer(done.value));
 }
 
 export function sha256<D extends ByteInput>(data: D): Promise<Result<Buffer, CryptoError>> { return digest("sha256", data); }
@@ -112,13 +106,13 @@ export function hmac<K extends ByteInput, D extends ByteInput>(algorithm: HashAl
 	}
 }
 
-async function hmacOwned(algorithm: HashAlgorithm, key: Buffer, data: Buffer): Promise<Result<Buffer, CryptoError>> {
+async function hmacOwned(algorithm: HashAlgorithm, key: uint8[], data: uint8[]): Promise<Result<Buffer, CryptoError>> {
 	const name = subtleName(algorithm);
 	// WebCrypto refuses an empty HMAC key, which HMAC itself allows.
 	if (name == "" || key.length == 0) return hmacSync(algorithm, key, data);
 	const done = await wcHmac(name, key, data);
 	if (done.error != "") return Result.err(hmacFailed(algorithm, done.error));
-	return Result.ok(done.value);
+	return Result.ok(new Buffer(done.value));
 }
 
 export function pbkdf2<P extends ByteInput, S extends ByteInput>(password: P, salt: S, iterations: int32, keyLength: int32, digest: HashAlgorithm): Promise<Result<Buffer, CryptoError>> {
@@ -129,14 +123,14 @@ export function pbkdf2<P extends ByteInput, S extends ByteInput>(password: P, sa
 	}
 }
 
-async function pbkdf2Owned(password: Buffer, salt: Buffer, iterations: int32, keyLength: int32, digest: HashAlgorithm): Promise<Result<Buffer, CryptoError>> {
+async function pbkdf2Owned(password: uint8[], salt: uint8[], iterations: int32, keyLength: int32, digest: HashAlgorithm): Promise<Result<Buffer, CryptoError>> {
 	const name = subtleName(digest);
 	if (name == "") return pbkdf2Sync(password, salt, iterations, keyLength, digest);
 	const refusal = pbkdf2Refusal(iterations, keyLength, digest);
 	if (refusal != null) return Result.err(refusal);
 	const done = await wcPbkdf2(name, password, salt, iterations, keyLength);
 	if (done.error != "") return Result.err(keyDerivationFailed("pbkdf2", done.error));
-	return Result.ok(done.value);
+	return Result.ok(new Buffer(done.value));
 }
 
 export function hkdf<I extends ByteInput, S extends ByteInput, N extends ByteInput>(algorithm: HashAlgorithm, ikm: I, salt: S, info: N, length: int32): Promise<Result<Buffer, CryptoError>> {
@@ -147,7 +141,7 @@ export function hkdf<I extends ByteInput, S extends ByteInput, N extends ByteInp
 	}
 }
 
-async function hkdfOwned(algorithm: HashAlgorithm, ikm: Buffer, salt: Buffer, info: Buffer, length: int32): Promise<Result<Buffer, CryptoError>> {
+async function hkdfOwned(algorithm: HashAlgorithm, ikm: uint8[], salt: uint8[], info: uint8[], length: int32): Promise<Result<Buffer, CryptoError>> {
 	const name = subtleName(algorithm);
 	// WebCrypto refuses empty HKDF input keying material, which RFC 5869 allows.
 	if (name == "" || ikm.length == 0) return hkdfSync(algorithm, ikm, salt, info, length);
@@ -155,5 +149,5 @@ async function hkdfOwned(algorithm: HashAlgorithm, ikm: Buffer, salt: Buffer, in
 	if (refusal != null) return Result.err(refusal);
 	const done = await wcHkdf(name, ikm, salt, info, length);
 	if (done.error != "") return Result.err(keyDerivationFailed("hkdf", done.error));
-	return Result.ok(done.value);
+	return Result.ok(new Buffer(done.value));
 }

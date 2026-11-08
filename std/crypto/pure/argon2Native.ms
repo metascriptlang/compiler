@@ -100,7 +100,7 @@ export function argon2HashRawSync<D extends ByteInput, K extends ByteInput>(
 			"Argon2id raw hashing failed",
 		));
 	}
-	return Result.ok(raw.value as Buffer);
+	return Result.ok(Buffer.from(raw.value));
 }
 
 export async function argon2HashRaw<D extends ByteInput, K extends ByteInput>(

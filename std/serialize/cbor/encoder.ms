@@ -27,11 +27,7 @@ export function encode(v: CborValue): Buffer {
 	const w = newCborWriter();
 	encodeValue(w, v);
 	const out = Buffer.alloc(w.bytes.length);
-	let i = 0;
-	while (i < w.bytes.length) {
-		out.set(i, w.bytes[i]);
-		i = i + 1;
-	}
+	out.set(w.bytes);
 	return out;
 }
 
@@ -145,7 +141,7 @@ function pushStringBytes(w: CborWriter, s: string): void {
 }
 
 function pushBufferBytes(w: CborWriter, b: Buffer): void {
-	const n = b.byteLength();
+	const n = b.byteLength;
 	let i = 0;
 	while (i < n) {
 		w.bytes.push((b.byteAt(i) & 0xff) as uint8);
@@ -248,7 +244,7 @@ export function encodeValue(w: CborWriter, v: CborValue): void {
 	match (v.kind) {
 		CborKind.Int       => { encodeInt(w, v.intVal); },
 		CborKind.Bytes     => {
-			writeHead(w, 2, v.bytesVal.byteLength() as int64);
+			writeHead(w, 2, v.bytesVal.byteLength as int64);
 			pushBufferBytes(w, v.bytesVal);
 		},
 		CborKind.Text      => { encodeText(w, v.textVal); },

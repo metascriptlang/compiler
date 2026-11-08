@@ -1,4 +1,4 @@
-import { InputBytes } from "./bytes";
+import { InputBytes, OutputBytes } from "./bytes";
 import {
 	newPoly1305,
 	updatePoly1305,
@@ -220,7 +220,7 @@ function chachaXor(
 	counter: uint32,
 	src: InputBytes,
 	srcOff: int32,
-	dst: uint8[],
+	dst: OutputBytes,
 	dstOff: int32,
 	length: int32,
 ): void {
@@ -286,7 +286,7 @@ export function chacha20Xor(
 	nonce: InputBytes,
 	counter: uint32,
 	src: InputBytes,
-	dst: uint8[],
+	dst: OutputBytes,
 ): boolean {
 	if (nonce.length != 12 || dst.length != src.length) return false;
 	const blocks = ((src.length as int64) + 63) >> 6;
@@ -369,7 +369,7 @@ export function xchachaSealInto(
 	key: Readonly<uint32[]>,
 	aad: InputBytes,
 	plain: InputBytes,
-	out: uint8[],
+	out: OutputBytes,
 ): boolean {
 	const length = plain.length as int32;
 	if (out.length != 24 + length + 16) return false;
@@ -390,7 +390,7 @@ export function xchachaOpenInto(
 	key: Readonly<uint32[]>,
 	aad: InputBytes,
 	sealed: InputBytes,
-	out: uint8[],
+	out: OutputBytes,
 ): boolean {
 	const length = (sealed.length as int32) - 40;
 	if (length < 0 || out.length != length) return false;
@@ -423,7 +423,7 @@ export function chacha20Poly1305SealInto(
 	nonce: InputBytes,
 	aad: InputBytes,
 	plain: InputBytes,
-	out: uint8[],
+	out: OutputBytes,
 ): boolean {
 	const length = plain.length as int32;
 	if (nonce.length != 12 || out.length != length + 16) return false;
@@ -445,7 +445,7 @@ export function chacha20Poly1305OpenInto(
 	nonce: InputBytes,
 	aad: InputBytes,
 	sealed: InputBytes,
-	out: uint8[],
+	out: OutputBytes,
 ): boolean {
 	const length = (sealed.length as int32) - 16;
 	if (nonce.length != 12 || length < 0 || out.length != length) return false;
@@ -466,7 +466,7 @@ export function chacha20Poly1305SealAt(
 	key: Readonly<uint32[]>,
 	nonce: InputBytes,
 	aad: InputBytes,
-	buf: uint8[],
+	buf: OutputBytes,
 	at: int32,
 	length: int32,
 ): boolean {
@@ -488,7 +488,7 @@ export function chacha20Poly1305OpenAt(
 	key: Readonly<uint32[]>,
 	nonce: InputBytes,
 	aad: InputBytes,
-	buf: uint8[],
+	buf: OutputBytes,
 	at: int32,
 	length: int32,
 ): boolean {

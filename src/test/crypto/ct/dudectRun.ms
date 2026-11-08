@@ -71,8 +71,8 @@ function compute(name: string, secret: uint8[]): uint8[] {
 		if (key == null) throw new Error("rsa key not loaded");
 		return or(rsaSignPkcs1(key, "sha256", secret), name);
 	}
-	if (name == "aesGcmSeal") return gcmSealWithNonce(expandKey(secret), nonce12, fixed(9, 100), message);
-	if (name == "aesCbcEncrypt") return cbcEncrypt(expandKey(secret), iv16, fixed(11, 64));
+	if (name == "aesGcmSeal") return [...gcmSealWithNonce(expandKey(secret), nonce12, fixed(9, 100), message)];
+	if (name == "aesCbcEncrypt") return [...cbcEncrypt(expandKey(secret), iv16, fixed(11, 64))];
 	if (name == "xchachaSeal") {
 		const words = new Array<uint32>(8);
 		const plain = fixed(13, 100);

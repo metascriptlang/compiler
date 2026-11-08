@@ -125,7 +125,7 @@ function signatures(
 			check(d, false, `${what}: a side failed to sign`);
 			continue;
 		}
-		const theirBytes = theirs.value as uint8[];
+		const theirBytes: uint8[] = [...theirs.value];
 		const pureVerifies = (signature: Readonly<uint8[]>): boolean =>
 			pss
 				? rsaVerifyPss(pub, hash, message, signature)
@@ -182,16 +182,16 @@ function ciphertexts(
 		// The vendor's decryptSync reports an empty plaintext as a failure, so its side of length 0 is not compared.
 		if (length > 0) check(
 			d,
-			opened.ok && (opened.value as uint8[]).encodeHex() == message.encodeHex(),
+			opened.ok && opened.value.encodeHex() == message.encodeHex(),
 			`${what}: vendor cannot open the pure ciphertext`,
 		);
-		const ourOpened = rsaOaepDecrypt(pure, theirs.value as uint8[]);
+		const ourOpened = rsaOaepDecrypt(pure, [...theirs.value]);
 		check(
 			d,
 			ourOpened != null && ourOpened.encodeHex() == message.encodeHex(),
 			`${what}: pure cannot open the vendor ciphertext`,
 		);
-		const tampered = flipped(theirs.value as uint8[], length % 256);
+		const tampered = flipped([...theirs.value], length % 256);
 		check(
 			d,
 			(rsaOaepDecrypt(pure, tampered) == null) ==

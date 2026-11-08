@@ -3,7 +3,7 @@
  * them and returned as DER certificates. Parsing them is the caller's job.
  */
 
-import { Buffer } from "std/core/buffer";
+import { bytesOf } from "../pure/bytes";
 import { exists, isDir, isFile, join, readDirNames, readFileBytes } from "std/fs";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 import { derItem, tagSequence } from "../pure/asn1";
@@ -13,7 +13,7 @@ extern function msProcessGetEnv(name: string): string;
 extern function msProcessExecPath(): string;
 
 export interface TrustAnchor {
-	der: Buffer;
+	der: uint8[];
 	source: string;
 }
 
@@ -65,8 +65,8 @@ function stripWhitespace(text: string): string {
  * Every CERTIFICATE block of a PEM text, decoded. A block whose body is not
  * base64 is skipped, and a BEGIN without its END ends the scan.
  */
-export function pemCertificates(text: string): Buffer[] {
-	const out: Buffer[] = [];
+export function pemCertificates(text: string): uint8[][] {
+	const out: uint8[][] = [];
 	let at = text.indexOf(BEGIN_MARKER);
 	while (at >= 0) {
 		const bodyStart = at + BEGIN_MARKER.length;
@@ -74,25 +74,25 @@ export function pemCertificates(text: string): Buffer[] {
 		if (bodyEnd < 0) break;
 		const der = stripWhitespace(text.slice(bodyStart, bodyEnd))
 			.decodeBase64();
-		if (der.length > 0) out.push(der as Buffer);
+		if (der.length > 0) out.push(der);
 		at = text.indexOf(BEGIN_MARKER, bodyEnd + END_MARKER.length);
 	}
 	return out;
 }
 
-function isWholeDerSequence(bytes: Buffer): boolean {
+function isWholeDerSequence(bytes: Readonly<uint8[]>): boolean {
 	const length = bytes.length as int32;
 	const item = derItem(bytes, 0, length);
 	return item != null && item.tag == tagSequence && item.end == length;
 }
 
 /** The certificates of one file: a PEM bundle, else one DER certificate. */
-export function certificatesInFile(path: string): Buffer[] {
+export function certificatesInFile(path: string): uint8[][] {
 	const read = readFileBytes(path);
 	if (!read.ok) return [];
-	const bytes = read.value;
-	const text = bytes.asString();
+	const text = read.value.asString();
 	if (text.indexOf(BEGIN_MARKER) >= 0) return pemCertificates(text);
+	const bytes = bytesOf(read.value);
 	if (isWholeDerSequence(bytes)) return [bytes];
 	return [];
 }

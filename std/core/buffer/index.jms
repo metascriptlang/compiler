@@ -16,14 +16,10 @@ import {
 	needBytes, needValue, storedInt, needWideValue, needBigValue, needWidth,
 } from "./codec";
 
-import { Buffer } from "./type";
+import { Buffer, allocSize } from "./type";
 export { Buffer } from "./type";
-export { toJSON, inspect } from "./protocols";
-
-/** Decodes the bytes as UTF-8 the way Node does: an ill-formed sequence becomes U+FFFD. */
-export function toString(this b: Buffer): string {
-	return b.toStringEncoded("utf8", 0, b.length);
-}
+export { inspect } from "./protocols";
+export { BufferJson } from "./type";
 
 // ===== private native bindings =====
 
@@ -48,27 +44,37 @@ function msBufStore(b, o, n, put) {
 function bufCopyInto(dst: Buffer, src: Buffer, at: number): void {
 	let i = 0;
 	while (i < src.length) {
-		dst.set(at + i, src.byteAt(i));
+		dst.putByte(at + i, src.byteAt(i));
 		i += 1;
 	}
 }
 
 // ===== Free Functions (constructors / static-like) =====
 
+function putByte(this b: Buffer, i: number, v: number): void {
+	b.setInBounds(i, v);
+}
+
 export function alloc(this typeof Buffer, size: number): Buffer {
-	return new Array<uint8>(size as int64) as Buffer;
+	return new Buffer(allocSize(size));
 }
 
-// js has no unsafe allocation; a zero-filled array is a semantic superset.
+// js has no unsafe allocation; a zero-filled buffer is a semantic superset.
 export function allocUnsafe(this typeof Buffer, size: number): Buffer {
-	return new Array<uint8>(size as int64) as Buffer;
+	return new Buffer(allocSize(size));
 }
 
-export extern function fromArray(this typeof Buffer, arr: number[]): Buffer from "Array.from(#, (x) => x & 255)";
+export function fromArray(this typeof Buffer, arr: number[]): Buffer {
+	const buf = new Buffer(arr.length);
+	for (let i = 0; i < arr.length; i++) buf.putByte(i, arr[i]);
+	return buf;
+}
 
-extern function decodeUtf8Range(b: Buffer, start: number, end: number): string from "new TextDecoder('utf-8', { ignoreBOM: true }).decode(Uint8Array.from(#.slice(#, #)))";
+extern function decodeUtf8Range(b: Buffer, start: number, end: number): string from "new TextDecoder('utf-8', { ignoreBOM: true }).decode(#.subarray(#, #))";
 
-extern function prefixOf(b: Buffer, length: number): Buffer from "#.slice(0, #)";
+function prefixOf(b: Buffer, length: number): Buffer {
+	return b.subarray(0, length);
+}
 
 function decodeText(value: string, base64: boolean): Buffer {
 	const text = value.asBytes();
@@ -88,9 +94,11 @@ export function fromString(this typeof Buffer, value: string, name: string): Buf
 	return (written as number) < capacity ? prefixOf(buf, written as number) : buf;
 }
 
-export extern function slice(this b: Buffer, start: number = 0, end: number = 9007199254740991): Buffer from "#.slice(#, #)";
-
-export extern function copy(this typeof Buffer, value: Buffer): Buffer from "#.slice()";
+export function copy(this typeof Buffer, value: Buffer): Buffer {
+	const out = new Buffer(value.length);
+	out.set(value);
+	return out;
+}
 
 export function compare(this typeof Buffer, a: Buffer, b: Buffer): number {
 	const n = a.length < b.length ? a.length : b.length;
@@ -165,10 +173,10 @@ export function isBufferEncoding(this typeof Buffer, encoding: string): boolean 
 }
 
 export function concatList(this typeof Buffer, buffers: Buffer[]): Buffer {
-	let total = 0;
+	let total: number = 0;
 	for (const b of buffers) { total += b.length; }
 	const out = Buffer.alloc(total);
-	let off = 0;
+	let off: number = 0;
 	for (const b of buffers) {
 		bufCopyInto(out, b, off);
 		off += b.length;
@@ -182,12 +190,8 @@ extern function byteInBounds(this b: Buffer, i: number): int32 from "msBufAt(#, 
 export function byteAt(this b: Buffer, i: number): int32 {
 	return b.byteInBounds(i);
 }
-export extern function byteLength(this b: Buffer): number from "#.length";
 
 extern function setInBounds(this b: Buffer, i: number, v: number): void from "msBufSet(#, #, #)";
-export function set(this b: Buffer, i: number, v: number): void {
-	b.setInBounds(i, v);
-}
 
 export function toHex(this b: Buffer): string {
 	return encodeHex(b);
@@ -235,12 +239,12 @@ export function copyTo(this b: Buffer, target: Buffer, targetStart: number, sour
 	if (at + len > target.length) len = target.length - at;
 	if (len <= 0) return 0;
 	for (let i = 0; i < len; i += 1) {
-		target.set(at + i, b.byteAt(s + i));
+		target.putByte(at + i, b.byteAt(s + i));
 	}
 	return len;
 }
 
-export extern function fill(this b: Buffer, value: number, start: number, end: number): void from "#.fill((#) & 255, #, #)";
+export extern function fillByte(this b: Buffer, value: number, start: number, end: number): void from "#.fill((#) & 255, #, #)";
 export extern function indexOf(this b: Buffer, value: number, byteOffset: number): number from "#.indexOf(#, #)";
 export extern function lastIndexOf(this b: Buffer, value: number, byteOffset: number): number from "#.lastIndexOf(#, #)";
 export extern function includes(this b: Buffer, value: number, byteOffset: number): boolean from "#.includes(#, #)";
@@ -290,7 +294,7 @@ export function fillString(this b: Buffer, value: string, start: number, end: nu
 	let i = start;
 	let k = 0;
 	while (i < end) {
-		b.set(i, pat.byteAt(k % pat.length));
+		b.putByte(i, pat.byteAt(k % pat.length));
 		i += 1;
 		k += 1;
 	}
@@ -301,7 +305,7 @@ export function fillBuffer(this b: Buffer, value: Buffer, start: number, end: nu
 	let i = start;
 	let k = 0;
 	while (i < end) {
-		b.set(i, value.byteAt(k % value.length));
+		b.putByte(i, value.byteAt(k % value.length));
 		i += 1;
 		k += 1;
 	}
@@ -442,7 +446,7 @@ extern function dvSetF64BE(this b: Buffer, o: number, v: number): void from "msB
 export function writeUInt8(this b: Buffer, v: number, o: number): number {
 	needValue(v, 0, 255);
 	needBytes(b.length, o, 1);
-	b.set(o, storedInt(v) as int32);
+	b.putByte(o, storedInt(v) as int32);
 	return o + 1;
 }
 export function writeUInt16BE(this b: Buffer, v: number, o: number): number {
@@ -472,7 +476,7 @@ export function writeUInt32LE(this b: Buffer, v: number, o: number): number {
 export function writeInt8(this b: Buffer, v: number, o: number): number {
 	needValue(v, -128, 127);
 	needBytes(b.length, o, 1);
-	b.set(o, (storedInt(v) as int32) & 255);
+	b.putByte(o, (storedInt(v) as int32) & 255);
 	return o + 1;
 }
 export function writeInt16BE(this b: Buffer, v: number, o: number): number {
@@ -558,7 +562,7 @@ export function writeUIntLE(this b: Buffer, v: number, o: number, byteLength: nu
 	let x = v;
 	let k = 0;
 	while (k < byteLength) {
-		b.set(o + k, x % 256);
+		b.putByte(o + k, x % 256);
 		x = Math.floor(x / 256);
 		k += 1;
 	}
@@ -570,7 +574,7 @@ export function writeUIntBE(this b: Buffer, v: number, o: number, byteLength: nu
 	let x = v;
 	let k = byteLength - 1;
 	while (k >= 0) {
-		b.set(o + k, x % 256);
+		b.putByte(o + k, x % 256);
 		x = Math.floor(x / 256);
 		k -= 1;
 	}

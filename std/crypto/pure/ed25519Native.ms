@@ -30,7 +30,7 @@ export class Ed25519PublicKey {
 	}
 
 	exportSync(): Result<Buffer, CryptoError> {
-		return Result.ok(this._raw.slice(0) as Buffer);
+		return Result.ok(Buffer.from(this._raw));
 	}
 
 	async export(): Promise<Result<Buffer, CryptoError>> {
@@ -97,7 +97,7 @@ export class Ed25519PrivateKey {
 	}
 
 	exportSeedSync(): Result<Buffer, CryptoError> {
-		return Result.ok(this._seed.slice(0) as Buffer);
+		return Result.ok(Buffer.from(this._seed));
 	}
 
 	async exportSeed(): Promise<Result<Buffer, CryptoError>> {
@@ -129,7 +129,7 @@ export function signSync<D extends ByteInput>(
 			CryptoErrorKind.SignatureFailed, "ed25519.sign", "signing failed",
 		));
 	}
-	return Result.ok(signature as Buffer);
+	return Result.ok(Buffer.from(signature));
 }
 
 export function sign<D extends ByteInput>(

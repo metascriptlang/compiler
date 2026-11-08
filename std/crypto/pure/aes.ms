@@ -1,5 +1,5 @@
 import { newGhash, updateGhash, finishGhash } from "./ghash";
-import { InputBytes } from "./bytes";
+import { InputBytes, OutputBytes, OutputArray, outputArray } from "./bytes";
 import { declassify, wipeBytes, wipeWords } from "./secret";
 import { load32LE, store32LE, store32BE } from "./endian";
 
@@ -1024,11 +1024,6 @@ when (c) {
 	function roundsOf(keys: Readonly<Word[]>): int32 {
 		return keys[keys.length - 1] as int32;
 	}
-
-	/** An output array every byte of which the caller writes before it is read, so it is not zeroed first. */
-	function outputArray(size: int32): uint8[] {
-		return Buffer.allocUnsafe(size);
-	}
 } else {
 	function hwTailWords(rounds: int32): int32 {
 		return 0;
@@ -1038,10 +1033,6 @@ when (c) {
 
 	function roundsOf(keys: Readonly<Word[]>): int32 {
 		return keys.length / KEY_WORDS - 1;
-	}
-
-	function outputArray(size: int32): uint8[] {
-		return new Array<uint8>(size);
 	}
 }
 
@@ -1203,7 +1194,7 @@ function startGcm(keys: Readonly<Word[]>, batch: Batch, nonce: InputBytes, lengt
 }
 
 // dst[dstAt, +length) = src[srcAt, +length) ^ the key stream from counter 2, which `startGcm` began at batch.bytes[32].
-function ctrXor(keys: Readonly<Word[]>, batch: Batch, nonce: InputBytes, src: InputBytes, srcAt: int32, length: int32, dst: uint8[], dstAt: int32): void {
+function ctrXor(keys: Readonly<Word[]>, batch: Batch, nonce: InputBytes, src: InputBytes, srcAt: int32, length: int32, dst: OutputBytes, dstAt: int32): void {
 	const stream = batch.bytes;
 	let streamAt = 32;
 	let done = 0;
@@ -1228,7 +1219,7 @@ function requireRange(what: string, bytes: InputBytes, at: int32, length: int32)
 }
 
 // The tag over `aad` and the cipher text `text[at, +length)` into `tag[0, 16)`; `keyed` starts with E(0) and E(J1).
-function gcmTag(keyed: InputBytes, aad: InputBytes, text: InputBytes, at: int32, length: int32, tag: uint8[]): void {
+function gcmTag(keyed: InputBytes, aad: InputBytes, text: InputBytes, at: int32, length: int32, tag: OutputBytes): void {
 	const ghash = newGhash(keyed);
 	updateGhash(ghash, aad, 0, aad.length);
 	updateGhash(ghash, text, at, at + length);
@@ -1246,7 +1237,7 @@ function gcmTag(keyed: InputBytes, aad: InputBytes, text: InputBytes, at: int32,
  * AES-GCM encryption of `src[srcAt, +length)` into `dst[dstAt, +length)` (the two may be the same range) and its
  * 16-byte tag into `tag[tagAt, +16)`. The nonce must be fresh for every call under one key.
  */
-export function gcmEncryptInto(xk: Readonly<Word[]>, nonce: InputBytes, aad: InputBytes, src: InputBytes, srcAt: int32, length: int32, dst: uint8[], dstAt: int32, tag: uint8[], tagAt: int32): void {
+export function gcmEncryptInto(xk: Readonly<Word[]>, nonce: InputBytes, aad: InputBytes, src: InputBytes, srcAt: int32, length: int32, dst: OutputBytes, dstAt: int32, tag: OutputBytes, tagAt: int32): void {
 	requireNonce(nonce);
 	requireRange("source", src, srcAt, length);
 	requireRange("destination", dst, dstAt, length);
@@ -1272,7 +1263,7 @@ export function gcmEncryptInto(xk: Readonly<Word[]>, nonce: InputBytes, aad: Inp
  * AES-GCM decryption of `src[srcAt, +length)` into `dst[dstAt, +length)` once the tag at `tag[tagAt, +16)` verifies;
  * false, with nothing written, when it does not.
  */
-export function gcmDecryptInto(xk: Readonly<Word[]>, nonce: InputBytes, aad: InputBytes, src: InputBytes, srcAt: int32, length: int32, tag: InputBytes, tagAt: int32, dst: uint8[], dstAt: int32): boolean {
+export function gcmDecryptInto(xk: Readonly<Word[]>, nonce: InputBytes, aad: InputBytes, src: InputBytes, srcAt: int32, length: int32, tag: InputBytes, tagAt: int32, dst: OutputBytes, dstAt: int32): boolean {
 	requireNonce(nonce);
 	requireRange("source", src, srcAt, length);
 	requireRange("destination", dst, dstAt, length);
@@ -1297,7 +1288,7 @@ export function gcmDecryptInto(xk: Readonly<Word[]>, nonce: InputBytes, aad: Inp
 }
 
 /** AES-GCM: `nonce(12) || cipher text || tag(16)`. The nonce must be fresh for every call under one key. */
-export function gcmSealWithNonce(xk: Readonly<Word[]>, nonce: InputBytes, plain: InputBytes, aad: InputBytes): uint8[] {
+export function gcmSealWithNonce(xk: Readonly<Word[]>, nonce: InputBytes, plain: InputBytes, aad: InputBytes): OutputArray {
 	requireNonce(nonce);
 	const size = plain.length;
 	const sealed = outputArray(12 + size + 16);
@@ -1307,7 +1298,7 @@ export function gcmSealWithNonce(xk: Readonly<Word[]>, nonce: InputBytes, plain:
 }
 
 /** The plain text of a `nonce || cipher text || tag` blob, or null when it is shorter than 28 bytes or the tag does not verify. */
-export function gcmOpen(xk: Readonly<Word[]>, sealed: InputBytes, aad: InputBytes): uint8[] | null {
+export function gcmOpen(xk: Readonly<Word[]>, sealed: InputBytes, aad: InputBytes): OutputArray | null {
 	if (sealed.length < 28) return null;
 	const size = sealed.length - 28;
 	when (c) {
@@ -1316,7 +1307,7 @@ export function gcmOpen(xk: Readonly<Word[]>, sealed: InputBytes, aad: InputByte
 			return aesGcmHwOpenFresh(xk, sealed[0..12], aad, sealed, 12, size, sealed, 12 + size, fresh, 0) ? fresh : null;
 		}
 	}
-	const plain = new Array<uint8>(size);
+	const plain = outputArray(size);
 	const nonce = new Array<uint8>(12);
 	for (let i = 0; i < 12; i++) nonce[i] = sealed[i];
 	if (!gcmDecryptInto(xk, nonce, aad, sealed, 12, size, sealed, 12 + size, plain, 0)) return null;
@@ -1328,7 +1319,7 @@ function requireIv(iv: InputBytes): void {
 }
 
 /** AES-CBC with PKCS#7 padding; `iv` is 16 bytes. */
-export function cbcEncrypt(xk: Readonly<Word[]>, iv: InputBytes, plain: InputBytes): uint8[] {
+export function cbcEncrypt(xk: Readonly<Word[]>, iv: InputBytes, plain: InputBytes): OutputArray {
 	requireIv(iv);
 	const size = plain.length;
 	const padding = 16 - (size % 16);
@@ -1358,7 +1349,7 @@ export function cbcEncrypt(xk: Readonly<Word[]>, iv: InputBytes, plain: InputByt
 	return out;
 }
 
-function cbcDecryptPortable(xk: Readonly<Word[]>, iv: InputBytes, cipher: InputBytes, out: uint8[]): void {
+function cbcDecryptPortable(xk: Readonly<Word[]>, iv: InputBytes, cipher: InputBytes, out: OutputBytes): void {
 	const size = cipher.length;
 	const batch = new Batch();
 	let at = 0;
@@ -1381,7 +1372,7 @@ function cbcDecryptPortable(xk: Readonly<Word[]>, iv: InputBytes, cipher: InputB
 }
 
 /** The plain text of an AES-CBC cipher text, or null for an empty or ragged input or bad padding; `xk` is from `expandKeyDecrypt`. */
-export function cbcDecrypt(xk: Readonly<Word[]>, iv: InputBytes, cipher: InputBytes): uint8[] | null {
+export function cbcDecrypt(xk: Readonly<Word[]>, iv: InputBytes, cipher: InputBytes): OutputArray | null {
 	requireIv(iv);
 	const size = cipher.length;
 	if (size == 0 || size % 16 != 0) return null;
@@ -1404,7 +1395,14 @@ export function cbcDecrypt(xk: Readonly<Word[]>, iv: InputBytes, cipher: InputBy
 		wipeBytes(out);
 		return null;
 	}
-	const plain = out.slice(0, size - (declassify(pad) as int32));
-	wipeBytes(out);
-	return plain;
+	const length = size - (declassify(pad) as int32);
+	when (!js) {
+		const padded: Span<uint8> = out;
+		wipeBytes(padded[length..size]);
+		return out.subarray(0, length);
+	} else {
+		const plain = out.slice(0, length);
+		wipeBytes(out);
+		return plain;
+	}
 }

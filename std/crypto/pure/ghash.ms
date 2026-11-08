@@ -1,5 +1,5 @@
 import { wipeBytes } from "./secret";
-import { InputBytes } from "./bytes";
+import { InputBytes, OutputBytes } from "./bytes";
 import { store32BE } from "./endian";
 
 when (c) {
@@ -108,7 +108,7 @@ when (c) {
 		};
 	}
 
-	function storeAcc(g: Ghash, out: uint8[], at: int32): void {
+	function storeAcc(g: Ghash, out: OutputBytes, at: int32): void {
 		store32BE(out, at, (g.accHi >> 32) as uint32);
 		store32BE(out, at + 4, (g.accHi & 0xffffffff) as uint32);
 		store32BE(out, at + 8, (g.accLo >> 32) as uint32);
@@ -184,7 +184,7 @@ when (c) {
 		};
 	}
 
-	function storeAcc(g: Ghash, out: uint8[], at: int32): void {
+	function storeAcc(g: Ghash, out: OutputBytes, at: int32): void {
 		store32BE(out, at, g.acc0);
 		store32BE(out, at + 4, g.acc1);
 		store32BE(out, at + 8, g.acc2);
@@ -223,7 +223,7 @@ export function updateGhash(g: Ghash, data: InputBytes, from: int32, to: int32):
 }
 
 /** Writes the 16-byte hash to `out[at, at + 16)` and wipes the state. */
-export function finishGhash(g: Ghash, out: uint8[], at: int32): void {
+export function finishGhash(g: Ghash, out: OutputBytes, at: int32): void {
 	storeAcc(g, out, at);
 	wipeState(g);
 	wipeBytes(g.tail);

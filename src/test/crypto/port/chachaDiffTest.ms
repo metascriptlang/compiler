@@ -15,13 +15,13 @@ function nextWord(rng: Rng): uint32 {
 	return x;
 }
 
-function randomBuffer(rng: Rng, size: int32): Buffer {
-	const out = Buffer.alloc(size);
+function randomBuffer(rng: Rng, size: int32): uint8[] {
+	const out = new Array<uint8>(size);
 	for (let i = 0; i < size; i++) out[i] = (nextWord(rng) & 255) as uint8;
 	return out;
 }
 
-function sameBytes(a: Readonly<uint8[]>, b: Readonly<uint8[]>): boolean {
+function sameBytes(a: Readonly<Span<uint8>>, b: Readonly<Span<uint8>>): boolean {
 	if (a.length != b.length) return false;
 	for (let i = 0; i < a.length; i++) if (a[i] != b[i]) return false;
 	return true;
@@ -68,13 +68,13 @@ function agreeOnce(rng: Rng, size: int32): boolean {
 
 	const pureOpened = new Array<uint8>(size);
 	if (
-		!xchachaOpenInto(kw, aad, vendorSealed.value, pureOpened) ||
+		!xchachaOpenInto(kw, aad, [...vendorSealed.value], pureOpened) ||
 		!sameBytes(pureOpened, plain)
 	) return false;
 	const vendorOpened = openSync(vendorKey.value, pureSealed, aad);
 	if (!vendorOpened.ok || !sameBytes(vendorOpened.value, plain)) return false;
 
-	const forged = Buffer.copy(vendorSealed.value);
+	const forged: uint8[] = [...vendorSealed.value];
 	const at = (nextWord(rng) % (forged.length as uint32)) as int32;
 	forged[at] = forged[at] ^ ((1 << (nextWord(rng) % 8)) as uint8);
 	const pureForged = new Array<uint8>(size);

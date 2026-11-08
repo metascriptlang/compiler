@@ -2,7 +2,10 @@
 
 import { Buffer } from "std/core/buffer";
 
-extern function outputPointer(buf: Buffer): Ptr<uint8> from "msBufferData";
+function outputPointer(buf: Buffer): Ptr<uint8> {
+	const bytes: Span<uint8> = buf;
+	return (bytes as Ptr<void>) as Ptr<uint8>;
+}
 
 export function newUninitOutputBuffer(length: int64): Buffer {
 	return Buffer.allocUnsafe(length as number);

@@ -149,7 +149,7 @@ export function decisionError(code: int32, msg: string): FrameDecision {
 // Shared by the state machine and the handshake recv loop. Exposed so the
 // I/O wrapper can splice frame chunks together without re-implementing them.
 
-export function appendBytes(dst: uint8[], src: uint8[]): void {
+export function appendBytes(dst: uint8[], src: Readonly<Span<uint8>>): void {
 	for (let i: int32 = 0; i < src.length; i = i + 1) {
 		dst.push(src[i]);
 	}

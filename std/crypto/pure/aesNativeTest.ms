@@ -11,7 +11,7 @@ import { expandKey, expandKeyDecrypt, gcmSealWithNonce, gcmOpen, gcmEncryptInto,
 import { newGhash, updateGhash, finishGhash } from "./ghash";
 import { encodeHex, decodeHex } from "../../core/encoding";
 
-function eqHex(got: Readonly<uint8[]>, want: string): boolean {
+function eqHex(got: Readonly<Span<uint8>>, want: string): boolean {
 	return got.encodeHex() == want;
 }
 

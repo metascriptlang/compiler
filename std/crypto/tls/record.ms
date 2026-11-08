@@ -144,7 +144,7 @@ export enum RecordFailure {
 	SequenceExhausted,
 }
 
-function copyRange(out: uint8[], at: int32, data: Readonly<uint8[]>, from: int32, to: int32): void {
+function copyRange(out: uint8[], at: int32, data: Readonly<Span<uint8>>, from: int32, to: int32): void {
 	for (let i = from; i < to; i++) out[at + i - from] = data[i];
 }
 
@@ -298,9 +298,11 @@ export function newRecordBuffer(): RecordBuffer {
 	return { pending: [], start: 0 };
 }
 
-export function append(this buffer: RecordBuffer, data: Readonly<uint8[]>): void {
+export function append(this buffer: RecordBuffer, data: Readonly<Span<uint8>>): void {
 	if (buffer.start == buffer.pending.length) {
-		buffer.pending = data.slice(0);
+		const fresh = new Array<uint8>(data.length);
+		copyRange(fresh, 0, data, 0, data.length as int32);
+		buffer.pending = fresh;
 		buffer.start = 0;
 		return;
 	}

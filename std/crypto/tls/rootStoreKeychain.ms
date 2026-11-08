@@ -3,7 +3,7 @@
  * straight from its bytes, with no Security framework call.
  */
 
-import { Buffer } from "std/core/buffer";
+import { bytesOf } from "../pure/bytes";
 
 export const MACOS_KEYCHAIN_PATHS: string[] = [
 	"/System/Library/Keychains/SystemRootCertificates.keychain",
@@ -16,21 +16,21 @@ const TABLE_HEADER_SIZE: int64 = 28;
 const CERT_SIZE_AT: int64 = 16;
 const CERT_HEADER_SIZE: int64 = 60;
 
-function word(bytes: Readonly<uint8[]>, at: int64): int64 | null {
+function word(bytes: Readonly<Span<uint8>>, at: int64): int64 | null {
 	if (at < 0 || at + 4 > (bytes.length as int64)) return null;
 	return ((bytes[at] as int64) << 24) | ((bytes[at + 1] as int64) << 16) |
 		((bytes[at + 2] as int64) << 8) | (bytes[at + 3] as int64);
 }
 
-function isKeychain(bytes: Readonly<uint8[]>): boolean {
+function isKeychain(bytes: Readonly<Span<uint8>>): boolean {
 	return bytes.length >= 20 && bytes[0] == "k".code &&
 		bytes[1] == "y".code && bytes[2] == "c".code && bytes[3] == "h".code;
 }
 
 function tableCertificates(
-	bytes: Readonly<uint8[]>,
+	bytes: Readonly<Span<uint8>>,
 	table: int64,
-	out: Buffer[],
+	out: uint8[][],
 ): void {
 	const tableId = word(bytes, table + 4);
 	const recordCount = word(bytes, table + 8);
@@ -44,7 +44,7 @@ function tableCertificates(
 		if (size == null || size == 0) continue;
 		const start = record + CERT_HEADER_SIZE;
 		if (start + size > (bytes.length as int64)) continue;
-		out.push(bytes.slice(start as number, (start + size) as number) as Buffer);
+		out.push(bytesOf(bytes[start..start + size]));
 	}
 }
 
@@ -52,8 +52,8 @@ function tableCertificates(
  * The DER certificates held in a keychain file's X.509 table. Empty when the
  * bytes are not a keychain; a record that runs past the end is skipped.
  */
-export function keychainCertificates(bytes: Readonly<uint8[]>): Buffer[] {
-	const out: Buffer[] = [];
+export function keychainCertificates(bytes: Readonly<Span<uint8>>): uint8[][] {
+	const out: uint8[][] = [];
 	if (!isKeychain(bytes)) return out;
 	const schema = word(bytes, SCHEMA_OFFSET_AT);
 	if (schema == null) return out;

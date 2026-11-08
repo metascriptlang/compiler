@@ -2312,8 +2312,8 @@ test "compiling the same C twice leaves byte-identical objects, whatever name th
 	assert compileCFile(source, `${dir}/a.2.o`, `${dir}/a.d`, parts.value, NO_PLAN).ok;
 	const second = readFileBytes(`${dir}/a.2.o`);
 	assert first.ok && second.ok;
-	assert first.value.byteLength() == second.value.byteLength();
-	for (let i = 0; i < first.value.byteLength(); i += 1) assert first.value.byteAt(i as int32) == second.value.byteAt(i as int32);
+	assert first.value.byteLength == second.value.byteLength;
+	for (let i = 0; i < first.value.byteLength; i += 1) assert first.value.byteAt(i as int32) == second.value.byteAt(i as int32);
 	for (const name of ["a.c", "a.1.o", "a.2.o", "a.d"]) remove(`${dir}/${name}`);
 	remove(dir);
 }

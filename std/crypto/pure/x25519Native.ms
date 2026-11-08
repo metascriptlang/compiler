@@ -28,7 +28,7 @@ export class X25519PublicKey {
 	}
 
 	exportSync(): Result<Buffer, CryptoError> {
-		return Result.ok(this._raw.slice(0) as Buffer);
+		return Result.ok(Buffer.from(this._raw));
 	}
 
 	async export(): Promise<Result<Buffer, CryptoError>> {
@@ -129,7 +129,7 @@ export function sharedSecretSync(
 			"x25519.sharedSecret", "key agreement failed",
 		));
 	}
-	return Result.ok(shared as Buffer);
+	return Result.ok(Buffer.from(shared));
 }
 
 export async function sharedSecret(

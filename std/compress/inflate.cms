@@ -14,6 +14,7 @@
 @compile("vendor/miniz/miniz_tdef.c");
 @compile("vendor/miniz/miniz_tinfl.c");
 
+import { adoptBuffer } from "std/core/buffer/bytes";
 import { Buffer } from "std/core/buffer";
 import { ByteInput } from "std/core/buffer/bytes";
 import { CompressError, CompressErrorKind, CompressFormat, compressError } from "./errors";
@@ -25,7 +26,7 @@ export { CompressFormat, CompressError, CompressErrorKind } from "./errors";
 
 extern function msInflateNew(format: int32): int64;
 extern function msInflateFeed(handle: int64, chunk: Readonly<Span<uint8>>, isLast: int32): int32;
-extern function msInflateDrain(handle: int64, maxBytes: int32): Buffer;
+extern function msInflateDrain(handle: int64, maxBytes: int32): Vec<uint8>;
 extern function msInflateFree(handle: int64): void;
 
 function feedBytes(handle: int64, chunk: Readonly<Span<uint8>>, isLast: int32): int32 {
@@ -53,7 +54,7 @@ function oneShot(data: Readonly<Span<uint8>>, format: int32, failure: string): R
 		msInflateFree(handle);
 		return Result.err(inflateFailure(status, failure));
 	}
-	const out = msInflateDrain(handle, 0);
+	const out = adoptBuffer(msInflateDrain(handle, 0));
 	msInflateFree(handle);
 	return Result.ok(out);
 }
@@ -93,7 +94,7 @@ function inflateFeedSpan(s: InflateStream, chunk: Readonly<Span<uint8>>): Result
 		s.finished = true;
 		return Result.err(inflateFailure(st, "decompression failed"));
 	}
-	return Result.ok(msInflateDrain(s.handle, 0));
+	return Result.ok(adoptBuffer(msInflateDrain(s.handle, 0)));
 }
 
 // Signal end of input, drain remaining output, and release the context.
@@ -110,7 +111,7 @@ export function inflateFinish(s: InflateStream): Result<Buffer, CompressError> {
 		s.handle = 0;
 		return Result.err(inflateFailure(st, "decompression failed"));
 	}
-	const tail = msInflateDrain(s.handle, 0);
+	const tail = adoptBuffer(msInflateDrain(s.handle, 0));
 	msInflateFree(s.handle);
 	s.handle = 0;
 	return Result.ok(tail);

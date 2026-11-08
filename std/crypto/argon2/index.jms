@@ -38,7 +38,7 @@ function msArgon2NodeHash(password, salt, passes, memory, parallelism, tagLength
 }`);
 
 	extern function nodeHasArgon2(): boolean from "msArgon2Node() !== null";
-	extern function nodeArgon2(password: Buffer, salt: Buffer, timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): Buffer | null from "msArgon2NodeHash(#, #, #, #, #, #)";
+	extern function nodeArgon2(password: Readonly<uint8[]>, salt: Readonly<uint8[]>, timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): uint8[] | null from "msArgon2NodeHash(#, #, #, #, #, #)";
 }
 
 // ===== Parameters =====
@@ -65,7 +65,7 @@ function freshDefaultLimits(): Argon2Limits {
 export const defaultArgon2Limits: Argon2Limits = freshDefaultLimits();
 
 /** The raw hash, or null when the platform could not allocate the memory the parameters ask for. */
-function hashRaw(password: Buffer, salt: Buffer, timeCost: int32, memoryCost: int32, parallelism: int32, version: int32, hashLen: int32): Buffer | null {
+function hashRaw(password: uint8[], salt: uint8[], timeCost: int32, memoryCost: int32, parallelism: int32, version: int32, hashLen: int32): uint8[] | null {
 	when (nodejs) {
 		if (version == 0x13 && nodeHasArgon2()) return nodeArgon2(password, salt, timeCost, memoryCost, parallelism, hashLen);
 	}
@@ -73,7 +73,7 @@ function hashRaw(password: Buffer, salt: Buffer, timeCost: int32, memoryCost: in
 	if (words > 2147483647) return null;
 	try {
 		const memory = newWords(words);
-		return argon2idHash(memory, password, salt, timeCost, memoryCost, parallelism, version, hashLen) as Buffer;
+		return argon2idHash(memory, password, salt, timeCost, memoryCost, parallelism, version, hashLen);
 	} catch (e) {
 		return null;
 	}
@@ -94,7 +94,7 @@ export function argon2HashSync<P extends ByteInput, S extends ByteInput>(passwor
 	return argon2HashOwned(bytesOf(password), bytesOf(saltBytes), timeCost, memoryCost, parallelism, hashLen);
 }
 
-function argon2HashOwned(password: Buffer, salt: Buffer, timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): Result<string, CryptoError> {
+function argon2HashOwned(password: uint8[], salt: uint8[], timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): Result<string, CryptoError> {
 	const invalid = argon2Problem(timeCost, memoryCost, parallelism, hashLen, salt.length);
 	if (invalid != "") {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "argon2Hash", invalid));
@@ -116,7 +116,7 @@ export function argon2HashRawSync<P extends ByteInput, S extends ByteInput>(pass
 	return argon2HashRawOwned(bytesOf(password), bytesOf(saltBytes), timeCost, memoryCost, parallelism, hashLen);
 }
 
-function argon2HashRawOwned(password: Buffer, salt: Buffer, timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): Result<Buffer, CryptoError> {
+function argon2HashRawOwned(password: uint8[], salt: uint8[], timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): Result<Buffer, CryptoError> {
 	const invalid = argon2Problem(timeCost, memoryCost, parallelism, hashLen, salt.length);
 	if (invalid != "") {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "argon2HashRaw", invalid));
@@ -125,7 +125,7 @@ function argon2HashRawOwned(password: Buffer, salt: Buffer, timeCost: int32, mem
 	if (hash == null) {
 		return Result.err(cryptoError(CryptoErrorKind.HashFailed, "argon2HashRaw", "Argon2id raw hashing failed"));
 	}
-	return Result.ok(hash);
+	return Result.ok(Buffer.from(hash));
 }
 
 export function argon2HashRaw<P extends ByteInput, S extends ByteInput>(password: P, saltBytes: S, timeCost: int32 = DEFAULT_TIME_COST, memoryCost: int32 = DEFAULT_MEMORY_COST, parallelism: int32 = DEFAULT_PARALLELISM, hashLen: int32 = 32): Promise<Result<Buffer, CryptoError>> { return Promise.resolve(argon2HashRawSync(password, saltBytes, timeCost, memoryCost, parallelism, hashLen)); }
@@ -167,8 +167,8 @@ export function argon2VerifySync<P extends ByteInput>(encoded: string, password:
 	if (!withinLimits(encoded, limits)) return false;
 	const fields = decodeArgon2id(encoded);
 	if (fields == null || fields.version > 2147483647) return false;
-	const hash = hashRaw(bytesOf(password), fields.salt as Buffer, fields.timeCost as int32, fields.memoryCost as int32, fields.parallelism as int32, fields.version as int32, fields.hash.length as int32);
-	return hash != null && timingSafeEqual(hash, fields.hash as Buffer);
+	const hash = hashRaw(bytesOf(password), fields.salt, fields.timeCost as int32, fields.memoryCost as int32, fields.parallelism as int32, fields.version as int32, fields.hash.length as int32);
+	return hash != null && timingSafeEqual(hash, fields.hash);
 }
 
 export function argon2Verify<P extends ByteInput>(encoded: string, password: P, limits: Argon2Limits = freshDefaultLimits()): Promise<boolean> { return Promise.resolve(argon2VerifySync(encoded, password, limits)); }

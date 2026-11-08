@@ -17,6 +17,7 @@ import { hashOf } from "std/crypto/pure/hash";
 import { hmacOf, hkdfOf, pbkdf2Of } from "std/crypto/pure/hmac";
 import { kindSha256, kindSha512 } from "std/crypto/pure/state";
 import { blake2bOf } from "std/crypto/pure/blake2b";
+import { Buffer } from "std/core/buffer";
 import { expandKey, expandKeyDecrypt, gcmSealWithNonce, gcmOpen, cbcEncrypt, cbcDecrypt } from "std/crypto/pure/aes";
 import { keyWords, xchachaSealInto, xchachaOpenInto } from "std/crypto/pure/chacha";
 import { argon2Raw, Argon2Mode } from "std/crypto/pure/argon2";
@@ -48,6 +49,11 @@ function secretOf(seed: int32, length: int32, taint: boolean): uint8[] {
 function or(found: uint8[] | null, what: string): uint8[] {
 	if (found == null) throw new Error(`${what} returned null`);
 	return found;
+}
+
+function orBytes(found: Buffer | null, what: string): uint8[] {
+	if (found == null) throw new Error(`${what} returned null`);
+	return [...found];
 }
 
 function rsaKey(): RsaPrivateData {
@@ -104,15 +110,15 @@ function run(name: string, taint: boolean): uint8[] {
 	if (name == "p384Ecdh") return or(ecdhShared(p384, secretOf(5, 48, taint), or(ecPublicPoint(p384, fixed(7, 48)), "peer")), name);
 	if (name == "rsaSignPkcs1") return or(rsaSignPkcs1(rsaKeyTainted(taint), "sha256", message), name);
 	if (name == "rsaOaepDecrypt") return or(rsaOaepDecrypt(rsaKeyTainted(taint), oaepSha256.decodeHex()), name);
-	if (name == "aesGcmSeal") return gcmSealWithNonce(expandKey(secretOf(8, 32, taint)), nonce12, secretOf(9, 100, taint), message);
+	if (name == "aesGcmSeal") return [...gcmSealWithNonce(expandKey(secretOf(8, 32, taint)), nonce12, secretOf(9, 100, taint), message)];
 	if (name == "aesGcmOpen") {
 		const sealed = gcmSealWithNonce(expandKey(fixed(8, 32)), nonce12, fixed(9, 100), message);
-		return or(gcmOpen(expandKey(secretOf(8, 32, taint)), sealed, message), name);
+		return orBytes(gcmOpen(expandKey(secretOf(8, 32, taint)), sealed, message), name);
 	}
-	if (name == "aesCbcEncrypt") return cbcEncrypt(expandKey(secretOf(10, 16, taint)), iv16, secretOf(11, 64, taint));
+	if (name == "aesCbcEncrypt") return [...cbcEncrypt(expandKey(secretOf(10, 16, taint)), iv16, secretOf(11, 64, taint))];
 	if (name == "aesCbcDecrypt") {
 		const cipher = cbcEncrypt(expandKey(fixed(10, 16)), iv16, fixed(11, 64));
-		return or(cbcDecrypt(expandKeyDecrypt(secretOf(10, 16, taint)), iv16, cipher), name);
+		return orBytes(cbcDecrypt(expandKeyDecrypt(secretOf(10, 16, taint)), iv16, cipher), name);
 	}
 	if (name == "xchachaSeal" || name == "xchachaOpen") {
 		const words = new Array<uint32>(8);

@@ -124,7 +124,7 @@ function compactRxBuf(ws: WsClient): void {
 // fails, we MUST NOT silently fall back to a fixed key — that would defeat the
 // masking entirely. Instead we surface InternalError so the caller can decide.
 
-function buildAndMaskFrame(opcode: int32, fin: boolean, payload: uint8[]): Result<uint8[], WsError> {
+function buildAndMaskFrame(opcode: int32, fin: boolean, payload: Readonly<Span<uint8>>): Result<uint8[], WsError> {
 	let maskBytes: uint8[];
 	try {
 		maskBytes = randomOctets(4);
@@ -144,12 +144,12 @@ async function sendFrameAsync(ws: WsClient, opcode: int32, payload: uint8[]): Pr
 	}
 	const wireResult = buildAndMaskFrame(opcode, true, payload);
 	if (!wireResult.ok) return Result.err(wireResult.error);
-	const sent = await sendAsync(ws.fd, wireResult.value as Buffer);
+	const sent = await sendAsync(ws.fd, wireResult.value);
 	if (sent < 0) return Result.err(wsSocketError("send failed"));
 	return Result.ok(null);
 }
 
-function sendFrameSync(ws: WsClient, opcode: int32, payload: uint8[]): Result<void, WsError> {
+function sendFrameSync(ws: WsClient, opcode: int32, payload: Readonly<Span<uint8>>): Result<void, WsError> {
 	if (ws.state != WsState.Open && opcode != OPCODE_CLOSE) {
 		return Result.err(wsClosed("send on " + stateName(ws.state) + " connection"));
 	}
@@ -158,7 +158,7 @@ function sendFrameSync(ws: WsClient, opcode: int32, payload: uint8[]): Result<vo
 	}
 	const wireResult = buildAndMaskFrame(opcode, true, payload);
 	if (!wireResult.ok) return Result.err(wireResult.error);
-	const sent = netSend(ws.fd, wireResult.value as Buffer);
+	const sent = netSend(ws.fd, wireResult.value);
 	if (sent < 0) return Result.err(wsSocketError("send failed"));
 	return Result.ok(null);
 }
@@ -180,7 +180,7 @@ export function sendTextSync(this ws: WsClient, payload: string): Result<void, W
 	return sendFrameSync(ws, OPCODE_TEXT, bytes);
 }
 
-export function sendBinarySync(this ws: WsClient, payload: uint8[]): Result<void, WsError> {
+export function sendBinarySync(this ws: WsClient, payload: Readonly<Span<uint8>>): Result<void, WsError> {
 	return sendFrameSync(ws, OPCODE_BINARY, payload);
 }
 

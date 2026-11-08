@@ -23,7 +23,7 @@ function randomBytes(rng: Rng, n: int32): uint8[] {
 }
 
 function vendorHex(algorithm: HashAlgorithm, data: uint8[]): string {
-	const r = digestSync(algorithm, data as Buffer);
+	const r = digestSync(algorithm, data);
 	if (!r.ok) throw new Error("vendor digest failed");
 	return r.value.encodeHex();
 }

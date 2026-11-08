@@ -67,7 +67,7 @@ export function writeTar(entries: TarEntry[]): Result<Buffer, string> {
 
 		totalSize = totalSize + BLOCK_SIZE;
 		// Body is padded to next 512-byte boundary.
-		const bodyLen: int32 = data.length;
+		const bodyLen: int32 = data.length as int32;
 		const padded: int32 = bodyLen + ((BLOCK_SIZE - (bodyLen % BLOCK_SIZE)) % BLOCK_SIZE);
 		totalSize = totalSize + padded;
 	}
@@ -83,7 +83,7 @@ export function writeTar(entries: TarEntry[]): Result<Buffer, string> {
 		hdr.copyTo(out, off, 0, BLOCK_SIZE);
 		off = off + BLOCK_SIZE;
 		const data = entries[j].data;
-		const bodyLen: int32 = data.length;
+		const bodyLen: int32 = data.length as int32;
 		if (bodyLen > 0) {
 			data.copyTo(out, off, 0, bodyLen);
 		}
@@ -131,21 +131,21 @@ function buildHeader(entry: TarEntry): Result<Buffer, string> {
 	hdr.fill(32, 148, 156); // 32 = (space)
 
 	// Typeflag (offset 156, 1 byte): "0" for regular file
-	hdr.set(156, 48); // '0'
+	hdr[156] = 48; // '0'
 
 	// Linkname (offset 157, 100 bytes): already zero
 
 	// Magic "ustar\0" (offset 257, 6 bytes)
-	hdr.set(257, 117); // 'u'
-	hdr.set(258, 115); // 's'
-	hdr.set(259, 116); // 't'
-	hdr.set(260, 97);  // 'a'
-	hdr.set(261, 114); // 'r'
-	hdr.set(262, 0);   // NUL
+	hdr[257] = 117; // 'u'
+	hdr[258] = 115; // 's'
+	hdr[259] = 116; // 't'
+	hdr[260] = 97;  // 'a'
+	hdr[261] = 114; // 'r'
+	hdr[262] = 0;   // NUL
 
 	// Version "00" (offset 263, 2 bytes)
-	hdr.set(263, 48); // '0'
-	hdr.set(264, 48); // '0'
+	hdr[263] = 48; // '0'
+	hdr[264] = 48; // '0'
 
 	// uname (offset 265, 32 bytes): empty
 	// gname (offset 297, 32 bytes): empty

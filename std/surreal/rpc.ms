@@ -25,7 +25,7 @@ import { SurrealError, SurrealErrorKind, decodeError, rpcError } from "./errors"
 // for a credential record).
 //
 // Returns `uint8[]` rather than Buffer/string so the caller can hand the
-// frame straight to `ws.sendBinarySync(...)` (which takes `uint8[]`)
+// frame straight to `ws.sendBinarySync(...)` (which reads any byte view)
 // without an extra encoding hop.
 export function buildRequest(id: string, method: string, params: CborValue[]): uint8[] {
 	const envelope = cborTextMap(

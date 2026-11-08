@@ -11,9 +11,15 @@ function relativeIndex(index: number, length: number): number {
 	return whole > length ? length : whole;
 }
 
+function invalidLength(name: string, value: number): RangeError {
+	return new RangeError(`Invalid ${name}: ${value}`);
+}
+
+@inline
 function wholeLength(value: number, name: string): number {
-	if (!(value >= 0) || value != Math.floor(value) || value > 9007199254740991) throw new RangeError(`Invalid ${name}: ${value}`);
-	return value;
+	const whole = value < 0 ? Math.ceil(value) : Math.floor(value);
+	if (whole < 0 || whole > 9007199254740991) throw invalidLength(name, value);
+	return whole > 0 ? whole : 0;
 }
 
 function viewStart(buffer: ArrayBuffer, byteOffset: number, per: number, name: string): number {
@@ -31,6 +37,18 @@ function viewLength(buffer: ArrayBuffer, offset: number, length: number, per: nu
 	const count = wholeLength(length, "typed array length");
 	if (offset + count * per > buffer.bytes.length) throw new RangeError(`Invalid typed array length: ${count}`);
 	return count;
+}
+
+function wrapModulo(value: number, modulus: number): number {
+	if (!(value - value == 0)) return 0;
+	const whole = value < 0 ? Math.ceil(value) : Math.floor(value);
+	const wrapped = whole % modulus;
+	return wrapped < 0 ? wrapped + modulus : wrapped;
+}
+
+function signedWrap(value: number, modulus: number): number {
+	const wrapped = wrapModulo(value, modulus);
+	return wrapped >= modulus / 2 ? wrapped - modulus : wrapped;
 }
 
 // ToUint8Clamp: NaN to 0, out of range to the nearest end, a tie to the even neighbour.
@@ -78,6 +96,7 @@ export class TypedArray<T> {
 	readonly byteOffset: number;
 	readonly length: number;
 
+	@inline
 	constructor(own: Vec<uint8>, store: ArrayBuffer | null, byteOffset: number, length: number) {
 		this.own = own;
 		this.store = store;
@@ -152,11 +171,12 @@ export class Int8Array extends TypedArray<int8> {
 		return out;
 	}
 
-	fill(value: int8, begin: number = 0, end: number = this.length): Int8Array {
+	fill(value: number, begin: number = 0, end: number = this.length): Int8Array {
 		const from = relativeIndex(begin, this.length);
 		const to = relativeIndex(end, this.length);
 		const into: Span<int8> = this;
-		for (let i = from; i < to; i++) into[i] = value;
+		const element = signedWrap(value, 256) as int8;
+		for (let i = from; i < to; i++) into[i] = element;
 		return this;
 	}
 }
@@ -210,11 +230,12 @@ export class Uint8Array extends TypedArray<uint8> {
 		return out;
 	}
 
-	fill(value: uint8, begin: number = 0, end: number = this.length): Uint8Array {
+	fill(value: number, begin: number = 0, end: number = this.length): Uint8Array {
 		const from = relativeIndex(begin, this.length);
 		const to = relativeIndex(end, this.length);
 		const into: Span<uint8> = this;
-		for (let i = from; i < to; i++) into[i] = value;
+		const element = wrapModulo(value, 256) as uint8;
+		for (let i = from; i < to; i++) into[i] = element;
 		return this;
 	}
 }
@@ -328,11 +349,12 @@ export class Int16Array extends TypedArray<int16> {
 		return out;
 	}
 
-	fill(value: int16, begin: number = 0, end: number = this.length): Int16Array {
+	fill(value: number, begin: number = 0, end: number = this.length): Int16Array {
 		const from = relativeIndex(begin, this.length);
 		const to = relativeIndex(end, this.length);
 		const into: Span<int16> = this;
-		for (let i = from; i < to; i++) into[i] = value;
+		const element = signedWrap(value, 65536) as int16;
+		for (let i = from; i < to; i++) into[i] = element;
 		return this;
 	}
 }
@@ -386,11 +408,12 @@ export class Uint16Array extends TypedArray<uint16> {
 		return out;
 	}
 
-	fill(value: uint16, begin: number = 0, end: number = this.length): Uint16Array {
+	fill(value: number, begin: number = 0, end: number = this.length): Uint16Array {
 		const from = relativeIndex(begin, this.length);
 		const to = relativeIndex(end, this.length);
 		const into: Span<uint16> = this;
-		for (let i = from; i < to; i++) into[i] = value;
+		const element = wrapModulo(value, 65536) as uint16;
+		for (let i = from; i < to; i++) into[i] = element;
 		return this;
 	}
 }
@@ -444,11 +467,12 @@ export class Int32Array extends TypedArray<int32> {
 		return out;
 	}
 
-	fill(value: int32, begin: number = 0, end: number = this.length): Int32Array {
+	fill(value: number, begin: number = 0, end: number = this.length): Int32Array {
 		const from = relativeIndex(begin, this.length);
 		const to = relativeIndex(end, this.length);
 		const into: Span<int32> = this;
-		for (let i = from; i < to; i++) into[i] = value;
+		const element = signedWrap(value, 4294967296) as int32;
+		for (let i = from; i < to; i++) into[i] = element;
 		return this;
 	}
 }
@@ -502,11 +526,12 @@ export class Uint32Array extends TypedArray<uint32> {
 		return out;
 	}
 
-	fill(value: uint32, begin: number = 0, end: number = this.length): Uint32Array {
+	fill(value: number, begin: number = 0, end: number = this.length): Uint32Array {
 		const from = relativeIndex(begin, this.length);
 		const to = relativeIndex(end, this.length);
 		const into: Span<uint32> = this;
-		for (let i = from; i < to; i++) into[i] = value;
+		const element = wrapModulo(value, 4294967296) as uint32;
+		for (let i = from; i < to; i++) into[i] = element;
 		return this;
 	}
 }
@@ -560,11 +585,12 @@ export class Float32Array extends TypedArray<float32> {
 		return out;
 	}
 
-	fill(value: float32, begin: number = 0, end: number = this.length): Float32Array {
+	fill(value: number, begin: number = 0, end: number = this.length): Float32Array {
 		const from = relativeIndex(begin, this.length);
 		const to = relativeIndex(end, this.length);
 		const into: Span<float32> = this;
-		for (let i = from; i < to; i++) into[i] = value;
+		const element = value as float32;
+		for (let i = from; i < to; i++) into[i] = element;
 		return this;
 	}
 }

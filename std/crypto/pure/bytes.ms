@@ -5,20 +5,48 @@ import { wipeBytes } from "./secret";
 when (!js) {
 	/** The bytes a kernel reads in place: on C any view of the caller's bytes, on JavaScript an array. */
 	export type InputBytes = Readonly<Span<uint8>>;
+	/** Where a kernel writes bytes: on C any view, a Buffer's included, on JavaScript an array. */
+	export type OutputBytes = Span<uint8>;
+	/** A kernel's fresh result: on C the Buffer the API returns, on JavaScript an array. */
+	export type OutputArray = Buffer;
+
+	export function outputArray(size: number): OutputArray {
+		return new Buffer(size);
+	}
+
+	/** A kernel's result as the Buffer the API returns: on C the result itself. */
+	@inline
+	export function outputBuffer(bytes: OutputArray): Buffer {
+		return bytes;
+	}
 } else {
 	export type InputBytes = Readonly<uint8[]>;
+	export type OutputBytes = uint8[];
+	export type OutputArray = uint8[];
+
+	export function outputArray(size: number): OutputArray {
+		return new Array<uint8>(size);
+	}
+
+	/** A kernel's result as the Buffer the API returns: on JavaScript a copy of the array. */
+	export function outputBuffer(bytes: OutputArray): Buffer {
+		return Buffer.from(bytes);
+	}
 }
 
 /** An owned copy of the bytes an operation reads: a string is its UTF-8 bytes. */
-export function bytesOf<D extends ByteInput>(data: D): Buffer {
-	if (typeof data == "string") return Buffer.fromString(data, "utf8");
-	const owned = new Array<uint8>(data.length);
-	for (let i = 0; i < data.length; i++) owned[i] = data[i];
-	return owned as Buffer;
+export function bytesOf<D extends ByteInput>(data: D): uint8[] {
+	return typeof data == "string" ? ownedBytes(data.asBytes()) : ownedBytes(data);
+}
+
+function ownedBytes(bytes: Readonly<Span<uint8>>): uint8[] {
+	const owned = new Array<uint8>(bytes.length);
+	for (let i = 0; i < bytes.length; i++) owned[i] = bytes[i];
+	return owned;
 }
 
 /** Clears the copy bytesOf made of `data`: it is the operation's own, so a secret in it must not outlive the call. */
-export function wipeIfCopied<D extends ByteInput>(data: D, bytes: Buffer): void {
+export function wipeIfCopied<D extends ByteInput>(data: D, bytes: uint8[]): void {
 	wipeBytes(bytes);
 }
 

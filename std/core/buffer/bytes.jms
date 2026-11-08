@@ -5,9 +5,12 @@ export type Bytes = string | uint8[];
 
 export type ByteInput = string | Uint8Array | Readonly<Span<uint8>>;
 
-export function rawString(data: Bytes): string {
-	if (typeof data == "string") return data;
-	return wellFormedString(data);
+export function rawString<K extends ByteInput>(data: K): string {
+	return typeof data == "string" ? data : rawStringOf(data);
+}
+
+function rawStringOf(bytes: Readonly<Span<uint8>>): string {
+	return wellFormedString(bytes);
 }
 
 export function rawBuffer(raw: string): Buffer {

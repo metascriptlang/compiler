@@ -129,7 +129,7 @@ function derivedPassword(algorithm: HashAlgorithm): uint8[] {
 	} else {
 		const result = pbkdf2Sync(password, salt, 2, 65, algorithm);
 		if (!result.ok) throw new Error(result.error.message);
-		return result.value;
+		return [...result.value];
 	}
 }
 
@@ -139,7 +139,7 @@ function derivedKey(algorithm: HashAlgorithm): uint8[] {
 	} else {
 		const result = hkdfSync(algorithm, password, salt, info, 65);
 		if (!result.ok) throw new Error(result.error.message);
-		return result.value;
+		return [...result.value];
 	}
 }
 

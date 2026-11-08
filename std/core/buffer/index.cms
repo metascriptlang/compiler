@@ -12,31 +12,34 @@ import {
 } from "./codec";
 import { asciiWords, utf8String, wordAt } from "../string/bytes";
 
-import { Buffer } from "./type";
+import { Buffer, allocSize } from "./type";
 export { Buffer } from "./type";
-export { toJSON, inspect } from "./protocols";
+export { inspect } from "./protocols";
+export { BufferJson } from "./type";
 
-/** Decodes the bytes as UTF-8 the way Node does: an ill-formed sequence becomes U+FFFD. */
-export function toString(this buf: Buffer): string {
-	return utf8String(buf, false);
-}
-
-extern function uninitBytes(length: int64): uint8[] from "msBytesNewUninit";
-
+@inline
 function bufferAlloc(size: number): Buffer {
-	return new Array<uint8>(size as int64) as Buffer;
+	return new Buffer(size);
 }
 
+@inline
 function bufferAllocUninit(size: number): Buffer {
-	return uninitBytes(size as int64) as Buffer;
+	return new Buffer(size);
 }
 
+function putByte(this buf: Buffer, index: number, value: number): void {
+	const at = index as int64;
+	if (at >= 0 && at < buf.byteCount()) buf.bytePointer()[at] = (value as int64) as uint8;
+}
+
+@inline
 export function alloc(this typeof Buffer, size: number): Buffer {
-	return bufferAlloc(size);
+	return bufferAlloc(allocSize(size));
 }
 
+@inline
 export function allocUnsafe(this typeof Buffer, size: number): Buffer {
-	return bufferAllocUninit(size);
+	return bufferAllocUninit(allocSize(size));
 }
 
 extern function newBytes(length: int64): string from "msStringNewUninit";
@@ -66,7 +69,10 @@ extern function cMemcmp(a: Ptr<uint8>, b: Ptr<uint8>, size: uint64): int32 from 
 
 // ===== Byte access =====
 
-extern function bytePointer(this buf: Buffer): Ptr<uint8> from "msBufferData";
+function bytePointer(this buf: Buffer): Ptr<uint8> {
+	const bytes: Span<uint8> = buf;
+	return (bytes as Ptr<void>) as Ptr<uint8>;
+}
 
 function textPointer(this text: string): Readonly<Ptr<uint8>> {
 	return (text as cstring) as Readonly<Ptr<uint8>>;
@@ -78,10 +84,6 @@ function byteCount(this buf: Buffer): int64 {
 
 function byteCount(this text: string): int64 {
 	return text.asBytes().length as int64;
-}
-
-export function byteLength(this buf: Buffer): number {
-	return buf.length;
 }
 
 export function byteAt(this buf: Buffer, index: number): int32 {
@@ -292,8 +294,7 @@ function decodeText(value: string, base64: boolean): Buffer {
 	const capacity = base64 ? base64Capacity(text) : hexCapacity(text);
 	const buf = bufferAllocUninit(capacity as number);
 	const written = base64 ? writeBase64(text, buf.bytePointer(), 0, capacity) : writeHex(text, buf.bytePointer(), 0, capacity);
-	if (written < capacity) buf.length = written as int32;
-	return buf;
+	return written < capacity ? buf.subarray(0, written as number) : buf;
 }
 
 @inline
@@ -312,19 +313,13 @@ function decodeString(value: string, encoding: int32): Buffer {
 	const capacity = encodedLength(value, encoding) as int64;
 	const buf = bufferAlloc(capacity as number);
 	const written = writeText(value.asBytes(), buf.bytePointer(), 0, capacity, encoding);
-	if (written < capacity) buf.length = written as int32;
-	return buf;
+	return written < capacity ? buf.subarray(0, written as number) : buf;
 }
 
 export function fromArray(this typeof Buffer, arr: number[]): Buffer {
 	const buf = bufferAllocUninit(arr.length);
-	for (let i = 0; i < arr.length; i++) buf.set(i, arr[i]);
+	for (let i = 0; i < arr.length; i++) buf.putByte(i, arr[i]);
 	return buf;
-}
-
-export function slice(this buf: Buffer, start: number = 0, end: number = 9007199254740991): Buffer {
-	const bytes: Readonly<Span<uint8>> = buf;
-	return bytes.slice(start, end) as Buffer;
 }
 
 export function copy(this typeof Buffer, value: Buffer): Buffer {
@@ -433,7 +428,7 @@ export function isBufferEncoding(this typeof Buffer, encoding: string): boolean 
 }
 
 export function concatList(this typeof Buffer, buffers: Buffer[]): Buffer {
-	let totalLength = 0;
+	let totalLength: number = 0;
 	for (let i = 0; i < buffers.length; i++) totalLength += buffers[i].length;
 	const result = bufferAllocUninit(totalLength);
 	let offset: int64 = 0;
@@ -448,11 +443,6 @@ export function concatList(this typeof Buffer, buffers: Buffer[]): Buffer {
 // ===== Extension Methods (only what string doesn't already have) =====
 
 // --- Byte write (string has byteAt for read, but no write) ---
-
-export function set(this buf: Buffer, index: number, value: number): void {
-	const at = index as int64;
-	if (at >= 0 && at < buf.byteCount()) buf.bytePointer()[at] = (value as int64) as uint8;
-}
 
 // --- Hex/Base64 conversion ---
 
@@ -541,7 +531,7 @@ export function copyTo(
 
 // --- Byte fill ---
 
-export function fill(this buf: Buffer, value: number, start: number, end: number): void {
+export function fillByte(this buf: Buffer, value: number, start: number, end: number): void {
 	const length = buf.byteCount();
 	const first = start as int64;
 	const last = end as int64;

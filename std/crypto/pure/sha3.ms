@@ -532,6 +532,13 @@ export function updateSha3(state: Sha3State, data: Readonly<uint8[]>): void {
 
 /** Pad, permute, and return the digest bytes; the state is wiped afterwards. Throws if called more than once. */
 export function finishSha3(state: Sha3State): uint8[] {
+	const out = new Array<uint8>(state.bits >> 3);
+	finishSha3Into(state, out);
+	return out;
+}
+
+/** Pad, permute, and write the `bits / 8` digest bytes to `out`; the state is wiped afterwards. */
+export function finishSha3Into(state: Sha3State, out: Span<uint8>): void {
 	if (state.finished) throw new Error("SHA3: already finished");
 	const rate = state.rate;
 	addBytes(state, state.buf, 0, state.filled);
@@ -543,12 +550,10 @@ export function finishSha3(state: Sha3State): uint8[] {
 	addByte(state, 0x80, rate - 1);
 	keccakF(state);
 	state.finished = true;
-	const out = new Array<uint8>(state.bits >> 3);
-	for (let i = 0; i < out.length; i++) out[i] = stateByte(state, i);
+	for (let i = 0; i < state.bits >> 3; i++) out[i] = stateByte(state, i);
 	wipeLanes(state);
 	wipeBytes(state.buf);
 	state.filled = 0;
-	return out;
 }
 
 /** Hash data in one call. */

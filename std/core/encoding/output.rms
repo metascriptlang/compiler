@@ -1,5 +1,5 @@
 export type EncodingIndex = int64;
-export type EncodingBytes = uint8[];
+export type EncodingBytes = Span<uint8>;
 export const emptyEncoding = "";
 
 export function newEncodingOutput(length: int64): uint8[] {

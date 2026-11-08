@@ -15,8 +15,8 @@ export function cborInt(n: int64): CborValue {
 
 // --- Major 2 ---
 
-export function cborBytes(b: uint8[]): CborValue {
-	return { kind: CborKind.Bytes, bytesVal: b as Buffer };
+export function cborBytes(b: Buffer): CborValue {
+	return { kind: CborKind.Bytes, bytesVal: b };
 }
 
 // --- Major 3 ---

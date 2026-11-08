@@ -1,9 +1,9 @@
 import { Buffer } from "std/core/buffer";
 import { ByteInput } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
-import { bytesOf, wipeIfCopied } from "./bytes";
+import { bytesOf, wipeIfCopied, outputArray, outputBuffer } from "./bytes";
 import {
-	Blake2bState, newBlake2b, updateBlake2b, finishBlake2b, blake2bOf,
+	Blake2bState, newBlake2b, updateBlake2b, finishBlake2b, finishBlake2bInto,
 } from "./blake2b";
 
 export { CryptoError, CryptoErrorKind } from "../errors";
@@ -24,7 +24,16 @@ export function blake2bSync<D extends ByteInput>(
 ): Result<Buffer, CryptoError> {
 	const bad = badHashSize(hashSize, "blake2b");
 	if (bad != null) return Result.err(bad);
-	return Result.ok(blake2bOf(hashSize, [], (typeof data == "string" ? data.asBytes() : data)) as Buffer);
+	const state = newBlake2b(hashSize, []);
+	const bytes = typeof data == "string" ? data.asBytes() : data;
+	updateBlake2b(state, bytes, 0, bytes.length as int32);
+	return Result.ok(digestOf(state));
+}
+
+function digestOf(state: Blake2bState): Buffer {
+	const out = outputArray(state.outputSize);
+	finishBlake2bInto(state, out, 0);
+	return outputBuffer(out);
 }
 
 export function blake2bKeyedSync<D extends ByteInput, K extends ByteInput>(
@@ -44,9 +53,11 @@ export function blake2bKeyedSync<D extends ByteInput, K extends ByteInput>(
 		wipeIfCopied(keyBytes, key);
 		return Result.err(bad);
 	}
-	const digest = blake2bOf(hashSize, key, (typeof data == "string" ? data.asBytes() : data));
+	const state = newBlake2b(hashSize, key);
 	wipeIfCopied(keyBytes, key);
-	return Result.ok(digest as Buffer);
+	const bytes = typeof data == "string" ? data.asBytes() : data;
+	updateBlake2b(state, bytes, 0, bytes.length as int32);
+	return Result.ok(digestOf(state));
 }
 
 export function blake2b<D extends ByteInput>(
@@ -80,7 +91,7 @@ export class Blake2b {
 		if (this._state.finished) {
 			throw new Error("Blake2b.digest: the hasher already produced its digest");
 		}
-		return finishBlake2b(this._state) as Buffer;
+		return digestOf(this._state);
 	}
 
 	onDestroy(): void {

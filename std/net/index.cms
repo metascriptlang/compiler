@@ -7,6 +7,7 @@
 
 @include("runtime/net/socket.h");
 
+import { adoptBuffer } from "std/core/buffer/bytes";
 import { Buffer } from "std/core/buffer";
 import { ByteInput, rawBuffer } from "std/core/buffer/bytes";
 import { wellFormedString } from "std/core/string/bytes";
@@ -23,8 +24,8 @@ extern function msNetSocketUnix(): int32;
 extern function msNetBindUnix(fd: int32, path: string): int32;
 extern function msNetConnectUnix(fd: int32, path: string): int32;
 extern function msNetSendBytes(fd: int32, data: Readonly<Span<uint8>>): int32;
-extern function msNetRecvBytes(fd: int32, maxBytes: int32): Buffer;
-extern function msNetRecvNonBlockBytes(fd: int32, maxBytes: int32): Buffer;
+extern function msNetRecvBytes(fd: int32, maxBytes: int32): Vec<uint8>;
+extern function msNetRecvNonBlockBytes(fd: int32, maxBytes: int32): Vec<uint8>;
 extern function msNetSendNonBlockBytes(fd: int32, data: Readonly<Span<uint8>>, offset: int32): int32;
 extern function msNetLastRecvTimedOut(): int32;
 extern function msNetClose(fd: int32): void;
@@ -76,7 +77,7 @@ function sendSpan(fd: int32, data: Readonly<Span<uint8>>): int32 {
 }
 
 export function recv(fd: int32, maxBytes: int32): Buffer {
-	return msNetRecvBytes(fd, maxBytes);
+	return adoptBuffer(msNetRecvBytes(fd, maxBytes));
 }
 
 // True also when a non-blocking socket had no data, so an empty recv is end of stream only when this is false.
@@ -110,7 +111,7 @@ export function acceptNonBlock(fd: int32): int32 {
 }
 
 export function recvNonBlock(fd: int32, maxBytes: int32): Buffer {
-	return msNetRecvNonBlockBytes(fd, maxBytes);
+	return adoptBuffer(msNetRecvNonBlockBytes(fd, maxBytes));
 }
 
 export function sendNonBlock<D extends ByteInput>(fd: int32, data: D, offset: int32): int32 {

@@ -92,19 +92,29 @@ export function hexDigitValue(byte: uint8): int32 {
 }
 
 export function decodeHex(this text: string): uint8[] {
+	const length = text.decodedHexLength();
+	if (length < 0) return [];
+	const result = newDecodingOutput(length);
+	return text.decodeHexInto(result) ? result : [];
+}
+
+/** The byte length `text` decodes to as hexadecimal, or -1 when its length is odd. */
+export function decodedHexLength(this text: string): int64 {
+	const byteCount = text.byteLength as int64;
+	return byteCount % 2 != 0 ? -1 : byteCount / 2;
+}
+
+/** Decodes hexadecimal `text` into `out`, which holds decodedHexLength bytes; false at a byte that is no hex digit. */
+export function decodeHexInto(this text: string, out: Span<uint8>): boolean {
 	const bytes = text.asBytes();
-	const byteCount = bytes.length as int64;
-	if (byteCount % 2 != 0) return [];
-	const result = newDecodingOutput(byteCount / 2);
-	const out: Span<uint8> = result;
-	const inputLength = byteCount as EncodingIndex;
+	const inputLength = bytes.length as EncodingIndex;
 	for (let i: EncodingIndex = 0; i < inputLength; i += 2) {
 		const hi = hexDigitValue(bytes[i]);
 		const lo = hexDigitValue(bytes[i + 1]);
-		if (hi < 0 || lo < 0) return [];
+		if (hi < 0 || lo < 0) return false;
 		out[i / 2] = ((hi << 4) | lo) as uint8;
 	}
-	return result;
+	return true;
 }
 
 function base64TextOnVm(data: Readonly<Span<uint8>>): string {
@@ -189,31 +199,42 @@ function base64Digit(byte: int32): int32 {
 }
 
 export function decodeBase64(this text: string): uint8[] {
+	const length = text.decodedBase64Length();
+	if (length < 0) return [];
+	const result = newDecodingOutput(length);
+	return text.decodeBase64Into(result) ? result : [];
+}
+
+/** The byte length padded base64 `text` decodes to, or -1 when its length or padding cannot be base64. */
+export function decodedBase64Length(this text: string): int64 {
 	const bytes = text.asBytes();
 	const byteCount = bytes.length as int64;
-	if (byteCount == 0 || byteCount % 4 != 0) return [];
+	if (byteCount == 0 || byteCount % 4 != 0) return -1;
 	const inputLength = byteCount as EncodingIndex;
 	let length = byteCount / 4 * 3;
 	if (bytes[inputLength - 1] == "=".code) length -= 1;
 	if (bytes[inputLength - 2] == "=".code) {
-		if (bytes[inputLength - 1] != "=".code) return [];
+		if (bytes[inputLength - 1] != "=".code) return -1;
 		length -= 1;
 	}
-	const result = newDecodingOutput(length);
+	return length;
+}
+
+/** Decodes padded base64 `text` into `dest`, which holds decodedBase64Length bytes; false at a byte that is no base64 digit. */
+export function decodeBase64Into(this text: string, dest: Span<uint8>): boolean {
+	const bytes = text.asBytes();
 	when (raiser) {
-		return decodesPortably(bytes, result) ? result : [];
+		return decodesPortably(bytes, dest);
 	} else {
 		when (c) {
-			const decoded: Span<uint8> = result;
-			if (!decodesWhole(bytes, decoded as Ptr<uint8>, length)) return [];
-			return result;
+			return decodesWhole(bytes, dest as Ptr<uint8>, dest.length as int64);
 		} else {
-			return decodesPortably(bytes, result) ? result : [];
+			return decodesPortably(bytes, dest);
 		}
 	}
 }
 
-function decodesPortably(bytes: Readonly<Span<uint8>>, result: uint8[]): boolean {
+function decodesPortably(bytes: Readonly<Span<uint8>>, result: Span<uint8>): boolean {
 	const inputLength = bytes.length as EncodingIndex;
 	const outputLength = result.length as EncodingIndex;
 	const finalGroup = inputLength - 4;
