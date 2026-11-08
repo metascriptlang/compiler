@@ -1104,14 +1104,25 @@ function coreGroup(): void {
 
 function immortalConstCell(): void {
 	const tag = "hcrImmortalConstCell";
+	const stable = freshDir(`${TMP}/immortalConstCell/coreStable`);
+	copy(`${FIXTURES}/immortalConstCell/inImage/app.ms`, `${stable}/app.ms`);
+	copy(`${FIXTURES}/immortalConstCell/plainLogic.ms`, `${stable}/logic.ms`);
+	mustBuild(tag, stable, ["build", "app.ms", "--hcr", "--emit=c"], "the image without a module const did not emit");
+	const before = new Map<string, string>();
+	for (const name of readDir(`${stable}/out/debug`)) {
+		if (name.startsWith("Sstd")) before.set(name, read(`${stable}/out/debug/${name}`));
+	}
+	need(tag, before.size > 0, "the HCR emit wrote no standard-library module");
+	copy(`${FIXTURES}/immortalConstCell/inImage/logic.ms`, `${stable}/logic.ms`);
+	mustBuild(tag, stable, ["build", "app.ms", "--hcr", "--emit=c"], "the image with a module const did not emit");
+	for (const [name, text] of before) {
+		need(tag, read(`${stable}/out/debug/${name}`) == text, `a module const in an image changed the emitted ${name}`);
+	}
 	for (const where of ["inImage", "inEntry"]) {
 		const dir = freshDir(`${TMP}/immortalConstCell/${where}`);
 		for (const f of ["app.ms", "logic.ms"]) copy(`${FIXTURES}/immortalConstCell/${where}/${f}`, `${dir}/${f}`);
-		const ran = msc(dir, ["run", "--hcr", "app.ms"]);
-		if (!succeeded(ran) || !both(ran).includes("HCR-ICC 3 true")) {
-			console.log(both(ran));
-			failWith(tag, `a module array const ${where == "inImage" ? "in an image" : "in the entry"} and a ref-array cell another image demands did not build under --hcr`);
-		}
+		mustBuild(tag, dir, ["build", "app.ms", "--hcr"],
+			`a module array const ${where == "inImage" ? "in an image" : "in the entry"} and a ref-array cell another image demands did not build under --hcr`);
 	}
 	console.log(`ok   ${tag}`);
 }

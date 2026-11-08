@@ -5,4 +5,4 @@ function table(): uint32[] {
 	return out;
 }
 const TABLE: Readonly<uint32[]> = table();
-console.log(`HCR-ICC ${TABLE[3]} ${label()}`);
+console.log(`${TABLE[3]} ${label()}`);
