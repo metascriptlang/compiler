@@ -105,7 +105,7 @@ import { lineText } from "../utils/sourceLines";
 import { splitCcFlags, quoteCcArg } from "../utils/commandLine";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
-import { join, isAbsolute, dirname, basename, relative, normalize } from "std/fs/path";
+import { join, isAbsolute, dirname, basename, relative, normalize, extname } from "std/fs/path";
 import { HcrAbiExport, HcrModuleAbi, HcrReloadDecision, HcrReloadKind, HcrReloadReason, buildHcrModuleAbi, classifyHcrReload, createHcrAbiExport, hcrAbiFingerprint, hcrLayoutKey, hcrReloadDiagnostic, hcrSignatureKey, parseHcrAbiBundle, serializeHcrAbiBundle } from "./hcrAbi";
 import { VERSION } from "./usage";
 
@@ -3021,6 +3021,20 @@ export function targetBinarySuffix(targetOs: string, cpuTarget: string, dynLib: 
 	throw new Error(`internal: no output suffix for target os "${targetOs}"`);
 }
 
+// A MinGW link (GCC 8+, clang's MinGW driver) writes an output named without an extension with `.exe` added, even
+// for a DLL; give it the target's suffix so the file the build records is the file the linker writes.
+export function windowsOutputPath(path: string, targetOs: string, cpuTarget: string, dynLib: boolean): string {
+	if (targetOs != "windows" || extname(path) != "") return path;
+	return path + targetBinarySuffix(targetOs, cpuTarget, dynLib);
+}
+
+test "an extensionless Windows output gets the target's suffix, and every other output keeps its name" {
+	assert windowsOutputPath("out/probe", "windows", "", false) == "out/probe.exe";
+	assert windowsOutputPath("out/probe", "windows", "", true) == "out/probe.dll";
+	assert windowsOutputPath("out/probe.bin", "windows", "", false) == "out/probe.bin";
+	assert windowsOutputPath("out/probe", "linux", "", false) == "out/probe";
+}
+
 test "a cross build's output suffix comes from the target os, not the host" {
 	assert targetBinarySuffix("linux", "", true) == ".so";
 	assert targetBinarySuffix("linux", "", false) == "";
@@ -3815,6 +3829,8 @@ function buildCPhases(entryPath: string, opts: CliOptions, session: BuildSession
 		let suffix = targetBinarySuffix(opts.targetOs, opts.cpuTarget, dynLib);
 		if (opts.appMode == "staticlib" && opts.targetOs != "solana" && opts.targetOs != "wasm" && opts.targetOs != "emcc") suffix = ".a";
 		outBinary = outDir + "/" + replaceExt(basename(entryPath), "") + suffix;
+	} else if (opts.appMode != "staticlib") {
+		outBinary = windowsOutputPath(outBinary, opts.targetOs, opts.cpuTarget, opts.isHcr || opts.appMode == "lib");
 	}
 	outBinary = normalize(outBinary);
 
