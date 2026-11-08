@@ -64,6 +64,7 @@ MS_HEAP_API void* msHeapRealloc0(void* p, size_t oldSize, size_t newSize);
 MS_HEAP_API void msHeapFree(void* p);
 MS_HEAP_API void msHeapReset(void);
 MS_HEAP_API void msHeapThreadRelease(void);
+MS_HEAP_API void msHeapThreadFlush(void);
 
 MS_HEAP_API void* msHeapTryAllocPages(size_t bytes);
 MS_HEAP_API void msHeapDeallocPages(void* p, size_t bytes);

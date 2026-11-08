@@ -419,6 +419,9 @@ static void* msPoolWorkerLoop(void* arg) {
 			!msWorkerLoopPending() &&
 			!pool->shutdown) {
 			if (!retired) msPoolIdleSet(pool, myWorkerIdx);
+#if MS_HEAP_ENABLED
+			msHeapThreadFlush();
+#endif
 			if (timerMs >= 0) MS_WAIT_MS(pool->workerConds[myWorkerIdx], pool, timerMs);
 			else MS_WAIT(pool->workerConds[myWorkerIdx], pool);
 			if (!retired) msPoolIdleClear(pool, myWorkerIdx);
@@ -673,6 +676,9 @@ void msPoolSubmit(struct msSpawnCtx* ctx) {
 	 * busyCount authority is the lock-free atomic (adjusted by Change 2 dec/inc in wait). */
 	if (msPoolQueueLen(pool) >= pool->cap - 1) msPoolDropClaimed(pool);
 	while (!msIsPoolWorker && msPoolQueueLen(pool) >= pool->cap - 1 && !pool->shutdown) {
+#if MS_HEAP_ENABLED
+		msHeapThreadFlush();
+#endif
 		MS_WAIT(pool->space, pool);
 		msPoolDropClaimed(pool);
 	}

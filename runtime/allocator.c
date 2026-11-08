@@ -76,6 +76,7 @@ void* msHeapRealloc0(void* p, size_t oldSize, size_t newSize) {
 void msHeapFree(void* p) { if (p) free(msHeapUntag(p)); }
 void msHeapReset(void) {}
 void msHeapThreadRelease(void) { msHeapAttached = 0; }
+void msHeapThreadFlush(void) {}
 
 #elif MS_HEAP_USE_MALLOC
 
@@ -110,6 +111,7 @@ void* msHeapRealloc0(void* p, size_t oldSize, size_t newSize) {
 void msHeapFree(void* p) { free(p); }
 void msHeapReset(void) {}
 void msHeapThreadRelease(void) {}
+void msHeapThreadFlush(void) {}
 
 #else
 
@@ -139,7 +141,8 @@ enum {
     MS_HEAP_TRUNK_BITS = 512,
     MS_HEAP_WORD_BITS = sizeof(uintptr_t) * 8,
     MS_HEAP_SMALL_CLASSES = MS_HEAP_PAGE_SIZE / MS_HEAP_ALIGN,
-    MS_HEAP_MAX_REMOTE_BIG_STEPS = 20
+    MS_HEAP_MAX_REMOTE_BIG_STEPS = 20,
+    MS_HEAP_REMOTE_BATCH_BYTES = 16384
 };
 
 #define MS_HEAP_MAX_BIG (((size_t)1 << 30) - ((size_t)1 << 24))
@@ -173,7 +176,16 @@ struct msHeapBig {
     _Alignas(16) unsigned char data[];
 };
 
-struct msHeapCell { msHeapCell* next; };
+struct msHeapCell {
+    msHeapCell* next;
+    uintptr_t run;
+#if UINTPTR_MAX == 0xffffffffu
+    msHeapCell* runTail;
+#endif
+};
+
+_Static_assert(sizeof(msHeapCell) <= MS_HEAP_ALIGN, "a remote run's header must fit the smallest cell");
+_Static_assert(MS_HEAP_REMOTE_BATCH_BYTES / MS_HEAP_ALIGN < 0x10000, "a remote run's length must fit its 16 bits");
 
 struct msHeapSmall {
     msHeapChunk base;
@@ -182,7 +194,6 @@ struct msHeapSmall {
     msHeapCell* freeList;
     uint32_t free;
     uint32_t acc;
-    uint32_t foreignCells;
     uint16_t alignOffset;
     uint16_t bumpZeroed;
     _Alignas(16) unsigned char data[];
@@ -215,8 +226,18 @@ struct msHeapRegion {
     uint32_t spreadSeq;
 };
 
+typedef struct {
+    msHeapHandle* owner;
+    msHeapCell* head;
+    msHeapCell* tail;
+    uintptr_t count;
+} msHeapRemoteRun;
+
 struct msHeapHandle {
     msHeapCell* sharedCells[MS_HEAP_SMALL_CLASSES];
+    msHeapRemoteRun runs[MS_HEAP_SMALL_CLASSES];
+    uint64_t openRuns[MS_HEAP_SMALL_CLASSES / 64];
+    size_t runBytes;
     msHeapBig* sharedBig;
     msHeapHandle* nextRetired;
     msHeapRegion region;
@@ -243,6 +264,9 @@ static void* msHeapAllocPages(size_t bytes) {
 }
 
 #if MS_HEAP_THREADS
+
+#include <stdio.h>
+#include <stdlib.h>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -282,9 +306,16 @@ static inline msHeapRegion* msHeapHere(void) {
     return MS_HEAP_REGION(handle);
 }
 
+static void msHeapCloseRuns(msHeapHandle* here);
+
+void msHeapThreadFlush(void) {
+    if (msHeapCurrent) msHeapCloseRuns(msHeapCurrent);
+}
+
 void msHeapThreadRelease(void) {
     msHeapHandle* handle = msHeapCurrent;
     if (!handle) return;
+    msHeapCloseRuns(handle);
     msHeapCurrent = NULL;
     msHeapRetiredAcquire();
     handle->nextRetired = msHeapRetired;
@@ -292,12 +323,68 @@ void msHeapThreadRelease(void) {
     msHeapRetiredReleaseLock();
 }
 
-static void msHeapPushRemoteCell(msHeapHandle* owner, size_t slot, msHeapCell* cell) {
-    msHeapCell* head = __atomic_load_n(&owner->sharedCells[slot], __ATOMIC_RELAXED);
+static void msHeapMarkRun(msHeapCell* head, msHeapCell* tail, uintptr_t count) {
+#if UINTPTR_MAX == 0xffffffffu
+    head->run = count;
+    head->runTail = tail;
+#else
+    intptr_t span = (intptr_t)tail - (intptr_t)head;
+    head->run = ((uintptr_t)span << 16) | count;
+    if (((intptr_t)head->run >> 16) != span) {
+        fprintf(stderr, "msHeapFree: a remote run spans %p..%p, beyond the 48-bit distance its header holds\n",
+                (void*)head, (void*)tail);
+        abort();
+    }
+#endif
+}
+
+static uintptr_t msHeapRunLength(msHeapCell* head) { return head->run & 0xffff; }
+
+static msHeapCell* msHeapRunTail(msHeapCell* head) {
+#if UINTPTR_MAX == 0xffffffffu
+    return head->runTail;
+#else
+    return (msHeapCell*)((intptr_t)head + ((intptr_t)head->run >> 16));
+#endif
+}
+
+static void msHeapPushRemoteRun(msHeapHandle* owner, size_t slot, msHeapCell* head, msHeapCell* tail, uintptr_t count) {
+    msHeapMarkRun(head, tail, count);
+    msHeapCell* shared = __atomic_load_n(&owner->sharedCells[slot], __ATOMIC_RELAXED);
     do {
-        cell->next = head;
-    } while (!__atomic_compare_exchange_n(&owner->sharedCells[slot], &head, cell, 1,
+        tail->next = shared;
+    } while (!__atomic_compare_exchange_n(&owner->sharedCells[slot], &shared, head, 1,
                                           __ATOMIC_RELEASE, __ATOMIC_RELAXED));
+}
+
+static void msHeapCloseRun(msHeapHandle* here, size_t slot) {
+    msHeapRemoteRun* run = &here->runs[slot];
+    msHeapPushRemoteRun(run->owner, slot, run->head, run->tail, run->count);
+    *run = (msHeapRemoteRun){0};
+}
+
+static void msHeapCloseRuns(msHeapHandle* here) {
+    for (size_t word = 0; word < MS_HEAP_SMALL_CLASSES / 64; ++word) {
+        for (uint64_t open = here->openRuns[word]; open; open &= open - 1)
+            msHeapCloseRun(here, word * 64 + (size_t)__builtin_ctzll(open));
+        here->openRuns[word] = 0;
+    }
+    here->runBytes = 0;
+}
+
+static void msHeapAddToRun(msHeapHandle* here, msHeapHandle* owner, size_t slot, size_t size, msHeapCell* cell) {
+    msHeapRemoteRun* run = &here->runs[slot];
+    if (run->head && run->owner != owner) msHeapCloseRun(here, slot);
+    if (!run->head) {
+        run->owner = owner;
+        run->tail = cell;
+        here->openRuns[slot / 64] |= (uint64_t)1 << (slot % 64);
+    }
+    cell->next = run->head;
+    run->head = cell;
+    ++run->count;
+    here->runBytes += size;
+    if (here->runBytes >= MS_HEAP_REMOTE_BATCH_BYTES) msHeapCloseRuns(here);
 }
 
 static void msHeapPushRemoteBig(msHeapHandle* owner, msHeapBig* chunk) {
@@ -313,6 +400,7 @@ static void msHeapPushRemoteBig(msHeapHandle* owner, msHeapBig* chunk) {
 static msHeapHandle msHeapOnly;
 #define msHeapHere() MS_HEAP_REGION(&msHeapOnly)
 void msHeapThreadRelease(void) {}
+void msHeapThreadFlush(void) {}
 
 #endif
 
@@ -572,11 +660,9 @@ static void msHeapFetchRemoteCells(msHeapRegion* a, msHeapSmall* chunk) {
     msHeapCell** head = &msHeapOwnerOf(a)->sharedCells[chunk->base.size / MS_HEAP_ALIGN];
     if (!__atomic_load_n(head, __ATOMIC_RELAXED)) return;
     chunk->freeList = __atomic_exchange_n(head, NULL, __ATOMIC_ACQUIRE);
-    size_t total = 0;
-    for (msHeapCell* cell = chunk->freeList; cell; cell = cell->next) {
-        total += chunk->base.size;
-        if (msHeapPage(cell) != &chunk->base) ++chunk->foreignCells;
-    }
+    size_t cells = 0;
+    for (msHeapCell* run = chunk->freeList; run; run = msHeapRunTail(run)->next) cells += msHeapRunLength(run);
+    size_t total = cells * chunk->base.size;
     chunk->free += (uint32_t)total;
     a->occupied -= total;
 }
@@ -613,7 +699,7 @@ static inline __attribute__((always_inline)) void* msHeapTake(size_t size, int* 
             chunk->base.size = cellSize;
             chunk->next = chunk->prev = NULL;
             chunk->freeList = NULL;
-            chunk->foreignCells = chunk->alignOffset = 0;
+            chunk->alignOffset = 0;
             chunk->acc = (uint32_t)cellSize;
             chunk->free = (uint32_t)(MS_HEAP_PAGE_SIZE - sizeof(*chunk) - cellSize);
             msHeapFetchRemoteCells(a, chunk);
@@ -624,7 +710,6 @@ static inline __attribute__((always_inline)) void* msHeapTake(size_t size, int* 
             if (chunk->freeList) {
                 result = chunk->freeList;
                 chunk->freeList = chunk->freeList->next;
-                if (msHeapPage(result) != &chunk->base) --chunk->foreignCells;
                 *zeroed = 0;
             } else {
                 result = chunk->data + chunk->acc;
@@ -689,7 +774,8 @@ void msHeapFree(void* p) {
         size_t size = base->size;
 #if MS_HEAP_THREADS
         if (owner != here) {
-            msHeapPushRemoteCell(owner, size / MS_HEAP_ALIGN, p);
+            if (here) msHeapAddToRun(here, owner, size / MS_HEAP_ALIGN, size, p);
+            else msHeapPushRemoteRun(owner, size / MS_HEAP_ALIGN, p, p, 1);
             return;
         }
 #endif
@@ -702,7 +788,6 @@ void msHeapFree(void* p) {
             cell->next = active->freeList;
             active->freeList = cell;
             active->free += (uint32_t)size;
-            ++active->foreignCells;
         } else {
             cell->next = chunk->freeList;
             chunk->freeList = cell;
