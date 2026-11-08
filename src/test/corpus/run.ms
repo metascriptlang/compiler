@@ -408,9 +408,16 @@ function shellOut(cmd: string): string {
 // 150 lines of C and a stale copy would be worse than a rebuild.
 const WINTIME = OUT_DIR + "wintime.exe";
 
+// The prepared bundle msc builds Windows with when no --cc is given, as the words that drive its clang.
+function windowsBundleClang(): string {
+	const explicit = env.get("MSC_NATIVE_TOOLCHAIN");
+	const root = (explicit != "" ? explicit : env.get("USERPROFILE") + "/.metascript/msc-toolchain").replaceAll("\\", "/");
+	return "\"" + root + "/bin/clang.exe\" --no-default-config \"--config=" + root + "/runtime/windows/x86_64-windows-gnu.cfg\"";
+}
+
 function ensureWintime(): boolean {
 	if (!IS_WIN) { return true; }
-	const r = runCapture("zig cc -O2 src/test/corpus/wintime.c -o " + WINTIME + " -lpsapi");
+	const r = runCapture(windowsBundleClang() + " -O2 src/test/corpus/wintime.c -o " + WINTIME + " -lpsapi");
 	if (exists(WINTIME)) { return true; }
 	progress("  !! cannot build " + WINTIME + " — the Windows runner needs it for cell launch, sleep and RSS:");
 	progress("     " + r.output.trim());
