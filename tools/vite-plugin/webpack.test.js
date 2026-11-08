@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { createRequire } from "node:module";
@@ -8,6 +8,7 @@ import { test } from "node:test";
 import MetaScriptPlugin, { loader } from "./webpack.js";
 import metascriptLoader from "./webpackLoader.js";
 import { canonicalPath } from "./compilerCore.js";
+import { ownedOutputPattern } from "./sourceDeclarations.js";
 
 class Hook {
 	callbacks = [];
@@ -17,7 +18,11 @@ class Hook {
 
 function fixture(t) {
 	const root = canonicalPath(mkdtempSync(join(tmpdir(), "msc webpack ")));
-	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const callCounter = `${root}.calls`;
+	t.after(() => {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(callCounter, { force: true });
+	});
 	const entry = join(root, "main.ms");
 	const dependency = join(root, "types.jms");
 	writeFileSync(entry, "source");
@@ -26,7 +31,7 @@ function fixture(t) {
 	writeFileSync(msc, `#!/usr/bin/env node
 const fs = require("node:fs"), path = require("node:path");
 const state = JSON.parse(fs.readFileSync(path.join(__dirname, "state.json"), "utf8"));
-fs.appendFileSync(path.join(__dirname, "calls"), "call\\n");
+fs.appendFileSync(${JSON.stringify(callCounter)}, "call\\n");
 if (state.fail || (state.required && !fs.existsSync(state.required))) { process.stderr.write("fixture compiler diagnostic"); process.exit(2); }
 const out = process.argv.find(arg => arg.startsWith("--output=")).slice(9);
 for (const [name, text] of Object.entries(state.files)) {
@@ -43,11 +48,19 @@ fs.writeFileSync(path.join(out, "_manifest.json"), JSON.stringify(state.manifest
 			"nested/main.d.ts": "export declare const value: number;",
 		},
 	};
-	const save = () => writeFileSync(join(root, "state.json"), JSON.stringify(state));
+	const settle = (...files) => {
+		const before = new Date(Date.now() - 10_000);
+		for (const file of files) utimesSync(file, before, before);
+	};
+	const save = () => {
+		writeFileSync(join(root, "state.json"), JSON.stringify(state));
+		settle(join(root, "state.json"));
+	};
 	save();
+	settle(entry, dependency, msc);
 	const settings = { root, entry, msc, declaration: true };
-	const calls = () => existsSync(join(root, "calls")) ? readFileSync(join(root, "calls"), "utf8").trim().split("\n").length : 0;
-	return { root, entry, dependency, state, save, settings, calls };
+	const calls = () => existsSync(callCounter) ? readFileSync(callCounter, "utf8").trim().split("\n").length : 0;
+	return { root, entry, dependency, state, save, settle, settings, calls };
 }
 
 function fakeCompiler(root, plugin, hooks = {}) {
@@ -304,6 +317,7 @@ test("real webpack persistent cache restores host modules without skipping proje
 	const f = fixture(t);
 	const host = join(f.root, "host.js");
 	writeFileSync(host, "export const host = 1;");
+	f.settle(host);
 	const config = () => nativeConfig(f, new MetaScriptPlugin(f.settings), {
 		entry: host,
 		cache: { type: "filesystem", cacheDirectory: join(f.root, "webpack-cache"), name: "test" },
@@ -614,19 +628,31 @@ test("real webpack watch recovers missing new imports, deletion and restoration 
  memoryOutput(compiler);
  const queue = watchTestQueue(); const invalid = [];
  compiler.hooks.invalid.tap("test-observer",file => invalid.push(file));
+ const file = join(f.root,"editor-types/main.d.ms.ts");
  const events = [];
- const watching = compiler.watch({aggregateTimeout:10,ignored:/do-not-watch/},(error,stats) => { events.push({calls:f.calls(),invalid:[...invalid],modified:[...(compiler.modifiedFiles ?? [])],missing:existsSync(missing),types:existsSync(join(f.root,"editor-types/main.d.ms.ts")),errors:stats?.toString({all:false,errors:true})}); queue.push({error,stats}); });
+ const watching = compiler.watch({aggregateTimeout:10,ignored:"**/do-not-watch/**"},(error,stats) => {
+  const event = {error:error?.message,calls:f.calls(),errors:stats?.hasErrors(),types:existsSync(file),missing:existsSync(missing),invalid:[...invalid],modified:[...(compiler.modifiedFiles ?? [])],detail:stats?.toString({all:false,errors:true})};
+  events.push(event); queue.push(event);
+ });
  t.after(() => t.diagnostic(JSON.stringify(events)));
  t.after(() => close(compiler));
- let result = await queue.next(); assert.equal(result.error,null); assert.equal(result.stats.hasErrors(),true);
- const file = join(f.root,"editor-types/main.d.ms.ts"); assert.equal(existsSync(file),false);
- writeFileSync(missing,"new type"); result = await queue.next(); assert.equal(result.error,null); assert.equal(result.stats.hasErrors(),false); assert.ok(existsSync(file));
- rmSync(missing); result = await queue.next(); assert.equal(result.stats.hasErrors(),true); assert.equal(existsSync(file),false);
- writeFileSync(missing,"restored type"); result = await queue.next(); assert.equal(result.stats.hasErrors(),false); assert.ok(existsSync(file));
+ const compiled = async (calls,errors) => {
+  while (true) {
+   const event = await queue.next();
+   assert.equal(event.error,undefined);
+   if (event.calls === calls) { assert.equal(event.errors,errors); assert.equal(event.types,!errors); return; }
+   assert.ok(event.calls < calls,`a generation woken by a directory the plugin created must compile nothing: ${JSON.stringify(event)}`);
+  }
+ };
+ await compiled(1,true);
+ writeFileSync(missing,"new type"); await compiled(2,false);
+ rmSync(missing); await compiled(3,true);
+ writeFileSync(missing,"restored type"); await compiled(4,false);
  await new Promise((resolve,reject) => watching.close(error => error ? reject(error) : resolve()));
  await close(compiler);
- assert.equal(f.calls(),4); assert.equal(queue.pending,0);
- assert.equal(invalid.some(file => file.includes("editor-types") || file.includes(".metascript")),false);
+ assert.equal(f.calls(),4);
+ const outputs = ownedOutputPattern({outDir:"editor-types"},f.root,join(f.root,"node_modules/.metascript/webpack-"));
+ assert.deepEqual(invalid.filter(path => outputs.test(path)),[]);
  assert.ok(existsSync(file)); assert.equal(existsSync(join(f.root,"editor-types/.msc-source-lease")),false);
 });
 
