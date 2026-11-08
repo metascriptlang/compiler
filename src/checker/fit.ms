@@ -3543,8 +3543,6 @@ function owningEdge(t: Type): Type | null {
 	return owned ?? t.typeChildren.find((m) => m.kind == TypeKind.Ref) ?? null;
 }
 
-// An owned slot takes any reference of its class: the single-owner rule is checked where the value is
-// stored (lowerOwnedStores), so a value passed toward one is a plain counted reference.
 export function fitOwnership(ctx: CheckerContext, expr: Node, formal: Type, exprType: Type): Type | null {
 	return releaseOwnedRead(expr, formal, exprType);
 }

@@ -14,7 +14,7 @@ import { flowStart, flowStop } from "../compiler/flows";
 import { wrapElseIfWhen } from "../transform/lowering/jumpRetarget";
 import { Node, NodeKind, DecoratedDeclData, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, AssertStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, PropertyDeclData, DoWhileStmtData, MoveExprData, AwaitExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt, AttachedOp } from "../ast/node";
 import { forEachChild, anyDescendant, Visit } from "../ast/visitor";
-import { isSinkTypeForParam, unownedSlotOf, createPrimitive, typeDisplayName, unwrapRefNullUnion, isUncountedElement, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType, isBoolType, declGenericParams, ownedEdgeOf, hasNullMember } from "../checker/types";
+import { isSinkTypeForParam, unownedSlotOf, createPrimitive, typeDisplayName, unwrapRefNullUnion, isUncountedElement, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType, isBoolType, declGenericParams, hasNullMember } from "../checker/types";
 import { holdsNonNullRef } from "../checker/visibility";
 import { declaredTypeOfLocation } from "../checker/fit";
 import { getOpByKey } from "../codegen/c/types";
@@ -607,7 +607,7 @@ function keepArgumentAlive(arg: Node, dctx: DrcContext): Node {
 		(arg.data as CallExprData).arguments[0] = keepArgumentAlive(source, dctx);
 		return arg;
 	}
-	const copied = passCopyToSink(arg, dctx, false, false);
+	const copied = passCopyToSink(arg, dctx, false);
 	if (copied === arg || copied.resolvedSym == null) return arg;
 	registerVar(dctx, classifyRc(arg.nodeType, dctx), false, copied.resolvedSym);
 	return copied;
@@ -748,21 +748,11 @@ function reportUnavailableCopy(srcExpr: Node, rcInfo: RcInfo, viaDup: boolean, d
 	});
 }
 
-function reportOwnedCopy(srcExpr: Node, dctx: DrcContext): void {
-	const edge = ownedEdgeOf(srcExpr.nodeType);
-	if (edge == null || dctx.ctx.checkerCtx == null) return;
-	const message = `cannot copy '${moveSourceText(srcExpr)}': '${typeDisplayName(srcExpr.nodeType)}' holds the unique owning edge '${typeDisplayName(edge)}' — make this its last use, pass it with 'move', or read it as a plain reference`;
-	dctx.ctx.checkerCtx.errors.push({
-		message, line: srcExpr.location.line, column: srcExpr.location.column, fatal: false,
-	});
-}
-
-function passCopyToSink(srcExpr: Node, dctx: DrcContext, viaDup: boolean = false, userCopy: boolean = true): Node {
+function passCopyToSink(srcExpr: Node, dctx: DrcContext, viaDup: boolean = false): Node {
 	const rcInfo = sinkClassify(srcExpr.nodeType, dctx);
 	if (!rcInfo.needsCleanup) return srcExpr;
 	reportFailedMove(srcExpr, dctx);
 	reportUnavailableCopy(srcExpr, rcInfo, viaDup, dctx);
-	if (userCopy) reportOwnedCopy(srcExpr, dctx);
 
 	const loc = srcExpr.location;
 	const tmpSym = freshTempSym(dctx.ctx, "borrow", srcExpr.nodeType);
@@ -1061,7 +1051,7 @@ function processMove(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 			const rc = md.moveArg.kind == NodeKind.MemberExpr ? classifyMemberFieldRc(md.moveArg, dctx) : sinkClassify(md.moveArg.nodeType, dctx);
 			md.moveArg = destructiveMoveVar(md.moveArg, rc, dctx);
 		} else if (!reportUnsharableMove(md.moveArg, dctx)) {
-			md.moveArg = passCopyToSink(md.moveArg, dctx, false, false);
+			md.moveArg = passCopyToSink(md.moveArg, dctx, false);
 		}
 		return node;
 	}
@@ -1448,7 +1438,6 @@ function genCopy(stmt: Node, dest: Node, destSym: Symbol | null, rhs: Node, rcIn
 		flags: int32, dctx: DrcContext, loc: SourceLocation): Node {
 	reportFailedMove(rhs, dctx);
 	reportUnavailableCopy(rhs, rcInfo, false, dctx);
-	reportOwnedCopy(rhs, dctx);
 	// Binary copy (Named/String): =copy(&dest, src) handles old-value atomically
 	if (isBinaryCopy(rcInfo) && rcInfo.copyFn != null) {
 		const lhsExpr = resolveLhs(flags, dest, destSym, loc);

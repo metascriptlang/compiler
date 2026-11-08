@@ -408,7 +408,7 @@ function listMoves(u: Unit): void {
 			say(u, stage, "no-flow", m, text);
 			continue;
 		}
-		lockable.push({ move: m, place: p, event: { at, sym: at.resolvedSym, owner: false } });
+		lockable.push({ move: m, place: p, event: { at, sym: at.resolvedSym } });
 	}
 	if (lockable.length == 0) return;
 	const scan = new MoveScan();

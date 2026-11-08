@@ -2,7 +2,7 @@ import {
 	Node, NodeKind, Symbol, SymbolKind, FlowNode, FlowFlag, FlowList,
 	IdentifierData, BinaryExprData, MoveExprData, OutExprData, CallExprData, NewExprData,
 	HiddenDerefData, HiddenStdConvData, ArrayLiteralData, ObjectLiteralData, SpreadExprData,
-	VariableDeclData, ReturnStmtData, TypeAssertionData, UpdateExprData, Type, TypeKind, BlockStmtData, ProgramData,
+	TypeAssertionData, UpdateExprData, Type, TypeKind, BlockStmtData, ProgramData,
 	FunctionDeclData, MethodDeclData, ConstructorDeclData, ArrowFunctionData, FunctionExprData, MemberExprData, ArrayAccessData, TestDeclData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
@@ -11,13 +11,11 @@ import { CheckerContext, LockedMove, addError } from "./context";
 import { Overlap, Place, PlaceScope, StepKind, overlap, placeOf, placeScope, readsMovedValueThroughOwnCount } from "./places";
 import { routineBody } from "./effects";
 import { hasFlag, SymbolFlag } from "./symbol";
-import { ownedEdgeOf, isSinkTypeForParam, typeDisplayName } from "./types";
-import { calledRoutineType } from "./effects";
+import { isSinkTypeForParam } from "./types";
 
 export interface MoveEvent {
 	at: Node;
 	sym: Symbol;
-	owner: boolean;
 }
 
 interface Pending {
@@ -65,48 +63,10 @@ function movedIdent(move: Node): Node | null {
 	return arg != null && arg.kind == NodeKind.Identifier && movableSym(arg.resolvedSym) ? arg : null;
 }
 
-function take(scan: MoveScan, at: Node, owner: boolean): void {
+function take(scan: MoveScan, at: Node): void {
 	if (at.flowNode == null) return;
-	scan.moves.push({ at, sym: at.resolvedSym!, owner });
+	scan.moves.push({ at, sym: at.resolvedSym! });
 	scan.moved.add(at.resolvedSym!);
-}
-
-// A local that holds an owned edge, read where the value is consumed: the read is its last use, or a copy.
-function ownedLocalAt(expr: Node | null): Node | null {
-	let e = expr;
-	while (e != null && ownedEdgeOf(e.nodeType) != null) {
-		if (e.kind == NodeKind.Identifier) {
-			const sym = e.resolvedSym;
-			const decl = sym != null ? sym.declNode : null;
-			return sym != null && sym.symbolKind == SymbolKind.Variable && !hasFlag(sym, SymbolFlag.Global)
-				&& decl != null && decl.kind == NodeKind.VariableDecl ? e : null;
-		}
-		if (e.kind == NodeKind.HiddenStdConv || e.kind == NodeKind.HiddenSubConv) {
-			e = (e.data as HiddenStdConvData).convExpr;
-		} else if (e.kind == NodeKind.TypeAssertion) {
-			e = (e.data as TypeAssertionData).asExpr;
-		} else {
-			return null;
-		}
-	}
-	return null;
-}
-
-function consumed(scan: MoveScan, expr: Node | null): void {
-	const local = ownedLocalAt(expr);
-	if (local != null) take(scan, local, true);
-}
-
-function consumedArgs(scan: MoveScan, call: Node): void {
-	const args = (call.data as CallExprData).arguments;
-	const fnType = calledRoutineType(call);
-	if (fnType == null) return;
-	const formals: Type[] = fnType.typeChildren;
-	const offset = formals.length == args.length + 1 ? 1 : 0;
-	for (let i = 0; i < args.length; i += 1) {
-		const at = i + offset;
-		if (at < formals.length && isSinkTypeForParam(formals[at])) consumed(scan, args[i]);
-	}
 }
 
 function routineParams(node: Node): string[] | null {
@@ -150,19 +110,9 @@ function collectMoves(node: Node | null, scan: MoveScan, routines: Node[]): void
 			if (why != "") {
 				scan.faults.push({ at: arg!, why });
 			} else if (arg != null) {
-				take(scan, arg, false);
+				take(scan, arg);
 			}
 		},
-		NodeKind.VariableDecl => consumed(scan, (node.data as VariableDeclData).initializer),
-		NodeKind.ReturnStmt => consumed(scan, (node.data as ReturnStmtData).argument),
-		NodeKind.BinaryExpr => {
-			const d = node.data as BinaryExprData;
-			if (d.operator == "=") consumed(scan, d.right);
-		},
-		NodeKind.ArrayLiteral => { for (const el of (node.data as ArrayLiteralData).elements) consumed(scan, el); },
-		NodeKind.ObjectLiteral => { for (const prop of (node.data as ObjectLiteralData).properties) consumed(scan, prop); },
-		NodeKind.NewExpr => { for (const arg of (node.data as NewExprData).newArguments) consumed(scan, arg); },
-		NodeKind.CallExpr => consumedArgs(scan, node),
 		_ => {},
 	};
 	const routine = routineParams(node) != null;
@@ -340,11 +290,7 @@ function eventsOf(scan: MoveScan, sym: Symbol): HashMap<FlowNode, MoveEvent[]> {
 
 function report(ctx: CheckerContext, taker: MoveEvent, read: Node): void {
 	const name = (taker.at.data as IdentifierData).name;
-	const edge = ownedEdgeOf(taker.at.nodeType);
-	const message = taker.owner && edge != null
-		? `cannot copy '${name}': '${typeDisplayName(taker.at.nodeType)}' holds the unique owning edge '${typeDisplayName(edge)}' — make this its last use, pass it with 'move', or read it as a plain reference (read again at ${read.location.line}:${read.location.column})`
-		: `cannot move '${name}': variable is still used after this point (read at ${read.location.line}:${read.location.column}); assign it a new value before reading it again`;
-	addOnce(ctx, message, taker.at);
+	addOnce(ctx, `cannot move '${name}': variable is still used after this point (read at ${read.location.line}:${read.location.column}); assign it a new value before reading it again`, taker.at);
 }
 
 export function checkMovesIn(ctx: CheckerContext, root: Node | null): void {
@@ -538,7 +484,7 @@ function checkLockedMoves(ctx: CheckerContext, scan: MoveScan, locked: LockedMov
 		walkLockReads(w, body, null);
 		w.reads.push({ ident: event, at: arg, place: moved });
 		const events = new HashMap<FlowNode, MoveEvent[]>();
-		events.set(event.flowNode, [{ at: event, sym: moved.root, owner: false }]);
+		events.set(event.flowNode, [{ at: event, sym: moved.root }]);
 		const clean = new HashSet<FlowNode>();
 		const refilled = (flow: FlowNode): boolean => flow.flags.has(FlowFlag.Assignment) && refillAt(w, flow.node);
 		const written = w.indexWrites.find((ident) => ident.flowNode != null && reachingMove(scan, ident, events, clean, refilled) != null);
