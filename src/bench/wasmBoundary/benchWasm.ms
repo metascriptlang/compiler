@@ -45,9 +45,10 @@ export function sumSpan(xs: Readonly<Span<float32>>): float32 {
 }
 
 @wasm
-export function makeVec(n: int32): Vec<float32> {
-	let out: Vec<float32> = [];
-	for (let i = 0; i < n; i += 1) out.push((i as float32) + 0.5);
+export function makeVec(n: int32): Float32Array {
+	const out = new Float32Array(n);
+	const xs: Span<float32> = out;
+	for (let i = 0; i < n; i += 1) xs[i] = (i as float32) + 0.5;
 	return out;
 }
 
