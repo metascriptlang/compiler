@@ -143,6 +143,9 @@ enum {
 };
 
 #define MS_HEAP_MAX_BIG (((size_t)1 << 30) - ((size_t)1 << 24))
+#define MS_HEAP_SPREAD_STEP 64u
+#define MS_HEAP_SPREAD_SLOTS 64u
+#define MS_HEAP_SPREAD_STRIDE 27u
 
 _Static_assert(MS_HEAP_MIN_PAGES > 0, "MS_HEAP_MIN_PAGES must be positive");
 _Static_assert(MS_HEAP_MIN_PAGES <= MS_HEAP_MAX_BIG / MS_HEAP_PAGE_SIZE,
@@ -209,6 +212,7 @@ struct msHeapRegion {
     size_t nextChunkSize;
     size_t lastSize;
     int blockChunkGrowth;
+    uint32_t spreadSeq;
 };
 
 struct msHeapHandle {
@@ -219,6 +223,9 @@ struct msHeapHandle {
 };
 
 #define MS_HEAP_REGION(handle) (&(handle)->region)
+
+_Static_assert(offsetof(msHeapBig, data) + (MS_HEAP_SPREAD_SLOTS - 1) * MS_HEAP_SPREAD_STEP < MS_HEAP_PAGE_SIZE,
+               "a spread big payload must start in its chunk's first page, where msHeapPage finds the header");
 
 static msHeapHandle* msHeapOwnerOf(msHeapRegion* a) {
     return (msHeapHandle*)((unsigned char*)a - offsetof(msHeapHandle, region));
@@ -646,7 +653,9 @@ static inline __attribute__((always_inline)) void* msHeapTake(size_t size, int* 
     } else chunk = msHeapGetBig(a, bytes);
     a->occupied += chunk->base.size;
     *zeroed = chunk->zeroed != 0;
-    return chunk->data;
+    size_t slots = (chunk->base.size - offsetof(msHeapBig, data) - size) / MS_HEAP_SPREAD_STEP + 1;
+    if (slots > MS_HEAP_SPREAD_SLOTS) slots = MS_HEAP_SPREAD_SLOTS;
+    return chunk->data + (size_t)(a->spreadSeq++ * MS_HEAP_SPREAD_STRIDE % slots) * MS_HEAP_SPREAD_STEP;
 }
 
 void* msHeapAlloc(size_t size) {
