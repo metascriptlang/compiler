@@ -2469,7 +2469,7 @@ run_tools_lane() {
       printf 'FAIL %s: check\n' tools/vite-plugin/test.mjs; rc=1
     else
       if ! node --test --test-concurrency=1 tools/vite-plugin/test.test.mjs; then printf 'FAIL %s: self-test\n' tools/vite-plugin/test.test.mjs; rc=1; fi
-      if ! npm install --prefix tools/vite-plugin --ignore-scripts --no-save --no-package-lock --no-audit --no-fund; then
+      if ! npm ci --prefix tools/vite-plugin --ignore-scripts --prefer-offline --no-audit --no-fund; then
         echo 'native-adapters: dependency provisioning failed; wrapper was not run'
         printf 'FAIL %s: check\n' tools/vite-plugin/test.mjs; rc=1
       elif ! MSC="$CAND" VITE_MODULE="$TOP/tools/vite-plugin/node_modules/vite/dist/node/index.js" \

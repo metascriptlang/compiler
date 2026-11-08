@@ -47,7 +47,7 @@ test('prerequisite failure is nonzero, named and provides pinned provisioning gu
   });
   assert.equal(child.status, 1);
   assert.match(child.stderr, /FAIL native-adapters prerequisites:.*ENOENT/);
-  assert.match(child.stderr, /npm install --prefix tools\/vite-plugin --ignore-scripts --no-save --no-package-lock/);
+  assert.match(child.stderr, /npm ci --prefix tools\/vite-plugin --ignore-scripts/);
   for (const pin of ['vite@6.3.5', 'rollup@4.67.5+metascript.2', 'webpack@5.99.9', 'magic-string@0.30.17', 'typescript@5.9.2']) {
     assert.ok(child.stderr.includes(pin));
   }
@@ -134,7 +134,7 @@ for (const [name, npmStatus] of [
   const parsed = spawnSync('bash', ['-c', `${reds}\nreds_of tools "$1" 1`, '--', log], { cwd: repo, encoding: 'utf8' });
   assert.equal(parsed.status, 0, parsed.stderr);
   assert.equal(parsed.stdout, 'tools/vite-plugin/test.mjs\n');
-  assert.equal(readFileSync(join(dir, 'calls.npm'), 'utf8'), 'install --prefix tools/vite-plugin --ignore-scripts --no-save --no-package-lock --no-audit --no-fund\n');
+  assert.equal(readFileSync(join(dir, 'calls.npm'), 'utf8'), 'ci --prefix tools/vite-plugin --ignore-scripts --prefer-offline --no-audit --no-fund\n');
   const calls = readFileSync(join(dir, 'calls'), 'utf8').trim().split('\n');
   assert.equal(calls.length, npmStatus ? 1 : 2);
   if (!npmStatus) {
