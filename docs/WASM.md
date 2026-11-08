@@ -28,6 +28,7 @@ unless its `@columns` says otherwise.
 | Numbers, bool, enums | typed scalars; `int64`/`uint64` as BigInt, exact | `scalars`, `enumAsInt`, `wireMatrix` |
 | Strings | copied as WTF-8 both ways; lone surrogates, BOM, NUL survive | `strings`, `stringsLong`, `bomStrings`, `decodeWtf8`, `interned` |
 | Structs, `Vec<T>` of scalars, nullable | copied; nested fields by leaf | `copies`, `nullableCopies`, `nullableScalars` |
+| A TS typed array result (`Float32Array`, `Int32Array`, … the nine classes), nullable | copied into a new array of the same class over a copy of its whole buffer, `byteOffset` and `length` kept; the call throws when the array is still held on the wasm side, when its `ArrayBuffer` is held by another view, or when its class extends the declared one. A typed array parameter takes a `Span<T>`, which a typed array passes to | `typedArrayResults`, `typedArrayMisuse` |
 | `Span<T>` | lent for the call; a writable Span is copied back; two views of one array share one copy | `spans`, `spanOverlap`, `spanLendResize`, `scratchArena` |
 | Callbacks | lent for the call; one kept past the call is refused at compile time | `callback*`, `refusedKeptCallback*` |
 | Errors | a JS throw in a callback reaches the JS caller as the same object; a wasm throw reaches it as an Error; a trap ends the instance and every later call says so | `callbackThrow*`, `spanThrow`, `handleTrap` |
@@ -63,6 +64,13 @@ three handle checks and drop the site.
   object, so the choice is spelling, not cost.
 - **No finalizer** releases a handle: a GC finalizer runs late or never, which is wrong for GPU
   resources and callback environments; the dev leak report names what was never released.
+- **A typed array result is a copy only when nothing else can see the original.** A typed array is
+  a class instance with an identity, so the wasm side hands it over only when it holds the sole
+  reference to the array and to its `ArrayBuffer` and the instance is of the declared class;
+  otherwise the call throws naming `Float32Array.from(x)`, because a copy would split one object
+  into two that stop seeing each other's writes. Measured 2026-11-08 on m1m (Node): a `makeVec`
+  of 1000 written through a `Span` of the array returns in 0.69 us against wasm-bindgen's 0.89;
+  written through `out[i]` it takes 1.28 us, the typed array subscript's own cost in std.
 - **A release while a call lends the handle is deferred to the end of that call**, a deliberate
   divergence recorded as `paper/NIM-REF.md` RT-48.
 
