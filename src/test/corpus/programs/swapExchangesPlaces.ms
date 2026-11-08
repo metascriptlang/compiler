@@ -1,4 +1,4 @@
-// @stdout: fields 2 1 | elements 4 3 | across 5 6 | structs b:1 a:2 | strings y x | numbers 9 8 | index once 1 | ref param 11 10 | generic 13 12 | locals 15 14
+// @stdout: fields 2 1 | elements 4 3 | across 5 6 | structs b:1 a:2 | strings y x | numbers 9 8 | index once 1 | ref param 11 10 | generic 13 12 | other class 17 16 | locals 15 14
 // @stdout: hashmap 300 sum 45150 after delete 100 sum 14950
 // @stdout: hashset 300 sum 45150 after delete 100 sum 14950
 // @stdout: map first 0,1,2 last 297,298,299 after delete 100 order 0,3,6 .. 291,294,297
@@ -28,6 +28,15 @@ function viaRef(ref a: Leaf, ref b: Leaf): void {
 }
 
 function exchange<T>(ref a: T, ref b: T): void {
+	swap(a, b);
+}
+
+class Twig {
+	w: int32;
+	constructor(w: int32) { this.w = w; }
+}
+
+function trade(ref a: Twig, ref b: Twig): void {
 	swap(a, b);
 }
 
@@ -73,12 +82,16 @@ function places(): string {
 	exchange(g[0], g[1]);
 	const generic = `generic ${g[0].v} ${g[1].v}`;
 
+	const ts: Twig[] = [new Twig(16), new Twig(17)];
+	trade(ts[0], ts[1]);
+	const otherClass = `other class ${ts[0].w} ${ts[1].w}`;
+
 	let l1 = new Leaf(14);
 	let l2 = new Leaf(15);
 	swap(l1, l2);
 	const locals = `locals ${l1.v} ${l2.v}`;
 
-	return `${fields} | ${elements} | ${across} | ${structs} | ${strings} | ${numbers} | ${once} | ${viaRefs} | ${generic} | ${locals}`;
+	return `${fields} | ${elements} | ${across} | ${structs} | ${strings} | ${numbers} | ${once} | ${viaRefs} | ${generic} | ${otherClass} | ${locals}`;
 }
 
 function hashMapGrowth(): string {
