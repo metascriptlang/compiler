@@ -60,6 +60,16 @@ test "a debug build does not flag a class with a plain cycle" {
 	assert !typeInfoOf(r.value, "N").contains("MS_TYPE_FLAG_OWNED_CYCLE"), typeInfoOf(r.value, "N");
 }
 
+test "an array of value structs whose references are owned is acyclic; a plain reference in the struct is cyclic" {
+	assert verdict("struct P { v: Owned<N> | null; w: int32; }\nclass N { ps: P[] = []; }\nconst n = new N();", "N") == "acyclic";
+	assert verdict("struct P { v: Owned<N> | null; back: N | null; }\nclass N { ps: P[] = []; }\nconst n = new N();", "N") == "cyclic";
+}
+
+test "an owned Map or generic class of owned values is acyclic" {
+	assert verdict("class N { m: Owned<Map<string, Owned<N>>> = new Map<string, Owned<N>>(); }\nconst n = new N();", "N") == "acyclic";
+	assert verdict("class Box<T> { item: T; constructor(t: T) { this.item = t; } }\nclass N { b: Owned<Box<Owned<N>>> | null = null; }\nconst n = new N();", "N") == "acyclic";
+}
+
 test "an array of owned children beside a plain back edge is cyclic" {
 	assert verdict("class N { kids: Owned<N>[] = []; up: N | null = null; }\nconst n = new N();", "N") == "cyclic";
 }
