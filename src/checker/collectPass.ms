@@ -8,7 +8,7 @@ import { inferredType, noneType, createModuleNamespace, emptyType, createStruct,
 import { builtinKindName, builtinKindNamed, defineSymbol, defineSymbolAs, redefineSymbol, makeSymbol, makeSymbolState, initSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag, openScope, closeScope, ScopeKind, RoutineFlag, routineFlagSet, isCTagSpelling } from "./symbol";
 import { constantLiteralOf } from "./constFold";
 import { makeIntNumber } from "./literalNodes";
-import { receiverBaseName, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, sgRecordSym, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, replicaOriginOf, isStaticExtensionSym, newSym, isExportedBy, isNativePattern, reexportExt, isLifecycleHookName, isOutsideResolvedStd, routineKindFlag } from "./context";
+import { receiverBaseName, isEngineCheckMode, CheckerContext, ExportedSymInfo, exportSym, exportSymAs, noteImported, buildExportInfo, addError, addWarning, findExportedSymbol, findModuleExports, registerExtension, createExtMethod, isStaticExtensionFlag, isGenericFn, getExtTypeName, sgRecordSym, dispatchRecordMethod, nextDisamb, addRuntimeConverter, reportDuplicateConverter, stampOwner, stampItem, replicaOriginOf, isStaticExtensionSym, newSym, isExportedBy, isNativePattern, reexportExt, isLifecycleHookName, isOutsideResolvedStd, routineKindFlag } from "./context";
 import { isGlobalImport } from "./prelude";
 import { getParserDefines } from "../parser/context";
 import { definedValue } from "../compiler/defines";
@@ -628,7 +628,7 @@ function refusePlaceholderMismatch(ctx: CheckerContext, d: FunctionDeclData, pat
 
 export function collectFunction(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
-	if (d.params.length > 0 && d.params[0] == "this" && !node.flags.has(NodeFlag.Accessor)) {
+	if (d.params.length > 0 && d.params[0] == "this" && !node.flags.has(NodeFlag.Accessor) && !isEngineCheckMode()) {
 		addError(ctx, "a 'this' parameter is only valid as the receiver of a class method — an extension names its receiver: function " + d.fnName + "(this x: T)", node.location.line, node.location.column);
 	}
 	// 3-pass idempotency contract — Pass 1 (collect) parity with Pass 2/3.
