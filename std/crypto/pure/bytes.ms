@@ -12,8 +12,8 @@ when (!js) {
 /** An owned copy of the bytes an operation reads: a string is its UTF-8 bytes. */
 export function bytesOf<D extends ByteInput>(data: D): Buffer {
 	if (typeof data == "string") return Buffer.fromString(data, "utf8");
-	const owned = new Array<uint8>(0);
-	for (const b of data) owned.push(b);
+	const owned = new Array<uint8>(data.length);
+	for (let i = 0; i < data.length; i++) owned[i] = data[i];
 	return owned as Buffer;
 }
 
