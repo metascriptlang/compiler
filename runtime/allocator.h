@@ -60,6 +60,7 @@
 MS_HEAP_API void* msHeapAlloc(size_t size);
 MS_HEAP_API void* msHeapCalloc(size_t count, size_t size);
 MS_HEAP_API void* msHeapRealloc(void* p, size_t oldSize, size_t newSize);
+MS_HEAP_API void* msHeapRealloc0(void* p, size_t oldSize, size_t newSize);
 MS_HEAP_API void msHeapFree(void* p);
 MS_HEAP_API void msHeapReset(void);
 MS_HEAP_API void msHeapThreadRelease(void);

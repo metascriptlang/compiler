@@ -71,6 +71,7 @@ _Noreturn static inline void msRaiseOutOfMemory(void) {
 
 void* msArenaAlloc(size_t size);
 void* msRealloc(void* old, size_t old_size, size_t new_size);
+void* msRealloc0(void* old, size_t old_size, size_t new_size);
 void msArenaReset(void);
 
 #elif defined(MSOS_SOLANA)
@@ -182,6 +183,14 @@ static inline void* msRealloc(void* old, size_t old_size, size_t new_size) {
     return p;
 #else
     return msHeapRealloc(old, old_size, new_size);
+#endif
+}
+
+static inline void* msRealloc0(void* old, size_t old_size, size_t new_size) {
+#ifdef MSOS_SOLANA
+    return msRealloc(old, old_size, new_size);
+#else
+    return msHeapRealloc0(old, old_size, new_size);
 #endif
 }
 

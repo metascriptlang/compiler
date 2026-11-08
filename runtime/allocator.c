@@ -67,6 +67,12 @@ void* msHeapRealloc(void* p, size_t oldSize, size_t newSize) {
     return msHeapTagHere(realloc(block, sizeof(msHeapPairing) + newSize), newSize);
 }
 
+void* msHeapRealloc0(void* p, size_t oldSize, size_t newSize) {
+    unsigned char* result = msHeapRealloc(p, oldSize, newSize);
+    if (newSize > oldSize) __builtin_memset(result + oldSize, 0, newSize - oldSize);
+    return result;
+}
+
 void msHeapFree(void* p) { if (p) free(msHeapUntag(p)); }
 void msHeapReset(void) {}
 void msHeapThreadRelease(void) { msHeapAttached = 0; }
@@ -92,6 +98,12 @@ void* msHeapRealloc(void* p, size_t oldSize, size_t newSize) {
     (void)oldSize;
     void* result = realloc(p, newSize);
     if (!result && newSize) msHeapOutOfMemory();
+    return result;
+}
+
+void* msHeapRealloc0(void* p, size_t oldSize, size_t newSize) {
+    unsigned char* result = msHeapRealloc(p, oldSize, newSize);
+    if (newSize > oldSize) __builtin_memset(result + oldSize, 0, newSize - oldSize);
     return result;
 }
 
@@ -699,15 +711,77 @@ void msHeapFree(void* p) {
     }
 }
 
-void* msHeapRealloc(void* p, size_t oldSize, size_t newSize) {
+static size_t msHeapUsable(void* p) {
+    msHeapChunk* base = msHeapPage(p);
+    if (base->size <= MS_HEAP_PAGE_SIZE - sizeof(msHeapSmall)) return base->size;
+    return (uintptr_t)base + base->size - (uintptr_t)p;
+}
+
+static int msHeapGrowInPlace(void* p, size_t newSize, size_t* zeroFrom) {
+    msHeapChunk* base = msHeapPage(p);
+    if (base->size <= MS_HEAP_PAGE_SIZE - sizeof(msHeapSmall) || base->size > MS_HEAP_MAX_BIG) return 0;
+#if MS_HEAP_THREADS
+    if (base->owner != msHeapCurrent) return 0;
+#endif
+    size_t lead = (uintptr_t)p - (uintptr_t)base;
+    if (newSize > MS_HEAP_MAX_BIG - lead) return 0;
+    size_t bytes = msHeapRound(newSize + lead, MS_HEAP_PAGE_SIZE);
+    msHeapBig* chunk = (msHeapBig*)base;
+    msHeapRegion* a = MS_HEAP_REGION(base->owner);
+    size_t oldBytes = chunk->base.size;
+    uintptr_t address = (uintptr_t)chunk + oldBytes;
+    if (!msHeapContains(a, address)) return 0;
+    msHeapBig* right = (msHeapBig*)address;
+    if ((right->base.prevSize & 1) || oldBytes + right->base.size < bytes) return 0;
+    size_t rightZeroed = right->zeroed;
+    msHeapRemoveBig(a, right);
+    msHeapExclude(a, address);
+    chunk->base.size = oldBytes + right->base.size;
+    if (chunk->base.size >= bytes + MS_HEAP_PAGE_SIZE) {
+        msHeapBig* rest = msHeapSplit(a, chunk, bytes);
+        rest->zeroed = rightZeroed;
+        msHeapInsertBig(a, rest);
+    } else msHeapUpdateNext(a, chunk);
+    a->occupied += chunk->base.size - oldBytes;
+    *zeroFrom = rightZeroed ? oldBytes + offsetof(msHeapBig, data) - lead : newSize;
+    return 1;
+}
+
+static void* msHeapResize(void* p, size_t newSize, size_t* zeroFrom) {
+    *zeroFrom = newSize;
     if (!newSize) {
         msHeapFree(p);
         return NULL;
     }
-    void* result = msHeapAlloc(newSize);
-    if (p) {
-        msHeapCopy(result, p, oldSize < newSize ? oldSize : newSize);
-        msHeapFree(p);
+    int zeroed;
+    if (!p) {
+        void* fresh = msHeapTakeTracked(newSize, &zeroed);
+        if (zeroed) *zeroFrom = 0;
+        return fresh;
+    }
+    size_t usable = msHeapUsable(p);
+    if (newSize <= usable && newSize >= usable / 2) return p;
+    if (newSize > usable && msHeapGrowInPlace(p, newSize, zeroFrom)) return p;
+    void* result = msHeapTakeTracked(newSize, &zeroed);
+    size_t kept = usable < newSize ? usable : newSize;
+    msHeapCopy(result, p, kept);
+    msHeapFree(p);
+    if (zeroed) *zeroFrom = kept;
+    return result;
+}
+
+void* msHeapRealloc(void* p, size_t oldSize, size_t newSize) {
+    (void)oldSize;
+    size_t zeroFrom;
+    return msHeapResize(p, newSize, &zeroFrom);
+}
+
+void* msHeapRealloc0(void* p, size_t oldSize, size_t newSize) {
+    size_t zeroFrom;
+    void* result = msHeapResize(p, newSize, &zeroFrom);
+    if (newSize > oldSize) {
+        size_t end = zeroFrom < newSize ? zeroFrom : newSize;
+        if (end > oldSize) msHeapZero((unsigned char*)result + oldSize, end - oldSize);
     }
     return result;
 }

@@ -185,6 +185,12 @@ void* msRealloc(void* old, size_t oldSize, size_t newSize) {
     return header + 1;
 }
 
+void* msRealloc0(void* old, size_t oldSize, size_t newSize) {
+    unsigned char* p = msRealloc(old, oldSize, newSize);
+    if (p && newSize > oldSize) memset(p + oldSize, 0, newSize - oldSize);
+    return p;
+}
+
 void* realloc(void* old, size_t size) {
     if (!old) return malloc(size);
     const msAllocationHeader* header = (const msAllocationHeader*)old - 1;

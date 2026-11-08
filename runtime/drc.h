@@ -330,6 +330,17 @@ static inline void* msRealloc(void* old, size_t oldSize, size_t newSize) {
 	return p;
 }
 
+static inline void* msRealloc0(void* old, size_t oldSize, size_t newSize) {
+#if MS_HEAP_ENABLED
+	void* p = msHeapRealloc0(old, oldSize, newSize);
+#else
+	void* p = realloc(old, newSize);
+	if (p != NULL && newSize > oldSize) memset((char*)p + oldSize, 0, newSize - oldSize);
+#endif
+	if (p == NULL && newSize != 0) msRaiseOutOfMemory();
+	return p;
+}
+
 /* Arc<T> box: msAllocTyped, but starts at rc = MS_RC_INCREMENT (sole owner).
  * msAtomicDecRefIsLast frees when fetch_sub sees the old rc == MS_RC_INCREMENT
  * (Rust Arc convention) — an Arc must NOT start at the rc=0 "sole owner" of the
