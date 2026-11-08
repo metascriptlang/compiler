@@ -15,7 +15,7 @@ function functionBody(code: string, name: string): string {
 function checksIn(code: string, name: string): int32 {
 	const body = functionBody(code, name);
 	if (body == "") return -1;
-	return (body.split("if (msErr) goto").length - 1) as int32;
+	return (body.split("if (MS_UNLIKELY(msErr)) goto").length - 1) as int32;
 }
 
 const RAISES_SRC = `
@@ -287,14 +287,14 @@ test "raiseChecks: a new of a constructor that cannot raise adds no check to it 
 test "raiseChecks: a new of a constructor that raises frees the half-built object before it leaves" {
 	const result = compileToC(NEW_SRC);
 	assert result.ok, result.error;
-	assert functionBody(result.value, "makeLoud").contains("if (msErr) { msDecref(_new");
+	assert functionBody(result.value, "makeLoud").contains("if (MS_UNLIKELY(msErr)) { msDecref(_new");
 	assert checksIn(result.value, "useLoud") == 1;
 }
 
 test "raiseChecks: a half-built object whose class can form a cycle is released through the cycle collector" {
 	const result = compileToC(NEW_SRC);
 	assert result.ok, result.error;
-	assert functionBody(result.value, "makeLink").contains("if (msErr) { msDecrefCyclic(_new");
+	assert functionBody(result.value, "makeLink").contains("if (MS_UNLIKELY(msErr)) { msDecrefCyclic(_new");
 }
 
 const THROWS_SRC = `
