@@ -210,6 +210,7 @@ function stepSafe(n: Node, counter: Symbol): boolean {
 			|| n.kind == NodeKind.YieldExpr || n.kind == NodeKind.AwaitExpr || n.kind == NodeKind.DeferStmt) return false;
 	if (n.kind == NodeKind.BinaryExpr && isAssignOp((n.data as BinaryExprData).operator) && names((n.data as BinaryExprData).left, counter)) return false;
 	if (n.kind == NodeKind.UpdateExpr && names((n.data as UpdateExprData).updateArg, counter)) return false;
+	if (n.kind == NodeKind.HiddenAddr && names((n.data as HiddenDerefData).expr, counter)) return false;
 	const target = checkedScalarTarget(n);
 	if (target != null && names(target, counter)) return false;
 	let ok = true;
