@@ -25,7 +25,7 @@ unless its `@columns` says otherwise.
 
 | Surface | Contract | Pins |
 |---|---|---|
-| Numbers, bool, enums | typed scalars; `int64`/`uint64` as BigInt, exact | `scalars`, `enumAsInt`, `wireMatrix` |
+| Numbers, bool | typed scalars; `int64`/`uint64` as BigInt, exact; an enum crosses as its integer (`x as int32`), the enum type is refused | `scalars`, `enumAsInt`, `refusedEnum`, `wireMatrix` |
 | Strings | copied as WTF-8 both ways; lone surrogates, BOM, NUL survive | `strings`, `stringsLong`, `bomStrings`, `decodeWtf8`, `interned` |
 | Structs, `Vec<T>` of scalars, nullable | copied; nested fields by leaf | `copies`, `nullableCopies`, `nullableScalars` |
 | A TS typed array result (`Float32Array`, `Int32Array`, … the nine classes), nullable | copied into a new array of the same class over a copy of its whole buffer, `byteOffset` and `length` kept; the call throws when the array is still held on the wasm side, when its `ArrayBuffer` is held by another view, or when its class extends the declared one. A typed array parameter takes a `Span<T>`, which a typed array passes to | `typedArrayResults`, `typedArrayMisuse` |
@@ -98,12 +98,13 @@ Two checks answer it, both outside the land gate and the core tests, run on a ho
 
 - **Correct:** `src/test/wasmmix/check.sh` runs every wasm boundary unit test and every wasmmix
   program in all its columns; `WASMMIX_BROWSER=1 CHROME=<path>` adds headless Chrome. It ends with
-  `js-wasm check: GREEN` and exit 0. 2026-11-07 on m1m, main `804c40e867a`: units 170/170, wasmmix 79/79.
+  `js-wasm check: GREEN` and exit 0. 2026-11-08 on m1m with `WASMMIX_BROWSER=1`: main `5e2b893c5bc` units 174/174; main `d8910b23c70` wasmmix 80/80.
 - **Fast enough:** `CHROME=<path> src/bench/run.sh wasmBoundary` then `node src/bench/wasmBoundary/accept.mjs`
   times the same rows in MetaScript and wasm-bindgen on Node and in headless Chrome, and prints which
   rows meet wasm-bindgen on the same runtime (exit 0 when all do); neon-bindings, a native Node-only
   addon, is a reference column, not the bar (the person, 2026-11-08). Recipe, arms and the recorded
-  table: `src/bench/wasmBoundary/baseline.md`; 2026-11-08 it read 10 of 12 rows on Node and 11 of 12
+  table: `src/bench/wasmBoundary/baseline.md`; its 2026-11-08 ship baseline reads 11 of 12 rows on Node,
+  the twelfth (`primes`, wasm code rather than the boundary) parked on a compiler card, and 12 of 12
   in Chrome.
 
 ## Measurements
