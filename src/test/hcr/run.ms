@@ -1102,6 +1102,20 @@ function coreGroup(): void {
 	console.log(`ok   ${tag}`);
 }
 
+function immortalConstCell(): void {
+	const tag = "hcrImmortalConstCell";
+	for (const where of ["inImage", "inEntry"]) {
+		const dir = freshDir(`${TMP}/immortalConstCell/${where}`);
+		for (const f of ["app.ms", "logic.ms"]) copy(`${FIXTURES}/immortalConstCell/${where}/${f}`, `${dir}/${f}`);
+		const ran = msc(dir, ["run", "--hcr", "app.ms"]);
+		if (!succeeded(ran) || !both(ran).includes("HCR-ICC 3 true")) {
+			console.log(both(ran));
+			failWith(tag, `a module array const ${where == "inImage" ? "in an image" : "in the entry"} and a ref-array cell another image demands did not build under --hcr`);
+		}
+	}
+	console.log(`ok   ${tag}`);
+}
+
 function compileTimeHelper(): void {
 	const tag = "hcrCompileTimeHelper";
 	const dir = freshDir(`${TMP}/compileTimeHelper`);
@@ -2678,6 +2692,7 @@ const CASES: { name: string, run: () => void }[] = [
 	{ name: "hcrCoreGroup", run: coreGroup },
 	{ name: "hcrStdFirstUse", run: stdFirstUse },
 	{ name: "hcrCompileTimeHelper", run: compileTimeHelper },
+	{ name: "hcrImmortalConstCell", run: immortalConstCell },
 	{ name: "hcrSpanParamForward", run: spanParamForward },
 	{ name: "hcrStaticField", run: staticField },
 	{ name: "hcrSharedNativeFlags", run: sharedNativeFlags },
