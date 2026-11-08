@@ -57,6 +57,50 @@ median difference +0.6% at noise 0.3% (no mark); wall time noise 17% and max rss
 time and rss under that load show nothing. Not measured: Linux (`perf stat` and the `/usr/bin/time -f`
 fallback are written, not run), and `rt:` programs.
 
+## Measured 2026-11-08 — what a hello world links
+
+`console.log("hello world")`, `msc build --danger --strip`. Before = tree `3acc0d784e76`, after =
+tree `63f54c80d1bf`, which arms exit, thread-exit and future-release work from the facility that
+first needs it (`msArmExitDrain` in `runtime/promise/drain.c`, `msArmDeferredRelease` in
+`runtime/promise/pool.c`, `msTypeInfo.decrefFn` in `runtime/types.h`).
+
+| host | before | after | reference |
+|---|---|---|---|
+| rtx, Linux x86-64, file | 43,728 B | 19,720 B | C `puts`, `cc -O2 -s`: 14,464 B |
+| rtx, `size` text | 39,804 | 16,155 | C `puts`: 1,368 |
+| macOS arm64, `__text` | 35,264 | 12,160 | Nim 2.2.2 `-d:danger --mm:orc`: 17,608 |
+
+Before, three paths every program reaches kept the whole async runtime live although hello runs none
+of it (`-Wl,-why_live`, `--cc=clang --lto=off`): `main` called `msDrainAtExit` and
+`msReportOrphanFailures` directly; the allocator's first acquire arms the thread-exit release, whose
+`msThreadExit` called `msFutureReleaseFlush`; and every `msDecrefAny`, `msDecrefCyclic` and
+`MS_DECREF_EDGE` called `msFutureDeferredRelease` inline. Each reached the pool, the event loop, the
+selector, the actor scheduler and the completion queues. A cut of one path alone saves almost
+nothing (the drain hook alone: 5 KB of `__text` in a probe, 0 B in the shipped step), because the
+other two reach the same code.
+
+This follows Nim at 15dd34468 (read there; built with the installed 2.2.2): its generated `main` is
+only `NimMain(); return nim_program_result` (`compiler/cgen.nim` `genMainProcsWithResult`), exit work
+is registered by the module that needs it (`lib/std/exitprocs.nim` `addExitProc`),
+`afterThreadRuns` runs only the handlers registered through `onThreadDestruction`
+(`lib/system/threadimpl.nim`). Nim has no
+implicit exit drain; ours is NIM-REF RT-41.
+
+What a hello world still links, and why:
+- the region heap and the cycle collector (`msOrcCollect`, about 3.4 KB): the unhandled-exception
+  report `msTestErrorFlag` releases the exception, whose destroy reaches `msUnownedOutlives`. Nim's
+  hello links its allocator and `collectCycles` the same way: `nimTestErrorFlag` drops the cyclic
+  `Exception`, which reaches `registerCycle` (`lib/system/orc.nim`).
+- the thread-exit arm and its teardown (`msThreadAttach`, `msAfterThreadRuns`,
+  `msRootsThreadTeardown`, `msMsgPoolsThreadTeardown`, about 1 KB): a thread the runtime did not
+  start must release its region when it exits (ULTRALOCK M11), and the allocator cannot know which
+  thread that is. Nim's `afterThreadRuns` also calls its root teardown (`nimYrcThreadTeardown`) directly rather than through a handler.
+- `msDrainAtExit` and `msReportOrphanFailures` as two hook reads.
+
+Pinned by `src/test/guard/helloLinksNoAsyncRuntime.ms`. Not measured: Windows size, Nim built from
+15dd34468 (`~/projects/nim/bin` holds no compiler), and wasm/emcc, whose `main` calls
+`msDrainUntilIdle` directly.
+
 ## Measured 2026-10-29 — the native toolchain bundle against managed zig
 
 Self-host `msc build src/index.ms` (450 modules) on RTX (WSL2, 24 threads, pinned to 16 CPUs,
