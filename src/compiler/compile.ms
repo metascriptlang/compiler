@@ -3021,17 +3021,50 @@ test "a cross build's output suffix comes from the target os, not the host" {
 
 export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	const session = createBuildSession(false);
+	const verify = env.get("MSC_IC_VERIFY") == "1";
+	const verifyRoot = `${outDirForMode(opts.mode)}/icverify`;
+	const warmDir = `${verifyRoot}/oneshot-warm`;
+	if (verify) {
+		emptyDir(warmDir);
+		icVerifyWarmDir = warmDir;
+		icVerifyDiagnostics = [];
+		icVerifyCollecting = true;
+		setRecoverableBuild(true);
+	}
 	let status = BuildStatus.Built;
+	let stopped = false;
 	try {
 		status = buildC(entryPath, opts, session);
 	} catch (e) {
-		if (e.message != BUILD_STOPPED) printError(`internal: the build threw '${e.message}'`);
-		exit(1);
+		if (e.message != BUILD_STOPPED) {
+			printError(`internal: the build threw '${e.message}'`);
+			exit(1);
+		}
+		stopped = true;
 	}
-	if (status == BuildStatus.Stale) {
+	icVerifyWarmDir = "";
+	icVerifyCollecting = false;
+	setRecoverableBuild(false);
+	if (!stopped && status == BuildStatus.Stale) {
 		printError(`internal: a fresh build session reported stale state (${session.staleReason})`);
 		exit(1);
 	}
+	if (verify) verifyOneShot(warmDir, stopped, status, verifyRoot);
+	if (stopped) exit(1);
+}
+
+function verifyOneShot(warmDir: string, stopped: boolean, status: BuildStatus, verifyRoot: string): void {
+	if (!stopped && status == BuildStatus.UpToDate) {
+		printError("incremental verify: the build was up to date, so it emitted nothing to compare with a cold build; rebuild with --force");
+		exit(1);
+	}
+	const problems = verifyAgainstCold(warmDir, icVerifyDiagnostics, stopped, `${verifyRoot}/oneshot-cold`, `${verifyRoot}/oneshot-cache`);
+	if (problems.length > 0) {
+		for (const problem of problems) printError(`internal: incremental verify: ${problem}`);
+		exit(1);
+	}
+	if (stopped) console.log(`verify: ${icVerifyDiagnostics.length} diagnostics equal a failed cold build`);
+	else console.log(`verify: ${readDir(warmDir).length} C units and ${icVerifyDiagnostics.length} diagnostics equal a cold build`);
 }
 
 function emitDirOf(opts: CliOptions): string {
@@ -3697,7 +3730,7 @@ function buildCPhases(entryPath: string, opts: CliOptions, session: BuildSession
 	session.lastBuilt = false;
 	entryPath = canonicalModulePath(entryPath);
 	emitOnlyMode = opts.emitC;
-	icVerifyDump = session.keep ? icVerifyWarmDir : env.get("MSC_IC_VERIFY_DUMP");
+	icVerifyDump = icVerifyWarmDir != "" ? icVerifyWarmDir : env.get("MSC_IC_VERIFY_DUMP");
 	icVerifyDiagnosticsFile = session.keep ? "" : env.get("MSC_IC_VERIFY_DIAGNOSTICS");
 	initCache(opts.mode, opts.forceRebuild, trimRootList(opts));
 	resetCompiledOFiles();
