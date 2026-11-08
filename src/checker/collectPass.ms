@@ -294,9 +294,10 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 	refuseComputedGotoDecorator(ctx, dd.decorators);
 	const declName = getDeclName(dd.decoratedNode);
 	if (declName == "") return;
-	const named = lookupSymbol(ctx.table, declName);
-	if (named == null) return;
-	const sym = declaredSymbolOf(dd.decoratedNode, named);
+	const staticMember = staticExtSymOf(declOfStatement(dd.decoratedNode));
+	const named = staticMember == null ? lookupSymbol(ctx.table, declName) : null;
+	if (staticMember == null && named == null) return;
+	const sym = staticMember ?? declaredSymbolOf(dd.decoratedNode, named!);
 	const info = extractDecoratorInfo(ctx, node);
 	const handlerName = reloadHandlerExportName(ctx, dd, sym, declName);
 	const exportName = handlerName != "" ? handlerName : exportNameRejected ? "" : info.exportName;
