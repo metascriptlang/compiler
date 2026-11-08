@@ -316,3 +316,36 @@ test "a comptime block runs a Map helper declared in its own module on C and JS"
 	const failure = mapRuns(`import { Map } from "std/core/struct";\nfunction storedThree(k: string): int32 { const m = new Map<string, int32>(); m.set(k, 3); return m.get(k) ?? -1; }\nconst V: int32 = @comptime { return storedThree("a") + 30; };\nconsole.log(V);\n`);
 	assert failure == "", failure;
 }
+
+const GENERIC_BASE_LIB = `
+export class GBase<T> {
+	n: number;
+	constructor(n: number) { this.n = n; }
+}
+export class GSub extends GBase<int32> {
+	constructor(n: number) { super(n + 2); }
+}
+`;
+
+const GENERIC_BASE_MAIN = `import { GSub } from "./lib";
+import { Node, NodeKind } from "std/meta";
+
+macro built(): Node {
+	const v = "generic=" + new GSub(1).n.toString() + " bytes=" + new Uint8Array(4).length.toString();
+	return { kind: NodeKind.StringLiteral, line: 0, column: 0, value: v };
+}
+
+console.log(built());
+`;
+
+test "a macro builds a class through a generic base and a typed array from their build-checked bodies" {
+	const entries: MapEntry[] = [
+		{ entryPath: "engineGenericBase/lib.ms", entrySource: GENERIC_BASE_LIB },
+		{ entryPath: "engineGenericBase/main.ms", entrySource: GENERIC_BASE_MAIN },
+	];
+	const before = engineRecheckCount();
+	const c = compileProjectToCWithStd(entries, "engineGenericBase/main.ms");
+	assert !c.startsWith("ERROR:"), c;
+	assert c.includes("generic=3 bytes=4"), "the expansion is missing";
+	assert engineRecheckCount() == before, `${engineRecheckCount() - before} helpers checked again: ${engineRecheckReasons().join(", ")}`;
+}
