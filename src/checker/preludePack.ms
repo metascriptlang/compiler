@@ -64,7 +64,7 @@ import { env, argv } from "std/process";
 import { collectStaleEntries, markUsed, nowSeconds } from "../utils/stampDirs";
 import { hashContent, collectFilesSorted } from "../utils/contentHash";
 
-const PACK_MAGIC = "MSPK12";
+const PACK_MAGIC = "MSPK13";
 
 function hashFile(path: string): string {
 	const src = try readFile(path) catch "";

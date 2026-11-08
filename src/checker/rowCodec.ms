@@ -1,4 +1,4 @@
-import { Symbol, SymbolFlag, NodeFlag, SymbolKind, SymbolState, Type, TypeKind, TypeFlag, Node, NodeData, NodeKind, SourceLocation, CallingConvention, makeLoc, makeLocRange, createNodeAt, DeclKind, ExternKind, BuiltinKind, FlowNode, InlineFrame } from "../ast/node";
+import { Symbol, SymbolFlag, NodeFlag, SymbolKind, SymbolState, Type, TypeKind, TypeFlag, Node, NodeData, NodeKind, SourceLocation, CallingConvention, makeLoc, makeLocRange, createNodeAt, DeclKind, ExternKind, BuiltinKind, FlowNode, InlineFrame, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, InterfaceDeclData, EnumDeclData } from "../ast/node";
 import { FieldSink, nodeFields } from "../ast/fieldspec";
 import { emptyType, wellKnownTypes, getSysType, createResult } from "./types";
 import { makeSymbolState, builtinKindName, builtinKindNamed } from "./symbol";
@@ -128,124 +128,44 @@ export function intsCsv(arr: int32[]): string {
 	return out;
 }
 
-// Fast int-list scan: digit accumulation straight off charCodeAt (O(1) on the
-// ASCII pack), no per-element substring allocation. Escape sequences never
-// occur in int lists, so the separator scan can ignore backslashes.
-function parseIntsCsv(s: string): int32[] {
-	if (s == "-" || s == "") return [];
-	const out: int32[] = [];
-	let i = 0;
-	const n = s.length;
-	while (i < n) {
-		let neg = false;
-		if (s.charCodeAt(i) == 45) {
-			neg = true;
-			i = i + 1;
-		}
-		let v: int32 = 0;
-		while (i < n) {
-			const c = s.charCodeAt(i);
-			if (c >= 48 && c <= 57) {
-				v = v * 10 + (c - 48);
-				i = i + 1;
-				continue;
-			}
-			break;
-		}
-		out.push(neg ? -v : v);
-		i = i + 1;
-	}
-	return out;
+export function strListText(items: string[] | null): string {
+	if (items == null) return "-";
+	const parts: string[] = [];
+	for (const item of items) parts.push(escapeP(item));
+	return `${items.length}:${parts.join(",")}`;
 }
 
-// Scan with charCodeAt (O(1) on the ASCII pack) + one slice per element.
-// The old char-concat builder (`cur = cur + ch`) allocated a fresh string per
-// character — quadratic per field, and the reader splits hundreds of thousands
-// of them.
-function splitCsvRaw(s: string): string[] {
-	if (s == "") return [];
-	const out: string[] = [];
-	let start = 0;
-	let i = 0;
-	const n = s.length;
-	while (i < n) {
-		const c = s.charCodeAt(i);
-		if (c == 92) {
-			i = i + 2;
-			continue;
-		}
-		if (c == 44) {
-			out.push(s.slice(start, i));
-			start = i + 1;
-		}
-		i = i + 1;
-	}
-	if (n > start || out.length > 0) out.push(s.slice(start, n));
-	return out;
+export function intListText(items: int32[] | null): string {
+	if (items == null) return "-";
+	const parts: string[] = [];
+	for (const item of items) parts.push(`${item}`);
+	return `${items.length}:${parts.join(",")}`;
 }
 
-function floatsCsv(arr: number[] | null): string {
-	if (arr == null) return "-";
-	if (arr.length == 0) return "";
-	let out = "";
-	let i = 0;
-	while (i < arr.length) {
-		if (i > 0) out = out + ",";
-		out = out + `${arr[i]}`;
-		i = i + 1;
-	}
-	return out;
+function floatListText(items: number[]): string {
+	const parts: string[] = [];
+	for (const item of items) parts.push(`${item}`);
+	return `${items.length}:${parts.join(",")}`;
 }
 
-function parseFloatsCsv(s: string): number[] {
-	if (s == "-" || s == "") return [];
-	const parts = splitCsvRaw(s);
-	const out: number[] = [];
-	for (const p of parts) out.push(p.parseFloat());
-	return out;
+function locText(l: SourceLocation | null): string {
+	if (l == null) return "-";
+	return `${l.line}/${l.column}/${l.endLine}/${l.endColumn}`;
 }
 
-function locCsv4(loc: SourceLocation | null): string {
-	if (loc == null) return "0,0,0,0";
-	return `${loc.line},${loc.column},${loc.endLine},${loc.endColumn}`;
-}
-
-// SourceLocation[] flattening: "-" = null, "" = empty, else 4 ints per loc.
-function locsCsv(locs: SourceLocation[] | null): string {
+function locListText(locs: SourceLocation[] | null): string {
 	if (locs == null) return "-";
-	if (locs.length == 0) return "";
-	let out = "";
-	let i = 0;
-	while (i < locs.length) {
-		if (i > 0) out = out + ",";
-		out = out + locCsv4(locs[i]);
-		i = i + 1;
-	}
-	return out;
+	const parts: string[] = [];
+	for (const l of locs) parts.push(locText(l));
+	return `${locs.length}:${parts.join(",")}`;
 }
 
-function parseLoc(s: string): SourceLocation {
-	const p = parseIntsCsv(s);
-	if (p.length == 0) return makeLoc(0, 0);
-	const l = makeLoc(p[0], p.length > 1 ? p[1] : 0);
-	if (p.length > 2) l.endLine = p[2];
-	if (p.length > 3) l.endColumn = p[3];
-	return l;
+function nullListError(owner: string, field: string): Error {
+	return new Error(`internal: ${owner} holds null in '${field}', a list whose type holds no null`);
 }
 
-function parseLocs(s: string): SourceLocation[] {
-	if (s == "-" || s == "") return [];
-	const p = parseIntsCsv(s);
-	const out: SourceLocation[] = [];
-	let k = 0;
-	while (k + 3 < p.length) {
-		const l = makeLoc(p[k], p[k + 1]);
-		l.endLine = p[k + 2];
-		l.endColumn = p[k + 3];
-		out.push(l);
-		k = k + 4;
-	}
-	return out;
+function nodeOwner(i: int32, n: Node): string {
+	return `node ${i} (${n.kind.toString()})`;
 }
 
 // Writer-side node/type index views for the top-level payload emitter —
@@ -267,50 +187,69 @@ function idxTypeP(t: Type | null): int32 {
 
 function idxsP(arr: Node[] | null): string {
 	if (arr == null) return "-";
-	if (arr.length == 0) return "";
-	let out = "";
-	let i = 0;
-	while (i < arr.length) {
-		if (i > 0) out = out + ",";
-		out = out + idxNodeP(arr[i]);
-		i = i + 1;
-	}
-	return out;
+	const ids: int32[] = [];
+	for (const n of arr) ids.push(idxNodeP(n));
+	return intListText(ids);
 }
 
-function nestedIdxsP(arrs: Node[][] | null): string {
-	if (arrs == null) return "-";
-	let out = "";
-	let i = 0;
-	while (i < arrs.length) {
-		out = out + idxsP(arrs[i]) + ";";
-		i = i + 1;
-	}
-	return out;
+function nestedIdxsP(rows: Node[][]): string {
+	const parts: string[] = [];
+	for (const row of rows) parts.push(idxsP(row));
+	return `${parts.length}:${parts.join(";")}`;
 }
 
-// Emit-phase sink: appends each field's serialized column. Byte-for-byte the
-// same output the pre-sink emitNodePayload produced (join("\t") === the old
-// template's \t separators) — verified by pack byte-identity.
+function nullRowPath(rows: Node[][] | null): string | null {
+	if (rows == null) return "";
+	for (let k = 0; k < rows.length; k += 1) {
+		if (rows[k] == null) return `[${k}]`;
+	}
+	return null;
+}
+
+// Emit-phase sink: appends each field's serialized column.
 let _payloadCols: string[] = [];
+let _payloadAt: int32 = -1;
+let _payloadNode: Node | null = null;
+
+function payloadNullList(field: string): Error {
+	return nullListError(nodeOwner(_payloadAt, _payloadNode!), field);
+}
 
 const emitSink: FieldSink = {
 	node: (name: string, x: Node | null): void => { _payloadCols.push(`${idxNodeP(x)}`); },
-	nodes: (name: string, a: Node[] | null): void => { _payloadCols.push(idxsP(a)); },
-	nodesNested: (name: string, a: Node[][] | null): void => { _payloadCols.push(nestedIdxsP(a)); },
+	nodes: (name: string, a: Node[] | null): void => {
+		if (a == null) throw payloadNullList(name);
+		_payloadCols.push(idxsP(a));
+	},
+	nodesNested: (name: string, a: Node[][] | null): void => {
+		const missing = nullRowPath(a);
+		if (missing != null) throw payloadNullList(name + missing);
+		_payloadCols.push(nestedIdxsP(a!));
+	},
 	typ: (name: string, t: Type | null): void => { _payloadCols.push(`${idxTypeP(t)}`); },
 	str: (name: string, s: string): void => { _payloadCols.push(escapeP(s)); },
-	strArr: (name: string, a: string[] | null): void => { _payloadCols.push(joinCsv(a != null ? a : [])); },
+	strArr: (name: string, a: string[] | null): void => {
+		if (a == null) throw payloadNullList(name);
+		_payloadCols.push(strListText(a));
+	},
 	integer: (name: string, v: int64): void => { _payloadCols.push(`${v}`); },
 	float: (name: string, v: float64): void => { _payloadCols.push(`${v}`); },
 	bool: (name: string, b: boolean): void => { _payloadCols.push(b ? "1" : "0"); },
-	loc: (name: string, l: SourceLocation | null): void => { _payloadCols.push(locCsv4(l)); },
-	locs: (name: string, l: SourceLocation[] | null): void => { _payloadCols.push(locsCsv(l)); },
-	floats: (name: string, a: number[] | null): void => { _payloadCols.push(floatsCsv(a)); },
+	loc: (name: string, l: SourceLocation | null): void => { _payloadCols.push(locText(l)); },
+	locs: (name: string, l: SourceLocation[] | null): void => {
+		if (l == null) throw payloadNullList(name);
+		_payloadCols.push(locListText(l));
+	},
+	floats: (name: string, a: number[] | null): void => {
+		if (a == null) throw payloadNullList(name);
+		_payloadCols.push(floatListText(a));
+	},
 };
 
-function emitNodePayloadViaSink(n: Node): string {
+function emitNodePayloadViaSink(at: int32, n: Node): string {
 	_payloadCols = [];
+	_payloadAt = at;
+	_payloadNode = n;
 	nodeFields(n, emitSink);
 	return _payloadCols.join("\t");
 }
@@ -415,16 +354,6 @@ export function str(this r: PackReader): string {
 	return text;
 }
 
-// A field that is usually "-", read without a slice.
-export function dashOrStr(this r: PackReader): string {
-	const n = r.b.length;
-	if (r.last == 9 && r.pos < n && r.b[r.pos] == 45 && (r.pos + 1 == n || r.b[r.pos + 1] == 9 || r.b[r.pos + 1] == 10)) {
-		r.finish(r.pos + 1);
-		return "-";
-	}
-	return r.str();
-}
-
 export function text(this r: PackReader): string {
 	return unescapeP(r.str());
 }
@@ -450,14 +379,269 @@ export function typeRef(this r: PackReader, types: Type[]): Type | null {
 	return v >= 0 && v < types.length ? types[v as int32] : null;
 }
 
-// Same reading as parseNodeArr: "-" and "" are the empty list; an index outside the pack reads as null.
-export function nodeArr(this r: PackReader, nodes: Node[]): Node[] {
-	const out: Node[] = [];
-	for (const v of r.ints()) out.push(v >= 0 && v < nodes.length ? nodes[v] : null as unknown as Node);
+function expect(this r: PackReader, c: int32, end: int32): void {
+	if (r.pos < end && (r.b[r.pos] as int32) == c) r.pos += 1;
+	else r.bad = true;
+}
+
+function intAt(this r: PackReader, end: int32): int32 {
+	const negative = r.pos < end && r.b[r.pos] == 45;
+	if (negative) r.pos += 1;
+	const digits = r.pos;
+	let value: int64 = 0;
+	while (r.pos < end) {
+		const d = (r.b[r.pos] as int32) - 48;
+		if (d < 0 || d > 9) break;
+		value = value * 10 + (d as int64);
+		if (value > 2147483648) {
+			r.bad = true;
+			return 0;
+		}
+		r.pos += 1;
+	}
+	if (r.pos == digits || (!negative && value > 2147483647)) {
+		r.bad = true;
+		return 0;
+	}
+	return (negative ? -value : value) as int32;
+}
+
+// -1 for the null mark "-"; otherwise the count before ':', with pos after it.
+function listHead(this r: PackReader, end: int32): int32 {
+	if (end == r.pos + 1 && r.b[r.pos] == 45) {
+		r.pos = end;
+		return -1;
+	}
+	const digits = r.pos;
+	let count: int32 = 0;
+	while (r.pos < end && count <= end - digits) {
+		const d = (r.b[r.pos] as int32) - 48;
+		if (d < 0 || d > 9) break;
+		count = count * 10 + d;
+		r.pos += 1;
+	}
+	if (r.pos == digits) r.bad = true;
+	r.expect(58, end);
+	if (count > end - r.pos + 1) r.bad = true;
+	return r.bad ? -1 : count;
+}
+
+function intsUntil(this r: PackReader, end: int32): int32[] | null {
+	const count = r.listHead(end);
+	if (count < 0) return null;
+	const out: int32[] = [];
+	for (let k = 0; k < count && !r.bad; k += 1) {
+		if (k > 0) r.expect(44, end);
+		out.push(r.intAt(end));
+	}
+	if (r.pos != end) r.bad = true;
 	return out;
 }
 
-// Same reading as parseIntsCsv: "-" and "" are the empty list, anything after a number is skipped.
+function rawItems(this r: PackReader, end: int32): string[] | null {
+	const count = r.listHead(end);
+	if (count < 0) return null;
+	const out: string[] = [];
+	let start = r.pos;
+	for (let i = r.pos; i < end; i += 1) {
+		if (r.b[i] != 44) continue;
+		out.push(i > start ? r.s.byteSlice(start, i) : "");
+		start = i + 1;
+	}
+	if (count > 0) out.push(end > start ? r.s.byteSlice(start, end) : "");
+	else if (end > r.pos) r.bad = true;
+	if (out.length != count) r.bad = true;
+	return out;
+}
+
+function locAt(this r: PackReader, end: int32): SourceLocation | null {
+	if (r.pos < end && r.b[r.pos] == 45 && (r.pos + 1 == end || r.b[r.pos + 1] == 44)) {
+		r.pos += 1;
+		return null;
+	}
+	const line = r.intAt(end);
+	r.expect(47, end);
+	const column = r.intAt(end);
+	r.expect(47, end);
+	const endLine = r.intAt(end);
+	r.expect(47, end);
+	return makeLocRange(line, column, endLine, r.intAt(end));
+}
+
+export function nullableInts(this r: PackReader): int32[] | null {
+	if (r.last != 9) {
+		r.bad = true;
+		return null;
+	}
+	const end = r.fieldEnd();
+	const out = r.intsUntil(end);
+	r.finish(end);
+	return out;
+}
+
+export function intList(this r: PackReader): int32[] {
+	const out = r.nullableInts();
+	if (out != null) return out;
+	r.bad = true;
+	return [];
+}
+
+export function nullableStrs(this r: PackReader): string[] | null {
+	if (r.last != 9) {
+		r.bad = true;
+		return null;
+	}
+	const end = r.fieldEnd();
+	const raw = r.rawItems(end);
+	r.finish(end);
+	if (raw == null) return null;
+	const out: string[] = [];
+	for (const item of raw) out.push(unescapeP(item));
+	return out;
+}
+
+export function strList(this r: PackReader): string[] {
+	const out = r.nullableStrs();
+	if (out != null) return out;
+	r.bad = true;
+	return [];
+}
+
+export function floatList(this r: PackReader): number[] {
+	if (r.last != 9) {
+		r.bad = true;
+		return [];
+	}
+	const end = r.fieldEnd();
+	const raw = r.rawItems(end);
+	r.finish(end);
+	const out: number[] = [];
+	if (raw == null) {
+		r.bad = true;
+		return out;
+	}
+	for (const item of raw) {
+		if (item == "") r.bad = true;
+		out.push(item.parseFloat());
+	}
+	return out;
+}
+
+export function location(this r: PackReader): SourceLocation | null {
+	if (r.last != 9) {
+		r.bad = true;
+		return null;
+	}
+	const end = r.fieldEnd();
+	const l = r.locAt(end);
+	if (r.pos != end) r.bad = true;
+	r.finish(end);
+	return l;
+}
+
+export function nullableLocs(this r: PackReader): SourceLocation[] | null {
+	if (r.last != 9) {
+		r.bad = true;
+		return null;
+	}
+	const end = r.fieldEnd();
+	const count = r.listHead(end);
+	let out: SourceLocation[] | null = null;
+	if (count >= 0) {
+		const locs: SourceLocation[] = [];
+		for (let k = 0; k < count && !r.bad; k += 1) {
+			if (k > 0) r.expect(44, end);
+			locs.push(r.locAt(end) as SourceLocation);
+		}
+		if (r.pos != end) r.bad = true;
+		out = locs;
+	}
+	r.finish(end);
+	return out;
+}
+
+export function locList(this r: PackReader): SourceLocation[] {
+	const out = r.nullableLocs();
+	if (out != null) return out;
+	r.bad = true;
+	return [];
+}
+
+export function idRows(this r: PackReader): int32[][] {
+	const rows: int32[][] = [];
+	if (r.last != 9) {
+		r.bad = true;
+		return rows;
+	}
+	const end = r.fieldEnd();
+	const count = r.listHead(end);
+	if (count < 0) r.bad = true;
+	for (let k = 0; k < count && !r.bad; k += 1) {
+		if (k > 0) r.expect(59, end);
+		let rowEnd = r.pos;
+		while (rowEnd < end && r.b[rowEnd] != 59) rowEnd += 1;
+		const row = r.intsUntil(rowEnd);
+		if (row == null) r.bad = true;
+		else rows.push(row);
+	}
+	if (r.pos != end) r.bad = true;
+	r.finish(end);
+	return rows;
+}
+
+function refsFit(ids: int32[] | null, count: int32, allowNone: boolean): boolean {
+	if (ids == null) return true;
+	const least = allowNone ? -1 : 0;
+	for (const k of ids) {
+		if (k < least || k >= count) return false;
+	}
+	return true;
+}
+
+function nodesAt(ids: int32[], nodes: Node[]): Node[] {
+	const out: Node[] = [];
+	for (const k of ids) out.push(k >= 0 ? nodes[k] : null as unknown as Node);
+	return out;
+}
+
+function optionalNodesAt(ids: int32[], nodes: Node[]): (Node | null)[] {
+	const out: (Node | null)[] = [];
+	for (const k of ids) out.push(k >= 0 ? nodes[k] : null);
+	return out;
+}
+
+function typesAt(ids: int32[], types: Type[]): Type[] {
+	const out: Type[] = [];
+	for (const k of ids) out.push(types[k]);
+	return out;
+}
+
+function symsAt(ids: int32[], syms: Symbol[]): Symbol[] {
+	const out: Symbol[] = [];
+	for (const k of ids) out.push(syms[k]);
+	return out;
+}
+
+export function nodeList(this r: PackReader, nodes: Node[]): Node[] {
+	const ids = r.intList();
+	if (refsFit(ids, nodes.length, true)) return nodesAt(ids, nodes);
+	r.bad = true;
+	return [];
+}
+
+export function nodeRows(this r: PackReader, nodes: Node[]): Node[][] {
+	const out: Node[][] = [];
+	for (const ids of r.idRows()) {
+		if (!refsFit(ids, nodes.length, true)) {
+			r.bad = true;
+			return [];
+		}
+		out.push(nodesAt(ids, nodes));
+	}
+	return out;
+}
+
+// The table rows' index lists: "-" and "" are the empty list, anything after a number is skipped.
 export function ints(this r: PackReader): int32[] {
 	const out: int32[] = [];
 	if (r.last != 9) {
@@ -490,72 +674,8 @@ export function ints(this r: PackReader): int32[] {
 	return out;
 }
 
-// idxs-convention parse: "-" = null, "0" = empty, else comma list of N idx.
-// idxs-convention parse: "-"/"" = empty list; a bare "0" is a REAL one-element
-// list [nodes[0]] — the empty marker is "" (writer idxs/idxsP), never "0".
-// Digit accumulation straight off charCodeAt (O(1) on the ASCII pack).
-function parseNodeIdxList(s: string, nodes: Node[]): (Node | null)[] {
-	if (s == "-" || s == "") return [];
-	const out: (Node | null)[] = [];
-	let i = 0;
-	const n = s.length;
-	while (i < n) {
-		let neg = false;
-		if (s.charCodeAt(i) == 45) {
-			neg = true;
-			i = i + 1;
-		}
-		let v: int32 = 0;
-		while (i < n) {
-			const c = s.charCodeAt(i);
-			if (c >= 48 && c <= 57) {
-				v = v * 10 + (c - 48);
-				i = i + 1;
-				continue;
-			}
-			break;
-		}
-		const idx = neg ? -v : v;
-		out.push(idx >= 0 && idx < nodes.length ? nodes[idx] : null);
-		i = i + 1;
-	}
-	return out;
-}
-
-function parseNodeArr(s: string, nodes: Node[]): Node[] {
-	const r = parseNodeIdxList(s, nodes);
-	const out: Node[] = [];
-	for (const n of r) out.push(n != null ? n : null as unknown as Node);
-	return out;
-}
-
 function nd(i: int32, nodes: Node[]): Node | null {
 	return i >= 0 && i < nodes.length ? nodes[i] : null;
-}
-
-function splitRows(s: string): string[] {
-	const out: string[] = [];
-	let cur = "";
-	let i = 0;
-	while (i < s.length) {
-		const ch = s.charAt(i);
-		if (ch == ";") {
-			out.push(cur);
-			cur = "";
-		} else {
-			cur = cur + ch;
-		}
-		i = i + 1;
-	}
-	return out;
-}
-
-function parseNestedNodeArrs(s: string, nodes: Node[]): Node[][] {
-	if (s == "-" || s == "") return [];
-	const parts = splitRows(s);
-	const out: Node[][] = [];
-	for (const p of parts) out.push(parseNodeArr(p, nodes));
-	return out;
 }
 
 // Mirror of emitNodePayload — same kinds, same field order. `f` holds the
@@ -575,20 +695,20 @@ function buildNodeData(kind: NodeKind, rd: PackReader, nodes: Node[], types: Typ
 	if (kind == NodeKind.BinaryExpr) return { operator: rd.text(), left: rd.nodeRef(nodes) as Node, right: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.UnaryExpr) return { unaryOp: rd.text(), operand: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.UpdateExpr) return { updateOp: rd.text(), updateArg: rd.nodeRef(nodes) as Node, isPrefix: rd.flag() } as NodeData;
-	if (kind == NodeKind.CallExpr) return { callee: rd.nodeRef(nodes) as Node, arguments: rd.nodeArr(nodes), isDirectCall: rd.flag(), resolvedOverloadIdx: rd.str().parseFloat() } as NodeData;
+	if (kind == NodeKind.CallExpr) return { callee: rd.nodeRef(nodes) as Node, arguments: rd.nodeList(nodes), isDirectCall: rd.flag(), resolvedOverloadIdx: rd.str().parseFloat() } as NodeData;
 	if (kind == NodeKind.MemberExpr) return { object: rd.nodeRef(nodes) as Node, property: rd.text(), isOptional: rd.flag() } as NodeData;
 	if (kind == NodeKind.ArrayAccess) return { array: rd.nodeRef(nodes) as Node, index: rd.nodeRef(nodes) as Node } as NodeData;
-	if (kind == NodeKind.ObjectLiteral) return { properties: rd.nodeArr(nodes), keys: splitCsv(rd.str()), keyLocations: parseLocs(rd.str()) } as NodeData;
-	if (kind == NodeKind.ArrayLiteral) return { elements: rd.nodeArr(nodes) } as NodeData;
-	if (kind == NodeKind.ArrowFunction) return { arrowParams: splitCsv(rd.str()), arrowParamTypes: splitCsv(rd.str()), arrowBody: rd.nodeRef(nodes) as Node, arrowFlags: rd.text(), arrowReturnType: rd.text(), arrowDefaults: rd.nodeArr(nodes) } as NodeData;
-	if (kind == NodeKind.FunctionExpr) return { funcExprParams: splitCsv(rd.str()), funcExprParamTypes: splitCsv(rd.str()), funcExprBody: rd.nodeRef(nodes) as Node, funcExprFlags: rd.text(), funcExprReturnType: rd.text() } as NodeData;
+	if (kind == NodeKind.ObjectLiteral) return { properties: rd.nodeList(nodes), keys: rd.strList(), keyLocations: rd.locList() } as NodeData;
+	if (kind == NodeKind.ArrayLiteral) return { elements: rd.nodeList(nodes) } as NodeData;
+	if (kind == NodeKind.ArrowFunction) return { arrowParams: rd.strList(), arrowParamTypes: rd.strList(), arrowBody: rd.nodeRef(nodes) as Node, arrowFlags: rd.text(), arrowReturnType: rd.text(), arrowDefaults: rd.nodeList(nodes) } as NodeData;
+	if (kind == NodeKind.FunctionExpr) return { funcExprParams: rd.strList(), funcExprParamTypes: rd.strList(), funcExprBody: rd.nodeRef(nodes) as Node, funcExprFlags: rd.text(), funcExprReturnType: rd.text() } as NodeData;
 	if (kind == NodeKind.TypeAssertion) return { asExpr: rd.nodeRef(nodes) as Node, asType: rd.text() } as NodeData;
 	if (kind == NodeKind.ConditionalExpr) return { ternaryCondition: rd.nodeRef(nodes) as Node, ternaryConsequent: rd.nodeRef(nodes) as Node, ternaryAlternate: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.SpreadExpr) return { spreadArg: rd.nodeRef(nodes) as Node } as NodeData;
-	if (kind == NodeKind.NewExpr) return { newCallee: rd.nodeRef(nodes) as Node, newArguments: rd.nodeArr(nodes) } as NodeData;
+	if (kind == NodeKind.NewExpr) return { newCallee: rd.nodeRef(nodes) as Node, newArguments: rd.nodeList(nodes) } as NodeData;
 	if (kind == NodeKind.TryExpr) return { tryArg: rd.nodeRef(nodes) as Node, hasCatch: rd.flag(), catchVal: rd.nodeRef(nodes) as Node } as NodeData;
-	if (kind == NodeKind.MatchExpr) return { matchDisc: rd.nodeRef(nodes) as Node, matchCases: rd.nodeArr(nodes) } as NodeData;
-	if (kind == NodeKind.MatchCase) return { casePatterns: rd.nodeArr(nodes), caseGuard: rd.nodeRef(nodes) as Node, caseBody: rd.nodeRef(nodes) as Node } as NodeData;
+	if (kind == NodeKind.MatchExpr) return { matchDisc: rd.nodeRef(nodes) as Node, matchCases: rd.nodeList(nodes) } as NodeData;
+	if (kind == NodeKind.MatchCase) return { casePatterns: rd.nodeList(nodes), caseGuard: rd.nodeRef(nodes) as Node, caseBody: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.AwaitExpr) return { awaitArg: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.YieldExpr) return { yieldArg: rd.nodeRef(nodes) as Node, isDelegate: rd.flag() } as NodeData;
 	if (kind == NodeKind.MoveExpr) return { moveArg: rd.nodeRef(nodes) as Node } as NodeData;
@@ -597,58 +717,58 @@ function buildNodeData(kind: NodeKind, rd: PackReader, nodes: Node[], types: Typ
 	if (kind == NodeKind.HiddenStdConv || kind == NodeKind.HiddenSubConv) return { convExpr: rd.nodeRef(nodes) as Node, convType: rd.typeRef(types) as Type } as NodeData;
 	if (kind == NodeKind.HiddenDeref || kind == NodeKind.HiddenAddr) return { expr: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.TypeAnnotation) return { annotationType: rd.text() } as NodeData;
-	if (kind == NodeKind.ArrayPattern) return { patternElements: rd.nodeArr(nodes), hasRestElement: rd.flag(), patternDefaults: rd.nodeArr(nodes) } as NodeData;
-	if (kind == NodeKind.ObjectPattern) return { patternProps: rd.nodeArr(nodes), hasRestProp: rd.flag() } as NodeData;
+	if (kind == NodeKind.ArrayPattern) return { patternElements: rd.nodeList(nodes), hasRestElement: rd.flag(), patternDefaults: rd.nodeList(nodes) } as NodeData;
+	if (kind == NodeKind.ObjectPattern) return { patternProps: rd.nodeList(nodes), hasRestProp: rd.flag() } as NodeData;
 	if (kind == NodeKind.ObjectPatternProp) return { propKey: rd.text(), propAlias: rd.nodeRef(nodes) as Node, propDefault: rd.nodeRef(nodes) } as NodeData;
 	if (kind == NodeKind.DestructuringDecl) return { destrPattern: rd.nodeRef(nodes) as Node, destrInit: rd.nodeRef(nodes) as Node, destrIsConst: rd.flag(), destrType: rd.text() } as NodeData;
-	if (kind == NodeKind.VariableDecl) return { declName: rd.text(), declType: rd.text(), initializer: rd.nodeRef(nodes) as Node, declKind: rd.dec() as DeclKind, nameLocation: parseLoc(rd.str()) } as NodeData;
+	if (kind == NodeKind.VariableDecl) return { declName: rd.text(), declType: rd.text(), initializer: rd.nodeRef(nodes) as Node, declKind: rd.dec() as DeclKind, nameLocation: rd.location() as SourceLocation } as NodeData;
 	if (kind == NodeKind.IfStmt) return { condition: rd.nodeRef(nodes) as Node, consequent: rd.nodeRef(nodes) as Node, alternate: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.WhileStmt) return { whileCondition: rd.nodeRef(nodes) as Node, whileBody: rd.nodeRef(nodes) as Node, whileLabel: rd.text() } as NodeData;
-	if (kind == NodeKind.ForStmt) return { forInit: rd.nodeRef(nodes) as Node, forCondition: rd.nodeRef(nodes) as Node, forUpdate: rd.nodeRef(nodes) as Node, forBody: rd.nodeRef(nodes) as Node } as NodeData;
-	if (kind == NodeKind.ForOfStmt) return { forOfBinding: rd.text(), forOfIsConst: rd.flag(), forOfIterable: rd.nodeRef(nodes) as Node, forOfBody: rd.nodeRef(nodes) as Node, forOfPattern: rd.nodeRef(nodes) as Node, bindingLocation: parseLoc(rd.str()) } as NodeData;
-	if (kind == NodeKind.ForInStmt) return { forInBinding: rd.text(), forInIsConst: rd.flag(), forInObject: rd.nodeRef(nodes) as Node, forInBody: rd.nodeRef(nodes) as Node } as NodeData;
-	if (kind == NodeKind.BlockStmt) return { statements: rd.nodeArr(nodes) } as NodeData;
+	if (kind == NodeKind.ForStmt) return { forInit: rd.nodeRef(nodes) as Node, forCondition: rd.nodeRef(nodes) as Node, forUpdate: rd.nodeRef(nodes) as Node, forBody: rd.nodeRef(nodes) as Node, forLabel: "" } as NodeData;
+	if (kind == NodeKind.ForOfStmt) return { forOfBinding: rd.text(), forOfIsConst: rd.flag(), forOfIterable: rd.nodeRef(nodes) as Node, forOfBody: rd.nodeRef(nodes) as Node, forOfPattern: rd.nodeRef(nodes) as Node, bindingLocation: rd.location() as SourceLocation, forOfLabel: "" } as NodeData;
+	if (kind == NodeKind.ForInStmt) return { forInBinding: rd.text(), forInIsConst: rd.flag(), forInObject: rd.nodeRef(nodes) as Node, forInBody: rd.nodeRef(nodes) as Node, forInLabel: "" } as NodeData;
+	if (kind == NodeKind.BlockStmt) return { statements: rd.nodeList(nodes) } as NodeData;
 	if (kind == NodeKind.ExprStmt) return { expr: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.ReturnStmt) return { argument: rd.nodeRef(nodes) } as NodeData;
 	if (kind == NodeKind.BreakStmt) return { breakLabel: rd.text() } as NodeData;
 	if (kind == NodeKind.ContinueStmt) return { continueLabel: rd.text() } as NodeData;
-	if (kind == NodeKind.FunctionDecl) return { fnName: rd.text(), params: splitCsv(rd.str()), fnParamTypes: splitCsv(rd.str()), fnBody: rd.nodeRef(nodes) as Node, fnFlags: rd.text(), fnReturnType: rd.text(), fnDefaults: rd.nodeArr(nodes), nativeName: rd.text(), nameLocation: parseLoc(rd.str()) } as NodeData;
-	if (kind == NodeKind.DoWhileStmt) return { doBody: rd.nodeRef(nodes) as Node, doCondition: rd.nodeRef(nodes) as Node } as NodeData;
-	if (kind == NodeKind.SwitchStmt) return { switchDisc: rd.nodeRef(nodes) as Node, switchCases: rd.nodeArr(nodes) } as NodeData;
-	if (kind == NodeKind.SwitchCase) return { caseTests: rd.nodeArr(nodes), caseStmts: rd.nodeArr(nodes), isDefault: rd.flag() } as NodeData;
+	if (kind == NodeKind.FunctionDecl) return { fnName: rd.text(), params: rd.strList(), fnParamTypes: rd.strList(), fnBody: rd.nodeRef(nodes) as Node, fnFlags: rd.text(), fnReturnType: rd.text(), fnDefaults: rd.nodeList(nodes), nativeName: rd.text(), nameLocation: rd.location() as SourceLocation } as NodeData;
+	if (kind == NodeKind.DoWhileStmt) return { doBody: rd.nodeRef(nodes) as Node, doCondition: rd.nodeRef(nodes) as Node, dwLabel: "", dwSwitchWrapper: false } as NodeData;
+	if (kind == NodeKind.SwitchStmt) return { switchDisc: rd.nodeRef(nodes) as Node, switchCases: rd.nodeList(nodes), switchLowered: false } as NodeData;
+	if (kind == NodeKind.SwitchCase) return { caseTests: rd.nodeList(nodes), caseStmts: rd.nodeList(nodes), isDefault: rd.flag() } as NodeData;
 	if (kind == NodeKind.UnreachableStmt) return { unreachableMsg: rd.text() } as NodeData;
-	if (kind == NodeKind.MatchStmt) return { matchStmtDisc: rd.nodeRef(nodes) as Node, matchStmtCases: rd.nodeArr(nodes) } as NodeData;
-	if (kind == NodeKind.ImportDecl) return { importNames: splitCsv(rd.str()), importAliases: splitCsv(rd.str()), importSource: rd.text(), nameLocations: parseLocs(rd.str()), aliasLocations: parseLocs(rd.str()), importTypeNames: splitCsv(rd.str()) } as NodeData;
+	if (kind == NodeKind.MatchStmt) return { matchStmtDisc: rd.nodeRef(nodes) as Node, matchStmtCases: rd.nodeList(nodes) } as NodeData;
+	if (kind == NodeKind.ImportDecl) return { importNames: rd.strList(), importAliases: rd.strList(), importSource: rd.text(), nameLocations: rd.locList(), aliasLocations: rd.locList(), importTypeNames: rd.strList() } as NodeData;
 	if (kind == NodeKind.ExportDecl) return { exportedDecl: rd.nodeRef(nodes) as Node } as NodeData;
-	if (kind == NodeKind.TypeAliasDecl) return { aliasName: rd.text(), aliasType: rd.text(), aliasIsDistinct: rd.flag(), aliasGenericParams: rd.text(), discriminantName: rd.text(), discriminantType: rd.text(), variantKeys: splitCsv(rd.str()), variantTypes: splitCsv(rd.str()), nameLocation: parseLoc(rd.str()) } as NodeData;
-	if (kind == NodeKind.EnumDecl) return { enumName: rd.text(), enumMembers: splitCsv(rd.str()), enumValues: parseFloatsCsv(rd.str()), nameLocation: parseLoc(rd.str()), memberLocations: parseLocs(rd.str()), enumInits: rd.nodeArr(nodes) } as NodeData;
-	if (kind == NodeKind.InterfaceDecl || kind == NodeKind.StructDecl) return { interfaceName: rd.text(), interfaceFields: splitCsv(rd.str()), interfaceFieldTypes: splitCsv(rd.str()), interfaceExtends: splitCsv(rd.str()), nameLocation: parseLoc(rd.str()), interfaceFieldVisibility: splitCsv(rd.str()), interfaceFieldDecorators: parseNestedNodeArrs(rd.str(), nodes), interfaceOptionalFields: splitCsv(rd.str()), nativeName: rd.text() } as NodeData;
-	if (kind == NodeKind.ClassDecl) return { className: rd.text(), classDisplayName: rd.text(), classExtends: rd.text(), classBody: rd.nodeArr(nodes), nameLocation: parseLoc(rd.str()), classImplements: splitCsv(rd.str()) } as NodeData;
+	if (kind == NodeKind.TypeAliasDecl) return { aliasName: rd.text(), aliasType: rd.text(), aliasIsDistinct: rd.flag(), aliasGenericParams: rd.text(), discriminantName: rd.text(), discriminantType: rd.text(), variantKeys: rd.strList(), variantTypes: rd.strList(), nameLocation: rd.location() as SourceLocation } as NodeData;
+	if (kind == NodeKind.EnumDecl) return { enumName: rd.text(), enumMembers: rd.strList(), enumValues: rd.floatList(), nameLocation: rd.location() as SourceLocation, memberLocations: rd.locList(), enumInits: rd.nodeList(nodes) } as NodeData;
+	if (kind == NodeKind.InterfaceDecl || kind == NodeKind.StructDecl) return { interfaceName: rd.text(), interfaceFields: rd.strList(), interfaceFieldTypes: rd.strList(), interfaceExtends: rd.strList(), nameLocation: rd.location() as SourceLocation, interfaceFieldVisibility: rd.strList(), interfaceFieldDecorators: rd.nodeRows(nodes), interfaceOptionalFields: rd.strList(), nativeName: rd.text() } as NodeData;
+	if (kind == NodeKind.ClassDecl) return { className: rd.text(), classDisplayName: rd.text(), classExtends: rd.text(), classBody: rd.nodeList(nodes), nameLocation: rd.location() as SourceLocation, classImplements: rd.strList() } as NodeData;
 	if (kind == NodeKind.PropertyDecl) return { propName: rd.text(), propType: rd.text(), propIsStatic: rd.flag(), propIsReadonly: rd.flag(), propVisibility: rd.text(), propInitializer: rd.nodeRef(nodes) as Node } as NodeData;
-	if (kind == NodeKind.MethodDecl) return { methodName: rd.text(), methodParams: splitCsv(rd.str()), methodParamTypes: splitCsv(rd.str()), methodBody: rd.nodeRef(nodes) as Node, methodIsStatic: rd.flag(), methodFlags: rd.text(), methodVisibility: rd.text(), methodReturnType: rd.text(), methodDefaults: rd.nodeArr(nodes), nativeName: rd.text(), nameLocation: parseLoc(rd.str()) } as NodeData;
-	if (kind == NodeKind.ConstructorDecl) return { ctorParams: splitCsv(rd.str()), ctorParamTypes: splitCsv(rd.str()), ctorBody: rd.nodeRef(nodes) as Node, ctorDefaults: rd.nodeArr(nodes), ctorVisibility: rd.text(), ctorParamProps: rd.nodeArr(nodes), ctorFlags: rd.text() } as NodeData;
+	if (kind == NodeKind.MethodDecl) return { methodName: rd.text(), methodParams: rd.strList(), methodParamTypes: rd.strList(), methodBody: rd.nodeRef(nodes) as Node, methodIsStatic: rd.flag(), methodFlags: rd.text(), methodVisibility: rd.text(), methodReturnType: rd.text(), methodDefaults: rd.nodeList(nodes), nativeName: rd.text(), nameLocation: rd.location() as SourceLocation } as NodeData;
+	if (kind == NodeKind.ConstructorDecl) return { ctorParams: rd.strList(), ctorParamTypes: rd.strList(), ctorBody: rd.nodeRef(nodes) as Node, ctorDefaults: rd.nodeList(nodes), ctorVisibility: rd.text(), ctorParamProps: rd.nodeList(nodes), ctorFlags: rd.text() } as NodeData;
 	if (kind == NodeKind.ThrowStmt) return { throwArg: rd.nodeRef(nodes) as Node } as NodeData;
-	if (kind == NodeKind.TryCatchStmt) return { tryBody: rd.nodeRef(nodes) as Node, catchName: rd.text(), catchBody: rd.nodeRef(nodes) as Node, finallyBody: rd.nodeRef(nodes) as Node, catchBindingLocation: parseLoc(rd.str()), hasCatchClause: rd.flag() } as NodeData;
-	if (kind == NodeKind.MacroInvocation) return { macroName: rd.text(), macroArgs: rd.nodeArr(nodes), macroHasParens: rd.last == 9 && rd.flag() } as NodeData;
-	if (kind == NodeKind.DecoratedDecl) return { decorators: rd.nodeArr(nodes), decoratedNode: rd.nodeRef(nodes) as Node } as NodeData;
+	if (kind == NodeKind.TryCatchStmt) return { tryBody: rd.nodeRef(nodes) as Node, catchName: rd.text(), catchBody: rd.nodeRef(nodes) as Node, finallyBody: rd.nodeRef(nodes) as Node, catchBindingLocation: rd.location() as SourceLocation, hasCatchClause: rd.flag() } as NodeData;
+	if (kind == NodeKind.MacroInvocation) return { macroName: rd.text(), macroArgs: rd.nodeList(nodes), macroHasParens: rd.last == 9 && rd.flag() } as NodeData;
+	if (kind == NodeKind.DecoratedDecl) return { decorators: rd.nodeList(nodes), decoratedNode: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.DeferStmt) return { deferExpr: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.TestDecl) return { testName: rd.text(), testBody: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.AssertStmt) return { assertExpr: rd.nodeRef(nodes) as Node, assertSource: rd.text(), assertMessage: rd.text(), assertMessageExpr: rd.nodeRef(nodes) } as NodeData;
 	if (kind == NodeKind.ExternDecl) return { externKind: rd.dec() as ExternKind, externName: rd.text(), nativeName: rd.text(), externType: rd.text() } as NodeData;
-	if (kind == NodeKind.MacroDecl) return { macroDeclName: rd.text(), macroDeclParams: splitCsv(rd.str()), macroDeclParamTypes: splitCsv(rd.str()), macroDeclReturnType: rd.text(), macroDeclBody: rd.nodeRef(nodes) as Node } as NodeData;
+	if (kind == NodeKind.MacroDecl) return { macroDeclName: rd.text(), macroDeclParams: rd.strList(), macroDeclParamTypes: rd.strList(), macroDeclReturnType: rd.text(), macroDeclBody: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.QuoteExpr) return { quoteBody: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.ComptimeBlock) return { comptimeBody: rd.nodeRef(nodes) as Node } as NodeData;
-	if (kind == NodeKind.TypeGeneric) return { typExprBase: rd.nodeRef(nodes) as Node, typExprArgs: rd.nodeArr(nodes) } as NodeData;
+	if (kind == NodeKind.TypeGeneric) return { typExprBase: rd.nodeRef(nodes) as Node, typExprArgs: rd.nodeList(nodes) } as NodeData;
 	if (kind == NodeKind.TypeArray) return { typExprElement: rd.nodeRef(nodes) as Node, typExprSize: rd.str().parseFloat() } as NodeData;
-	if (kind == NodeKind.TypeUnion) return { typExprMembers: rd.nodeArr(nodes), discFieldName: rd.text(), variantKeys: splitCsv(rd.str()), discKind: rd.text() } as NodeData;
-	if (kind == NodeKind.TypeIntersection) return { typExprMembers: rd.nodeArr(nodes) } as NodeData;
-	if (kind == NodeKind.TypeFunction) return { typExprParams: rd.nodeArr(nodes), typExprReturn: rd.nodeRef(nodes) as Node, typExprParamNames: splitCsv(rd.str()) } as NodeData;
-	if (kind == NodeKind.TypeObject) return { typExprFieldNames: splitCsv(rd.str()), typExprFieldTypes: rd.nodeArr(nodes), typExprIndexKey: rd.nodeRef(nodes) as Node, typExprIndexValue: rd.nodeRef(nodes) as Node, typExprFieldDecorators: parseNestedNodeArrs(rd.str(), nodes), typExprTypeName: rd.text(), typExprOptionalFields: splitCsv(rd.str()) } as NodeData;
-	if (kind == NodeKind.Program) return { programStmts: rd.nodeArr(nodes) } as NodeData;
-	if (kind == NodeKind.ActorDecl) return { actorName: rd.text(), actorBody: rd.nodeArr(nodes), nameLocation: parseLoc(rd.str()) } as NodeData;
-	if (kind == NodeKind.SpliceMany) return { spliceNodes: rd.nodeArr(nodes) } as NodeData;
-	if (kind == NodeKind.JSXElement) return { jsxTag: rd.text(), jsxAttrs: rd.nodeArr(nodes), jsxChildren: rd.nodeArr(nodes), jsxSelfClosing: rd.flag() } as NodeData;
-	if (kind == NodeKind.JSXFragment) return { jsxFragChildren: rd.nodeArr(nodes) } as NodeData;
+	if (kind == NodeKind.TypeUnion) return { typExprMembers: rd.nodeList(nodes), discFieldName: rd.text(), variantKeys: rd.strList(), discKind: rd.text() } as NodeData;
+	if (kind == NodeKind.TypeIntersection) return { typExprMembers: rd.nodeList(nodes) } as NodeData;
+	if (kind == NodeKind.TypeFunction) return { typExprParams: rd.nodeList(nodes), typExprReturn: rd.nodeRef(nodes) as Node, typExprParamNames: rd.strList() } as NodeData;
+	if (kind == NodeKind.TypeObject) return { typExprFieldNames: rd.strList(), typExprFieldTypes: rd.nodeList(nodes), typExprIndexKey: rd.nodeRef(nodes) as Node, typExprIndexValue: rd.nodeRef(nodes) as Node, typExprFieldDecorators: rd.nodeRows(nodes), typExprTypeName: rd.text(), typExprOptionalFields: rd.strList() } as NodeData;
+	if (kind == NodeKind.Program) return { programStmts: rd.nodeList(nodes) } as NodeData;
+	if (kind == NodeKind.ActorDecl) return { actorName: rd.text(), actorBody: rd.nodeList(nodes), nameLocation: rd.location() as SourceLocation } as NodeData;
+	if (kind == NodeKind.SpliceMany) return { spliceNodes: rd.nodeList(nodes) } as NodeData;
+	if (kind == NodeKind.JSXElement) return { jsxTag: rd.text(), jsxAttrs: rd.nodeList(nodes), jsxChildren: rd.nodeList(nodes), jsxSelfClosing: rd.flag() } as NodeData;
+	if (kind == NodeKind.JSXFragment) return { jsxFragChildren: rd.nodeList(nodes) } as NodeData;
 	if (kind == NodeKind.JSXText) return { jsxText: rd.text() } as NodeData;
 	if (kind == NodeKind.JSXExpressionContainer) return { jsxExpr: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.JSXAttribute) return { jsxAttrName: rd.text(), jsxAttrValue: rd.nodeRef(nodes) as Node } as NodeData;
@@ -709,8 +829,8 @@ export const SYMBOL_FIELD_ROLES: { [K in keyof Symbol]-?: FieldRole } = {
 	itemModule: encoded("S itemModule"),
 	item: encoded("S item"),
 	instantiatedFrom: encoded("S originIdx"),
-	instanceArgs: encoded("S retained instArgsCsv"),
-	instanceParams: encoded("S retained instParamsCsv"),
+	instanceArgs: encoded("S instArgsCsv"),
+	instanceParams: encoded("S instParamsCsv"),
 	ctorRoutine: encoded("S ctorRoutineIdx"),
 	ctorOwner: encoded("S ctorOwnerIdx"),
 	borrowedFrom: encoded("S borrowedFromIdx"),
@@ -770,9 +890,16 @@ export const NODE_FIELD_ROLES: { [K in keyof Node]-?: FieldRole } = {
 //     locLine locCol locEndLine locEndCol inScope
 //     name modulePath nativeName builtinKind headerPath jsModulePath
 //     typeIdx overloadsCsv staticCsv declIdx dpCsv disamb exportName
-//     ownerIdx typeParamsCsv originIdx paramOwnerIdx retained instArgsCsv instParamsCsv
+//     ownerIdx typeParamsCsv originIdx paramOwnerIdx instArgsCsv instParamsCsv
 //     fieldDecoratorNamesCsv fieldDecoratorRows metaKeysCsv metaValuesCsv nonisolatedCsv
 //     itemModule item ctorRoutineIdx ctorOwnerIdx borrowedFromIdx
+//
+// A *Csv column, and a payload list, is "-" for null, otherwise `<count>:`
+// and the items joined by ',' (an escaped string holds no raw ','), so null,
+// [], [""] and ["", "a,b"] read back apart. A location is line/column/
+// endLine/endColumn joined by '/', or "-" for null. A nested list
+// (fieldDecoratorRows) is `<count>:` and its rows, each a list, joined by ';'.
+// A list whose type holds no null is refused at write when it is null.
 
 export class RowWriter {
 	syms: Symbol[] = [];
@@ -830,15 +957,37 @@ export function idxNode(this w: RowWriter, n: Node | null): int32 {
 
 export function idxs(this w: RowWriter, arr: Node[] | null): string {
 	if (arr == null) return "-";
-	if (arr.length == 0) return "";
-	let out = "";
-	let i = 0;
-	while (i < arr.length) {
-		if (i > 0) out = out + ",";
-		out = out + w.idxNode(arr[i]);
-		i = i + 1;
+	const ids: int32[] = [];
+	for (const n of arr) ids.push(w.idxNode(n));
+	return intListText(ids);
+}
+
+function typeIdxs(this w: RowWriter, ts: Type[] | null): string {
+	if (ts == null) return "-";
+	const ids: int32[] = [];
+	for (const t of ts) ids.push(w.idxType(t));
+	return intListText(ids);
+}
+
+function symIdxs(this w: RowWriter, ss: Symbol[] | null): string {
+	if (ss == null) return "-";
+	const ids: int32[] = [];
+	for (const s of ss) ids.push(w.idxSym(s));
+	return intListText(ids);
+}
+
+function transformOnlyField(n: Node): string {
+	const kind = n.kind;
+	if (kind == NodeKind.ForStmt && (n.data as ForStmtData).forLabel != "") return "forLabel";
+	if (kind == NodeKind.ForOfStmt && (n.data as ForOfStmtData).forOfLabel != "") return "forOfLabel";
+	if (kind == NodeKind.ForInStmt && (n.data as ForInStmtData).forInLabel != "") return "forInLabel";
+	if (kind == NodeKind.DoWhileStmt) {
+		const d = n.data as DoWhileStmtData;
+		if (d.dwLabel != "") return "dwLabel";
+		if (d.dwSwitchWrapper) return "dwSwitchWrapper";
 	}
-	return out;
+	if (kind == NodeKind.SwitchStmt && (n.data as SwitchStmtData).switchLowered) return "switchLowered";
+	return "";
 }
 
 export function closeOver(this w: RowWriter): void {
@@ -935,60 +1084,51 @@ export function emitObjectRows(this w: RowWriter, lines: string[]): void {
 	for (let k = 0; k < known.length; k += 1) wellKnown.set(known[k], k as int32);
 	for (let i = 0; i < w.types.length; i += 1) {
 		const t = w.types[i];
-		const children: int32[] = [];
-		if (t.typeChildren != null) {
-			for (const c of t.typeChildren) children.push(w.idxType(c));
-		}
-		const names: string[] = t.typeNames != null ? t.typeNames : [];
-		const optional: string[] = t.optionalFields != null ? t.optionalFields : [];
+		const nullList = t.typeNames == null ? "typeNames" : t.typeChildren == null ? "typeChildren" : t.attachedOps == null ? "attachedOps" : "";
+		if (nullList != "") throw nullListError(`type ${i} (${t.typeName})`, nullList);
 		const ops: int32[] = [];
 		for (const o of t.attachedOps) ops.push(w.idxSym(o));
-		lines.push(`T\t${i}\t${t.kind as int32}\t${t.typeFlags as uint32}\t${t.typeValue}\t${t.callConv as int32}\t${escapeP(t.typeName)}\t${joinCsv(names)}\t${intsCsv(children)}\t${w.idxType(t.typeReturn)}\t${w.idxType(t.typeExtra)}\t${w.idxSym(t.sym)}\t${joinCsv(optional)}\t${intsCsv(ops)}\t${w.idxType(t.readonlyView)}\t${w.idxType(t.mutableView)}\t${w.idxType(t.typeInst)}\t${w.idxType(t.typeParamDefault)}\t${w.idxType(t.ownedType)}\t${w.idxType(t.plainType)}\t${wellKnownIndex(wellKnown, t)}`);
+		lines.push(`T\t${i}\t${t.kind as int32}\t${t.typeFlags as uint32}\t${t.typeValue}\t${t.callConv as int32}\t${escapeP(t.typeName)}\t${strListText(t.typeNames)}\t${w.typeIdxs(t.typeChildren)}\t${w.idxType(t.typeReturn)}\t${w.idxType(t.typeExtra)}\t${w.idxSym(t.sym)}\t${strListText(t.optionalFields)}\t${intListText(ops)}\t${w.idxType(t.readonlyView)}\t${w.idxType(t.mutableView)}\t${w.idxType(t.typeInst)}\t${w.idxType(t.typeParamDefault)}\t${w.idxType(t.ownedType)}\t${w.idxType(t.plainType)}\t${wellKnownIndex(wellKnown, t)}`);
 	}
 
 	_wnodeIdx = w.nodeIdx;
 	_wtypeIdx = w.typeIdx;
 	for (let i = 0; i < w.nodes.length; i += 1) {
 		const n = w.nodes[i];
-		if (n.inlineFrame != null) throw new Error(`internal: node ${i} (${n.kind.toString()}) carries an inlineFrame, which only transform-time inlining sets; the object rows hold checked trees`);
+		if (n.inlineFrame != null) throw new Error(`internal: ${nodeOwner(i, n)} carries an inlineFrame, which only transform-time inlining sets; the object rows hold checked trees`);
+		const unwritten = transformOnlyField(n);
+		if (unwritten != "") throw new Error(`internal: ${nodeOwner(i, n)} sets ${unwritten}, which only a transform writes and the object rows do not carry`);
 		const loc = n.location;
-		const tes = n.typeExprs != null ? w.idxs(n.typeExprs) : "-";
-		const bes = n.baseExprs != null ? w.idxs(n.baseExprs) : "-";
-		const defaults: int32[] = [];
+		let defaults: int32[] | null = null;
 		if (n.genericDefaults != null) {
-			for (const value of n.genericDefaults) defaults.push(w.idxNode(value));
+			const ids: int32[] = [];
+			for (const value of n.genericDefaults) ids.push(w.idxNode(value));
+			defaults = ids;
 		}
-		const pls = locsCsv(n.paramLocations);
-		let pss = "-";
-		if (n.paramSyms != null) {
-			const psi: int32[] = [];
-			for (const ps of n.paramSyms) psi.push(w.idxSym(ps));
-			pss = psi.length == 0 ? "" : intsCsv(psi);
-		}
-		lines.push(`N\t${i}\t${n.kind as int32}\t${n.flags as uint64}\t${loc.line}\t${loc.column}\t${loc.endLine}\t${loc.endColumn}\t${w.idxType(n.nodeType)}\t${w.idxSym(n.resolvedSym)}\t${w.idxNode(n.typeExpr)}\t${tes}\t${pls}\t${escapeP(n.typeArg)}\t${n.variantSlot}\t${pss}\t${bes}\t${n.genericDefaults == null ? "-" : intsCsv(defaults)}\t${w.idxNode(n.nodeTypeAst)}\t${emitNodePayloadViaSink(n)}`);
+		lines.push(`N\t${i}\t${n.kind as int32}\t${n.flags as uint64}\t${loc.line}\t${loc.column}\t${loc.endLine}\t${loc.endColumn}\t${w.idxType(n.nodeType)}\t${w.idxSym(n.resolvedSym)}\t${w.idxNode(n.typeExpr)}\t${w.idxs(n.typeExprs)}\t${locListText(n.paramLocations)}\t${escapeP(n.typeArg)}\t${n.variantSlot}\t${w.symIdxs(n.paramSyms)}\t${w.idxs(n.baseExprs)}\t${intListText(defaults)}\t${w.idxNode(n.nodeTypeAst)}\t${emitNodePayloadViaSink(i, n)}`);
 	}
 
 	for (let i = 0; i < w.syms.length; i += 1) {
 		const s = w.syms[i];
+		const nullList = symbolNullList(s);
+		if (nullList != "") throw nullListError(`symbol ${i} (${s.name})`, nullList);
 		const loc = s.location;
-		const ovl: int32[] = [];
-		if (s.overloads != null) {
-			for (const ov of s.overloads) ovl.push(w.idxSym(ov));
-		}
-		const stf: int32[] = [];
-		if (s.staticFields != null) {
-			for (const sf of s.staticFields) stf.push(w.idxSym(sf));
-		}
-		const dp = w.idxs(s.defaultParams);
-		const tps: int32[] = [];
-		for (const tp of s.typeParams) tps.push(w.idxType(tp));
-		const instArgs: int32[] = [];
-		for (const t of s.instanceArgs ?? []) instArgs.push(w.idxType(t));
-		const instParams: int32[] = [];
-		for (const t of s.instanceParams ?? []) instParams.push(w.idxType(t));
-		const retained = s.instanceArgs != null && s.instanceParams != null ? 1 : 0;
-		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint64}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${w.roots.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(builtinKindName(s.builtinKind))}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${w.idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${w.idxNode(s.declNode)}\t${dp}\t${s.disamb}\t${escapeP(s.exportName)}\t${w.idxSym(s.staticOwner)}\t${intsCsv(tps)}\t${w.idxSym(s.instantiatedFrom)}\t${w.idxSym(s.typeParamOwner)}\t${retained}\t${intsCsv(instArgs)}\t${intsCsv(instParams)}\t${joinCsv(s.fieldDecoratorNames)}\t${nestedIdxsP(s.fieldDecorators)}\t${joinCsv(s.metaKeys)}\t${w.idxs(s.metaValues)}\t${joinCsv(s.nonisolatedFields)}\t${s.itemModule}\t${s.item}\t${w.idxSym(s.ctorRoutine)}\t${w.idxSym(s.ctorOwner)}\t${w.idxSym(s.borrowedFrom)}`);
+		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint64}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${w.roots.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(builtinKindName(s.builtinKind))}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${w.idxType(s.symbolType)}\t${w.symIdxs(s.overloads)}\t${w.symIdxs(s.staticFields)}\t${w.idxNode(s.declNode)}\t${w.idxs(s.defaultParams)}\t${s.disamb}\t${escapeP(s.exportName)}\t${w.idxSym(s.staticOwner)}\t${w.typeIdxs(s.typeParams)}\t${w.idxSym(s.instantiatedFrom)}\t${w.idxSym(s.typeParamOwner)}\t${w.typeIdxs(s.instanceArgs)}\t${w.typeIdxs(s.instanceParams)}\t${strListText(s.fieldDecoratorNames)}\t${nestedIdxsP(s.fieldDecorators)}\t${strListText(s.metaKeys)}\t${w.idxs(s.metaValues)}\t${strListText(s.nonisolatedFields)}\t${s.itemModule}\t${s.item}\t${w.idxSym(s.ctorRoutine)}\t${w.idxSym(s.ctorOwner)}\t${w.idxSym(s.borrowedFrom)}`);
 	}
+}
+
+function symbolNullList(s: Symbol): string {
+	if (s.overloads == null) return "overloads";
+	if (s.staticFields == null) return "staticFields";
+	if (s.defaultParams == null) return "defaultParams";
+	if (s.typeParams == null) return "typeParams";
+	if (s.fieldDecoratorNames == null) return "fieldDecoratorNames";
+	const row = nullRowPath(s.fieldDecorators);
+	if (row != null) return `fieldDecorators${row}`;
+	if (s.metaKeys == null) return "metaKeys";
+	if (s.metaValues == null) return "metaValues";
+	if (s.nonisolatedFields == null) return "nonisolatedFields";
+	return "";
 }
 
 function wellKnownIndex(known: HashMap<Type, int32>, t: Type): int32 {
@@ -1025,23 +1165,21 @@ export class RowReader {
 	symTypeParamsIdx: int32[][] = [];
 	symOriginIdx: int32[] = [];
 	symParamOwnerIdx: int32[] = [];
-	symRetained: boolean[] = [];
-	symInstanceArgsIdx: int32[][] = [];
-	symInstanceParamsIdx: int32[][] = [];
-	symDpRaw: string[] = [];
-	symFieldDecoratorsRaw: string[] = [];
-	symMetaValuesRaw: string[] = [];
+	symInstanceArgsIdx: (int32[] | null)[] = [];
+	symInstanceParamsIdx: (int32[] | null)[] = [];
+	symDpIdx: int32[][] = [];
+	symFieldDecoratorsIdx: int32[][][] = [];
+	symMetaValuesIdx: int32[][] = [];
 	symCtorRoutineIdx: int32[] = [];
 	symCtorOwnerIdx: int32[] = [];
 	symBorrowedFromIdx: int32[] = [];
 	nodeTypeRef: int32[] = [];
 	nodeSymRef: int32[] = [];
 	nodeTeRef: int32[] = [];
-	nodeTesRaw: string[] = [];
-	nodeBesRaw: string[] = [];
-	nodeDefaultsRaw: string[] = [];
-	nodePlsRaw: string[] = [];
-	nodePssRaw: string[] = [];
+	nodeTesIdx: (int32[] | null)[] = [];
+	nodeBesIdx: (int32[] | null)[] = [];
+	nodeDefaultsIdx: (int32[] | null)[] = [];
+	nodePssIdx: (int32[] | null)[] = [];
 	nodeTypeAstRef: int32[] = [];
 	nodePayloadPos: int32[] = [];
 	placeholder: NodeData = { nullPlaceholder: true } as NodeData;
@@ -1056,14 +1194,13 @@ export function readObjectRow(this a: RowReader, tag: int32, rd: PackReader): bo
 		t.typeValue = rd.int() as int32;
 		t.callConv = rd.int() as int32 as CallingConvention;
 		t.typeName = unescapeP(rd.str());
-		t.typeNames = splitCsv(rd.str());
-		a.typeChildrenIdx.push(rd.ints());
+		t.typeNames = rd.strList();
+		a.typeChildrenIdx.push(rd.intList());
 		a.typeReturnIdx.push(rd.int() as int32);
 		a.typeExtraIdx.push(rd.int() as int32);
 		a.typeSymIdx.push(rd.int() as int32);
-		const optional = rd.str();
-		if (optional != "-") t.optionalFields = splitCsv(optional);
-		a.typeOpsIdx.push(rd.ints());
+		t.optionalFields = rd.nullableStrs();
+		a.typeOpsIdx.push(rd.intList());
 		a.typeViewIdx.push(rd.int() as int32);
 		a.typeMutableIdx.push(rd.int() as int32);
 		a.typeInstIdx.push(rd.int() as int32);
@@ -1094,13 +1231,13 @@ export function readObjectRow(this a: RowReader, tag: int32, rd: PackReader): bo
 		a.nodeTypeRef.push(rd.int() as int32);
 		a.nodeSymRef.push(rd.int() as int32);
 		a.nodeTeRef.push(rd.int() as int32);
-		a.nodeTesRaw.push(rd.dashOrStr());
-		a.nodePlsRaw.push(rd.dashOrStr());
+		a.nodeTesIdx.push(rd.nullableInts());
+		n.paramLocations = rd.nullableLocs();
 		n.typeArg = unescapeP(rd.str());
 		n.variantSlot = rd.int() as int32;
-		a.nodePssRaw.push(rd.dashOrStr());
-		a.nodeBesRaw.push(rd.dashOrStr());
-		a.nodeDefaultsRaw.push(rd.dashOrStr());
+		a.nodePssIdx.push(rd.nullableInts());
+		a.nodeBesIdx.push(rd.nullableInts());
+		a.nodeDefaultsIdx.push(rd.nullableInts());
 		a.nodeTypeAstRef.push(rd.int() as int32);
 		a.nodePayloadPos.push(rd.last == 9 ? rd.pos : -1);
 		rd.endRow();
@@ -1133,24 +1270,23 @@ export function readObjectRow(this a: RowReader, tag: int32, rd: PackReader): bo
 		s.headerPath = unescapeP(rd.str());
 		s.jsModulePath = unescapeP(rd.str());
 		a.symTypeIdx.push(rd.int() as int32);
-		a.symOverloadIdx.push(rd.ints());
-		a.symStaticIdx.push(rd.ints());
+		a.symOverloadIdx.push(rd.intList());
+		a.symStaticIdx.push(rd.intList());
 		a.symDeclIdx.push(rd.int() as int32);
-		a.symDpRaw.push(rd.str());
+		a.symDpIdx.push(rd.intList());
 		if (rd.last == 9) s.disamb = rd.int() as int32;
 		if (rd.last == 9) s.exportName = unescapeP(rd.str());
 		a.symOwnerIdx.push(rd.last == 9 ? rd.int() as int32 : -1);
-		a.symTypeParamsIdx.push(rd.last == 9 ? rd.ints() : []);
+		a.symTypeParamsIdx.push(rd.intList());
 		a.symOriginIdx.push(rd.last == 9 ? rd.int() as int32 : -1);
 		a.symParamOwnerIdx.push(rd.last == 9 ? rd.int() as int32 : -1);
-		a.symRetained.push(rd.last == 9 && rd.int() == 1);
-		a.symInstanceArgsIdx.push(rd.last == 9 ? rd.ints() : []);
-		a.symInstanceParamsIdx.push(rd.last == 9 ? rd.ints() : []);
-		s.fieldDecoratorNames = splitCsv(rd.str());
-		a.symFieldDecoratorsRaw.push(rd.str());
-		s.metaKeys = splitCsv(rd.str());
-		a.symMetaValuesRaw.push(rd.str());
-		s.nonisolatedFields = splitCsv(rd.str());
+		a.symInstanceArgsIdx.push(rd.nullableInts());
+		a.symInstanceParamsIdx.push(rd.nullableInts());
+		s.fieldDecoratorNames = rd.strList();
+		a.symFieldDecoratorsIdx.push(rd.idRows());
+		s.metaKeys = rd.strList();
+		a.symMetaValuesIdx.push(rd.intList());
+		s.nonisolatedFields = rd.strList();
 		s.itemModule = rd.int() as int32;
 		s.item = rd.int() as int32;
 		a.symCtorRoutineIdx.push(rd.int() as int32);
@@ -1167,26 +1303,6 @@ function badRef(k: int32, count: int32): boolean {
 	return k < -1 || k >= count;
 }
 
-function linkNodeList(raw: string, nodes: Node[]): Node[] | null {
-	const out: Node[] = [];
-	for (const k of parseIntsCsv(raw)) {
-		if (badRef(k, nodes.length)) return null;
-		out.push(k >= 0 ? nodes[k] : null as unknown as Node);
-	}
-	return out;
-}
-
-function linkNodeRows(raw: string, nodes: Node[]): Node[][] | null {
-	const out: Node[][] = [];
-	if (raw == "-") return out;
-	for (const row of splitRows(raw)) {
-		const linked = linkNodeList(row, nodes);
-		if (linked == null) return null;
-		out.push(linked);
-	}
-	return out;
-}
-
 export function linkTypesAndSymbols(this a: RowReader): boolean {
 	const types = a.types;
 	const syms = a.syms;
@@ -1194,13 +1310,8 @@ export function linkTypesAndSymbols(this a: RowReader): boolean {
 	for (let i = 0; i < types.length; i += 1) {
 		if (a.typeWellKnown[i] >= 0) continue;
 		const t = types[i];
-		const kids = a.typeChildrenIdx[i];
-		const children: Type[] = [];
-		for (const k of kids) {
-			if (k < 0 || k >= types.length) return false;
-			children.push(types[k]);
-		}
-		t.typeChildren = children;
+		if (!refsFit(a.typeChildrenIdx[i], types.length, false) || !refsFit(a.typeOpsIdx[i], syms.length, true)) return false;
+		t.typeChildren = typesAt(a.typeChildrenIdx[i], types);
 		t.typeReturn = a.typeReturnIdx[i] >= 0 && a.typeReturnIdx[i] < types.length ? types[a.typeReturnIdx[i]] : null as unknown as Type;
 		t.typeExtra = a.typeExtraIdx[i] >= 0 && a.typeExtraIdx[i] < types.length ? types[a.typeExtraIdx[i]] : null as unknown as Type;
 		t.sym = a.typeSymIdx[i] >= 0 && a.typeSymIdx[i] < syms.length ? syms[a.typeSymIdx[i]] : null as unknown as Symbol;
@@ -1211,57 +1322,35 @@ export function linkTypesAndSymbols(this a: RowReader): boolean {
 		if (badRef(a.typeOwnedIdx[i], types.length) || badRef(a.typePlainIdx[i], types.length)) return false;
 		t.ownedType = a.typeOwnedIdx[i] >= 0 ? types[a.typeOwnedIdx[i]] : null;
 		t.plainType = a.typePlainIdx[i] >= 0 ? types[a.typePlainIdx[i]] : null;
-		for (const k of a.typeOpsIdx[i]) {
-			if (k >= syms.length) return false;
-			t.attachedOps.push(k >= 0 ? syms[k] : null);
-		}
+		for (const k of a.typeOpsIdx[i]) t.attachedOps.push(k >= 0 ? syms[k] : null);
 	}
 
 	for (let i = 0; i < syms.length; i += 1) {
 		const s = syms[i];
 		s.symbolType = a.symTypeIdx[i] >= 0 && a.symTypeIdx[i] < types.length ? types[a.symTypeIdx[i]] : null as unknown as Type;
-		const ovls: Symbol[] = [];
-		for (const k of a.symOverloadIdx[i]) {
-			if (k < 0 || k >= syms.length) return false;
-			ovls.push(syms[k]);
+		const args = a.symInstanceArgsIdx[i];
+		const params = a.symInstanceParamsIdx[i];
+		if (!refsFit(a.symOverloadIdx[i], syms.length, false) || !refsFit(a.symStaticIdx[i], syms.length, false)
+			|| !refsFit(a.symTypeParamsIdx[i], types.length, false) || !refsFit(args, types.length, false)
+			|| !refsFit(params, types.length, false) || !refsFit(a.symDpIdx[i], nodes.length, true)
+			|| !refsFit(a.symMetaValuesIdx[i], nodes.length, true)) return false;
+		for (const row of a.symFieldDecoratorsIdx[i]) {
+			if (!refsFit(row, nodes.length, true)) return false;
 		}
-		s.overloads = ovls;
-		const stf: Symbol[] = [];
-		for (const k of a.symStaticIdx[i]) {
-			if (k < 0 || k >= syms.length) return false;
-			stf.push(syms[k]);
-		}
-		s.staticFields = stf;
-		const tps: Type[] = [];
-		for (const k of a.symTypeParamsIdx[i]) {
-			if (k < 0 || k >= types.length) return false;
-			tps.push(types[k]);
-		}
-		s.typeParams = tps;
-		if (a.symRetained[i]) {
-			const args: Type[] = [];
-			for (const k of a.symInstanceArgsIdx[i]) {
-				if (k < 0 || k >= types.length) return false;
-				args.push(types[k]);
-			}
-			const params: Type[] = [];
-			for (const k of a.symInstanceParamsIdx[i]) {
-				if (k < 0 || k >= types.length) return false;
-				params.push(types[k]);
-			}
-			s.instanceArgs = args;
-			s.instanceParams = params;
-		}
+		s.overloads = symsAt(a.symOverloadIdx[i], syms);
+		s.staticFields = symsAt(a.symStaticIdx[i], syms);
+		s.typeParams = typesAt(a.symTypeParamsIdx[i], types);
+		s.instanceArgs = args == null ? null : typesAt(args, types);
+		s.instanceParams = params == null ? null : typesAt(params, types);
 		s.staticOwner = a.symOwnerIdx[i] >= 0 && a.symOwnerIdx[i] < syms.length ? syms[a.symOwnerIdx[i]] : null;
 		s.instantiatedFrom = a.symOriginIdx[i] >= 0 && a.symOriginIdx[i] < syms.length ? syms[a.symOriginIdx[i]] : null;
 		s.typeParamOwner = a.symParamOwnerIdx[i] >= 0 && a.symParamOwnerIdx[i] < syms.length ? syms[a.symParamOwnerIdx[i]] : null;
 		s.declNode = a.symDeclIdx[i] >= 0 && a.symDeclIdx[i] < nodes.length ? nodes[a.symDeclIdx[i]] : null as unknown as Node;
-		s.defaultParams = parseNodeArr(a.symDpRaw[i], nodes);
-		const decorators = linkNodeRows(a.symFieldDecoratorsRaw[i], nodes);
-		const metaValues = linkNodeList(a.symMetaValuesRaw[i], nodes);
-		if (decorators == null || metaValues == null) return false;
+		s.defaultParams = nodesAt(a.symDpIdx[i], nodes);
+		const decorators: Node[][] = [];
+		for (const row of a.symFieldDecoratorsIdx[i]) decorators.push(nodesAt(row, nodes));
 		s.fieldDecorators = decorators;
-		s.metaValues = metaValues;
+		s.metaValues = nodesAt(a.symMetaValuesIdx[i], nodes);
 		if (badRef(a.symCtorRoutineIdx[i], syms.length) || badRef(a.symCtorOwnerIdx[i], syms.length) || badRef(a.symBorrowedFromIdx[i], syms.length)) return false;
 		s.ctorRoutine = a.symCtorRoutineIdx[i] >= 0 ? syms[a.symCtorRoutineIdx[i]] : null;
 		s.ctorOwner = a.symCtorOwnerIdx[i] >= 0 ? syms[a.symCtorOwnerIdx[i]] : null;
@@ -1279,20 +1368,17 @@ export function linkNodes(this a: RowReader, rd: PackReader): boolean {
 		n.nodeType = a.nodeTypeRef[i] >= 0 && a.nodeTypeRef[i] < types.length ? types[a.nodeTypeRef[i]] : null as unknown as Type;
 		n.resolvedSym = a.nodeSymRef[i] >= 0 && a.nodeSymRef[i] < syms.length ? syms[a.nodeSymRef[i]] : null as unknown as Symbol;
 		n.typeExpr = nd(a.nodeTeRef[i], nodes) as Node;
-		n.typeExprs = a.nodeTesRaw[i] == "-" ? null : parseNodeArr(a.nodeTesRaw[i], nodes);
-		n.genericDefaults = a.nodeDefaultsRaw[i] == "-" ? null : parseNodeIdxList(a.nodeDefaultsRaw[i], nodes);
-		n.baseExprs = a.nodeBesRaw[i] == "-" ? null : parseNodeArr(a.nodeBesRaw[i], nodes);
-		n.paramLocations = a.nodePlsRaw[i] == "-" ? null : parseLocs(a.nodePlsRaw[i]);
-		if (badRef(a.nodeTypeAstRef[i], nodes.length)) return false;
+		const tes = a.nodeTesIdx[i];
+		const bes = a.nodeBesIdx[i];
+		const defaults = a.nodeDefaultsIdx[i];
+		const pss = a.nodePssIdx[i];
+		if (!refsFit(tes, nodes.length, true) || !refsFit(bes, nodes.length, true) || !refsFit(defaults, nodes.length, true)
+			|| !refsFit(pss, syms.length, false) || badRef(a.nodeTypeAstRef[i], nodes.length)) return false;
+		n.typeExprs = tes == null ? null : nodesAt(tes, nodes);
+		n.genericDefaults = defaults == null ? null : optionalNodesAt(defaults, nodes);
+		n.baseExprs = bes == null ? null : nodesAt(bes, nodes);
 		n.nodeTypeAst = nd(a.nodeTypeAstRef[i], nodes);
-		if (a.nodePssRaw[i] != "-") {
-			const pss: Symbol[] = [];
-			for (const k of parseIntsCsv(a.nodePssRaw[i])) {
-				if (k < 0 || k >= syms.length) return false;
-				pss.push(syms[k]);
-			}
-			n.paramSyms = pss;
-		}
+		n.paramSyms = pss == null ? null : symsAt(pss, syms);
 		rd.pos = a.nodePayloadPos[i] < 0 ? rd.b.length : a.nodePayloadPos[i];
 		rd.last = a.nodePayloadPos[i] < 0 ? 10 : 9;
 		n.data = buildNodeData(n.kind, rd, nodes, types);
@@ -1310,12 +1396,6 @@ test "rowCodec: escape/unescape roundtrip incl separators" {
 	assert joinCsv([]) == "-";
 	assert splitCsv("-").length == 0;
 	assert intsCsv([1, 2, 3]) == "1,2,3";
-	assert (parseIntsCsv("4,5,6").length == 3) && parseIntsCsv("4,5,6")[2] == 6;
-	assert parseIntsCsv("").length == 0;
-	assert parseIntsCsv("0").length == 1 && parseIntsCsv("0")[0] == 0;
-	assert parseIntsCsv("-1,-2").length == 2 && parseIntsCsv("-1,-2")[1] == -2;
-	assert parseFloatsCsv("") != null && parseFloatsCsv("").length == 0;
-	assert parseFloatsCsv("0").length == 1 && parseFloatsCsv("0")[0] == 0;
 	// ASCII-forcing invariant: the escaped form must never carry a byte >= 0x80.
 	const esc = escapeP("ttiếng Việt đũ ề");
 	let maxByte = 0;
@@ -1454,4 +1534,245 @@ test "rowCodec: a node an inlining copied is refused at write" {
 		message = (e as Error).message;
 	}
 	assert message.startsWith("internal:") && message.includes("inlineFrame");
+}
+
+function sameStrs(got: string[] | null, want: string[] | null): boolean {
+	if (got == null || want == null) return got == null && want == null;
+	if (got.length != want.length) return false;
+	for (let k = 0; k < want.length; k += 1) {
+		if (got[k] != want[k]) return false;
+	}
+	return true;
+}
+
+function sameTypes(got: Type[] | null, want: Type[] | null): boolean {
+	if (got == null || want == null) return got == null && want == null;
+	if (got.length != want.length) return false;
+	for (let k = 0; k < want.length; k += 1) {
+		if (got[k] != want[k]) return false;
+	}
+	return true;
+}
+
+function fieldReader(field: string): PackReader {
+	const rd = new PackReader(`Q\t${field}\n`);
+	rd.startRow();
+	return rd;
+}
+
+test "rowCodec: a list field tells null, the empty list and empty strings apart" {
+	assert strListText(null) == "-" && strListText([]) == "0:" && strListText([""]) == "1:";
+	assert strListText(["", "a,b"]) == "2:,a\\cb";
+	assert intListText(null) == "-" && intListText([]) == "0:" && intListText([-1]) == "1:-1";
+	const cases: string[] = ["-", "0:", "1:", "2:,a\\cb", "1:-"];
+	const wants: (string[] | null)[] = [null, [], [""], ["", "a,b"], ["-"]];
+	for (let k = 0; k < cases.length; k += 1) {
+		const rd = fieldReader(cases[k]);
+		assert sameStrs(rd.nullableStrs(), wants[k]) && !rd.bad, cases[k];
+	}
+	const none = fieldReader("-");
+	assert none.nullableInts() == null && !none.bad;
+	const empty = fieldReader("0:").nullableInts();
+	assert empty != null && empty.length == 0;
+	const one = fieldReader("1:-1").nullableInts();
+	assert one != null && one.length == 1 && one[0] == -1;
+}
+
+test "rowCodec: a list field whose count does not match its items is a failed read" {
+	for (const field of ["2:a", "1:a,b", "0:a", "0:,", ":a", "x:", "", "3", "99999999999:"]) {
+		const rd = fieldReader(field);
+		rd.nullableStrs();
+		assert rd.bad, `strings ${field}`;
+	}
+	for (const field of ["2:1", "1:1,2", "1:", "1:x", "1:1x", "1:-", "0:,", "1:2147483648"]) {
+		const rd = fieldReader(field);
+		rd.nullableInts();
+		assert rd.bad, `ints ${field}`;
+	}
+	for (const field of ["-", "1:-", "2:0:", "1:1:0;0:", "1:"]) {
+		const rd = fieldReader(field);
+		rd.idRows();
+		assert rd.bad, `rows ${field}`;
+	}
+	const listOfNoNull = fieldReader("-");
+	listOfNoNull.strList();
+	assert listOfNoNull.bad;
+}
+
+test "rowCodec: a type keeps typeNames and optionalFields exactly, null and empty strings included" {
+	const cases: (string[] | null)[] = [null, [], [""], ["", "a,b"]];
+	for (const names of cases) {
+		const t = emptyType();
+		t.kind = TypeKind.Struct;
+		t.typeName = "Shape";
+		t.optionalFields = names;
+		t.typeNames = names ?? ["x"];
+		const w = new RowWriter();
+		w.enqType(t);
+		const r = roundtripRows(w);
+		assert r != null;
+		const got = r.types[w.idxType(t)];
+		assert got != t && sameStrs(got.optionalFields, names) && sameStrs(got.typeNames, names ?? ["x"]);
+	}
+}
+
+test "rowCodec: a symbol's string lists keep empty strings and separators" {
+	const cases: string[][] = [[], [""], ["", "a,b"]];
+	for (const names of cases) {
+		const s = makeSymbolState("Owner", SymbolKind.Class, null, false, SymbolState.Checked);
+		s.fieldDecoratorNames = names;
+		s.metaKeys = names;
+		s.nonisolatedFields = names;
+		const w = new RowWriter();
+		w.enqSym(s, true);
+		const r = roundtripRows(w);
+		assert r != null;
+		const got = r.syms[w.idxSym(s)];
+		assert sameStrs(got.fieldDecoratorNames, names) && sameStrs(got.metaKeys, names) && sameStrs(got.nonisolatedFields, names);
+	}
+}
+
+function instanceRoundtrip(args: Type[] | null, params: Type[] | null): boolean {
+	const s = makeSymbolState("Box", SymbolKind.Class, null, false, SymbolState.Checked);
+	s.instanceArgs = args;
+	s.instanceParams = params;
+	const w = new RowWriter();
+	w.enqSym(s, true);
+	const r = roundtripRows(w);
+	if (r == null) return false;
+	const got = r.syms[w.idxSym(s)];
+	return sameTypes(got.instanceArgs, args) && sameTypes(got.instanceParams, params);
+}
+
+test "rowCodec: a symbol keeps instanceArgs and instanceParams apart, null and empty included" {
+	const i32 = getSysType(TypeKind.Int32);
+	const str = getSysType(TypeKind.String);
+	assert instanceRoundtrip([i32], null);
+	assert instanceRoundtrip(null, [str]);
+	assert instanceRoundtrip([], null);
+	assert instanceRoundtrip(null, []);
+	assert instanceRoundtrip(null, null);
+	assert instanceRoundtrip([i32], [str]);
+}
+
+test "rowCodec: a node's header lists keep null, the empty list and null entries" {
+	const syntax = createNodeAt(NodeKind.Identifier, { name: "T" } as NodeData, makeLoc(1, 1));
+	const bare = createNodeAt(NodeKind.Identifier, { name: "bare" } as NodeData, makeLoc(2, 1));
+	const emptied = createNodeAt(NodeKind.Identifier, { name: "emptied" } as NodeData, makeLoc(3, 1));
+	emptied.typeExprs = [];
+	emptied.genericDefaults = [];
+	emptied.baseExprs = [];
+	emptied.paramLocations = [];
+	emptied.paramSyms = [];
+	const holed = createNodeAt(NodeKind.Identifier, { name: "holed" } as NodeData, makeLoc(4, 1));
+	holed.typeExprs = [syntax, null as unknown as Node];
+	holed.genericDefaults = [null, syntax];
+	holed.baseExprs = [null as unknown as Node];
+	holed.paramLocations = [makeLocRange(-1, 2, 3, 4), null as unknown as SourceLocation];
+	const w = new RowWriter();
+	w.enqNode(bare);
+	w.enqNode(emptied);
+	w.enqNode(holed);
+	const r = roundtripRows(w);
+	assert r != null;
+	const gotSyntax = r.nodes[w.idxNode(syntax)];
+	const b = r.nodes[w.idxNode(bare)];
+	assert b.typeExprs == null && b.genericDefaults == null && b.baseExprs == null && b.paramLocations == null && b.paramSyms == null;
+	const e = r.nodes[w.idxNode(emptied)];
+	assert e.typeExprs != null && e.typeExprs.length == 0 && e.genericDefaults != null && e.genericDefaults.length == 0;
+	assert e.baseExprs != null && e.baseExprs.length == 0 && e.paramLocations != null && e.paramLocations.length == 0;
+	assert e.paramSyms != null && e.paramSyms.length == 0;
+	const h = r.nodes[w.idxNode(holed)];
+	assert h.typeExprs != null && h.typeExprs.length == 2 && h.typeExprs[0] == gotSyntax && h.typeExprs[1] == null;
+	assert h.genericDefaults != null && h.genericDefaults.length == 2 && h.genericDefaults[0] == null && h.genericDefaults[1] == gotSyntax;
+	assert h.baseExprs != null && h.baseExprs.length == 1 && h.baseExprs[0] == null;
+	assert h.paramLocations != null && h.paramLocations.length == 2 && h.paramLocations[1] == null;
+	const l = h.paramLocations[0];
+	assert l.line == -1 && l.column == 2 && l.endLine == 3 && l.endColumn == 4;
+}
+
+test "rowCodec: a payload's string lists keep empty strings and separators" {
+	const cases: string[][] = [[], [""], ["", "a,b"]];
+	for (const names of cases) {
+		const decl = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: "I", interfaceFields: names, interfaceFieldTypes: names, interfaceExtends: names, nameLocation: makeLoc(1, 1), interfaceFieldVisibility: names, interfaceFieldDecorators: [], interfaceOptionalFields: names, nativeName: "" } as NodeData, makeLoc(1, 1));
+		const w = new RowWriter();
+		w.enqNode(decl);
+		const r = roundtripRows(w);
+		assert r != null;
+		const d = r.nodes[w.idxNode(decl)].data as InterfaceDeclData;
+		assert sameStrs(d.interfaceFields, names) && sameStrs(d.interfaceFieldTypes, names) && sameStrs(d.interfaceExtends, names);
+		assert sameStrs(d.interfaceFieldVisibility, names) && sameStrs(d.interfaceOptionalFields, names);
+	}
+}
+
+test "rowCodec: a payload's nested node lists keep empty rows and null entries" {
+	const tag = createNodeAt(NodeKind.Identifier, { name: "tag" } as NodeData, makeLoc(1, 1));
+	const cases: Node[][][] = [[], [[]], [[], [tag, null as unknown as Node]]];
+	for (const rows of cases) {
+		const decl = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: "I", interfaceFields: [], interfaceFieldTypes: [], interfaceExtends: [], nameLocation: makeLoc(1, 1), interfaceFieldVisibility: [], interfaceFieldDecorators: rows, interfaceOptionalFields: [], nativeName: "" } as NodeData, makeLoc(1, 1));
+		const w = new RowWriter();
+		w.enqNode(decl);
+		const r = roundtripRows(w);
+		assert r != null;
+		const got = (r.nodes[w.idxNode(decl)].data as InterfaceDeclData).interfaceFieldDecorators;
+		assert got.length == rows.length;
+		for (let k = 0; k < rows.length; k += 1) {
+			assert got[k].length == rows[k].length;
+			for (let j = 0; j < rows[k].length; j += 1) {
+				const want = rows[k][j];
+				assert want == null ? got[k][j] == null : got[k][j] == r.nodes[w.idxNode(want)];
+			}
+		}
+	}
+}
+
+test "rowCodec: a payload keeps float, location and node lists, null entries and a null location" {
+	const init = createNodeAt(NodeKind.Identifier, { name: "init" } as NodeData, makeLoc(1, 1));
+	const full = createNodeAt(NodeKind.EnumDecl, { enumName: "E", enumMembers: ["", "b"], enumValues: [-1.5, 0.25], nameLocation: null as unknown as SourceLocation, memberLocations: [makeLocRange(-1, 2, 3, 4), null as unknown as SourceLocation], enumInits: [null as unknown as Node, init] } as NodeData, makeLoc(1, 1));
+	const empty = createNodeAt(NodeKind.EnumDecl, { enumName: "F", enumMembers: [], enumValues: [], nameLocation: makeLocRange(5, 6, 7, 8), memberLocations: [], enumInits: [] } as NodeData, makeLoc(2, 1));
+	const w = new RowWriter();
+	w.enqNode(full);
+	w.enqNode(empty);
+	const r = roundtripRows(w);
+	assert r != null;
+	const f = r.nodes[w.idxNode(full)].data as EnumDeclData;
+	assert f.enumValues.length == 2 && f.enumValues[0] == -1.5 && f.enumValues[1] == 0.25;
+	assert f.nameLocation == null;
+	assert f.memberLocations.length == 2 && f.memberLocations[0].line == -1 && f.memberLocations[0].endColumn == 4 && f.memberLocations[1] == null;
+	assert f.enumInits.length == 2 && f.enumInits[0] == null && f.enumInits[1] == r.nodes[w.idxNode(init)];
+	const e = r.nodes[w.idxNode(empty)].data as EnumDeclData;
+	assert e.enumValues.length == 0 && e.memberLocations.length == 0 && e.enumInits.length == 0 && e.enumMembers.length == 0;
+	assert e.nameLocation.line == 5 && e.nameLocation.column == 6 && e.nameLocation.endLine == 7 && e.nameLocation.endColumn == 8;
+}
+
+function refusalAtWrite(n: Node): string {
+	const w = new RowWriter();
+	w.enqNode(n);
+	w.closeOver();
+	try {
+		w.emitObjectRows([]);
+	} catch (e) {
+		return (e as Error).message;
+	}
+	return "";
+}
+
+test "rowCodec: a field only a transform writes is refused at write when it left its parser default" {
+	const a = createNodeAt(NodeKind.Identifier, { name: "a" } as NodeData, makeLoc(1, 1));
+	const loc = makeLoc(2, 1);
+	const cases: Node[] = [
+		createNodeAt(NodeKind.ForStmt, { forInit: a, forCondition: a, forUpdate: a, forBody: a, forLabel: "__lp1" } as NodeData, loc),
+		createNodeAt(NodeKind.ForOfStmt, { forOfBinding: "x", forOfIsConst: true, forOfIterable: a, forOfBody: a, forOfPattern: null as unknown as Node, bindingLocation: loc, forOfLabel: "__lp2" } as NodeData, loc),
+		createNodeAt(NodeKind.ForInStmt, { forInBinding: "k", forInIsConst: true, forInObject: a, forInBody: a, forInLabel: "__lp3" } as NodeData, loc),
+		createNodeAt(NodeKind.DoWhileStmt, { doBody: a, doCondition: a, dwLabel: "__lp4", dwSwitchWrapper: false } as NodeData, loc),
+		createNodeAt(NodeKind.DoWhileStmt, { doBody: a, doCondition: a, dwLabel: "", dwSwitchWrapper: true } as NodeData, loc),
+		createNodeAt(NodeKind.SwitchStmt, { switchDisc: a, switchCases: [], switchLowered: true } as NodeData, loc),
+	];
+	const fields = ["forLabel", "forOfLabel", "forInLabel", "dwLabel", "dwSwitchWrapper", "switchLowered"];
+	for (let k = 0; k < cases.length; k += 1) {
+		const message = refusalAtWrite(cases[k]);
+		assert message.startsWith("internal:") && message.includes(fields[k]), fields[k];
+	}
+	const atDefault = createNodeAt(NodeKind.SwitchStmt, { switchDisc: a, switchCases: [], switchLowered: false } as NodeData, loc);
+	assert refusalAtWrite(atDefault) == "";
 }
