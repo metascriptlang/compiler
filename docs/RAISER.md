@@ -118,6 +118,35 @@ Per call, measured 2026-11-04 on an Apple M3 Max (load 12 at start), `src/bench/
 | `Math.sqrt`, std's in-place bridge | 22.9 | 4.23 | 8.19 | 4.26 |
 | `benchNativeSqrt` of the program's own C, generated bridge (LuaJIT: `ffi.C.sqrt`) | 25.8 | 4.23 | 27.1 | 4.30 |
 
+## Native code at the boundary, against the reference VM
+
+Read 2026-11-08 against Nim `15dd34468`. Its code generator picks a call's tier by the callee: a memory builtin by name
+(alloc, copyMem, incRef/decRef, seq payload copy, `compiler/vmgen.nim:75-97`); an `importc` routine through libffi with a
+call-site record built once (`compiler/vmgen.nim:1991-2021`, `compiler/vmffi.nim:158`); a callback for any routine whose
+qualified name is registered, a generic instance found by its generic's name (`compiler/vmgen.nim:1804-1828`); bytecode
+otherwise. A callback gets the address of its argument slots and of its result slot (`compiler/vmhooks.nim:28`), and
+values sit in VM memory laid out as the C backend lays them out (`compiler/vmlayout.nim:10-24`), so neither a callback
+nor a foreign call packs or unpacks a scalar or a string. Its VM memory has its own allocator (`compiler/vmmem.nim`), so
+native code never grows a container the VM owns.
+
+Where the Raiser stands against that, on main `25e95678cd3`:
+
+| Part | Reference | Raiser |
+|---|---|---|
+| which routines can run native | any routine, by qualified name | only an `extern` with a bridge in `hostTable.ms` |
+| cost of one native call | the callback call itself | `vmHandleCallHost` checks restricted and comptime mode, swaps the host heaps, saves floor and suspended runs, checks for a raise: about 18 ns a call (row differences in `src/bench/raiser/baseline.md`) |
+| program's own C | argument slots handed to libffi, a string by its data pointer, every scalar kind and pointers | a generated C bridge (no per-call libffi setup), each argument copied into a word array, a `cstring` copied twice (`runtime/raiser/bridge.h`), integers, floats and text only |
+| value layout | the C backend's | the same for strings and for the `{len, p}` head of a scalar array; object cells give each field an 8-byte slot behind a tagged handle; structs are heap cells (NIM-REF CT-47) |
+
+A prototype on that main (not landed) bound a call to `Map_get` / `Map_set` of `Map<int64, int64>` at link time to the
+std `Map<int64, int64>` that msc itself is compiled with: one opcode reads the arguments in the caller's slots and
+writes the result in place, and the native map hangs off the VM object. Two runs on rtx, us per 1000 operations, before
+and after: Map set 317 and 327 to 13.7 and 14.6 (LuaJIT `-joff` 11.5), Map get 245 and 270 to 43 and 44 (`-joff` 14.5),
+same output as the C backend on a probe of get, overwrite, missing keys and two maps. The set loop then runs 6
+instructions per iteration with the native call; the get loop runs 13, five of them the packed `int64 | null` result
+(ZeroN, MoveN, LoadFrame), which take the slow arm. Not verified: any other Map operation, other key or value types,
+freeing a native map.
+
 ## Execution budget
 
 The VM stops after `loopLimit` backward jumps (default 10M):
