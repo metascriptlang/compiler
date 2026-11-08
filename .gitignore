@@ -77,3 +77,4 @@ docs/*
 # local compiler build candidates + their debug PDBs (root only)
 /*.pdb
 /paper
+node_modules/
