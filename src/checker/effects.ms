@@ -1,6 +1,7 @@
 // Effects are read from checked bodies, and a callee later in the module is not
 // checked yet where its caller is: queue a check with deferEffectCheck.
 
+import { stdModuleName } from "../module/tiers";
 import { stmtsOf, membersOf } from "./unitsInCheck";
 import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, HiddenDerefData, HiddenStdConvData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, IdentifierData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, PropertyDeclData, ReturnStmtData, SpreadExprData, Symbol, SymbolKind, Type, TryExprData, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData, BuiltinKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
@@ -870,7 +871,7 @@ export function callEffect(dispatchRegistry: DispatchRegistry, call: Node, e: Ef
 	if (hasFlag(sym!, SymbolFlag.GeneratedOp) || isStdBuiltinWritingNothing(sym!) || isScalarToString(call, sym!)) return null;
 	const external = isExternalRoutine(sym!);
 	if (external) {
-		if (e != Effect.SideEffect || receiverOf(call) != null) return null;
+		if (e != Effect.SideEffect || isStdNativeMethod(call, sym!) || !externSignatureHoldsPointer(sym!)) return null;
 		return cause(call, "calls the external '" + sym!.name + "'");
 	}
 	const name = callee != null && callee.kind == NodeKind.Identifier ? (callee.data as IdentifierData).name
@@ -965,6 +966,16 @@ function useEffect(dispatchRegistry: DispatchRegistry, node: Node, e: Effect): E
 	if (isModuleState(sym)) return isConstantValue(dispatchRegistry, sym, e) ? null : cause(node, "uses " + stateName(sym));
 	if (sym.symbolKind == SymbolKind.Function) return through(node, "refers to '" + sym.name + "'", routineEffect(dispatchRegistry, sym, e));
 	return null;
+}
+
+function isStdNativeMethod(call: Node, sym: Symbol): boolean {
+	return receiverOf(call) != null && stdModuleName(sym.modulePath) != "";
+}
+
+function externSignatureHoldsPointer(sym: Symbol): boolean {
+	const t = sym.symbolType;
+	if (t == null || t.kind != TypeKind.Function) return true;
+	return holdsPointerByValue(t.typeReturn, 0) || t.typeChildren.some((p: Type): boolean => holdsPointerByValue(p, 0));
 }
 
 function isExternalRoutine(sym: Symbol): boolean {
