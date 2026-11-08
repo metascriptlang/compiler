@@ -14,11 +14,13 @@ sources at every step. The format follows the reference compiler's metamorphic I
   `rebuilt` (the session may fall back to a full rebuild), `fails: <text>` (warm and cold both
   fail, cold with that text).
 - `#!VERIFY` runs the warm session under `MSC_IC_VERIFY=1`: after each warm build the session builds the
-  same sources cold in a child process and compares every C unit. The runner checks that verdict against
+  same sources cold in a child process and compares every C unit and the diagnostics, in order; a failed
+  warm build is compared by its diagnostics alone. The runner checks that verdict against
   its own cold build at every step, and a disagreement fails the case even under `#!XFAIL`.
 - `#!XFAIL <why>` marks a case red today for the named reason; the runner fails it once it
   turns green, so the marker is dropped with the fix.
 - Lines before the first `#!FILE` describe the case.
 
-At every step the warm build's C must equal the cold build's byte for byte, and a step after the
+At every step the warm build's C must equal the cold build's byte for byte, its diagnostics (from its
+build event) must equal those the cold build prints, in order, and a step after the
 first must stay warm unless it says `rebuilt`.

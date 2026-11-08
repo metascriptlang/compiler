@@ -4,6 +4,9 @@
 // Env: MSC=<path to msc> (default ./msc, else installed msc), IC_ONLY=<case,names>.
 import { execFileResult, ExecFileResult, exit, env, cwd } from "std/process";
 import { readFile, writeFile, readDir, exists, ensureDir, remove, removeAll } from "std/fs";
+import { parseJson } from "std/serialize/json/parser";
+import { at, length, getDynamicField } from "std/serialize/json/accessors";
+import { asString, asInt32 } from "std/serialize/json/types";
 
 function slashes(p: string): string {
 	return p.replaceAll("\\", "/");
@@ -183,6 +186,83 @@ function recheckedPerBuild(eventsPath: string, work: string): string[][] {
 	return builds;
 }
 
+function firstLine(s: string): string {
+	const at = s.indexOf("\n");
+	return at < 0 ? s : s.slice(0, at);
+}
+
+function isDigits(s: string): boolean {
+	if (s == "") return false;
+	for (let i: int32 = 0; i < s.byteLength; i += 1) {
+		if (s.byteAt(i) < "0".code || s.byteAt(i) > "9".code) return false;
+	}
+	return true;
+}
+
+function diagnosticKey(severity: string, file: string, line: string, col: string, message: string): string {
+	return `${severity} ${file}:${line}:${col} ${firstLine(message)}`;
+}
+
+function isDiagnosticHeader(line: string): boolean {
+	return line.startsWith("error: ") || line.startsWith("warning: ") || line.startsWith("graph error: ");
+}
+
+// A build's diagnostics read back from its rendered stderr, so this oracle shares no code with the
+// compiler's own recording of them.
+function renderedDiagnostics(text: string): string[] {
+	const keys: string[] = [];
+	const lines = text.split("\n");
+	for (let i = 0; i < lines.length; i += 1) {
+		const line = lines[i];
+		if (!isDiagnosticHeader(line)) continue;
+		const colon = line.startsWith("graph error: ") ? -1 : line.indexOf(": ");
+		const severity = line.startsWith("warning: ") ? "warning" : "error";
+		const message = colon < 0 ? line : line.slice(colon + 2, line.length);
+		let where = "";
+		for (let j = i + 1; j < lines.length && lines[j] != "" && !isDiagnosticHeader(lines[j]); j += 1) {
+			if (lines[j].startsWith("  --> ")) {
+				where = lines[j].slice(6, lines[j].length);
+				break;
+			}
+		}
+		const parts = where.split(":");
+		let lineNo = "0";
+		let col = "0";
+		if (parts.length >= 3 && isDigits(parts[parts.length - 1]) && isDigits(parts[parts.length - 2])) {
+			col = parts.pop()!;
+			lineNo = parts.pop()!;
+		} else if (parts.length >= 2 && isDigits(parts[parts.length - 1])) {
+			lineNo = parts.pop()!;
+		}
+		keys.push(diagnosticKey(severity, parts.join(":"), lineNo, col, message));
+	}
+	return keys;
+}
+
+// Each warm build's diagnostics, indexed by build number, from its build.done or build.failed event.
+// The verify mode's own report of a difference is left out: it is the verdict under test.
+function diagnosticsPerBuild(eventsPath: string): HashMap<int32, string[]> {
+	const builds = new HashMap<int32, string[]>();
+	for (const line of read(eventsPath).split("\n")) {
+		if (!line.contains("\"event\":\"build.done\"") && !line.contains("\"event\":\"build.failed\"")) continue;
+		const parsed = parseJson(line);
+		if (!parsed.ok) {
+			console.log(`FAIL icRunner: ${eventsPath}: an event is not JSON: ${line}`);
+			exit(1);
+		}
+		const list = getDynamicField(parsed.value, "diagnostics");
+		const keys: string[] = [];
+		for (let i = 0; i < length(list); i += 1) {
+			const d = at(list, i);
+			const message = asString(getDynamicField(d, "message"));
+			if (message.startsWith("internal: incremental verify")) continue;
+			keys.push(diagnosticKey(asString(getDynamicField(d, "severity")), asString(getDynamicField(d, "file")), `${asInt32(getDynamicField(d, "line"))}`, `${asInt32(getDynamicField(d, "col"))}`, message));
+		}
+		builds.set(asInt32(getDynamicField(parsed.value, "build")), keys);
+	}
+	return builds;
+}
+
 function materialize(work: string, state: HashMap<string, string>, everWritten: HashSet<string>): void {
 	for (const f of everWritten) {
 		if (!state.has(f) && exists(`${work}/${f}`)) remove(`${work}/${f}`);
@@ -258,6 +338,7 @@ function runCase(name: string, steps: IcStep[], verify: boolean): CaseFailure {
 	}
 
 	const debug = `${work}/out/debug`;
+	const warmDiagnostics = diagnosticsPerBuild(`${dir}/events.jsonl`);
 	for (let k = 0; k < steps.length; k += 1) {
 		const step = steps[k];
 		const where = `step ${k + 1} (line ${step.line})`;
@@ -273,6 +354,18 @@ function runCase(name: string, steps: IcStep[], verify: boolean): CaseFailure {
 			if (done < names.length) warm.text = `${warm.text} rechecked [${names[done].join(" ")}]`;
 		}
 
+		const coldKeys = renderedDiagnostics(both(cold));
+		const warmKeys = warmDiagnostics.has(k) ? warmDiagnostics.get(k)! : [] as string[];
+		const diagnosticsDiffer = warmKeys.join("\n") != coldKeys.join("\n");
+		if (diagnosticsDiffer && (warm.label != "failed" || step.attrs.has("fails"))) {
+			fail.reasons.push(`${where}: diagnostics differ from a cold build:\nwarm:\n${warmKeys.join("\n")}\ncold:\n${coldKeys.join("\n")}`);
+		}
+		if (verify && step.attrs.has("fails")) {
+			const said = verifyVerdict(warmLogs[k], k);
+			if (said == "") fail.verifyReasons.push(`${where}: the warm session printed no verify result for the failed build ${k}`);
+			if (said == "equal" && diagnosticsDiffer) fail.verifyReasons.push(`${where}: verify passed a failed build whose diagnostics differ from a cold build`);
+			if (said.startsWith("differs") && !diagnosticsDiffer) fail.verifyReasons.push(`${where}: verify reported a difference a cold build does not show: ${said}`);
+		}
 		if (step.attrs.has("fails")) {
 			const want = step.attrs.get("fails")!;
 			if (succeeded(cold) || !both(cold).contains(want)) fail.reasons.push(`${where}: the cold build should fail with '${want}':\n${both(cold)}`);
@@ -285,7 +378,7 @@ function runCase(name: string, steps: IcStep[], verify: boolean): CaseFailure {
 		}
 		if (verify) {
 			const said = verifyVerdict(warmLogs[k], k);
-			const differs = emittedDiffers(`${debug}/watch${k}`, debug);
+			const differs = emittedDiffers(`${debug}/watch${k}`, debug) || diagnosticsDiffer;
 			if (said == "" && warm.label != "failed") fail.verifyReasons.push(`${where}: the warm session printed no verify result for build ${k}`);
 			if (said == "equal" && differs) fail.verifyReasons.push(`${where}: verify passed a build whose C differs from a cold build`);
 			if (said.startsWith("differs") && !differs) fail.verifyReasons.push(`${where}: verify reported a difference a cold build does not show: ${said}`);

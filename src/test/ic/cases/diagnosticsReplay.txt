@@ -1,0 +1,40 @@
+A warning in a module the build does not recheck is still reported, at its current line, beside an
+error in another module, and disappears with its cause.
+#!VERIFY
+#!FILE a.ms
+export function mix(v: number): int32 {
+	return v | 1;
+}
+export function other(): int32 {
+	return 2;
+}
+#!FILE main.ms
+import { mix, other } from "./a";
+console.log(`${mix(4)} ${other()}`);
+#!STEP expect: 5 2
+#!FILE a.ms
+export function mix(v: number): int32 {
+
+	return v | 1;
+}
+export function other(): int32 {
+	return 3;
+}
+#!STEP expect: 5 3; body-edit
+#!FILE main.ms
+import { mix, other } from "./a";
+const z: int32 = "x";
+console.log(`${mix(5)} ${other()}`);
+#!STEP fails: Type 'string' is not assignable to type 'int32'
+#!FILE main.ms
+import { mix, other } from "./a";
+console.log(`${mix(6)} ${other()}`);
+#!STEP expect: 7 3
+#!FILE a.ms
+export function mix(v: int32): int32 {
+	return v | 1;
+}
+export function other(): int32 {
+	return 3;
+}
+#!STEP expect: 7 3
