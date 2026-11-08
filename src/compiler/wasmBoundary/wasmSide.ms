@@ -6,6 +6,7 @@ import {
 } from "./boundaryKinds";
 import {
 	BoundaryCallback,
+	BoundaryEnum,
 	BoundaryFunction,
 	BoundaryLeaf,
 	BoundaryMode,
@@ -141,6 +142,14 @@ function zeroOf(kind: BoundaryKind): string {
 	return kind == BoundaryKind.Bool ? "false" : "0";
 }
 
+function enumAliasOf(prefix: string, e: BoundaryEnum | null): string {
+	return e == null ? "" : prefix + e.name;
+}
+
+function enumZeroOf(prefix: string, e: BoundaryEnum | null): string {
+	return e == null ? "" : `(${e.low} as ${prefix}${e.name})`;
+}
+
 function orMaybe(flag: string, value: string): string {
 	return `(${flag} != 0 ? ${value} : null)`;
 }
@@ -203,7 +212,7 @@ function typedResultLines(classes: string[]): string[] {
 const ADOPT_VEC_MACRO = '@emit("#define msbAdoptVec(v, b, l) ((v)->len = (l), '
 	+ '(v)->p = (l) > 0 ? (void*)(uintptr_t)(b) : NULL)");';
 
-function closureOf(cb: BoundaryCallback, idName: string): string {
+function closureOf(cb: BoundaryCallback, idName: string, prefix: string): string {
 	const params = cb.params;
 	let sig = "";
 	let args = idName;
@@ -212,7 +221,7 @@ function closureOf(cb: BoundaryCallback, idName: string): string {
 		const nullable = cb.nullables[i];
 		if (params[i] == BoundaryKind.String) {
 			sig += `a${i}: string${nullable ? " | null" : ""}`;
-			args += ", " + wireArgsOut(BoundaryKind.String, nullable, `a${i}`);
+			args += ", " + wireArgsOut(BoundaryKind.String, nullable, `a${i}`, "");
 			continue;
 		}
 		if (params[i] == BoundaryKind.Span) {
@@ -224,15 +233,20 @@ function closureOf(cb: BoundaryCallback, idName: string): string {
 			args += `, (a${i}.length == 0 ? 0 : ${base}), a${i}.length as int32`;
 			continue;
 		}
-		sig += `a${i}: ${valueTypeOf(params[i])}${nullable ? " | null" : ""}`;
-		args += ", " + wireArgsOut(params[i], nullable, `a${i}`);
+		const alias = enumAliasOf(prefix, cb.enums[i]);
+		const type = alias != "" ? alias : valueTypeOf(params[i]);
+		sig += `a${i}: ${type}${nullable ? " | null" : ""}`;
+		const zero = enumZeroOf(prefix, cb.enums[i]);
+		args += ", " + wireArgsOut(params[i], nullable, `a${i}`, zero);
 	}
 	const call = `msb_cb_${cb.signature}(${args})`;
 	if (cb.result == BoundaryKind.Void) {
 		return `(${sig}): void => { ${call}; msbCheck(); }`;
 	}
-	const result = msTypeOf(cb.result);
-	const value = wireToMsValue(cb.result, "w");
+	const alias = enumAliasOf(prefix, cb.resultEnum);
+	const result = alias != "" ? alias : msTypeOf(cb.result);
+	const wire = wireToMsValue(cb.result, "w");
+	const value = alias != "" ? `(${wire} as ${alias})` : wire;
 	return `(${sig}): ${result} => { const w = ${call}; msbCheck(); `
 		+ `return ${value}; }`;
 }
@@ -241,6 +255,7 @@ function wireArgsOut(
 	kind: BoundaryKind,
 	nullable: boolean,
 	value: string,
+	enumZero: string,
 ): string {
 	const some = `(${value} != null ? 1 : 0)`;
 	if (kind == BoundaryKind.String) {
@@ -249,8 +264,12 @@ function wireArgsOut(
 		const len = `(${value} != null ? ${value}.asBytes().length : 0)`;
 		return `${some}, ${ptr}, ${len}`;
 	}
-	if (!nullable) return msValueToWire(kind, value);
-	return `${some}, ` + msValueToWire(kind, `(${value} ?? ${zeroOf(kind)})`);
+	const stored = (v: string): string => {
+		return enumZero == "" ? v : `(${v} as ${valueTypeOf(kind)})`;
+	};
+	if (!nullable) return msValueToWire(kind, stored(value));
+	const zero = enumZero == "" ? zeroOf(kind) : enumZero;
+	return `${some}, ` + msValueToWire(kind, stored(`(${value} ?? ${zero})`));
 }
 
 function wireArgsIn(
@@ -258,6 +277,7 @@ function wireArgsIn(
 	name: string,
 	kind: BoundaryKind,
 	nullable: boolean,
+	enumAlias: string,
 ): string {
 	const some = `${name}Some`;
 	if (nullable) sigs.push(`${some}: int32`);
@@ -267,6 +287,7 @@ function wireArgsIn(
 		value = `msbStrAdopt(${name}Ptr, ${name}Len)`;
 	} else {
 		sigs.push(`${name}: ${valueTypeOf(kind)}`);
+		if (enumAlias != "") value = `(${name} as ${enumAlias})`;
 	}
 	return nullable ? orMaybe(some, value) : value;
 }
@@ -365,6 +386,7 @@ function wrapperLines(
 ): string[] {
 	const sigs: string[] = [];
 	const argList: string[] = [];
+	const prefix = `msbm${modules.indexOf(f.modulePath)}_`;
 	for (let i = 0; i < f.params.length; i += 1) {
 		const p: BoundaryParam = f.params[i];
 		const some = `${p.name}Some`;
@@ -374,7 +396,7 @@ function wrapperLines(
 		match (p.kind) {
 			BoundaryKind.Callback => {
 				sigs.push(`${p.name}: int32`);
-				argList.push(closureOf(p.callback!, p.name));
+				argList.push(closureOf(p.callback!, p.name, prefix));
 			}
 			BoundaryKind.Handle => {
 				sigs.push(`${p.name}: uint32`);
@@ -388,7 +410,8 @@ function wrapperLines(
 				for (let j = 0; j < p.leaves.length; j += 1) {
 					const leaf = p.leaves[j];
 					const name = `${p.name}_${j}`;
-					values.push(wireArgsIn(sigs, name, leaf.kind, leaf.nullable));
+					const alias = enumAliasOf(prefix, leaf.enumOf);
+					values.push(wireArgsIn(sigs, name, leaf.kind, leaf.nullable, alias));
 				}
 				argList.push(present(leafLiteral(p.leaves, values, 0)));
 			}
@@ -405,7 +428,8 @@ function wrapperLines(
 				argList.push(`${view}[0..${p.name}Len]`);
 			}
 			_ => {
-				argList.push(wireArgsIn(sigs, p.name, p.kind, p.nullable));
+				const alias = enumAliasOf(prefix, p.enumOf);
+				argList.push(wireArgsIn(sigs, p.name, p.kind, p.nullable, alias));
 			}
 		}
 	}
@@ -416,7 +440,8 @@ function wrapperLines(
 			const wires: string[] = [];
 			for (const leaf of f.resultLeaves) {
 				const value = `r.${leaf.path.join(".")}`;
-				wires.push(wireArgsOut(leaf.kind, leaf.nullable, value));
+				const zero = enumZeroOf(prefix, leaf.enumOf);
+				wires.push(wireArgsOut(leaf.kind, leaf.nullable, value, zero));
 			}
 			const letters = leafLetters(f.resultLeaves);
 			const take = `msb_rs_${letters}(${wires.join(", ")});`;
@@ -444,16 +469,21 @@ function wrapperLines(
 		_ => {
 			const type = f.result == BoundaryKind.Void ? "void" : msTypeOf(f.result);
 			const zero = f.result == BoundaryKind.Void ? "" : zeroOf(f.result);
+			const enumZero = enumZeroOf(prefix, f.resultEnum);
+			const stored = (v: string): string => {
+				return enumZero == "" ? v : `(${v}) as ${type}`;
+			};
 			if (f.resultNullable) {
+				const absent = enumZero == "" ? zero : enumZero;
 				guardedExport(f, sig, type, [
 					`const r = ${call};`,
 					"msbRetSome = r != null ? 1 : 0;",
-					`return r ?? ${zero};`,
+					`return ${stored(`r ?? ${absent}`)};`,
 				], zero)
 			} else {
 				const body = f.result == BoundaryKind.Void
 					? `${call};`
-					: `return ${call};`;
+					: `return ${stored(call)};`;
 				guardedExport(f, sig, type, [body], zero)
 			}
 		},
@@ -523,6 +553,7 @@ interface EntryUsage {
 	resultImports: string[];
 	callbacks: BoundaryCallback[];
 	handles: string[];
+	enums: string[];
 	viewElements: BoundaryKind[];
 }
 
@@ -539,6 +570,12 @@ function addHandle(
 	}
 }
 
+function addEnum(usage: EntryUsage, f: BoundaryFunction, e: BoundaryEnum | null): void {
+	if (e == null) return;
+	const key = `${f.modulePath}\n${e.name}`;
+	if (!usage.enums.includes(key)) usage.enums.push(key);
+}
+
 function usageOf(fns: BoundaryFunction[]): EntryUsage {
 	const usage: EntryUsage = {
 		modules: [],
@@ -552,6 +589,7 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 		resultImports: [],
 		callbacks: [],
 		handles: [],
+		enums: [],
 		viewElements: [],
 	};
 	let hasVecResult = false;
@@ -581,6 +619,8 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 			}
 		}
 		if (f.resultHandle != null) addHandle(usage, f, f.resultHandle!, f.resultElement);
+		addEnum(usage, f, f.resultEnum);
+		for (const leaf of f.resultLeaves) addEnum(usage, f, leaf.enumOf);
 		if (f.result == BoundaryKind.Vec) {
 			usage.readsHeap = true;
 			hasVecResult = true;
@@ -592,12 +632,16 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 		}
 		for (const p of f.params) {
 			if (p.handle != null) addHandle(usage, f, p.handle!, p.element);
+			addEnum(usage, f, p.enumOf);
+			for (const leaf of p.leaves) addEnum(usage, f, leaf.enumOf);
 			if (p.kind == BoundaryKind.String) {
 				usage.hasString = true;
 				usage.copiesIn = true;
 			}
 			if (p.kind == BoundaryKind.Callback) {
 				const cb = p.callback!;
+				for (const e of cb.enums) addEnum(usage, f, e);
+				addEnum(usage, f, cb.resultEnum);
 				if (cb.params.includes(BoundaryKind.String)) {
 					usage.hasString = true;
 				}
@@ -646,7 +690,7 @@ function aliasOf(f: BoundaryFunction, modules: string[]): string {
 function moduleImportLines(
 	fns: BoundaryFunction[],
 	modules: string[],
-	handles: string[],
+	types: string[],
 	importPathOf: (modulePath: string) => string,
 ): string[] {
 	const lines: string[] = [];
@@ -658,7 +702,7 @@ function moduleImportLines(
 			imported.push(f.name);
 			names.push(`${f.name} as ${aliasOf(f, modules)}`);
 		}
-		for (const key of handles) {
+		for (const key of types) {
 			const at = key.indexOf("\n");
 			if (key.slice(0, at) != modulePath) continue;
 			const name = key.slice(at + 1);
@@ -711,7 +755,8 @@ function entryLines(
 	importPathOf: (modulePath: string) => string,
 ): string[] {
 	const { modules, handles } = usage;
-	const lines = moduleImportLines(fns, modules, handles, importPathOf);
+	const types = handles.concat(usage.enums);
+	const lines = moduleImportLines(fns, modules, types, importPathOf);
 	if (handles.length > 0) {
 		const box = usage.viewElements.length > 0 ? ", VecBox" : "";
 		lines.push(`import { Handle${box} } from "std/ffi";`);

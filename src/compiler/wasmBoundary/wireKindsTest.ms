@@ -69,7 +69,7 @@ function placeholderLetterOf(kind: BoundaryKind): string {
 function callbackOf(params: BoundaryKind[], elements: BoundaryKind[], modes: BoundaryMode[], result: BoundaryKind): BoundaryCallback {
 	let letters = "";
 	for (const p of params) letters += placeholderLetterOf(p);
-	return { params, nullables: params.map((_p) => false), elements, modes, result, signature: placeholderLetterOf(result) + "_" + letters };
+	return { params, nullables: params.map((_p) => false), elements, modes, enums: params.map((_p) => null), result, resultEnum: null, signature: placeholderLetterOf(result) + "_" + letters };
 }
 
 function plainCallback(): BoundaryCallback {

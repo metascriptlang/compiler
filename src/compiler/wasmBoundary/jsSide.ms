@@ -7,6 +7,7 @@ import {
 } from "./boundaryKinds";
 import {
 	BoundaryCallback,
+	BoundaryEnum,
 	BoundaryFunction,
 	BoundaryMode,
 	BoundaryParam,
@@ -90,7 +91,15 @@ function elementArgs(kind: BoundaryKind): string {
 	return `${quoted(facts.jsType)}, ${range}, ${quoted(facts.msType)}`;
 }
 
-function valueCheck(kind: BoundaryKind, expr: string, at: string): string {
+function valueCheck(
+	kind: BoundaryKind,
+	e: BoundaryEnum | null,
+	expr: string,
+	at: string,
+): string {
+	if (e != null) {
+		return `__msbInt(${expr}, "number", ${e.low}, ${e.high}, ${quoted(e.name)}, ${at})`;
+	}
 	const facts = scalarFacts(kind, "JS type check");
 	const jsType = quoted(facts.jsType);
 	const msType = quoted(facts.msType);
@@ -156,7 +165,8 @@ function paramChecks(f: BoundaryFunction): string[] {
 						const check = `__msbType(${value}, "string", "string", ${where});`;
 						out.push(skip + check);
 					} else {
-						out.push(skip + valueCheck(leaf.kind, `${x}.${path}`, where) + ";");
+						const check = valueCheck(leaf.kind, leaf.enumOf, `${x}.${path}`, where);
+						out.push(skip + check + ";");
 					}
 				}
 			}
@@ -176,7 +186,7 @@ function paramChecks(f: BoundaryFunction): string[] {
 				out.push(`__msbType(${x}, "object", ${type}, ${at(label)});`);
 			}
 			_ => {
-				out.push(valueCheck(p.kind, x, at(label)) + ";");
+				out.push(valueCheck(p.kind, p.enumOf, x, at(label)) + ";");
 			}
 		}
 		if (p.nullable) {
@@ -289,7 +299,9 @@ function adapterOf(
 	if (shared) views = `const vs = __msbVecViews([${ranges.join(", ")}]); `;
 	let call = `${target}(${args.join(", ")})`;
 	const isVoid = cb.result == BoundaryKind.Void;
-	if (resultAt != null && !isVoid) call = valueCheck(cb.result, call, resultAt);
+	if (resultAt != null && !isVoid) {
+		call = valueCheck(cb.result, cb.resultEnum, call, resultAt);
+	}
 	const returned = isVoid ? "" : jsValueToWire(cb.result, call);
 	const body = isVoid ? `${call};` : `return ${returned};`;
 	const params = names.join(", ");

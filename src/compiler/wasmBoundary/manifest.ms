@@ -32,6 +32,8 @@ import {
 	isReadonlyView,
 	isStdCollection,
 	isStructType,
+	enumOrdinalBounds,
+	enumStorageKind,
 	literalBase,
 	peelThrough,
 	runtimeClassSym,
@@ -43,10 +45,17 @@ import {
 import { dirname, relative } from "std/fs/path";
 import { BoundaryKind, signatureLetter } from "./boundaryKinds";
 
+export interface BoundaryEnum {
+	name: string;
+	low: int32;
+	high: int32;
+}
+
 export interface BoundaryLeaf {
 	path: string[];
 	kind: BoundaryKind;
 	nullable: boolean;
+	enumOf: BoundaryEnum | null;
 }
 
 export enum BoundaryMode {
@@ -60,7 +69,9 @@ export interface BoundaryCallback {
 	nullables: boolean[];
 	elements: BoundaryKind[];
 	modes: BoundaryMode[];
+	enums: (BoundaryEnum | null)[];
 	result: BoundaryKind;
+	resultEnum: BoundaryEnum | null;
 	signature: string;
 }
 
@@ -73,6 +84,7 @@ export interface BoundaryParam {
 	leaves: BoundaryLeaf[];
 	element: BoundaryKind;
 	handle: string | null;
+	enumOf: BoundaryEnum | null;
 }
 
 export interface BoundaryFunction {
@@ -89,6 +101,7 @@ export interface BoundaryFunction {
 	resultHandle: string | null;
 	resultLabel: string;
 	resultClass: string;
+	resultEnum: BoundaryEnum | null;
 }
 
 export interface BoundaryRefusal {
@@ -304,6 +317,32 @@ function handleElementOf(t: Type): BoundaryKind {
 	return vecBoxElement(handleTarget(t)!) ?? BoundaryKind.Void;
 }
 
+function enumStorage(t: Type): BoundaryKind {
+	return match (enumStorageKind(t)) {
+		TypeKind.Uint8 => BoundaryKind.U8,
+		TypeKind.Uint16 => BoundaryKind.U16,
+		TypeKind.Int32 => BoundaryKind.I32,
+		_ => {
+			throw new Error(`internal: enum ${describe(t)} has no boundary storage kind`);
+		},
+	};
+}
+
+function enumOf(c: Collector, what: string, t: Type): BoundaryEnum | null {
+	const name = describe(t);
+	if (!isExportedTarget(c, t)) {
+		cannotCross(
+			c,
+			"enum-unexported",
+			`${what}: ${name} must be exported by this module to cross: export it, `
+				+ `or re-export it with export { ${name} }`,
+		);
+		return null;
+	}
+	const bounds = enumOrdinalBounds(t);
+	return { name, low: bounds[0], high: bounds[1] };
+}
+
 function callbackParamKind(pt: Type): BoundaryKind | null {
 	if (isMaybeType(pt)) return null;
 	return pt.kind == TypeKind.String ? BoundaryKind.String : scalarKind(pt);
@@ -324,10 +363,24 @@ function callbackOf(
 	const nullables: boolean[] = [];
 	const elements: BoundaryKind[] = [];
 	const modes: BoundaryMode[] = [];
+	const enums: (BoundaryEnum | null)[] = [];
 	for (let i = 0; i < t.typeChildren.length; i += 1) {
 		const declared = peeled(t.typeChildren[i]);
 		const nullable = isMaybeType(declared);
 		const pt = payloadOf(declared);
+		if (pt.kind == TypeKind.Enum) {
+			const e = enumOf(c, `parameter ${i + 1} of ${what}`, pt);
+			if (e == null) {
+				ok = false;
+				continue;
+			}
+			params.push(enumStorage(pt));
+			nullables.push(nullable);
+			elements.push(BoundaryKind.Void);
+			modes.push(BoundaryMode.Copied);
+			enums.push(e);
+			continue;
+		}
 		let k = callbackParamKind(pt);
 		let element = BoundaryKind.Void;
 		if (!nullable && pt.kind == TypeKind.Span && pt.typeReturn != null) {
@@ -362,13 +415,19 @@ function callbackOf(
 			nullables.push(nullable);
 			elements.push(element);
 			modes.push(callbackParamMode(k, pt));
+			enums.push(null);
 		}
 	}
 	let result = BoundaryKind.Void;
+	let resultEnum: BoundaryEnum | null = null;
 	if (!isVoidType(t.typeReturn)) {
 		const rt = peeled(t.typeReturn!);
 		const k = isMaybeType(rt) ? null : scalarKind(rt);
-		if (k == null && isHandleType(rt)) {
+		if (rt.kind == TypeKind.Enum) {
+			resultEnum = enumOf(c, `the result of ${what}`, rt);
+			if (resultEnum == null) ok = false;
+			else result = enumStorage(rt);
+		} else if (k == null && isHandleType(rt)) {
 			handleRefusal(
 				c,
 				"handle-callback",
@@ -396,7 +455,7 @@ function callbackOf(
 		letters += (nullables[i] ? "i" : "") + signatureLetter(params[i]);
 	}
 	const signature = signatureLetter(result) + "_" + letters;
-	return { params, nullables, elements, modes, result, signature };
+	return { params, nullables, elements, modes, enums, result, resultEnum, signature };
 }
 
 export function leafLiteral(
@@ -427,6 +486,7 @@ interface ValueShape {
 	element: BoundaryKind;
 	handle: string | null;
 	className: string;
+	enumOf: BoundaryEnum | null;
 }
 
 function declaresHook(t: Type): boolean {
@@ -467,9 +527,13 @@ function structLeaves(
 		const fieldWhat = `field '${fieldPath.join(".")}' of ${what}`;
 		const scalar = isMaybeType(ft) ? null : scalarKind(ft);
 		if (scalar != null) {
-			out.push({ path: fieldPath, kind: scalar, nullable });
+			out.push({ path: fieldPath, kind: scalar, nullable, enumOf: null });
 		} else if (ft.kind == TypeKind.String) {
-			out.push({ path: fieldPath, kind: BoundaryKind.String, nullable });
+			out.push({ path: fieldPath, kind: BoundaryKind.String, nullable, enumOf: null });
+		} else if (ft.kind == TypeKind.Enum) {
+			const e = enumOf(c, fieldWhat, ft);
+			if (e == null) ok = false;
+			else out.push({ path: fieldPath, kind: enumStorage(ft), nullable, enumOf: e });
 		} else if (!nullable && isStructType(ft) && !isMaybeType(ft)) {
 			ok = structLeaves(c, fieldWhat, ft, fieldPath, out) && ok;
 		} else {
@@ -585,17 +649,10 @@ function functionWhy(at: NoFormAt): string | null {
 	return null;
 }
 
-function enumWhy(t: Type, at: NoFormAt): string {
-	const crossing = byPosition(
-		at,
-		"passing 'x as int32'",
-		"returning 'x as int32'",
-		"declaring the field as int32 and writing 'x as int32'",
-	);
+function enumMemberWhy(t: Type): string {
 	const base = describe(literalBase(t));
-	return "and an enum has no boundary form yet: cross its integer instead, "
-		+ `${crossing}, and converting back with 'n as ${base}', `
-		+ "which checks the range";
+	return "and an enum member has no boundary form of its own: "
+		+ `declare it as ${base}`;
 }
 
 function unionWhy(t: Type, at: NoFormAt): string | null {
@@ -646,9 +703,7 @@ function arrayWhy(at: NoFormAt): string {
 function noFormWhy(t: Type, at: NoFormAt): string | null {
 	if (isMaybeType(t)) return null;
 	if (t.kind == TypeKind.Function) return functionWhy(at);
-	if (t.kind == TypeKind.Enum || t.kind == TypeKind.EnumLiteral) {
-		return enumWhy(t, at);
-	}
+	if (t.kind == TypeKind.EnumLiteral) return enumMemberWhy(t);
 	if (t.kind == TypeKind.Union) return unionWhy(t, at);
 	if (isStdCollection(t)) return collectionWhy(at);
 	if (
@@ -685,7 +740,8 @@ function valueShape(
 		if (!structLeaves(c, what, t, [], leaves)) return null;
 		const element = BoundaryKind.Void;
 		const handle = null;
-		return { kind: BoundaryKind.Struct, nullable, leaves, element, handle, className: "" };
+		const kind = BoundaryKind.Struct;
+		return { kind, nullable, leaves, element, handle, className: "", enumOf: null };
 	}
 	if (t.kind == TypeKind.Array && t.typeReturn != null) {
 		const et = peeled(t.typeReturn!);
@@ -702,7 +758,8 @@ function valueShape(
 			return null;
 		}
 		const handle = null;
-		return { kind: BoundaryKind.Vec, nullable, leaves: [], element, handle, className: "" };
+		const kind = BoundaryKind.Vec;
+		return { kind, nullable, leaves: [], element, handle, className: "", enumOf: null };
 	}
 	return null;
 }
@@ -728,6 +785,7 @@ function plainParam(
 		leaves: [],
 		element,
 		handle: null,
+		enumOf: null,
 	};
 }
 
@@ -746,6 +804,13 @@ function paramOf(
 	}
 	if (t.kind == TypeKind.String) {
 		return plainParam(name, BoundaryKind.String, nullable, BoundaryMode.Copied);
+	}
+	if (t.kind == TypeKind.Enum) {
+		const e = enumOf(c, what, t);
+		if (e == null) return null;
+		const param = plainParam(name, enumStorage(t), nullable, BoundaryMode.Copied);
+		param.enumOf = e;
+		return param;
 	}
 	if (t.kind == TypeKind.Function) {
 		if (nullable) {
@@ -830,7 +895,7 @@ function paramOf(
 
 function plainShape(kind: BoundaryKind, nullable: boolean): ValueShape {
 	const element = BoundaryKind.Void;
-	return { kind, nullable, leaves: [], element, handle: null, className: "" };
+	return { kind, nullable, leaves: [], element, handle: null, className: "", enumOf: null };
 }
 
 function resultOf(c: Collector, type: Type | null): ValueShape | null {
@@ -842,6 +907,13 @@ function resultOf(c: Collector, type: Type | null): ValueShape | null {
 	if (scalar != null) return plainShape(scalar, nullable);
 	if (t.kind == TypeKind.String) {
 		return plainShape(BoundaryKind.String, nullable);
+	}
+	if (t.kind == TypeKind.Enum) {
+		const e = enumOf(c, "the result", t);
+		if (e == null) return null;
+		const shape = plainShape(enumStorage(t), nullable);
+		shape.enumOf = e;
+		return shape;
 	}
 	if (t.kind == TypeKind.Span) {
 		refuse(
@@ -1044,6 +1116,7 @@ function boundaryFunction(
 			? ""
 			: handleLabel(c, result.handle!, nameAt),
 		resultClass: result.className,
+		resultEnum: result.enumOf,
 	};
 }
 

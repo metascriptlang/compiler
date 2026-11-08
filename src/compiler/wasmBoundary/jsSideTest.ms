@@ -245,7 +245,7 @@ test "js side: the owned string encoder lays out a payload, cap then bytes then 
 }
 
 test "js side: a callback string parameter arrives as pointer and length and is decoded" {
-	const cb: BoundaryCallback = { params: [BoundaryKind.String, BoundaryKind.I32], nullables: [false, false], elements: [BoundaryKind.Void, BoundaryKind.Void], modes: [BoundaryMode.Copied, BoundaryMode.Copied], result: BoundaryKind.I32, signature: "i_si" };
+	const cb: BoundaryCallback = { params: [BoundaryKind.String, BoundaryKind.I32], nullables: [false, false], elements: [BoundaryKind.Void, BoundaryKind.Void], modes: [BoundaryMode.Copied, BoundaryMode.Copied], enums: [null, null], result: BoundaryKind.I32, resultEnum: null, signature: "i_si" };
 	const m: Manifest = {
 		functions: [{
 			modulePath: "/p/calc.ms", moduleKey: "calc", name: "note", overloadIndex: 0, exportSymbol: "msb_calc_note",

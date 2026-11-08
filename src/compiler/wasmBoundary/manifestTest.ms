@@ -87,7 +87,7 @@ struct Rows { xs: int32[]; n: int32; }
 struct Tagged { u: int32 | string; n: int32; }
 `;
 
-test "manifest: an enum, a union and a function refuse with the way out of their own position" {
+test "manifest: an unexported enum, an enum member, a union and a function refuse with the way out of their own position" {
 	const src = NO_FORM_TYPES + `
 export function paramEnum(c: Color): int32 { return 0; }
 export function resultEnum(): Color { return Color.Red; }
@@ -103,12 +103,11 @@ export function fieldFn(o: Op): int32 { return 0; }
 	const m = manifestFor(MODULE, ENTRY, exportsOf(src, names), names);
 	assert m.functions.length == 0;
 	assert m.errors.length == names.length, m.errors.map((e) => e.message).join("; ");
-	const enumLead = "and an enum has no boundary form yet: cross its integer instead, ";
-	const enumBack = ", and converting back with 'n as Color', which checks the range";
-	assert errorFor(m.errors, "paramEnum").includes("parameter 'c' has type") && errorFor(m.errors, "paramEnum").includes(enumLead + "passing 'x as int32'" + enumBack);
-	assert errorFor(m.errors, "resultEnum").includes("the result has type") && errorFor(m.errors, "resultEnum").includes(enumLead + "returning 'x as int32'" + enumBack);
-	assert errorFor(m.errors, "fieldEnum").includes("field 'shade' of parameter 'p' has type") && errorFor(m.errors, "fieldEnum").includes(enumLead + "declaring the field as int32 and writing 'x as int32'" + enumBack);
-	assert errorFor(m.errors, "literalEnum").includes(enumLead + "passing 'x as int32'" + enumBack);
+	const unexported = "Color must be exported by this module to cross: export it, or re-export it with export { Color }";
+	assert errorFor(m.errors, "paramEnum").includes(`parameter 'c': ${unexported}`);
+	assert errorFor(m.errors, "resultEnum").includes(`the result: ${unexported}`);
+	assert errorFor(m.errors, "fieldEnum").includes(`field 'shade' of parameter 'p': ${unexported}`);
+	assert errorFor(m.errors, "literalEnum").includes("parameter 'c' has type") && errorFor(m.errors, "literalEnum").includes("and an enum member has no boundary form of its own: declare it as Color");
 	const unionLead = "and a union has no single boundary form: ";
 	assert errorFor(m.errors, "paramUnion").includes("parameter 'v' has type") && errorFor(m.errors, "paramUnion").includes(unionLead + "pass a tag integer and the payload as separate parameters, or give each variant its own @wasm function");
 	assert errorFor(m.errors, "resultUnion").includes("the result has type") && errorFor(m.errors, "resultUnion").includes(unionLead + "return a struct with a tag integer and one field per variant, or give each variant its own @wasm function");
