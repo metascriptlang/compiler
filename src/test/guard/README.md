@@ -127,3 +127,8 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   Nim attaches exit procs and thread-destruction handlers. Proven RED on tree `7a70426b98c4`
   (exit drain hooked only; macOS arm64: all six forbidden symbols at `--danger` and `--release`), GREEN
   on tree `63f54c80d1bf` (macOS arm64 and Linux x86-64).
+- **`releaseDisposeOutOfLine.ms`** — every generic ref release macro (`msDecref`, `msDecrefAny`,
+  `msDecrefCyclic`, `msAtomicDecref`, `msDecrefCyclicEdge`) decides inline and disposes through one
+  out-of-line call, as Nim inlines only `nimDecRefIsLast` and calls `nimDestroyAndDispose`. Compiles
+  each macro at `-O3` and reads the object's symbols. Proven RED on tree `9966bc7d6d35` (macOS arm64:
+  all five reference `msUnownedOutlives`), GREEN on the slice-2 tree.
