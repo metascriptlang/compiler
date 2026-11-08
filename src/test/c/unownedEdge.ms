@@ -3,6 +3,7 @@
 // moves it into a strong owner. Runtime behaviour: corpus `unownedEdgeReadsItsTarget` and its `unownedEdge*` siblings.
 
 import { compileToC } from "../helpers";
+import { hostTargetInfo } from "../../checker/types";
 
 function typeInfoOf(c: string, name: string): string {
 	for (const line of c.split("\n")) {
@@ -11,8 +12,9 @@ function typeInfoOf(c: string, name: string): string {
 	return "";
 }
 
+// The release classification: a debug build keeps owned cycles under the collector to report them.
 function verdict(decls: string, name: string): string {
-	const r = compileToC(decls + "\nconsole.log(\"ok\");\n");
+	const r = compileToC(decls + "\nconsole.log(\"ok\");\n", hostTargetInfo(), false, false, true);
 	if (!r.ok) return r.error;
 	const line = typeInfoOf(r.value, name);
 	if (line == "") return `no TypeInfo for ${name}`;

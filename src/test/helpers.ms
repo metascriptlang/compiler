@@ -26,6 +26,7 @@ import { transformForRaiser } from "../transform/raiserLowering";
 import { evaluateComptimeBlocks } from "../compiler/meta/comptime";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { createTransformContextWithChecker } from "../transform/context";
+import { setOwnedCycleCheck } from "../transform/cycles";
 import { analyzeProgram } from "../analyzer/index";
 import { createRoutineDecls, createWriteSummaries } from "../analyzer/writeEffects";
 import { factInlineDecls } from "../codegen/c/forward";
@@ -105,7 +106,17 @@ function placeOwnedInstances(units: CheckedUnit[], classesBesideGeneric: boolean
 	}
 }
 
+// A danger build classifies as a release build: owned cycles are not checked.
 export function compileToC(source: string, target: TargetInfo = hostTargetInfo(), manualGc: boolean = false, lowerAccess: boolean = false, danger: boolean = false): CompileResult {
+	setOwnedCycleCheck(!danger);
+	try {
+		return compileToCIn(source, target, manualGc, lowerAccess, danger);
+	} finally {
+		setOwnedCycleCheck(true);
+	}
+}
+
+function compileToCIn(source: string, target: TargetInfo, manualGc: boolean, lowerAccess: boolean, danger: boolean): CompileResult {
 	resetBuildState();
 	// loadModule canonicalizes the entry path to absolute (loader.ms:393) —
 	// findModule uses string equality, so we must canonicalize here too.

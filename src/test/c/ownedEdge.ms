@@ -3,6 +3,7 @@
 // Runtime behaviour: corpus `ownedTreeDrop`, `ownedField*`, `ownedElementsMoveBetweenHolders`.
 
 import { compileToC } from "../helpers";
+import { hostTargetInfo } from "../../checker/types";
 
 function typeInfoOf(c: string, name: string): string {
 	const named = name.endsWith("_") ? `.name = "${name}` : `.name = "${name}"`;
@@ -12,8 +13,9 @@ function typeInfoOf(c: string, name: string): string {
 	return "";
 }
 
+// The release classification: a debug build keeps owned cycles under the collector to report them.
 function verdict(decls: string, name: string): string {
-	const r = compileToC(decls + "\nconsole.log(\"ok\");\n");
+	const r = compileToC(decls + "\nconsole.log(\"ok\");\n", hostTargetInfo(), false, false, true);
 	if (!r.ok) return r.error;
 	const line = typeInfoOf(r.value, name);
 	if (line == "") return `no TypeInfo for ${name}`;
@@ -38,6 +40,24 @@ test "an array of owned children is acyclic, through nullable elements and neste
 	assert verdict("class N { kids: Array<Owned<N> | null> = []; }\nconst n = new N();", "N") == "acyclic";
 	assert verdict("class N { grid: Owned<N>[][] = []; }\nconst n = new N();", "N") == "acyclic";
 	assert refused("class N { v: int32 = 0; }\ntype Kid = Owned<N>;\nfunction f(ks: Kid[]): int32 { return ks.length; }\nconsole.log(f([new N()]));\n") == "compiled";
+}
+
+test "a debug build keeps a class with only owned cycles under the collector and flags it; a danger build does not" {
+	const src = "class N { kids: Owned<N>[] = []; }\nconst n = new N();\nconsole.log(\"ok\");\n";
+	const debug = compileToC(src);
+	assert debug.ok, debug.ok ? "" : debug.error;
+	const line = typeInfoOf(debug.value, "N");
+	assert line.contains(".isCyclic = MS_TRUE") && line.contains("MS_TYPE_FLAG_OWNED_CYCLE"), line;
+	const danger = compileToC(src, hostTargetInfo(), false, false, true);
+	assert danger.ok, danger.ok ? "" : danger.error;
+	const released = typeInfoOf(danger.value, "N");
+	assert released.contains(".isCyclic = MS_FALSE") && !released.contains("MS_TYPE_FLAG_OWNED_CYCLE"), released;
+}
+
+test "a debug build does not flag a class with a plain cycle" {
+	const r = compileToC("class N { kids: Owned<N>[] = []; up: N | null = null; }\nconst n = new N();\nconsole.log(\"ok\");\n");
+	assert r.ok, r.ok ? "" : r.error;
+	assert !typeInfoOf(r.value, "N").contains("MS_TYPE_FLAG_OWNED_CYCLE"), typeInfoOf(r.value, "N");
 }
 
 test "an array of owned children beside a plain back edge is cyclic" {
@@ -216,7 +236,7 @@ test "a module-level for-of over owned elements lends each element" {
 test "a module-level for-of whose body removes elements holds each element by a count" {
 	const r = compileToC(TOP + "for (const k of root.kids) { root.kids.pop(); console.log(k.id); }\n");
 	assert r.ok, r.ok ? "" : r.error;
-	assert r.value.contains("msIncref(dollarborrow_"), r.value;
+	assert r.value.contains("msIncref(dollarborrow_") || r.value.contains("msIncrefCyclic(dollarborrow_"), r.value;
 }
 
 test "a value popped from an owned Vec is a plain local" {
