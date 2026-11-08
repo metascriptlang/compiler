@@ -9,6 +9,7 @@ import { createState } from "../parser/cursor";
 import { CheckerContext, createContext } from "../checker/context";
 import { standalonePreludeCtx, checkProgram } from "../checker/checkPass";
 import { bindCompilerFuncs } from "./util";
+import "../compiler/meta/comptime";
 
 export function parseInput(input: string): Result<Node, string> {
 	const lr = lex(input);
