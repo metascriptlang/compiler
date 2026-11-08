@@ -9,6 +9,7 @@
 import { Node, NodeKind, NodeFlag, NumberLiteralData, SizeofExprData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, BigIntLiteralData, NewExprData, MoveExprData, OutExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, VariableDeclData, DeclKind, Type, TypeKind, Symbol, SymbolKind, ProgramData, BuiltinKind } from "../../ast/node";
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { duVariantIndexOfType } from "../../checker/compat";
+import { ctorVariantIndex } from "../../checker/ctorRoutine";
 import { isPlainFunctionPointer, skipModifier, isNumberLiteralSet, isUnknownType, unionMemberDisplay, peelTransparentInstance, typeofTagOf, isIntegerType, isFloatType, isNumeric, isMaybeType, unwrapPointerLikeForVariant, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldNameUnprofiled, variantKeyMember, findVariantByBooleanDiscriminant, findVariantByStringDiscriminant, findSharedEnumDiscriminant, findSharedUnitDiscriminant, numberLiteralBase, getDiscriminantName, isStringLike, isTagCarriedUnion, awaitedType, unwrapRefNullUnion, unwrapVarargs, peelToStructOrUnion, hasAsgnFlag, inlineVariantStruct, createFunction, findFieldInVariant, typeDisplayNameUnprofiled, booleanLiteralValue, unwrapRefBase, isAtomicRef, isUnresolvedType, storesNothing, matchUnionBehindInstance, fieldTypeView } from "../../checker/types";
 import { SymbolFlag, hasFlag, isTypeSymbol } from "../../checker/symbol";
 import {
@@ -1407,7 +1408,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			// `methodToFunction` transform) — no `<Class>_new` wrapper exists any
 			// more. This matches the inline pattern already used for class-without-
 			// ctor below (line ~960) and Nim's `genObjConstr` parity.
-			const initName = classInitCName(cName);
+			const initName = classInitCName(cName, ctorVariantIndex(node.resolvedSym));
 			const routineType: Readonly<Type | null> = node.resolvedSym != null ? node.resolvedSym.symbolType : null;
 			const initType = routineType != null && routineType.kind == TypeKind.Function ? routineType : null;
 			if (initType != null && node.nodeType != null) declareClassInit(g, initName, ctorImplementation(node.resolvedSym, d.newCallee.resolvedSym), initType, 0);
@@ -1522,7 +1523,7 @@ function discoverCallExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEval
 		const parentThis = parentType.typeChildren[0];
 		const parentName = getTypeDesc(g, parentThis.kind == TypeKind.Ref && parentThis.typeReturn != null ? parentThis.typeReturn : parentThis);
 		if (parentName != "") {
-			const parentInitName = classInitCName(parentName);
+			const parentInitName = classInitCName(parentName, ctorVariantIndex(parentCtor));
 			declareClassInit(g, parentInitName, ctorImplementation(parentCtor, parentThis.kind == TypeKind.Ref && parentThis.typeReturn != null ? parentThis.typeReturn.sym : parentThis.sym), parentType, parentCtor.mutatedParams);
 			if (p.params.length == 0) {
 				addCGenError(g, `internal: super() in '${p.name}' has no receiver parameter at ${node.location.line}:${node.location.column}`, node.location.line, node.location.column);

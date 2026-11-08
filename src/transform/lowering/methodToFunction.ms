@@ -2,6 +2,7 @@ import { Node, NodeKind, NodeData, createNodeAt, ProgramData, ClassDeclData, Met
 import { TransformContext, keepOutOfTree } from "../context";
 import { setFlag, SymbolFlag, initFnName, makeSymbol } from "../../checker/symbol";
 import { newSym, isGenericFn } from "../../checker/context";
+import { ctorVariantIndex } from "../../checker/ctorRoutine";
 import { createFunction, voidType, noneType } from "../../checker/types";
 import { declGenericParams } from "../../checker/types";
 import { classInitCName, mangledTypeName, buildModuleNameRoots } from "../../codegen/c/names";
@@ -110,7 +111,7 @@ function ctorToInitFunction(classNode: Node, classGenerics: string, ctorNode: No
 	initSym.symbolType = fnNode.nodeType;
 	setFlag(initSym, SymbolFlag.Exported);
 	setFlag(initSym, SymbolFlag.ClassInit);
-	if (classNode.resolvedSym != null) initSym.exportName = classInitCName(mangledTypeName(buildModuleNameRoots(), classNode.resolvedSym, className));
+	if (classNode.resolvedSym != null) initSym.exportName = classInitCName(mangledTypeName(buildModuleNameRoots(), classNode.resolvedSym, className), ctorVariantIndex(initSym));
 	initSym.location = ctorNode.location;
 	initSym.declNode = fnNode;
 	fnNode.resolvedSym = initSym;

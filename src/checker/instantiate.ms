@@ -7,13 +7,13 @@
 import { membersOf } from "./unitsInCheck";
 import { methodOwnerClass } from "./visibility";
 import { isAsyncFunctionNode } from "./freestanding";
-import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, HiddenDerefData, HiddenStdConvData, CallExprData, NewExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { decideInstanceTypeTests, decideParameterTypeTests } from "./instanceTypeTest";
-import { boxedCountedReference, boxedReferenceRefusal, boundParamName, getAttachedOp, setAttachedOp, isMaybeType, createGenericParam, inferredType, isUnresolvedType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, classParentOf, runtimeClassSym, genericParamNamesOf, substituteParams, substituteBound, declaredTypeParams, TypeVisitSet, typeVisitAdd, isDeclaredStruct, UnifyBindings, bindParam, bindAt, boundSlot, isBrandDistinct } from "./types";
+import { decideInstanceTypeTests, decideParameterTypeTests, decideSignatureTypeTests } from "./instanceTypeTest";
+import { boxedCountedReference, boxedReferenceRefusal, boundParamName, getAttachedOp, setAttachedOp, isMaybeType, createGenericParam, inferredType, isUnresolvedType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, peelTransparentInstance, classParentOf, runtimeClassSym, genericParamNamesOf, substituteParams, substituteBound, declaredTypeParams, TypeVisitSet, typeVisitAdd, isDeclaredStruct, UnifyBindings, bindParam, bindAt, boundSlot, isBrandDistinct } from "./types";
 import { ensureShaped, refuseHookInferredReturn } from "./resolvePass";
 import { lookupSymbol, makeSymbol, initFnName, addSymbolToScope, globalScope, SymbolFlag, hasFlag, setFlag, openScope, Scope, ScopeKind } from "./symbol";
-import { mintCtorRoutine, resetCtorRoutines, ctorRoutineOf, ctorFormalTypes } from "./ctorRoutine";
+import { mintCtorRoutine, mintCtorVariant, resetCtorRoutines, ctorRoutineOf, ctorFormalTypes, signatureRoutine, linkSignatureRoutine } from "./ctorRoutine";
 import { splitTopLevel } from "../utils/string";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
@@ -1634,6 +1634,92 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, nam
 	}
 
 	return ctorDeclNode;
+}
+
+// A call that picks a constructor signature runs the implementation checked with the signature's
+// parameter types, as an overloaded routine runs its own body: a `typeof` or `instanceof` test the
+// signature decides keeps one branch, and an argument the signature types narrower than the
+// implementation's union is passed as itself. Every program keeps its result; only the emitted
+// code changes. A body the narrower types do not check falls back to the implementation.
+export function signatureCtorRoutine(ctx: CheckerContext, owner: Symbol, impl: Symbol, sig: Symbol): Symbol {
+	const known = signatureRoutine(sig);
+	if (known != null) return known;
+	linkSignatureRoutine(sig, impl);
+	return ctorVariant(ctx, owner, impl, sig) ?? impl;
+}
+
+function ctorVariant(ctx: CheckerContext, owner: Symbol, impl: Symbol, sig: Symbol): Symbol | null {
+	const implNode = impl.declNode;
+	if (implNode == null || implNode.kind != NodeKind.ConstructorDecl || symGenericParams(owner) != "") return null;
+	const implData = implNode.data as ConstructorDeclData;
+	const declared = ctorFormalTypes(impl);
+	const picked = ctorFormalTypes(sig);
+	if (implData.ctorBody == null || declared == null || picked == null || picked.length > declared.length) return null;
+	const formals: Type[] = [];
+	let narrowed = false;
+	for (let i = 0; i < declared.length; i += 1) {
+		const t = i < picked.length ? picked[i] : declared[i];
+		if (t != declared[i] && peelTransparentInstance(declared[i]).kind == TypeKind.Union && !sameType(t, declared[i])) narrowed = true;
+		formals.push(t);
+	}
+	if (!narrowed) return null;
+	const params = implData.ctorParams.slice(0);
+	const body = monoCloneNode(implData.ctorBody);
+	dropFilledDefaults(body);
+	decideSignatureTypeTests(params, declared, formals, body);
+	const data: NodeData = { ctorParams: params, ctorParamTypes: implData.ctorParamTypes.slice(0), ctorBody: body, ctorDefaults: [], ctorVisibility: implData.ctorVisibility, ctorParamProps: implData.ctorParamProps, ctorFlags: implData.ctorFlags };
+	const declNode = createNodeAt(NodeKind.ConstructorDecl, data, implNode.location);
+	declNode.paramLocations = implNode.paramLocations;
+	declNode.nodeType = createFunction(formals, params, voidType());
+	const thisType = impl.symbolType.typeChildren[0];
+	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
+	const bodyCtx = pickBodyCtx(owner.modulePath, ctx, owner);
+	const routine = mintCtorVariant(host, owner, thisType, formals, params, declNode);
+	routine.state = SymbolState.Checked;
+	routine.symFlags = impl.symFlags;
+	routine.symbolType.callConv = impl.symbolType.callConv;
+	declNode.nodeType.callConv = impl.symbolType.callConv;
+	const savedHost = bodyCtx.instantiatingCtx;
+	bodyCtx.instantiatingCtx = host;
+	const savedModulePath = bodyCtx.modulePath;
+	bodyCtx.modulePath = owner.modulePath != "" ? owner.modulePath : ctx.modulePath;
+	clearCheckerState(body);
+	bindFunctionFlow(body, body, host.outOfTree, host.flowNodes);
+	const mark = markInstanceBody(bodyCtx);
+	const callerScope = openInstanceScope(bodyCtx, [], []);
+	bodyCtx.table.current.privateAccess = owner;
+	const extPreCount = injectCallerExtensions(bodyCtx, ctx);
+	const errBefore = bodyCtx.errors.length;
+	const outerGensym = beginGensymUnit();
+	declNode.paramSyms = callCheckFunctionBody(bodyCtx, routine, ["this"].concat(params), body, null);
+	rewindTemplateGensym(outerGensym);
+	const checked = bodyCtx.errors.length == errBefore;
+	if (checked) {
+		checkRoutineBorrows(bodyCtx, declNode);
+		checkMovesIn(bodyCtx, declNode);
+		listMovePaths(bodyCtx, declNode, owner.modulePath);
+	}
+	const clean = bodyCtx.errors.length == errBefore;
+	while (bodyCtx.errors.length > errBefore) bodyCtx.errors.pop();
+	bodyCtx.modulePath = savedModulePath;
+	bodyCtx.instantiatingCtx = savedHost;
+	bodyCtx.table.current = callerScope;
+	truncateCallerExtensions(bodyCtx, extPreCount);
+	releaseInstanceBody(bodyCtx, ctx, mark);
+	if (!clean) return null;
+	linkSignatureRoutine(sig, routine);
+	return routine;
+}
+
+function dropFilledDefaults(node: Node): void {
+	if (node.kind == NodeKind.CallExpr) {
+		const d = node.data as CallExprData;
+		d.arguments = d.arguments.filter((a: Node): boolean => !a.flags.has(NodeFlag.FilledDefault));
+	} else if (node.kind == NodeKind.NewExpr) {
+		const d = node.data as NewExprData;
+		d.newArguments = d.newArguments.filter((a: Node): boolean => !a.flags.has(NodeFlag.FilledDefault));
+	}
+	forEachChild(node, (child: Node): void => { dropFilledDefaults(child); });
 }
 
 // Register callback at module load time

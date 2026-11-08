@@ -2,16 +2,20 @@
 // `when` is (docs/LANG.md §when): an instance whose binding is one concrete type keeps only the branch
 // that type takes. A union binding keeps the test at run time, and so does a test no member of the
 // constraint can pass, so the instance still reports the branch that reads a never.
+// A constructor called through one of its overload signatures is decided the same way, with each
+// parameter typed by that signature: `instanceof` too, against the class the signature names.
 
-import { Node, NodeKind, FunctionDeclData, IfStmtData, ConditionalExprData, BinaryExprData, UnaryExprData, IdentifierData, StringLiteralData, BlockStmtData, VariableDeclData, ArrowFunctionData, FunctionExprData, TryCatchStmtData, ForOfStmtData, Type, TypeKind } from "../ast/node";
+import { Node, NodeKind, FunctionDeclData, IfStmtData, ConditionalExprData, BinaryExprData, UnaryExprData, IdentifierData, StringLiteralData, BlockStmtData, VariableDeclData, ArrowFunctionData, FunctionExprData, TryCatchStmtData, ForOfStmtData, Type, TypeKind, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { typeofTagOf, isMaybeType, peelTransparentInstance } from "./types";
+import { typeofTagOf, isMaybeType, peelTransparentInstance, isArrayType, classParentOf } from "./types";
 
 const UNDECIDED: int32 = -1;
 
 interface TypeTest {
 	tag: string;
 	reachable: string[] | null;
+	classes: string[] | null;
+	plain: boolean;
 }
 
 export function decideInstanceTypeTests(generic: Node, clone: Node, names: string[], params: Type[], types: Type[]): void {
@@ -26,11 +30,42 @@ export function decideParameterTypeTests(paramNames: string[], paramTypes: strin
 		const at = names.indexOf(paramTypes[i].trim());
 		if (at < 0 || at >= types.length) continue;
 		const tag = decidedTag(types[at]);
-		if (tag != "") tags.set(paramNames[i], { tag, reachable: at < params.length ? constraintTags(params[at].typeExtra) : null });
+		if (tag != "") tags.set(paramNames[i], { tag, reachable: at < params.length ? constraintTags(params[at].typeExtra) : null, classes: null, plain: false });
 	}
+	decideTags(body, tags);
+}
+
+export function decideSignatureTypeTests(paramNames: string[], declared: Type[], picked: Type[], body: Node | null): void {
+	const tags = new Map<string, TypeTest>();
+	for (let i = 0; i < paramNames.length && i < declared.length && i < picked.length; i += 1) {
+		if (picked[i] == declared[i]) continue;
+		const tag = decidedTag(picked[i]);
+		if (tag == "") continue;
+		const plain = tag != "object" && tag != "function" || isArrayType(peelTransparentInstance(picked[i]));
+		tags.set(paramNames[i], { tag, reachable: constraintTags(declared[i]), classes: classChain(picked[i]), plain });
+	}
+	decideTags(body, tags);
+}
+
+function decideTags(body: Node | null, tags: Map<string, TypeTest>): void {
 	if (tags.size == 0 || body == null) return;
 	forgetRedeclared(body, tags);
 	if (tags.size > 0) decideIn(body, tags);
+}
+
+function classChain(t: Type): string[] | null {
+	const v = peelTransparentInstance(t);
+	const body = v.kind == TypeKind.Ref && v.typeReturn != null ? v.typeReturn : v;
+	if (body.kind != TypeKind.Struct || body.sym == null || body.sym.symbolKind != SymbolKind.Class) return null;
+	const names: string[] = [];
+	let at: Type | null = v;
+	while (at != null && names.length < 64) {
+		const s = at.kind == TypeKind.Ref && at.typeReturn != null ? at.typeReturn : at;
+		if (s.sym == null) return null;
+		names.push(s.sym.name);
+		at = classParentOf(at);
+	}
+	return names;
 }
 
 function decidedTag(t: Type): string {
@@ -168,6 +203,7 @@ function testValue(cond: Node, tags: Map<string, TypeTest>): int32 {
 		if (l == UNDECIDED || r == UNDECIDED) return UNDECIDED;
 		return b.operator == "&&" ? l * r : (l + r > 0 ? 1 : 0);
 	}
+	if (b.operator == "instanceof") return instanceofValue(b, tags);
 	const equal = b.operator == "==" || b.operator == "===";
 	if (!equal && b.operator != "!=" && b.operator != "!==") return UNDECIDED;
 	const test = testedParam(b.left, tags) != null ? testedParam(b.left, tags) : testedParam(b.right, tags);
@@ -176,6 +212,15 @@ function testValue(cond: Node, tags: Map<string, TypeTest>): int32 {
 	const asked = (literal.data as StringLiteralData).value;
 	if (test.reachable != null && !test.reachable.includes(asked)) return UNDECIDED;
 	return (asked == test.tag) == equal ? 1 : 0;
+}
+
+function instanceofValue(b: BinaryExprData, tags: Map<string, TypeTest>): int32 {
+	if (b.left.kind != NodeKind.Identifier || b.right.kind != NodeKind.Identifier) return UNDECIDED;
+	const test = tags.get((b.left.data as IdentifierData).name);
+	if (test == null) return UNDECIDED;
+	const asked = (b.right.data as IdentifierData).name;
+	if (test.classes != null) return test.classes.includes(asked) ? 1 : UNDECIDED;
+	return test.plain && asked != "Object" && asked != "Array" ? 0 : UNDECIDED;
 }
 
 function testedParam(node: Node, tags: Map<string, TypeTest>): TypeTest | null {

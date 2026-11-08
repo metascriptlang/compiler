@@ -310,8 +310,8 @@ export function paramCName(name: string, position: number): string {
 	return `${mangle(name)}_p${position}`;
 }
 
-export function classInitCName(classCName: string): string {
-	return classCName + "_init";
+export function classInitCName(classCName: string, variant: int32 = -1): string {
+	return variant < 0 ? classCName + "_init" : `${classCName}_init_${variant}`;
 }
 
 // Static field global name: "Counter.total" → "Counter__total__<module>"

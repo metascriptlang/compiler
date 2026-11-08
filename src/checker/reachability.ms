@@ -18,7 +18,7 @@ import { hasFlag, SymbolFlag, makeSymbol } from "./symbol";
 import { hasGenericParams, isIntegerType, isFloatType, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym, storesNothing, fieldTypeView, peelToStructOrUnion, isReadonlyView, declaredFieldType } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
-import { ctorRoutineOf } from "./ctorRoutine";
+import { ctorRoutineOf, ctorVariantIndex } from "./ctorRoutine";
 import { DispatchRegistry, DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "./context";
 import { instanceArgsOf, sameInstanceArgs } from "./instantiate";
 
@@ -154,6 +154,7 @@ function walkBody(dispatchRegistry: DispatchRegistry, node: Node, modulePath: st
 	if (k == NodeKind.NewExpr) {
 		const nd = node.data as NewExprData;
 		walkBody(dispatchRegistry, nd.newCallee, modulePath);
+		if (ctorVariantIndex(node.resolvedSym) >= 0) markSymAndWalk(dispatchRegistry, node.resolvedSym!, modulePath);
 		for (const arg of nd.newArguments) {
 			walkBody(dispatchRegistry, arg, modulePath);
 		}

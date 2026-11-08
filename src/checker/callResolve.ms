@@ -20,7 +20,7 @@ import { checkImportCall } from "./importCall";
 import { isImportKeyword } from "../module/loader";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, markInitialized, mergeInitBranches, restoreInitState, saveInitState, unwrittenOutParam } from "./initTracker";
-import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook } from "./instantiate";
+import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook, signatureCtorRoutine } from "./instantiate";
 import { ctorRoutineOf, ctorRoutineFor, ctorFormalTypes, ctorSignaturesOf, requiredCtorArgs } from "./ctorRoutine";
 import { bindFromExplicitTypeArgs, explicitTypeArgs, hasExplicitTypeArgs, suppliedTypeArgs, annotatedType, operandAt, builtinTypeHead, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation, builtinTypeNamed, thenSignatureOf, thenablePromised } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
@@ -785,6 +785,7 @@ export function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[]
 		const fitted = expectedType != null && !awaitsInstance ? fitNode(defCtx, cloned, expectedType, cloned.nodeType) : cloned;
 		if (awaitsInstance && fitted.kind != NodeKind.ObjectLiteral) fitted.flags = fitted.flags.incl(NodeFlag.DefaultAwaitsInstance);
 		if (defaultCheckedAtDeclaration(defNode)) defCtx.errors.shrink(diagnosticMark);
+		fitted.flags = fitted.flags.incl(NodeFlag.FilledDefault);
 		args.push(fitted);
 		argIdx = argIdx + 1;
 	}
@@ -798,7 +799,9 @@ function fillNullableTail(ctx: CheckerContext, args: Node[], paramTypes: Type[],
 		if (expected.kind != TypeKind.Null && !isMaybeType(expected) && !unionHasMemberOfKind(expected, TypeKind.Null)) return;
 		const lit = createNodeAt(NodeKind.NullLiteral, { nullPlaceholder: true }, loc);
 		callCheckExpr(ctx, lit, expected);
-		args.push(fitNode(ctx, lit, expected, lit.nodeType));
+		const filled = fitNode(ctx, lit, expected, lit.nodeType);
+		filled.flags = filled.flags.incl(NodeFlag.FilledDefault);
+		args.push(filled);
 	}
 }
 
@@ -1332,11 +1335,12 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 		ai = ai + 1;
 	}
 	const ctorOwner = generic.instance != null ? generic.instance : classSym;
-	const ctorRoutine = ctorOwner != null ? ctorRoutineFor(ctx, ctorOwner) : null;
+	const ownRoutine = ctorOwner != null ? ctorRoutineFor(ctx, ctorOwner) : null;
+	const ctorRoutine = pickedSig != null && ownRoutine == signatureImpl && generic.instance == null ? signatureCtorRoutine(ctx, classSym!, signatureImpl!, pickedSig) : ownRoutine;
 	const typedBy = pickedSig != null ? pickedSig : ctorRoutine;
 	const declaring = hasCtor && ctorOwner != null ? constructorDeclaringClass(ctorOwner) : null;
 	if (hasCtor && ctorOwner != null) refuseHiddenConstructor(ctx, declaring != null ? declaring : ctorOwner, node.location.line, node.location.column);
-	const defaultsFrom = declaring != null ? ctorRoutineOf(declaring) : ctorRoutine;
+	const defaultsFrom = declaring != null ? ctorRoutineOf(declaring) : ownRoutine;
 	const ctorDefaults = defaultsFrom == null ? null : pickedSig != null ? defaultsThroughSignature(defaultsFrom, pickedSig) : strongNodes(defaultsFrom.defaultParams);
 	const routineFormals = hasCtor && ctorRoutine != null ? ctorFormalTypes(ctorRoutine) : null;
 	let ctorSpread: SpreadTake = { spread: null, at: -1, taken: false };
@@ -2147,11 +2151,13 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		const signatureImpl = ctorRoutineOf(signatureOwner);
 		const signatures = ctorSignaturesOf(signatureImpl);
 		const forwardsImplementation = ctx.currentFunction != null && hasFlag(ctx.currentFunction, SymbolFlag.InheritsConstructor);
-		if (signatures.length > 0 && !forwardsImplementation && pickCtorSignature(ctx, node, d.arguments, signatureOwner.name, signatureImpl!, signatures, null) == null) {
+		const pickedSig = signatures.length > 0 && !forwardsImplementation ? pickCtorSignature(ctx, node, d.arguments, signatureOwner.name, signatureImpl!, signatures, null) : null;
+		if (signatures.length > 0 && !forwardsImplementation && pickedSig == null) {
 			node.nodeType = voidType();
 			return voidType();
 		}
-		let ctorParamTypes = ctorFormalTypes(parentCtor);
+		if (pickedSig != null && parentCtor == signatureImpl && parentInst == null) d.callee.resolvedSym = signatureCtorRoutine(ctx, parentSym, signatureImpl!, pickedSig);
+		let ctorParamTypes = ctorFormalTypes(d.callee.resolvedSym);
 		if (substNames.length > 0 && ctorParamTypes != null && parentInst != null) {
 			const substParams = declaredTypeParams(parentSym, substNames.length);
 			ctorParamTypes = ctorParamTypes.map((t: Type): Type => substituteTypeParams(t, substParams, parentInst.typeChildren));

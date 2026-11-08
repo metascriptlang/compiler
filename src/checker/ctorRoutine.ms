@@ -11,9 +11,11 @@ export interface CtorRow {
 }
 
 let _capture: CtorRow[] | null = null;
+let _variantDecls = new HashMap<Symbol, Node>();
 
 export function resetCtorRoutines(): void {
 	_capture = null;
+	_variantDecls = new HashMap<Symbol, Node>();
 }
 
 export function startCtorCapture(): CtorRow[] | null {
@@ -30,9 +32,59 @@ export function endCtorCapture(outer: CtorRow[] | null): CtorRow[] {
 
 export function replayCtorRoutines(rows: CtorRow[]): void {
 	for (const row of rows) {
-		if (row.owner.ctorRoutine == null) registerCtorRoutine(row.owner, row.routine);
+		if (hasFlag(row.owner, SymbolFlag.OverloadSig)) linkSignatureRoutine(row.owner, row.routine);
+		else if (row.owner.ctorRoutine == null) registerCtorRoutine(row.owner, row.routine);
 		else if (_capture != null) _capture.push(row);
 	}
+}
+
+// A constructor signature binds the routine its calls run: null until a call picks it, then the
+// implementation, or the implementation checked with the signature's parameter types.
+export function signatureRoutine(sig: Symbol): Symbol | null {
+	return sig.ctorRoutine;
+}
+
+export function linkSignatureRoutine(sig: Symbol, routine: Symbol): void {
+	if (_capture != null) _capture.push({ owner: sig, routine });
+	sig.ctorRoutine = routine;
+	if (routine.declNode != null && routine.declNode.kind == NodeKind.ConstructorDecl && !_variantDecls.has(routine)) _variantDecls.set(routine, routine.declNode);
+	const receiver = routine.symbolType.typeChildren[0];
+	const body = receiver.kind == TypeKind.Ref && receiver.typeReturn != null ? receiver.typeReturn : receiver;
+	if (routine.ctorOwner == null && body.sym != null) routine.ctorOwner = body.sym;
+}
+
+// The signature position a variant was checked for, or -1 for any other routine; it names the
+// variant's C function beside the implementation's.
+// Reads symbols only, since emission asks it on worker threads.
+export function ctorVariantIndex(routine: Readonly<Symbol | null>): int32 {
+	if (routine == null || routine.ctorOwner == null) return -1;
+	const impl = routine.ctorOwner.ctorRoutine;
+	if (impl == null || impl == routine) return -1;
+	for (let i = 0; i < impl.overloads.length; i += 1) {
+		if (impl.overloads[i].ctorRoutine == routine) return i;
+	}
+	return -1;
+}
+
+// Lowering points a routine's declNode at the function it lifts; each lowering copies this one.
+export function ctorVariantDecl(variant: Symbol): Node {
+	const decl = _variantDecls.get(variant);
+	if (decl == null) throw new Error(`internal: the constructor variant '${variant.name}' has no declaration`);
+	return decl;
+}
+
+export function ctorVariantsOf(impl: Symbol | null): Symbol[] {
+	const out: Symbol[] = [];
+	if (impl == null) return out;
+	for (const sig of ctorSignaturesOf(impl)) {
+		const routine = signatureRoutine(sig);
+		if (routine != null && routine != impl && !out.includes(routine)) out.push(routine);
+	}
+	return out;
+}
+
+export function mintCtorVariant(ctx: CheckerContext, owner: Symbol, thisType: Type, userTypes: Type[], userNames: string[], declNode: Node): Symbol {
+	return newCtorRoutine(ctx, owner, owner.name, thisType, userTypes, userNames, declNode, []);
 }
 
 function registerCtorRoutine(owner: Symbol, routine: Symbol): void {

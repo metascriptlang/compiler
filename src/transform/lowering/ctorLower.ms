@@ -19,7 +19,8 @@ import { TransformContext, newLoweredSym, mintingChecker } from "../context";
 import { makeAssign, makeMember, makeExprStmt, makeTypedIdent, makeTypedIdentResolved, makeBlock, makeCall, makeIdent } from "../util";
 import { createFunction, voidType, classParentOf, getProperty, isUnresolvedType } from "../../checker/types";
 import { parentClassSymOf, makeSymbol } from "../../checker/symbol";
-import { ctorRoutineFor, ctorFormalTypes } from "../../checker/ctorRoutine";
+import { ctorRoutineFor, ctorFormalTypes, isCtorSignature } from "../../checker/ctorRoutine";
+import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { instantiateParentClass } from "../../checker/instantiate";
 import { lowerMethodToFunction } from "./methodToFunction";
 import { parseInput, getStmts, checkedCtx } from "../testUtil";
@@ -30,8 +31,15 @@ function rebindReceiver(node: Node, from: Symbol, to: Symbol): void {
 	forEachChild(node, (child: Node): void => { rebindReceiver(child, from, to); });
 }
 
-export function fieldInitAssignment(member: Node, receiverType: Type | null, thisSym: Symbol | null): Node {
+export function fieldInitAssignment(member: Node, receiverType: Type | null, thisSym: Symbol | null, copy: boolean = false): Node {
 	const pd = member.data as PropertyDeclData;
+	if (copy) {
+		const kept = pd.propInitializer;
+		pd.propInitializer = cloneNodeKeepSem(kept);
+		const stmt = fieldInitAssignment(member, receiverType, thisSym);
+		pd.propInitializer = kept;
+		return stmt;
+	}
 	// Untyped initializers (an empty array literal) codegen by their
 	// declared field type, not by a guessed default.
 	if (pd.propInitializer.nodeType == null && member.nodeType != null) {
@@ -52,13 +60,14 @@ export function fieldInitAssignment(member: Node, receiverType: Type | null, thi
 	return makeExprStmt(assign, member.location);
 }
 
-function fieldInitStatements(classNode: Node, cd: ClassDeclData, thisSym: Symbol | null): Node[] {
+// Every constructor but the last runs a copy of each initializer, so the node itself lives once.
+function fieldInitStatements(classNode: Node, cd: ClassDeclData, thisSym: Symbol | null, copy: boolean = false): Node[] {
 	const stmts: Node[] = [];
 	for (const member of cd.classBody) {
 		if (member.kind == NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
 			if (!pd.propIsStatic && pd.propInitializer != null) {
-				stmts.push(fieldInitAssignment(member, classNode.nodeType, thisSym));
+				stmts.push(fieldInitAssignment(member, classNode.nodeType, thisSym, copy));
 			}
 		}
 	}
@@ -100,11 +109,11 @@ function isSuperCallStmt(stmt: Node): boolean {
 	return (call.callee.data as IdentifierData).name == "super";
 }
 
-function lowerCtorBody(classNode: Node, cd: ClassDeclData, ctorNode: Node): void {
+function lowerCtorBody(classNode: Node, cd: ClassDeclData, ctorNode: Node, copy: boolean): void {
 	const ctorData = ctorNode.data as ConstructorDeclData;
 	if (ctorData.ctorBody == null || ctorData.ctorBody.kind != NodeKind.BlockStmt) return;
 	const thisSym = ctorNode.paramSyms != null && ctorNode.paramSyms.length > 0 ? ctorNode.paramSyms[0] : null;
-	const inits = paramPropertyStatements(classNode, cd, ctorNode, thisSym).concat(fieldInitStatements(classNode, cd, thisSym));
+	const inits = paramPropertyStatements(classNode, cd, ctorNode, thisSym).concat(fieldInitStatements(classNode, cd, thisSym, copy));
 	if (inits.length == 0) return;
 	const body = ctorData.ctorBody.data as BlockStmtData;
 	let at = 0;
@@ -188,23 +197,19 @@ function ensureImplicitSuper(classNode: Node, cd: ClassDeclData, ctorNode: Node,
 
 function lowerClassNode(classNode: Node, ctx: TransformContext): void {
 	const cd = classNode.data as ClassDeclData;
-	let ctorNode: Node | null = null;
+	const ctorNodes: Node[] = [];
 	for (const member of cd.classBody) {
-		if (member.kind == NodeKind.ConstructorDecl) {
-			ctorNode = member;
-		} else if (member.kind == NodeKind.DecoratedDecl) {
-			const dd = member.data as DecoratedDeclData;
-			if (dd.decoratedNode != null && dd.decoratedNode.kind == NodeKind.ConstructorDecl) {
-				ctorNode = dd.decoratedNode;
-			}
-		}
+		const ctor = member.kind == NodeKind.DecoratedDecl ? (member.data as DecoratedDeclData).decoratedNode : member;
+		if (ctor != null && ctor.kind == NodeKind.ConstructorDecl && !isCtorSignature(ctor)) ctorNodes.push(ctor);
 	}
-	if (ctorNode == null) {
+	if (ctorNodes.length == 0) {
 		synthesizeCtor(classNode, cd, ctx);
 		return;
 	}
-	ensureImplicitSuper(classNode, cd, ctorNode, ctx);
-	lowerCtorBody(classNode, cd, ctorNode);
+	for (let i = 0; i < ctorNodes.length; i += 1) {
+		ensureImplicitSuper(classNode, cd, ctorNodes[i], ctx);
+		lowerCtorBody(classNode, cd, ctorNodes[i], i + 1 < ctorNodes.length);
+	}
 }
 
 export function lowerCtorInit(program: Node, ctx: TransformContext): Node {

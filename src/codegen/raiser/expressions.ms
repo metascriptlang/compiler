@@ -1,6 +1,7 @@
 // Raiser codegen — Expression compilation
 // AST expression nodes → typed bytecode instructions.
 
+import { ctorVariantIndex } from "../../checker/ctorRoutine";
 import { isRuntimeProcSym, isRuntimeProcCall } from "../../transform/util";
 import { forEachChild } from "../../ast/visitor";
 import { resolveOverloadWinner, overloadAt } from "../c/names";
@@ -2826,6 +2827,7 @@ function compileSuperCall(s: RaiserCompState, node: Node, superSym: Symbol): int
 	let funcIdx = -1;
 	let parent: Symbol | null = null;
 	if (superSym.symbolKind == SymbolKind.Function) {
+		if (ctorVariantIndex(superSym) >= 0) superSym = superSym.ctorOwner!.ctorRoutine!;
 		funcIdx = resolveRoutine(s, superSym);
 		const fnType = superSym.symbolType;
 		const self = fnType != null && fnType.typeChildren.length > 0 ? unwrapRef(fnType.typeChildren[0]) : null;
