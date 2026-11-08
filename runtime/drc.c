@@ -546,7 +546,7 @@ static void msRootOwnerCheck(void* p, const char* site) {
 #define MS_ROOT_OWNER_CHECK(p, site) ((void)0)
 #endif
 
-void msRegisterCycle(void* p, const msTypeInfo* type) {
+__attribute__((noinline)) void msRegisterCycle(void* p, const msTypeInfo* type) {
 	if (p == NULL) return;
 	msRefHeader* h = msHeader(p);
 	MS_ROOT_OWNER_CHECK(p, "register");
@@ -562,7 +562,7 @@ void msRegisterCycle(void* p, const msTypeInfo* type) {
 	}
 }
 
-void msUnregisterCycle(void* p) {
+__attribute__((noinline)) void msUnregisterCycle(void* p) {
 	if (p == NULL) return;
 	msRefHeader* h = msHeader(p);
 	if (h->rootIdx < 0) return;
