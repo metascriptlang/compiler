@@ -185,11 +185,15 @@ export function implementRoutine(nativeName: string, impl: RaiserHostFn): void {
 
 export function implementRoutineInPlace(nativeName: string, impl: RaiserInPlaceHostFn): void {
 	registerInPlaceHostFn(nativeName, (call: RaiserVM): void => {
+		const outerObjects = activeHostObjectHeap();
+		const outerArrays = activeHostArrayHeap();
+		setActiveHostHeaps(call.objectHeap, call.arrayHeap);
 		try {
 			impl(call);
 		} catch (e) {
 			raiseFromHost(e.message, false);
 		}
+		setActiveHostHeaps(outerObjects, outerArrays);
 	});
 }
 

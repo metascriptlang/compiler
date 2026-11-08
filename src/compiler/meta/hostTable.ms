@@ -141,8 +141,12 @@ function _vmStrings(items: string[]): RaiserHostValue {
 	return hostArray(items.map((item: string): RaiserHostValue => hostString(item)));
 }
 
+function _vmVoidValue(r: Result<void, IoError>): RaiserHostValue {
+	return r.ok ? hostObject(["ok"], [hostValue(boxBool(true))]) : _vmFailure(r.error);
+}
+
 function _vmVoidResult(r: Result<void, IoError>): RaiserValue {
-	return _toVm(r.ok ? hostObject(["ok"], [hostValue(boxBool(true))]) : _vmFailure(r.error));
+	return _toVm(_vmVoidValue(r));
 }
 
 function _vmStringResult(r: Result<string, IoError>): RaiserValue {
@@ -175,10 +179,10 @@ function _stdFsReadFile(args: RaiserValue[]): RaiserValue {
 function _stdFsReadFileBytes(vm: RaiserVM): void {
 	const r = readFileBytes(_readForBuild(hostArgString(vm, 0)));
 	if (!r.ok) {
-		hostReturn(vm, _toVm(_vmFailure(r.error)));
+		hostReturn(vm, copyToVm(vm.arrayHeap, vm.objectHeap, _vmFailure(r.error)));
 		return;
 	}
-	const result = _toVm(_vmSuccess(hostValue(raiserNil())));
+	const result = copyToVm(vm.arrayHeap, vm.objectHeap, _vmSuccess(hostValue(raiserNil())));
 	heapObjectSetField(vm.arrayHeap, vm.objectHeap, result.intVal, "value", raiserArray(heapAllocBytesOf(vm.arrayHeap, bufferData(r.value) as int64, r.value.length as int64)));
 	hostReturn(vm, result);
 }
@@ -200,7 +204,7 @@ function _stdFsWriteFileBytes(vm: RaiserVM): void {
 	const bytes = hostArgBytes(vm, 1);
 	const content = Buffer.allocUnsafe(bytes.len as number);
 	copyBytes(bufferData(content) as int64, bytes.at, bytes.len);
-	hostReturn(vm, _vmVoidResult(writeFileBytes(path, content)));
+	hostReturn(vm, copyToVm(vm.arrayHeap, vm.objectHeap, _vmVoidValue(writeFileBytes(path, content))));
 }
 
 @include("runtime/core/buffer.h");
@@ -902,13 +906,10 @@ function _pushNodeShapedElems(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHea
 	}
 }
 
-function _nodeChildSlots(h: int64): RaiserValue[] {
+function _nodeChildSlots(vm: RaiserVM, h: int64): RaiserValue[] {
 	const out: RaiserValue[] = [];
-	const objHeapOrNull = activeHostObjectHeap();
-	const arrHeapOrNull = activeHostArrayHeap();
-	if (objHeapOrNull == null || arrHeapOrNull == null) return out;
-	const objHeap: RaiserObjectHeap = objHeapOrNull;
-	const arrHeap: RaiserArrayHeap = arrHeapOrNull;
+	const objHeap = vm.objectHeap;
+	const arrHeap = vm.arrayHeap;
 	const n = heapObjectFieldCount(objHeap, h);
 	for (let i = 0; i < n; i = i + 1) {
 		if (isNodeWireMetaField(heapObjectFieldNameAt(objHeap, h, i))) continue;
@@ -925,13 +926,13 @@ function _nodeChildSlots(h: int64): RaiserValue[] {
 function _bridgeMsNodeChildCount(vm: RaiserVM): void {
 	const node = hostArgCount(vm) < 1 ? raiserNil() : hostArg(vm, 0);
 	if (node.kind != RaiserValueKind.Object) { hostReturnInt(vm, 0); return; }
-	hostReturnInt(vm, _nodeChildSlots(node.intVal).length as int64);
+	hostReturnInt(vm, _nodeChildSlots(vm, node.intVal).length as int64);
 }
 
 function _bridgeMsNodeChildAt(vm: RaiserVM): void {
 	const node = hostArgCount(vm) < 2 ? raiserNil() : hostArg(vm, 0);
 	if (node.kind != RaiserValueKind.Object) { hostReturn(vm, raiserNil()); return; }
-	const slots = _nodeChildSlots(node.intVal);
+	const slots = _nodeChildSlots(vm, node.intVal);
 	const i = unboxInt(hostArg(vm, 1));
 	if (i < 0 || i >= slots.length) { hostReturn(vm, raiserNil()); return; }
 	rcIncref(vm.arrayHeap, vm.objectHeap, slots[i]);
@@ -1216,14 +1217,14 @@ function _bridgeMsNodeStringValue(vm: RaiserVM): void {
 	if (isWireNode(arrHeap, objHeap, n, NodeKind.Identifier)) {
 		const sym = boundSymOfObject(arrHeap, objHeap, n.intVal);
 		if (sym != null && sym.symbolKind == SymbolKind.EnumMember) { hostReturnString(vm, sym.name); return; }
-		hostReturnString(vm, unboxString(wireGet(arrHeap, objHeap, n.intVal, "name")));
+		hostReturnString(vm, heapStringText(arrHeap, wireGet(arrHeap, objHeap, n.intVal, "name")));
 		return;
 	}
 	if (!isWireNode(arrHeap, objHeap, n, NodeKind.StringLiteral)) {
 		raiseFromHost("stringValue needs a string literal or an identifier, got " + wireNodeKindText(arrHeap, objHeap, n), true);
 		return;
 	}
-	hostReturnString(vm, unboxString(wireGet(arrHeap, objHeap, n.intVal, "value")));
+	hostReturnString(vm, heapStringText(arrHeap, wireGet(arrHeap, objHeap, n.intVal, "value")));
 }
 
 function _bridgeMsStringReplace(vm: RaiserVM): void {
@@ -1372,19 +1373,13 @@ function _callbackByteLastIndexOf(vm: RaiserVM): void {
 	hostReturnInt(vm, hostArgString(vm, 0).byteLastIndexOf(hostArgString(vm, 1), startIdx) as int64);
 }
 
-function _hostArrayHeap(): RaiserArrayHeap {
-	const heap = activeHostArrayHeap();
-	if (heap == null) throw new Error("internal: an array kernel ran with no active array heap");
-	return heap;
-}
-
 function _arrayArg(v: RaiserValue): int64 {
 	if (v.kind != RaiserValueKind.Array) throw new Error("internal: an array kernel was handed a non-array");
 	return v.intVal;
 }
 
-function _numbersOf(v: RaiserValue): number[] {
-	const heap = _hostArrayHeap();
+function _numbersOf(vm: RaiserVM, v: RaiserValue): number[] {
+	const heap = vm.arrayHeap;
 	const h = _arrayArg(v);
 	const out: number[] = [];
 	const n = heapArrayLen(heap, h);
@@ -1392,8 +1387,8 @@ function _numbersOf(v: RaiserValue): number[] {
 	return out;
 }
 
-function _stringsOf(v: RaiserValue): string[] {
-	const heap = _hostArrayHeap();
+function _stringsOf(vm: RaiserVM, v: RaiserValue): string[] {
+	const heap = vm.arrayHeap;
 	const h = _arrayArg(v);
 	const out: string[] = [];
 	const n = heapArrayLen(heap, h);
@@ -1402,23 +1397,23 @@ function _stringsOf(v: RaiserValue): string[] {
 }
 
 function _bridgeNumberArrayIndexOf(vm: RaiserVM): void {
-	hostReturnFloat(vm, _numbersOf(hostArg(vm, 0)).indexOf(hostArgFloat(vm, 1)));
+	hostReturnFloat(vm, _numbersOf(vm, hostArg(vm, 0)).indexOf(hostArgFloat(vm, 1)));
 }
 
 function _bridgeNumberArrayIncludes(vm: RaiserVM): void {
-	hostReturnBool(vm, _numbersOf(hostArg(vm, 0)).includes(hostArgFloat(vm, 1)));
+	hostReturnBool(vm, _numbersOf(vm, hostArg(vm, 0)).includes(hostArgFloat(vm, 1)));
 }
 
 function _bridgeNumberArrayCount(vm: RaiserVM): void {
-	hostReturnFloat(vm, _numbersOf(hostArg(vm, 0)).count(hostArgFloat(vm, 1)));
+	hostReturnFloat(vm, _numbersOf(vm, hostArg(vm, 0)).count(hostArgFloat(vm, 1)));
 }
 
 function _bridgeNumberArrayJoin(vm: RaiserVM): void {
-	hostReturnString(vm, _numbersOf(hostArg(vm, 0)).join(hostArgString(vm, 1)));
+	hostReturnString(vm, _numbersOf(vm, hostArg(vm, 0)).join(hostArgString(vm, 1)));
 }
 
 function _bridgeNumberArrayAt(vm: RaiserVM): void {
-	const xs = _numbersOf(hostArg(vm, 0));
+	const xs = _numbersOf(vm, hostArg(vm, 0));
 	const idx = hostArgFloat(vm, 1);
 	const i = idx < 0.0 ? xs.length + idx : idx;
 	if (i < 0.0 || i >= xs.length) {
@@ -1440,28 +1435,28 @@ function _bridgeRaiseField(vm: RaiserVM): void {
 }
 
 function _bridgeStringArrayIndexOf(vm: RaiserVM): void {
-	hostReturnFloat(vm, _stringsOf(hostArg(vm, 0)).indexOf(hostArgString(vm, 1)));
+	hostReturnFloat(vm, _stringsOf(vm, hostArg(vm, 0)).indexOf(hostArgString(vm, 1)));
 }
 
 function _bridgeStringArrayIncludes(vm: RaiserVM): void {
-	hostReturnBool(vm, _stringsOf(hostArg(vm, 0)).includes(hostArgString(vm, 1)));
+	hostReturnBool(vm, _stringsOf(vm, hostArg(vm, 0)).includes(hostArgString(vm, 1)));
 }
 
 function _bridgeStringArrayLastIndexOf(vm: RaiserVM): void {
 	const from = hostArgCount(vm) > 2 ? unboxInt(hostArg(vm, 2)) as int32 : -1;
-	hostReturnFloat(vm, _stringsOf(hostArg(vm, 0)).lastIndexOf(hostArgString(vm, 1), from));
+	hostReturnFloat(vm, _stringsOf(vm, hostArg(vm, 0)).lastIndexOf(hostArgString(vm, 1), from));
 }
 
 function _bridgeStringArrayCount(vm: RaiserVM): void {
-	hostReturnFloat(vm, _stringsOf(hostArg(vm, 0)).count(hostArgString(vm, 1)));
+	hostReturnFloat(vm, _stringsOf(vm, hostArg(vm, 0)).count(hostArgString(vm, 1)));
 }
 
 function _bridgeStringArrayJoin(vm: RaiserVM): void {
-	hostReturnString(vm, _stringsOf(hostArg(vm, 0)).join(hostArgString(vm, 1)));
+	hostReturnString(vm, _stringsOf(vm, hostArg(vm, 0)).join(hostArgString(vm, 1)));
 }
 
 function _bridgeGenericArrayCheckedIndex(vm: RaiserVM): void {
-	const len = heapArrayLen(_hostArrayHeap(), _arrayArg(hostArg(vm, 0)));
+	const len = heapArrayLen(vm.arrayHeap, _arrayArg(hostArg(vm, 0)));
 	const idx = hostArgFloat(vm, 1);
 	const i = idx < 0.0 ? len + idx : idx;
 	if (i < 0.0 || i >= len) {
@@ -1552,7 +1547,7 @@ function _unionRead(vm: RaiserVM, maybe: boolean): void {
 	const tag = wireGet(arrHeap, objHeap, u.intVal, "$tag").intVal;
 	if (!_unionSlotAllowed(arrHeap, hostArg(vm, 1), tag)) {
 		const label = heapArrayGet(arrHeap, hostArg(vm, 3).intVal, tag);
-		raiseFromHost(hostArgString(vm, 2) + unboxString(label) + "'", true);
+		raiseFromHost(hostArgString(vm, 2) + heapStringText(arrHeap, label) + "'", true);
 		return;
 	}
 	hostReturn(vm, wireGet(arrHeap, objHeap, u.intVal, "$v"));
