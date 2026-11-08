@@ -1,0 +1,23 @@
+A helper a fold in one module compiled first is run again by a fold in another module; editing the
+helper's body must reach both folded values.
+#!VERIFY
+#!FILE h.ms
+export function seed(): int32 {
+	return 10;
+}
+#!FILE a.ms
+import { seed } from "./h";
+export const fromA = @comptime { return seed() + 1; };
+#!FILE b.ms
+import { seed } from "./h";
+export const fromB = @comptime { return seed() + 2; };
+#!FILE main.ms
+import { fromA } from "./a";
+import { fromB } from "./b";
+console.log(`${fromA} ${fromB}`);
+#!STEP expect: 11 12
+#!FILE h.ms
+export function seed(): int32 {
+	return 20;
+}
+#!STEP expect: 21 22
