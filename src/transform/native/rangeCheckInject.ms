@@ -6,11 +6,13 @@
 // TypeAssertion nodes (`expr as Type`) where the target type is a narrow integer
 // get wrapped with a runtime range check call.
 
-import { Node, NodeKind, SourceLocation, TypeAssertionData, HiddenStdConvData, Type, TypeKind, ExprStmtData, VariableDeclData, CallExprData } from "../../ast/node";
+import { Node, NodeKind, SourceLocation, TypeAssertionData, HiddenStdConvData, Type, TypeKind, ExprStmtData, VariableDeclData, CallExprData, BlockStmtData, DeclKind, Symbol } from "../../ast/node";
 import { integerRank, isIntegerType, peelToRepr, enumOrdinalBounds, createPrimitive, distinctNumericBase } from "../../checker/types";
-import { TransformContext } from "../context";
+import { TransformContext, freshTempSym } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeNumber, runtimeRef } from "../util";
+import { forEachChild } from "../../ast/visitor";
+import { isRoutineNode } from "../../ast/shape";
+import { makeCall, makeNumber, runtimeRef, makeVarDecl, makeIdentResolved } from "../util";
 import { isFloatKind } from "../numKinds";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts, checkedCtx, castOf } from "../testUtil";
 import { checkProgram } from "../../checker/checkPass";
@@ -20,8 +22,101 @@ import { checkProgram } from "../../checker/checkPass";
 // ===== Main Entry Point =====
 
 export function injectRangeChecks(program: Node, ctx: TransformContext): Node {
-	walkNode(program, (n: Node): Node => { return rangeCheckVisitor(n, ctx); });
+	const twins = new HashMap<Symbol, Symbol>();
+	if (ctx.rangeChecks) twinIntegerNumbers(program, ctx, twins);
+	walkNode(program, (n: Node): Node => { return rangeCheckVisitor(n, ctx, twins); });
 	return program;
+}
+
+// A const number converted from an integer keeps that integer in a const of its own, so a range check of the
+// number tests the integer and never converts back from a double.
+function twinIntegerNumbers(program: Node, ctx: TransformContext, twins: HashMap<Symbol, Symbol>): void {
+	walkNode(program, (n: Node): Node => {
+		if (n.kind != NodeKind.BlockStmt) return n;
+		const d = n.data as BlockStmtData;
+		const out: Node[] = [];
+		for (let k = 0; k < d.statements.length; k++) {
+			const s = d.statements[k];
+			const operand = integerNumberSource(s);
+			if (operand != null && !readInRoutine(d.statements, k + 1, s.resolvedSym!)) {
+				const twin = freshTempSym(ctx, "int", operand.nodeType!);
+				const decl = makeVarDecl(twin.name, operand, DeclKind.Const, s.location);
+				decl.resolvedSym = twin;
+				decl.nodeType = operand.nodeType;
+				out.push(decl);
+				replaceSource(s, operand, makeIdentResolved(twin, s.location));
+				twins.set(s.resolvedSym!, twin);
+			}
+			out.push(s);
+		}
+		d.statements = out;
+		return n;
+	});
+}
+
+function readInRoutine(stmts: Node[], from: int32, sym: Symbol): boolean {
+	for (let k = from; k < stmts.length; k++) {
+		if (routineReads(stmts[k], sym, false)) return true;
+	}
+	return false;
+}
+
+function routineReads(n: Node, sym: Symbol, inRoutine: boolean): boolean {
+	if (inRoutine && n.kind == NodeKind.Identifier && n.resolvedSym == sym) return true;
+	const nested = inRoutine || isRoutineNode(n);
+	let found = false;
+	forEachChild(n, (c: Node): void => {
+		if (!found && routineReads(c, sym, nested)) found = true;
+	});
+	return found;
+}
+
+function integerNumberSource(s: Node): Node | null {
+	if (s.kind != NodeKind.VariableDecl || s.resolvedSym == null) return null;
+	const d = s.data as VariableDeclData;
+	const t = peelToRepr(s.resolvedSym.symbolType);
+	if (d.declKind != DeclKind.Const || d.initializer == null || t == null || t.kind != TypeKind.Number) return null;
+	const conv = convOperand(d.initializer);
+	const operand = conv != null ? conv : d.initializer;
+	return exactInNumber(operand.nodeType) ? operand : null;
+}
+
+function replaceSource(s: Node, operand: Node, twin: Node): void {
+	const d = s.data as VariableDeclData;
+	if (d.initializer == operand) d.initializer = twin;
+	else setConvOperand(d.initializer, twin);
+}
+
+function convOperand(n: Node): Node | null {
+	if (n.kind == NodeKind.TypeAssertion) return (n.data as TypeAssertionData).asExpr;
+	return n.kind == NodeKind.HiddenStdConv ? (n.data as HiddenStdConvData).convExpr : null;
+}
+
+function setConvOperand(n: Node, operand: Node): void {
+	if (n.kind == NodeKind.TypeAssertion) (n.data as TypeAssertionData).asExpr = operand;
+	else (n.data as HiddenStdConvData).convExpr = operand;
+}
+
+function exactInNumber(t: Type | null): boolean {
+	const r = peelToRepr(t);
+	if (r == null) return false;
+	return match (r.kind) {
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => true,
+		TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Char => true,
+		_ => false,
+	};
+}
+
+function exactCheckName(fnName: string): string {
+	return match (fnName) {
+		"msCheckRangeI8" => "msCheckRangeExactI8",
+		"msCheckRangeU8" => "msCheckRangeExactU8",
+		"msCheckRangeI16" => "msCheckRangeExactI16",
+		"msCheckRangeU16" => "msCheckRangeExactU16",
+		"msCheckRangeI32" => "msCheckRangeExactI32",
+		"msCheckRangeU32" => "msCheckRangeExactU32",
+		_ => "",
+	};
 }
 
 export function injectEnumRangeChecks(program: Node, ctx: TransformContext): Node {
@@ -170,9 +265,17 @@ function checkedConv(
 	src: Type | null,
 	dest: Type,
 	node: Node,
+	twins: HashMap<Symbol, Symbol>,
 ): Node {
 	const fnName = rangeCheckHelper(src, dest, ctx.rangeChecks);
 	if (fnName == "") return node;
+	const twin = expr != null && expr.kind == NodeKind.Identifier && expr.resolvedSym != null && twins.has(expr.resolvedSym) ? twins.get(expr.resolvedSym)! : null;
+	if (twin != null && fnName == "msCheckRangeI64") {
+		const exact = makeCall(runtimeRef("msExactI64", node.location), [makeIdentResolved(twin, node.location)], node.location);
+		exact.nodeType = dest;
+		return exact;
+	}
+	if (twin != null && dest.kind != TypeKind.Enum && exactCheckName(fnName) != "") return makeRangeCheckFor(exactCheckName(fnName), makeIdentResolved(twin, node.location), dest, node.location);
 	const call = makeRangeCheckFor(fnName, expr, dest, node.location);
 	if (isInt64Check(fnName)) call.nodeType = dest;
 	return call;
@@ -187,13 +290,13 @@ function checkedEnumSource(ctx: TransformContext, expr: Node, dest: Type, untype
 	return call;
 }
 
-function checkedDistinctSource(ctx: TransformContext, expr: Node, base: Type): Node {
-	const checked = checkedConv(ctx, expr, expr.nodeType, base, expr);
+function checkedDistinctSource(ctx: TransformContext, expr: Node, base: Type, twins: HashMap<Symbol, Symbol>): Node {
+	const checked = checkedConv(ctx, expr, expr.nodeType, base, expr, twins);
 	if (checked != expr) checked.nodeType = base;
 	return checked;
 }
 
-function rangeCheckVisitor(node: Node, ctx: TransformContext): Node {
+function rangeCheckVisitor(node: Node, ctx: TransformContext, twins: HashMap<Symbol, Symbol>): Node {
 	if (node.kind == NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
 		const src = d.asExpr != null ? d.asExpr.nodeType : null;
@@ -204,10 +307,10 @@ function rangeCheckVisitor(node: Node, ctx: TransformContext): Node {
 		}
 		const base = distinctNumericBase(node.nodeType);
 		if (base != null && d.asExpr != null) {
-			d.asExpr = checkedDistinctSource(ctx, d.asExpr, base);
+			d.asExpr = checkedDistinctSource(ctx, d.asExpr, base, twins);
 			return node;
 		}
-		return checkedConv(ctx, d.asExpr, src, node.nodeType, node);
+		return checkedConv(ctx, d.asExpr, src, node.nodeType, node, twins);
 	}
 	if (node.kind == NodeKind.HiddenStdConv) {
 		const d = node.data as HiddenStdConvData;
@@ -217,7 +320,7 @@ function rangeCheckVisitor(node: Node, ctx: TransformContext): Node {
 			d.convExpr = checkedEnumSource(ctx, d.convExpr, d.convType);
 			return node;
 		}
-		return checkedConv(ctx, d.convExpr, src, d.convType, node);
+		return checkedConv(ctx, d.convExpr, src, d.convType, node, twins);
 	}
 	return node;
 }
