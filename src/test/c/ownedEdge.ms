@@ -65,6 +65,10 @@ test "an array of value structs whose references are owned is acyclic; a plain r
 	assert verdict("struct P { v: Owned<N> | null; back: N | null; }\nclass N { ps: P[] = []; }\nconst n = new N();", "N") == "cyclic";
 }
 
+test "Owned of a union of records that own the class holding it waits until the records are shaped" {
+	assert verdict("type Leaf = { name: string };\ntype Pair = { left: Owned<N>, right: Owned<N> };\ntype D = Leaf | Pair;\nclass N { data: Owned<D> = { name: \"\" }; }\nconst n = new N();", "N") == "acyclic";
+}
+
 test "an owned Map or generic class of owned values is acyclic" {
 	assert verdict("class N { m: Owned<Map<string, Owned<N>>> = new Map<string, Owned<N>>(); }\nconst n = new N();", "N") == "acyclic";
 	assert verdict("class Box<T> { item: T; constructor(t: T) { this.item = t; } }\nclass N { b: Owned<Box<Owned<N>>> | null = null; }\nconst n = new N();", "N") == "acyclic";
