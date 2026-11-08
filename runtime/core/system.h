@@ -630,11 +630,11 @@ static inline void* msObjDownConv(void* p, const msTypeInfo* target) {
 	return p;
 }
 
-static inline intptr_t msHeldCount(void* p) {
+static inline int64_t msHeldCount(void* p) {
 	return msHeader(p)->rc & MS_RC_STRONG_MASK;
 }
 
-static inline void msDestroyLeftNoRef(void* p, intptr_t held) {
+static inline void msDestroyLeftNoRef(void* p, int64_t held) {
 	if (msHeldCount(p) > held) msRaiseDestroyKeptSelf(p);
 }
 

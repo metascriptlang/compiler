@@ -645,7 +645,7 @@ static inline void setColor(msRefHeader* h, int32_t color) {
 	h->rc = (h->rc & ~MS_COLOR_MASK) | color;
 }
 
-static inline intptr_t getCount(msRefHeader* h) {
+static inline msRc getCount(msRefHeader* h) {
 	return h->rc >> MS_RC_SHIFT;
 }
 

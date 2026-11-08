@@ -44,7 +44,7 @@
 /* ===== RefHeader (same layout as drc.h) ===== */
 
 typedef struct {
-    intptr_t rc;
+    _Alignas(8) int64_t rc;
     const msTypeInfo* type;
     int32_t rootIdx;
     uint32_t allocSize;

@@ -5,7 +5,8 @@
  * ORC: cycle collector (Bacon's trial deletion), linked in every --mm=drc build.
  *
  * RefHeader prepended to all heap-allocated RC objects.
- * Layout: msRefHeader below, [rc:8][type:8][rootIdx:4][allocSize:4] = 24 bytes on 64-bit
+ * Layout: msRefHeader below, [rc:8][type:8][rootIdx:4][allocSize:4] = 24 bytes on 64-bit,
+ * [rc:8][type:4][rootIdx:4][allocSize:4] padded to 24 on 32-bit
  *
  * ORC supplements ARC for cyclic data structures. Non-cyclic objects
  * use plain ARC and never touch the root set. Cyclic objects get registered in the
@@ -26,27 +27,23 @@
 #include "runtime/bareHeap.h"
 
 /* ===== RC Encoding ===== */
-/* rc field = [strong:37][unowned:23][flags:4] (intptr_t) on 64-bit, [strong:28][flags:4] on 32-bit.
+/* rc field = [strong:37][unowned:23][flags:4], a 64-bit word on every target, so a 32-bit target
+ * counts Unowned<T> edges as a 64-bit one does.
  * Lower 4 bits reserved for ORC cycle collector (color + maybeCycle).
  * ALL rc operations use MS_RC_INCREMENT to preserve the lower bits.
  * The unowned field counts the Unowned<T> edges that point at the object. The strong
  * count sits on top because trial deletion takes it below zero for a moment. */
+typedef int64_t msRc;
 #define MS_RC_MASK      15   /* lower 4 bits: color + flags */
-#if INTPTR_MAX > 0x7fffffff
 #define MS_RC_SHIFT          27
-#define MS_UNOWNED_INCREMENT ((intptr_t)16)
-#define MS_UNOWNED_MASK      ((intptr_t)0x7fffff << 4)
-#else
-#define MS_RC_SHIFT          4
-#define MS_UNOWNED_INCREMENT ((intptr_t)0)
-#define MS_UNOWNED_MASK      ((intptr_t)0)
-#endif
-#define MS_RC_INCREMENT      ((intptr_t)1 << MS_RC_SHIFT)
-#define MS_RC_STRONG_MASK    (~(intptr_t)MS_RC_MASK & ~MS_UNOWNED_MASK)
+#define MS_UNOWNED_INCREMENT ((msRc)16)
+#define MS_UNOWNED_MASK      ((msRc)0x7fffff << 4)
+#define MS_RC_INCREMENT      ((msRc)1 << MS_RC_SHIFT)
+#define MS_RC_STRONG_MASK    (~(msRc)MS_RC_MASK & ~MS_UNOWNED_MASK)
 /* An immortal count sits halfway between the floor and the sign bit ORC's trial deletion uses, so a
  * stray plain increment or decrement leaves it immortal (PEP 683 _Py_IMMORTAL_REFCNT). */
-#define MS_RC_IMMORTAL_FLOOR ((intptr_t)1 << (sizeof(intptr_t) * 8 - 2))
-#define MS_RC_IMMORTAL       ((intptr_t)3 << (sizeof(intptr_t) * 8 - 3))
+#define MS_RC_IMMORTAL_FLOOR ((msRc)1 << 62)
+#define MS_RC_IMMORTAL       ((msRc)3 << 61)
 
 /* The lower 4 bits. A destroyed object that Unowned<T> edges still point at keeps its memory as a
  * husk marked MS_COL_DEAD until the last edge goes; nothing strong reaches a husk, so the collector
@@ -62,11 +59,12 @@
 /* ===== Reference Header ===== */
 
 typedef struct {
-	intptr_t rc;             /* Reference count (0 = unique, >0 = shared). Plain word: only the SHARE helpers use __atomic builtins on it. */
+	_Alignas(8) msRc rc;     /* Reference count (0 = unique, >0 = shared). Plain word: only the SHARE helpers use __atomic builtins on it. */
 	const msTypeInfo* type;  /* RTTI (NULL for untyped allocs) */
 	int32_t rootIdx;         /* ORC rootset index (-1 = not registered) */
 	uint32_t allocSize;      /* Total allocation size (header + payload) — for slab recycling */
 } msRefHeader;
+_Static_assert(sizeof(msRefHeader) == 24, "msRefHeader is 24 bytes on every target");
 
 /* Get header from user pointer: header lives right before the object */
 static inline msRefHeader* msHeader(void* p) {
@@ -444,7 +442,7 @@ static inline bool msAtomicDecRefIsLast(void* p) {
 	MS_DRC_STAT_ADD(MS_DS_RC_DEC_ATOMIC, 1);
 	MS_LEDGER_COUNT(MS_LEDGER_SHARE_DEC);
 	MS_RC_FAMILY_CHECK(p, true, "msAtomicDecRefIsLast");
-	intptr_t old = __atomic_fetch_sub(&msHeader(p)->rc, MS_RC_INCREMENT, __ATOMIC_RELEASE);
+	msRc old = __atomic_fetch_sub(&msHeader(p)->rc, MS_RC_INCREMENT, __ATOMIC_RELEASE);
 	if ((old & MS_RC_STRONG_MASK) == MS_RC_INCREMENT) {
 		__atomic_thread_fence(__ATOMIC_ACQUIRE);
 		return true;
@@ -457,7 +455,7 @@ _Noreturn void msRaiseUnownedDead(void* p);
 void msUnownedFreeHusk(void* p);
 
 static inline void msUnownedIncref(void* p) {
-	if (p != NULL && MS_UNOWNED_INCREMENT != 0) {
+	if (p != NULL) {
 		MS_PLAIN_ON_IMMORTAL_CHECK(p, "msUnownedIncref");
 		msRefHeader* h = msHeader(p);
 		if ((h->rc & MS_UNOWNED_MASK) == MS_UNOWNED_MASK) msRaiseUnownedOverflow(p);
@@ -509,7 +507,7 @@ static inline void* msUnownedGive(void* p) {
 
 static inline void msUnownedKeepHusk(msRefHeader* h, void* p) {
 	if (h->rootIdx >= 0) msUnregisterCycle(p);
-	h->rc = (h->rc & ~(intptr_t)MS_COLOR_MASK) | MS_COL_DEAD;
+	h->rc = (h->rc & ~(msRc)MS_COLOR_MASK) | MS_COL_DEAD;
 }
 
 void msDestroyAndDisposeDyn(void* p);
