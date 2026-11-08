@@ -25,7 +25,7 @@ async function sendAll(bytes: int32): Promise<int32[]> {
 		while (true) {
 			const chunk = recv(c, 65536);
 			if (chunk.length == 0) break;
-			total = total + chunk.length;
+			total = total + (chunk.length as int32);
 		}
 		close(c);
 		return total;

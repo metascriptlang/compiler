@@ -1,4 +1,4 @@
-import { compileToJS, compileToJSWithStd } from "../helpers";
+import { compileToJS } from "../helpers";
 
 test "JS: a pattern without a placeholder is emitted, not called by name" {
 	const js = compileToJS("extern function answer(): int32 from \"(40 + 2)\";\nconst v = answer();");
@@ -167,9 +167,11 @@ test "JS: an instance pattern extension called with parentheses emits its patter
 	assert !js.value.contains(".size");
 }
 
-test "JS: a std static pattern extern read through its class is refused" {
-	const js = compileToJSWithStd("function make(f: (b: Buffer) => Buffer): number { return f(Buffer.alloc(3)).length; }\n"
-		+ "console.log(make(Buffer.copy));");
+test "JS: a static pattern extern read through its class is refused" {
+	const js = compileToJS("class Box { n: number = 1; }\n"
+		+ "extern function dup(this typeof Box, b: Box): Box from \"#.clone()\";\n"
+		+ "function make(f: (b: Box) => Box): number { return f(new Box()).n; }\n"
+		+ "console.log(make(Box.dup));");
 	assert !js.ok;
-	assert js.error.contains("extern function 'copy' is the pattern \"#.slice()\"");
+	assert js.error.contains("extern function 'dup' is the pattern \"#.clone()\"");
 }

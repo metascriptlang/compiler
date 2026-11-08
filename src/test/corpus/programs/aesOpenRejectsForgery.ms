@@ -21,7 +21,7 @@ async function row(raw: string, plainText: string): Promise<string> {
 	if (!sealed.ok) throw new Error("seal failed");
 	const genuine = await open(key, sealed.value, "header");
 	const genuineOk = genuine.ok && genuine.value.asString() == plainText;
-	const forged = await open(key, zeros(sealed.value.length), "header");
+	const forged = await open(key, zeros(sealed.value.length as int32), "header");
 	const wrongAad = await open(key, sealed.value, "other");
 	const label = plainText.byteLength == 0 ? "empty" : "text";
 	return `${raw.byteLength} ${label} genuine ${genuineOk} forged ${forged.ok} aad ${wrongAad.ok}`;

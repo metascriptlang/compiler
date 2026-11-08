@@ -84,8 +84,8 @@ function must<T>(result: Result<T, CryptoError>): T {
 }
 
 test "crypto codecs preserve every byte" {
-	const bytes = Buffer.alloc(0);
-	for (let i = 0; i < 256; i++) bytes.push(i as uint8);
+	const bytes = Buffer.alloc(256);
+	for (let i = 0; i < 256; i++) bytes[i] = i as uint8;
 	assert Buffer.compare(must(fromHex(toHex(bytes))), bytes) == 0;
 	assert Buffer.compare(must(fromBase64(toBase64(bytes))), bytes) == 0;
 	assert toHex(must(fromBase64("/w=="))) == "ff";

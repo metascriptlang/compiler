@@ -5,7 +5,7 @@ import { compileToCWithStd } from "../helpers";
 
 test "a top-level block moves its own local into an actor" {
 	const c = compileToCWithStd(`
-actor Sink { total: int32 = 0; frame(data: Buffer): int32 { this.total += data.length; return this.total; } }
+actor Sink { total: int32 = 0; frame(data: Buffer): int32 { this.total += data.length as int32; return this.total; } }
 const sink = new Sink();
 { const b: Buffer = Buffer.alloc(3); console.log(await sink.frame(move b)); }
 `);

@@ -1,12 +1,12 @@
 // nim-guard: an isolated field, a destructured fresh value and a spread copy cross into an actor.
 //
 // INVARIANT (ULTRALOCK V2, N5): a field moved out of a local bound from a fresh value and never
-//   aliased crosses to the actor; so does a binding destructured from a fresh value, and a spread
+//   aliased crosses to the actor; so does a binding destructured from a fresh value, a spread
 //   of a T[] or a Buffer of value-only elements, which builds a fresh array. An actor handle is
 //   an uncounted pid (A6), so a value that shares only actor handles and Locked cells is a copy.
 //
 // WHAT IT CATCHES: the path check refusing a sole owner's field, a destructured binding reported
-//   as declared outside its function, and `[...b] as Buffer` or `[...a]` refused as "not a fresh
+//   as declared outside its function, and `[...b]` of a Buffer or `[...a]` refused as "not a fresh
 //   value" (no spelling of a fresh copy compiled on msc ad50eb00424); and a Result's value
 //   narrowed by `if (!r.ok)` refused as "not a fresh value" when its struct holds an array, because
 //   the narrowed read arrives wrapped in a conversion the path check did not peel (8e5d42d129b);
@@ -61,7 +61,7 @@ actor Tail {
 
 actor Sink {
 	total: int32 = 0;
-	frame(data: Buffer): int32 { this.total += data.length; return this.total; }
+	frame(data: Buffer): int32 { this.total += data.length as int32; return this.total; }
 	raw(data: uint8[]): int32 { this.total += data.length; return this.total; }
 	state(s: State): int32 { this.total += s.items.length; return this.total; }
 }
@@ -76,8 +76,8 @@ async function main(): Promise<int32> {
 	const { data } = next(4);
 	await sink.frame(move data);
 	const shared: Buffer = Buffer.alloc(7);
-	const copy = [...shared] as Buffer;
-	await sink.frame(move copy);
+	let copy: uint8[] = [...shared];
+	await sink.raw(move copy);
 	const src: uint8[] = [1, 2];
 	let plain: uint8[] = [...src];
 	await sink.raw(move plain);

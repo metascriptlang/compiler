@@ -38,7 +38,7 @@ async function drain(fd: int32, want: int32): Promise<void> {
 	while (total < want) {
 		const chunk = await recvAsync(fd, 65536);
 		if (chunk.length == 0) return;
-		total += chunk.length;
+		total += chunk.length as int32;
 	}
 }
 

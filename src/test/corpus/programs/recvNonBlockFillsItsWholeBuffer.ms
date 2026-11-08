@@ -30,7 +30,7 @@ let total = 0;
 for (let i = 0; i < 2000 && total < 20000; i++) {
 	const got = recvNonBlock(peer, 8192);
 	if (got.length == 8192) full = true;
-	total = total + got.length;
+	total = total + (got.length as int32);
 	if (got.length < 8192) await sleepAsync(5);
 }
 console.log(`full read seen=${full} total ${total}`);

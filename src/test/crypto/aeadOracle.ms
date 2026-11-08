@@ -22,7 +22,7 @@ function must<T>(result: Result<T, CryptoError>): T {
 
 function filled(count: int32, seed: int32): Buffer {
 	const buf = Buffer.alloc(count);
-	for (let i = 0; i < count; i++) buf.set(i, (i * 31 + seed * 7 + (i >> 3) * 13 + (i >> 9) * 5) & 255);
+	for (let i = 0; i < count; i++) buf[i] = ((i * 31 + seed * 7 + (i >> 3) * 13 + (i >> 9) * 5) & 255) as uint8;
 	return buf;
 }
 
