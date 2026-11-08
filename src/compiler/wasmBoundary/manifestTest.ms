@@ -410,6 +410,31 @@ export function callbackOnly(cb: (xs: Span<int32>) => void): void {}
 	assert m.errors[1].code == "span-and-callback" && m.errors[1].message.includes("'viewThen'");
 }
 
+test "manifest: a callback only called, here or by a direct callee, is borrowed; any other use keeps it" {
+	const src = `
+class Listener { visit: (x: int32) => void = (x: int32): void => {}; }
+let owner: Listener | null = null;
+let saved: (x: int32) => void = (x: int32): void => {};
+const all: ((x: int32) => void)[] = [];
+function callIt(f: (x: int32) => void): void { f(1); }
+function remember(f: (x: int32) => void): void { all.push(f); }
+function again(f: (x: int32) => void, n: int32): void { if (n > 0) again(f, n - 1); else f(n); }
+export function calls(cb: (x: int32) => void): void { cb(1); callIt(cb); again(cb, 2); }
+export function stores(cb: (x: int32) => void): void { saved = cb; }
+export function helper(cb: (x: int32) => void): void { remember(cb); }
+export function field(cb: (x: int32) => void): void { const l = new Listener(); l.visit = cb; owner = l; }
+export function local(cb: (x: int32) => void): void { const fs: ((x: int32) => void)[] = []; fs.push(cb); }
+export function captures(cb: (x: int32) => void): void { saved = (x: int32): void => cb(x); }
+`;
+	const names = ["calls", "stores", "helper", "field", "local", "captures"];
+	const m = manifestFor(MODULE, ENTRY, exportsOf(src, names), names);
+	assert m.errors.length == 0, m.errors.map((e) => e.message).join("; ");
+	const modes = m.functions.map((f) => f.params[0].mode);
+	assert modes[0] == BoundaryMode.Borrowed && m.functions[0].params[0].keptLabel == null;
+	for (let i = 1; i < modes.length; i += 1) assert modes[i] == BoundaryMode.Kept, names[i];
+	assert m.functions[1].params[0].keptLabel == "callback 'cb' kept by stores at calc/core.ms:10";
+}
+
 const HANDLE = `
 @builtin("FfiHandle")
 export struct Handle<T> { ptr: Ptr<void>; }

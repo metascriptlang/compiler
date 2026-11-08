@@ -119,6 +119,29 @@ test "js side: a callback is pushed before the call, adapted per kind and popped
 	assert code.includes("const id0 = __msb.push((x0, x1) => (a0(x0 !== 0, x1 >>> 0) ? 1 : 0));");
 }
 
+const KEPT = `
+let saved: (x: int32) => void = (x: int32): void => {};
+export function listen(cb: (x: int32) => void): void { saved = cb; }
+export function once(cb: (x: int32) => void): void { cb(1); }
+export function sum(xs: Span<int32>): int32 { return xs.length as int32; }
+`;
+
+test "js side: a kept callback is tagged for the leak report and popped here only when wasm never received it" {
+	const b = jsBindings(manifestFrom(KEPT, ["listen", "once", "sum"]), "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: (name) => false });
+	const code = b.modules[0].code;
+	assert code.includes("const id0 = __msb.push(a0, \"callback 'cb' kept by listen at calc.ms:3\");\n\tlet sent = false;\n\ttry {\n\t\tsent = true;");
+	assert code.includes("} finally {\n\t\tif (!sent) __msb.pop(id0);\n\t}");
+	assert code.includes("const id0 = __msb.push(a0);") && code.includes("\t\t__msb.pop(id0);");
+	assert code.includes("const span = __msb.span; __msb.span = \"sum\";") && code.includes("__msb.span = span;");
+	assert b.prelude.includes("push(f, t) {") && b.prelude.includes("tags[s] = t;");
+	assert b.prelude.includes("if (this.span !== null) throw new Error(\"a kept callback was called while '\" + this.span + \"' holds a copy of its Span");
+	assert b.prelude.includes("out.push(\"msb leak: \" + tags[s] + \" never released\");");
+	assert b.prelude.includes("process.on(\"exit\"");
+	const lent = jsBindings(manifestFrom(KEPT, ["once", "sum"]), "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: (name) => false });
+	assert !lent.prelude.includes("tags") && !lent.prelude.includes("this.span") && !lent.modules[0].code.includes("__msb.span");
+	assert !lent.prelude.includes("process.on(\"exit\"");
+}
+
 test "js side: a callback whose adapter would only forward its arguments is pushed as the user function" {
 	assert bindingsFor(["drain"]).modules[0].code.includes("const id0 = __msb.push(a0);");
 	assert bindingsFor(["noArg"]).modules[0].code.includes("const id0 = __msb.push(a0);");

@@ -112,6 +112,24 @@ test "wasm entry: one exportName wrapper per function and one import per callbac
 	assert s.includes('import_name(\\"msb_cb_v_id\\")');
 }
 
+const KEPT = `
+let saved: (x: int32) => void = (x: int32): void => {};
+export function listen(cb: (x: int32) => void): void { saved = cb; }
+export function once(cb: (x: int32) => void): void { cb(1); }
+`;
+
+test "wasm entry: a kept callback's closure captures an owner whose destroy frees its slot, a lent one does not" {
+	const e = wasmEntrySource(manifestFrom(KEPT, ["listen", "once"]).functions, (p: string) => "./calc");
+	const s = e.source;
+	assert s.includes("export function msb_calc_listen(cb: int32): void {\n\ttry {\n\t\tconst cbKept = new MsbKept();\n\t\tcbKept.id = cb;\n\t\tmsbm0_listen((a0: int32): void => { msb_cb_v_i(cbKept.id, a0); msbCheck(); });");
+	assert s.includes("msbm0_once((a0: int32): void => { msb_cb_v_i(cb, a0); msbCheck(); });");
+	assert s.includes("class MsbKept { id: int32 = 0; }\nfunction onDestroy(this k: MsbKept): void { msb_cb_free(k.id); }");
+	assert s.includes('extern function msb_cb_free(a0: int32): void from "msb_cb_free";');
+	assert e.jsLibrary.includes("\tmsb_cb_free: (a0) => { try { return Module['msb'].pop(a0); } catch (e) { throw Module['msb'].die(e); } },");
+	const lent = wasmEntrySource(manifestFrom(KEPT, ["once"]).functions, (p: string) => "./calc");
+	assert !lent.source.includes("MsbKept") && !lent.jsLibrary.includes("msb_cb_free");
+}
+
 test "wasm entry: a shared callback signature is declared once; exports and library follow the functions" {
 	const e = entryFor(["evaluate", "add64"]);
 	assert e.source.split("extern function msb_cb_i_i").length == 2;
