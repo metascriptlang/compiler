@@ -4,5 +4,6 @@
 int32_t msBareHeapReuseChecks(void);
 int32_t msBareHeapUseAfterFree(void);
 int32_t msAllocatorCoreChecks(void);
+int32_t msAllocatorZeroChecks(void);
 void msBareHeapOtherUnitFree(void* p);
 #endif

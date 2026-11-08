@@ -77,7 +77,7 @@ static int inSet(void* p, void** set, int n) {
 }
 
 /* M10: a cell another thread frees goes onto the owner's shared list, and the
- * owner reuses it once its active chunk has no free cell. */
+ * owner reuses it once its active chunk has no free cell; calloc zeroes it. */
 static void remoteSmallReuse(void) {
     phase = "remote small reuse";
     for (int i = 0; i < CELLS; ++i) { cells[i] = msHeapAlloc(48); memset(cells[i], 0x5a, 48); }
@@ -86,21 +86,27 @@ static void remoteSmallReuse(void) {
     CHECK(MS_HEAP_REGION(msHeapCurrent)->occupied == before);
     void* again[CELLS];
     int reused = 0;
-    for (int i = 0; i < CELLS; ++i) { again[i] = msHeapAlloc(48); reused += inSet(again[i], cells, CELLS); }
+    for (int i = 0; i < CELLS; ++i) {
+        again[i] = msHeapCalloc(1, 48);
+        reused += inSet(again[i], cells, CELLS);
+        for (int b = 0; b < 48; ++b) CHECK(((unsigned char*)again[i])[b] == 0);
+    }
     CHECK(reused > CELLS / 2);
     for (int i = 0; i < CELLS; ++i) msHeapFree(again[i]);
 }
 
 /* M10: a big chunk another thread frees is drained by the owner's next big
- * allocation, so its pages are reused. */
+ * allocation, so its pages are reused; calloc zeroes them. */
 static void remoteBigReuse(void) {
     phase = "remote big reuse";
     msHeapRegion* a = MS_HEAP_REGION(msHeapCurrent);
     size_t before = a->occupied;
-    for (int i = 0; i < 8; ++i) bigs[i] = msHeapAlloc(BIG);
+    for (int i = 0; i < 8; ++i) { bigs[i] = msHeapAlloc(BIG); memset(bigs[i], 0x5a, BIG); }
     probeJoin(probeSpawn(freeBigs, NULL));
     CHECK(__atomic_load_n(&msHeapCurrent->sharedBig, __ATOMIC_ACQUIRE) != NULL);
-    void* again = msHeapAlloc(BIG);
+    void* again = msHeapCalloc(1, BIG);
+    CHECK(inSet(again, bigs, 8));
+    for (int b = 0; b < BIG; ++b) CHECK(((unsigned char*)again)[b] == 0);
     CHECK(msHeapCurrent->sharedBig == NULL && a->pendingBig == NULL);
     CHECK(a->occupied == before + msHeapPage(again)->size);
     msHeapFree(again);
