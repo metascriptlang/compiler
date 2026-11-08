@@ -333,12 +333,23 @@ export function int(this r: PackReader): int64 {
 		r.bad = true;
 		return 0;
 	}
+	const negative = r.pos < r.b.length && r.b[r.pos] == 45;
+	const value = r.digitsUpTo(negative ? r.pos + 1 : r.pos, negative ? 9223372036854775808 : 9223372036854775807);
+	if (!negative) return value as int64;
+	return value == 0 ? 0 : -((value - 1) as int64) - 1;
+}
+
+export function uint(this r: PackReader): uint64 {
+	if (r.last != 9) {
+		r.bad = true;
+		return 0;
+	}
+	return r.digitsUpTo(r.pos, 18446744073709551615);
+}
+
+function digitsUpTo(this r: PackReader, from: int32, limit: uint64): uint64 {
 	const n = r.b.length;
-	let i = r.pos;
-	const negative = i < n && r.b[i] == 45;
-	if (negative) i += 1;
-	const digits = i;
-	const limit: uint64 = negative ? 9223372036854775808 : 9223372036854775807;
+	let i = from;
 	let value: uint64 = 0;
 	while (i < n) {
 		const d = (r.b[i] as int32) - 48;
@@ -347,10 +358,9 @@ export function int(this r: PackReader): int64 {
 		else value = value * 10 + (d as uint64);
 		i += 1;
 	}
-	if (i == digits || (i < n && r.b[i] != 9 && r.b[i] != 10)) r.bad = true;
+	if (i == from || (i < n && r.b[i] != 9 && r.b[i] != 10)) r.bad = true;
 	r.finish(i);
-	if (!negative) return value as int64;
-	return value == 0 ? 0 : -((value - 1) as int64) - 1;
+	return value;
 }
 
 export function str(this r: PackReader): string {
@@ -1235,7 +1245,7 @@ export function readObjectRow(this a: RowReader, tag: int32, rd: PackReader): bo
 	if (tag == 78) {
 		rd.skip();
 		const kind = rd.int() as int32 as NodeKind;
-		const flags = rd.int() as uint64 as BitSet<NodeFlag>;
+		const flags = rd.uint() as BitSet<NodeFlag>;
 		const line = rd.int() as int32;
 		const column = rd.int() as int32;
 		const endLine = rd.int() as int32;

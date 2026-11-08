@@ -990,6 +990,30 @@ test "preludePack: a hit links a class and its constructor routine both ways and
 	}
 }
 
+test "preludePack: a node keeps a flag in bit 63" {
+	const prevHome = pkEnterPrivateCache();
+	try {
+		const ctx = makeTestCtx();
+		const sym = makeSymbolState("pkFlagFn", SymbolKind.Function, noneType(), false, SymbolState.Hollow);
+		sym.state = SymbolState.Checked;
+		sym.nameId = getIdentId(ctx.table.identCache, sym.name);
+		(ctx.table.current.symbols as Map<int32, Symbol>).set(sym.nameId, sym);
+		const node = createNodeAt(NodeKind.Program, { programStmts: [] } as NodeData, makeLoc(1, 1));
+		node.flags = node.flags.incl(NodeFlag.FilledDefault).incl(NodeFlag.Sem);
+		sym.declNode = node;
+		const key = preludePackKey("node-high-flag", ".test");
+		writePreludePack(key, PK_STAMP, ctx, emptyPreludeTables());
+		const loaded = tryLoadPreludePack(key, PK_STAMP);
+		assert loaded != null;
+		const got = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkFlagFn"));
+		assert got != null && got.declNode != null;
+		assert got.declNode.flags.has(NodeFlag.FilledDefault) && got.declNode.flags.has(NodeFlag.Sem);
+		remove(`${packRoot()}/${key}.pk`);
+	} finally {
+		pkLeavePrivateCache(prevHome);
+	}
+}
+
 test "preludePack: exhaustive per-kind node roundtrip" {
 	const prevHome = pkEnterPrivateCache();
 	try {
