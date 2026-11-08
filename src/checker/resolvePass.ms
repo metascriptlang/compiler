@@ -1013,7 +1013,10 @@ function ownedUnionOf(ctx: CheckerContext, written: Type, union: Type, line: int
 		}
 		members.push(createOwned(m));
 	}
-	return createUnionInOrder(members);
+	const owned = copyTypeShallow(union);
+	owned.typeChildren = members;
+	owned.plainType = union;
+	return owned;
 }
 
 function unownedAnnotationOf(ctx: CheckerContext, inner: Type, line: int32, col: int32): Type {
@@ -1071,19 +1074,9 @@ function bitSetAnnotationOf(ctx: CheckerContext, elem: Type, line: int32, col: i
 	return createBitSet(elem);
 }
 
-function sharedArrayAnnotationOf(ctx: CheckerContext, elem: Type, line: int32, col: int32): Type {
-	const peeled = peelThrough(elem, PEEL_ALIAS);
-	const owns = isOwnedRef(peeled) || (peeled != null && peeled.kind == TypeKind.Union && peeled.typeChildren.some((m) => isOwnedRef(m)));
-	if (owns) {
-		const shown = typeDisplayName(elem);
-		addError(ctx, "'" + shown + "' cannot be an array element: every holder of an array shares it, so two of them would own the same element; hold owned elements in 'Vec<" + shown + ">'", line, col);
-	}
-	return createRef(createArray(elem));
-}
-
 function wrapAnnotation(layer: AnnotationLayer, inner: Type, ctx: CheckerContext, line: int32, col: int32): Type {
 	return match (layer.wrap) {
-		AnnotationWrap.RefArray => sharedArrayAnnotationOf(ctx, inner, line, col),
+		AnnotationWrap.RefArray => createRef(createArray(inner)),
 		AnnotationWrap.Vec => createArray(inner),
 		AnnotationWrap.SizedArray => createSizedArray(inner, layer.size),
 		AnnotationWrap.Promise => promiseAnnotationOf(ctx, inner, line, col),
