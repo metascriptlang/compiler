@@ -42,6 +42,11 @@ export class Box {
 	}
 }
 
+@inline
+export function made(this typeof Box, n: int32): Box {
+	return new Box(n + 3);
+}
+
 export class Cell<T> {
 	v: T;
 
@@ -67,13 +72,13 @@ export function fromOther(n: int32): int32 {
 }
 `;
 
-const MAIN = `import { twice, plain, Span2, width, Box, Cell, IntCell } from "./lib";
+const MAIN = `import { twice, plain, Span2, width, Box, made, Cell, IntCell } from "./lib";
 import { fromOther } from "./other";
 
 const n: int32 = 20;
 const a: Span2 = { low: 1, high: 5 };
 const b: Span2 = { low: 2, high: 9 };
-console.log(twice(n), plain(n), (a + b).width(), fromOther(n), Box.of(n).n, new Cell<string>("c").v, new IntCell(n).v);
+console.log(twice(n), plain(n), (a + b).width(), fromOther(n), Box.of(n).n, Box.made(n).n, new Cell<string>("c").v, new IntCell(n).v);
 `;
 
 function emitted(): string {
@@ -139,6 +144,12 @@ test "an @inline constructor and static method are defined static inline in ever
 	assert definesStaticInlineInit(other, "Box");
 	assert definesStaticInline(main, "Box_of");
 	assert !definesStaticInline(other, "Box_of");
+}
+
+test "an @inline static extension is defined static inline in the module that calls it" {
+	const cCode = emitted();
+	assert !cCode.startsWith("ERROR"), cCode;
+	assert definesStaticInline(moduleC(cCode, "main"), "made");
 }
 
 function definesStaticInlineGenericInit(unit: string, cls: string): boolean {
