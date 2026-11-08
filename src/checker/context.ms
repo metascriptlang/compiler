@@ -289,6 +289,27 @@ export function resetDefaultsCheckedAtDeclaration(): void {
 	_defaultSources = new HashMap<Node, Node>();
 }
 
+export class DefaultsRows {
+	checked: Node[] = [];
+	stored: Node[] = [];
+	sources: Node[] = [];
+}
+
+export function defaultsRows(): DefaultsRows {
+	const rows = new DefaultsRows();
+	for (const def of _defaultsCheckedAtDeclaration) rows.checked.push(def);
+	for (const [stored, source] of _defaultSources) {
+		rows.stored.push(stored);
+		rows.sources.push(source);
+	}
+	return rows;
+}
+
+export function replayDefaults(rows: DefaultsRows): void {
+	for (const def of rows.checked) _defaultsCheckedAtDeclaration.add(def);
+	for (let i = 0; i < rows.stored.length; i += 1) _defaultSources.set(rows.stored[i], rows.sources[i]);
+}
+
 export function noteDefaultSource(stored: Node, source: Node): void {
 	_defaultSources.set(stored, source);
 }
@@ -1179,6 +1200,16 @@ const decodedRoutineFlagTexts: HashMap<string, RoutineFlagText> = new HashMap<st
 
 const noRoutineFlagText: RoutineFlagText = { kind: "", extSegment: "", extReceiverText: "", extReceiverType: "", sextSegment: "" };
 
+export function decodedRoutineFlagTextKeys(): string[] {
+	const keys: string[] = [];
+	for (const key of decodedRoutineFlagTexts.keys()) keys.push(key);
+	return keys;
+}
+
+export function prewarmRoutineFlagTexts(keys: string[]): void {
+	for (const key of keys) routineFlagText(key);
+}
+
 function routineFlagText(flags: string): RoutineFlagText {
 	if (flags == "") return noRoutineFlagText;
 	const known = decodedRoutineFlagTexts.get(flags);
@@ -1847,6 +1878,13 @@ export function moduleItemId(path: string): int32 {
 	const id = _moduleItemIds.size as int32;
 	_moduleItemIds.set(path, id);
 	return id;
+}
+
+export function moduleItemPaths(): string[] {
+	const paths: string[] = [];
+	for (let i = 0; i < (_moduleItemIds.size as int32); i += 1) paths.push("");
+	for (const [path, id] of _moduleItemIds) paths[id] = path;
+	return paths;
 }
 
 // Mints the ordinal that separates same-named routines of one module in the

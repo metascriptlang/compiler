@@ -3529,6 +3529,12 @@ export function checkProgramBody(ctx: CheckerContext, program: Node): void {
 }
 
 let _needPath: HashMap<Node, int32> = new HashMap<Node, int32>();
+
+export function checksInFlight(): int32 {
+	return (_routinesInFlight.length + _methodsCheckedOnDemand.size + _bindingsCheckedOnDemand.size + _discardedInFlightCalls.length
+		+ _selfReads.length + _fieldsCheckedOnDemand.size + _fieldsInFlight.length + _blocksInFlight.length + _forwardLocals.size
+		+ _needPath.size) as int32;
+}
 const NO_CYCLE: int32 = 2147483647;
 
 interface InferredNames {
@@ -3710,7 +3716,7 @@ export function runThreePasses(ctx: CheckerContext, program: Node): void {
 	checkBoundProgram(ctx, program, bindProgram(ctx, program));
 }
 
-function enterComptimeOuter(ctx: CheckerContext, program: Node): void {
+export function enterComptimeOuter(ctx: CheckerContext, program: Node): void {
 	setOuterProgramForComptime(program);
 	if (ctx.exportRegistry != null && ctx.moduleGraph != null && ctx.currentModule != null && ctx.preludeCtx != null) {
 		setOuterCheckContext(ctx.exportRegistry, ctx.moduleGraph, ctx.currentModule, ctx.preludeCtx);

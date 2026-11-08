@@ -30,13 +30,13 @@ import {
 	TaDependencyStack,
 	createDependencyStack, pushFrame, popFrame, recordDependency, recordDurability,
 } from "./query";
-import { TaCacheStore, createCacheStore, cacheGet, cachePut, cacheContains, cacheRemove } from "./cache";
+import { TaCacheStore, createCacheStore, cacheGet, cachePeek, cachePut, cacheContains, cacheRemove } from "./cache";
 import { TaOutputStore, createOutputStore, outputChangedAt } from "./outputs";
 import { TaDispatchStore, createDispatchStore, prepareDispatch, trackDispatchReads } from "./dispatch";
 import { DispatchRegistry, createDispatchRegistry, installDispatchReadSink } from "../../checker/context";
 import {
 	TaFileInputStore, createFileInputStore,
-	setFileText, setFileAbsent, getFileText, getFileId, getInputId, getFilePath, hasFile,
+	setFileText, setFileAbsent, getFileText, getFileId, getInputId, getInputPath, getFilePath, hasFile,
 	getFileCount, getFilePathByIndex,
 	getFileDurability, setFileDurability
 } from "./fileInput";
@@ -1368,6 +1368,78 @@ export function dbCheckIsCurrent(db: TransAmDb, filePath: string): boolean {
 	const fileId = getFileId(db.fileInput, filePath);
 	if (fileId < 0) return false;
 	return dbMarkGreen(db, createQueryKey(TaQueryKind.TypeCheck, fileId));
+}
+
+export class TaCheckRecord {
+	kinds: TaQueryKind[] = [];
+	paths: string[] = [];
+	durability: TaDurability = TaDurability.High;
+	collected: boolean = false;
+}
+
+export function dbCheckRecord(db: TransAmDb, filePath: string): TaCheckRecord | null {
+	const fileId = getFileId(db.fileInput, filePath);
+	if (fileId < 0) return null;
+	const entry = cachePeek(db.cache, createQueryKey(TaQueryKind.TypeCheck, fileId));
+	const now = db.revision.value;
+	if (entry == null || entry.state != TaQueryState.Green || entry.computedAt != now || entry.verifiedAt != now || entry.changedAt != now) return null;
+	if (dbContext(db, checkCtxKey(fileId)) == null || getRegisteredAt(db.moduleDeps, fileId) != now) return null;
+	const record = new TaCheckRecord();
+	for (const dep of entry.dependencies) {
+		const path = getInputPath(db.fileInput, dep.fileId);
+		if (path == "") return null;
+		record.kinds.push(dep.queryKind);
+		record.paths.push(path);
+	}
+	record.durability = entry.durability;
+	const collectedAt = collectedAtOf(db.exportStore, fileId);
+	if (collectedAt != null && collectedAt != now) return null;
+	record.collected = collectedAt != null;
+	return record;
+}
+
+export function dbStdUnitBlocker(db: TransAmDb): string {
+	if (db.handedToCheck == null) return "the db is kept across builds";
+	if (db.depStack.frames.length > 0) return "a query frame is still open";
+	if (db.bound.size > 0) return "a module was bound and never checked";
+	if (db.checkInProgress.size > 0) return "a check is still in progress";
+	if (db.externalReads.paths.length > 0) return "a compile-time evaluation read a file";
+	return "";
+}
+
+export function dbCheckRecordMissing(db: TransAmDb, record: TaCheckRecord): string {
+	for (let i = 0; i < record.kinds.length; i += 1) {
+		if (record.kinds[i] != TaQueryKind.FileText && getFileId(db.fileInput, record.paths[i]) < 0) return record.paths[i];
+	}
+	return "";
+}
+
+export function dbRestoreCheck(db: TransAmDb, filePath: string, ctx: CheckerContext, program: Node, record: TaCheckRecord): void {
+	const fileId = getFileId(db.fileInput, filePath);
+	if (fileId < 0 || db.handedToCheck == null) throw new Error(`internal: the std unit restores ${filePath} into a db that does not hold it or is kept`);
+	const graphMod = db.graph != null ? findModule(db.graph, filePath) : null;
+	if (graphMod != null && graphMod.program != null) {
+		const parsed = dbParsed(db, filePath);
+		if (parsed == null) throw new Error(`internal: the std unit restores ${filePath}, whose loader parse the db did not take`);
+		parsed.consumedBy = "dbTypeCheck";
+	}
+	db.handedToCheck.add(fileId);
+	registerModuleProgram(filePath, program);
+	const key = createQueryKey(TaQueryKind.TypeCheck, fileId);
+	pushFrame(db.depStack, key);
+	for (let i = 0; i < record.kinds.length; i += 1) {
+		const kind = record.kinds[i];
+		const id = kind == TaQueryKind.FileText ? getInputId(db.fileInput, record.paths[i], db.revision.value) : getFileId(db.fileInput, record.paths[i]);
+		if (id < 0) throw new Error(`internal: the std unit restores ${filePath} with a dependency on ${record.paths[i]}, which this db does not hold`);
+		recordDependency(db.depStack, createQueryKey(kind, id));
+	}
+	recordDurability(db.depStack, record.durability);
+	db.contexts.set(checkCtxKey(fileId), ctx);
+	setRegisteredAt(db.moduleDeps, fileId, db.revision.value);
+	db.trees.set(checkNodeKey(fileId), program);
+	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, db.revision.value, true);
+	if (record.collected) markCollected(db.exportStore, fileId, db.revision.value);
+	registerModuleCtx(filePath, ctx);
 }
 
 function copyDisambTable(table: HashMap<string, int32>): HashMap<string, int32> {

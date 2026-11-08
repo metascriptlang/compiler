@@ -81,6 +81,10 @@ function touch(cache: TaCacheStore, entry: TaCacheEntry): void {
 	entry.accessedAt = cache.accessClock;
 }
 
+export function cachePeek(cache: TaCacheStore, key: TaQueryKey): TaCacheEntry | null {
+	return findEntry(cache, key);
+}
+
 export function cacheGet(
 	cache: TaCacheStore,
 	key: TaQueryKey,

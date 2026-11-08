@@ -21,6 +21,12 @@ export function restrictedComptimeSource(modulePath: string): string {
 type EngineRunObserver = (vm: RaiserVM, ran: int32[]) => void;
 let _runObserver: EngineRunObserver | null = null;
 
+let _comptimeRuns: int32 = 0;
+
+export function comptimeRunCount(): int32 {
+	return _comptimeRuns;
+}
+
 export function observeComptimeRuns(observer: EngineRunObserver | null): EngineRunObserver | null {
 	const previous = _runObserver;
 	_runObserver = observer;
@@ -33,6 +39,7 @@ export function callWithComptimeHostPolicy(
 	args: RaiserValue[],
 	modulePath: string,
 ): RaiserValue {
+	_comptimeRuns += 1;
 	const previousRestricted = vm.hostCallsRestricted;
 	const previousSource = vm.hostPolicySource;
 	const restrictedSource = restrictedComptimeSource(modulePath);

@@ -365,6 +365,28 @@ export function replayOps(ops: KeyedOp[]): void {
 	for (const op of ops) recordOp(op.key, op.sym, op.canon);
 }
 
+export class OpCanonRows {
+	syms: Symbol[] = [];
+	keys: string[] = [];
+}
+
+export function opCanonRows(): OpCanonRows {
+	const rows = new OpCanonRows();
+	for (const [sym, key] of _opShared.keyOfSym) {
+		rows.syms.push(sym);
+		rows.keys.push(key);
+	}
+	return rows;
+}
+
+export function replayOpCanonRows(rows: OpCanonRows): void {
+	for (let i = 0; i < rows.syms.length; i += 1) _opShared.keyOfSym.set(rows.syms[i], rows.keys[i]);
+}
+
+export function opTablesAtRest(): boolean {
+	return _opModule == "" && _opWriting == _opShared && _opTables.size == 0 && _reusedOps.size == 0 && _opView.length == 0;
+}
+
 export function liftedOp(t: Type, op: AttachedOp, name: string, fnType: Type | null): Symbol {
 	const key = opKey(t, op);
 	const held = viewedOp(key);

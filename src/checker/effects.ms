@@ -116,6 +116,22 @@ function tableFor(e: Effect): EffectTable {
 	};
 }
 
+export function effectsCheckedModules(): string[] {
+	const paths: string[] = [];
+	for (const path of checkedModules) paths.push(path);
+	return paths;
+}
+
+export function effectsAtRestAfter(graph: ModuleGraph): boolean {
+	return deferred.length == 0 && hookRegistry == null && moduleGraph == graph && !uncheckedBodiesReported;
+}
+
+export function restoreEffectsAfterPrelude(paths: string[], graph: ModuleGraph): void {
+	for (const path of paths) checkedModules.add(path);
+	moduleGraph = graph;
+	uncheckedBodiesReported = false;
+}
+
 export function deferEffectCheck(site: Node, rule: string, check: (ctx: CheckerContext) => void): void {
 	for (const d of deferred) {
 		if (d.site == site && d.rule == rule) return;

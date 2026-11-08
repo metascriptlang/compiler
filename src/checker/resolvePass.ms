@@ -62,6 +62,10 @@ const _forwardNullables: ForwardNullable[] = [];
 const _forwardOwners: ForwardOwner[] = [];
 const _forwardWraps: ForwardWrap[] = [];
 
+export function forwardTablesPending(): int32 {
+	return (_forwardNullables.length + _forwardOwners.length + _forwardWraps.length) as int32;
+}
+
 function declaresType(t: Type | null, sym: Symbol): boolean {
 	let peeled = t;
 	while (peeled != null && peeled.kind == TypeKind.Alias) peeled = peeled.typeReturn;

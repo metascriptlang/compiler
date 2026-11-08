@@ -143,6 +143,16 @@ export function refuseRoutineFlagDecodeWhileSealed(text: string): void {
 	if (_routineFlagsSealed) throw new Error(`internal: routine flags of ${text} decoded during emission`);
 }
 
+export function decodedRoutineFlagKeys(): string[] {
+	const keys: string[] = [];
+	for (const key of decodedRoutineFlags.keys()) keys.push(key);
+	return keys;
+}
+
+export function prewarmRoutineFlags(keys: string[]): void {
+	for (const key of keys) routineFlagSet(key);
+}
+
 export function routineFlagSet(text: string): BitSet<RoutineFlag> {
 	if (text == "") return 0 as BitSet<RoutineFlag>;
 	const known = decodedRoutineFlags.get(text);

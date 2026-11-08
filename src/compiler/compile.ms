@@ -69,6 +69,7 @@ import { resetLiftedOps, setJsProgramScope } from "../transform/lowering/destruc
 import { setOwnedCycleCheck } from "../transform/cycles";
 import { createModuleGraph, findModule, addModule, ModuleGraph, Module, ModuleState, createModule, createImportEntry, ModuleError, ErrorSeverity, planDynamicModules, DynamicModulePlan } from "../module/graph";
 import { canonicalModulePath, createFileSystemProvider, loadModule, provideSource, SourceProvider, takeHeaderTimings, registerHeaderCache, headerModuleSource, isCHeaderPath } from "../module/loader";
+import { registerStdUnitStamps } from "../checker/stdUnit";
 import { registerPreludeStampFn, preludePackKey, preludePackStamp, packRoot, tryLoadPreludeDeps, writePreludeDeps, PreludeDepsSnapshot, DepsModuleRow, DepsImportRow, DepsCircularRow } from "../checker/preludePack";
 import { modulePassIdentity } from "../checker/prelude";
 import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
@@ -113,6 +114,7 @@ import { VERSION } from "./usage";
 // module load so every later build engages it without an init-order hazard.
 registerHeaderCache(headerModuleKey, lookupHeaderModule, storeHeaderModule);
 registerPreludeStampFn(compilerStamp, stdTreeStamp);
+registerStdUnitStamps(toolchainStamp, stdTreeStamp);
 
 // ===== Build Helpers =====
 

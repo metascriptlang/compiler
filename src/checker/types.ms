@@ -1757,6 +1757,30 @@ export function createMaybeType(inner: Type): Type {
 	return t;
 }
 
+export function maybeCacheSize(): int32 {
+	return _maybeCacheNames.length as int32;
+}
+
+export function maybeCacheKeys(): string[] {
+	const keys: string[] = [];
+	for (const key of _maybeCacheNames) keys.push(key);
+	return keys;
+}
+
+export function maybeCacheTypes(): Type[] {
+	const types: Type[] = [];
+	for (const t of _maybeCache) types.push(t);
+	return types;
+}
+
+export function replayMaybeCache(keys: string[], types: Type[]): void {
+	if (keys.length != types.length) throw new Error(`internal: ${keys.length} Maybe cache keys replayed with ${types.length} types`);
+	for (let i = 0; i < keys.length; i += 1) {
+		_maybeCacheNames.push(keys[i]);
+		_maybeCache.push(types[i]);
+	}
+}
+
 function maybePayloadIs(cached: Type, inner: Type): boolean {
 	return isReadonlyView(cached.typeReturn) == isReadonlyView(inner) && isOwnedClosure(cached.typeReturn) == isOwnedClosure(inner) && sameDeclarationsIn(cached.typeReturn, inner, [], []);
 }
@@ -4083,6 +4107,57 @@ export function leaveSpeculation(): void {
 
 function newHeldBeyond(): HeldBeyond {
 	return { held: [], seen: new HashSet<Type>() };
+}
+
+export class HeldBeyondRows {
+	syms: Symbol[] = [];
+	symHeld: Type[][] = [];
+	fieldNames: string[] = [];
+	slots: Type[] = [];
+	slotHeld: Type[][] = [];
+}
+
+export function heldBeyondRows(): HeldBeyondRows {
+	const rows = new HeldBeyondRows();
+	for (const [sym, entry] of _heldBySym) {
+		rows.syms.push(sym);
+		rows.symHeld.push(heldCopy(entry));
+	}
+	for (const [names, bucket] of _heldByFieldNames) {
+		for (const [slot, entry] of bucket) {
+			rows.fieldNames.push(names);
+			rows.slots.push(slot);
+			rows.slotHeld.push(heldCopy(entry));
+		}
+	}
+	return rows;
+}
+
+function heldCopy(entry: HeldBeyond): Type[] {
+	const out: Type[] = [];
+	for (const t of entry.held) out.push(t);
+	return out;
+}
+
+function heldFrom(types: Type[]): HeldBeyond {
+	const entry = newHeldBeyond();
+	for (const t of types) {
+		entry.seen.add(t);
+		entry.held.push(t);
+	}
+	return entry;
+}
+
+export function replayHeldBeyond(rows: HeldBeyondRows): void {
+	for (let i = 0; i < rows.syms.length; i += 1) _heldBySym.set(rows.syms[i], heldFrom(rows.symHeld[i]));
+	for (let i = 0; i < rows.slots.length; i += 1) {
+		let bucket = _heldByFieldNames.get(rows.fieldNames[i]);
+		if (bucket == null) {
+			bucket = new HashMap<Type, HeldBeyond>();
+			_heldByFieldNames.set(rows.fieldNames[i], bucket);
+		}
+		bucket.set(rows.slots[i], heldFrom(rows.slotHeld[i]));
+	}
 }
 
 function heldEntry(slot: Type): HeldBeyond {

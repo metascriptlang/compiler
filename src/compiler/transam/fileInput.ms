@@ -174,6 +174,11 @@ export function getFilePath(store: TaFileInputStore, fileId: int32): string {
 	return store.files[idx].filePath;
 }
 
+export function getInputPath(store: TaFileInputStore, fileId: int32): string {
+	const idx = findByFileId(store, fileId);
+	return idx < 0 ? "" : store.files[idx].filePath;
+}
+
 // Count of all inputs, the absent ones included
 export function getFileCount(store: TaFileInputStore): int32 {
 	return store.files.length;

@@ -17,10 +17,11 @@ import { isAssignableProfile } from "./compat";
 import { TargetInfo, hostTargetInfo, unifyTypeProfile, substituteParamsProfile, typeNameOfProfile, typeDisplayNameProfile, getPropertyProfile, findVariantByFieldNameProfile } from "./types";
 import { findAllExtensionsByNameProfile } from "./context";
 import { checkCallExprProfile } from "./callResolve";
-import { instantiateProfile, instantiateTimings, lookupModuleCtx, resetInstantiationState } from "./instantiate";
-import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbTypeCheck, TransAmDb } from "../compiler/transam/index";
+import { instantiateProfile, instantiateTimings, lookupModuleCtx, lookupModuleProgram, resetInstantiationState } from "./instantiate";
+import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbTypeCheck, dbCheckRecord, TransAmDb } from "../compiler/transam/index";
 import { opMark, opsFrom, replayOps, KeyedOp } from "../codegen/c/types";
 import { HeldNote, heldNoteMark, heldNotesFrom, replayHeldNotes, heldNotesText } from "./types";
+import { StdUnitInput, StdUnitModule, stdUnitRequested, stdUnitStoreOff, processFreshness, engineMark, noteGraphCheck, noteStdUnitRefused, stdUnitKeyText, stdUnitTimeKey, stdUnitReport, loadStdUnit, applyStdUnit, adoptStdUnitTarget, verifyRestoredExports, writeStdUnit } from "./stdUnit";
 
 export class CheckSession {
 	keep: boolean;
@@ -148,21 +149,20 @@ function keptPrelude(db: TransAmDb): CheckerContext {
 // reason as targetOs: checks that depend on the runtime's capabilities (e.g. the
 // freestanding async gate) run inside this pass, long before applyGcMode.
 export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms", targetOs: string = platform, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Drc, config: ResolverConfig | null = null, session: CheckSession | null = null, strictNullChecks: boolean = false, appMode: string = "console"): ExportRegistry {
+	const unitWanted = stdUnitRequested();
+	const unitFresh = unitWanted ? processFreshness() : "";
+	const unitEngine = unitWanted ? engineMark() : "";
+	noteGraphCheck();
 	const kept: TransAmDb | null = session != null ? session.db : null;
 	const db = kept != null ? kept : createTransAmDb(graph.loadOrder.length * 8 + 64, session != null && session.keep);
 	graph.dispatchRegistry = db.dispatchRegistry;
 	const _tpre0 = performance.now();
 	const resolverConfig = config != null ? config : createDefaultConfig(backendOfExtension(backendExt), stdPath);
 	const holdsPrelude = graphHoldsPrelude(graph);
-	const baseCtx = kept != null ? keptPrelude(kept) : holdsPrelude ? createGraphPreludeContext(db.dispatchRegistry) : hasExtraGlobalImports() ? buildPreludeContext(stdPath, backendExt, db.dispatchRegistry) : preludeContextFor(stdPath, backendExt, db.dispatchRegistry);
+	let baseCtx = kept != null ? keptPrelude(kept) : holdsPrelude ? createGraphPreludeContext(db.dispatchRegistry) : hasExtraGlobalImports() ? buildPreludeContext(stdPath, backendExt, db.dispatchRegistry) : preludeContextFor(stdPath, backendExt, db.dispatchRegistry);
 	const preludeOwned = holdsPrelude ? new HashSet<string>() : preludeClosure(graph, resolverConfig);
 	const tPrelude = performance.now() - _tpre0;
-	baseCtx.targetOs = targetOs;
-	baseCtx.targetInfo = targetInfo;
-	baseCtx.gcMode = gcMode;
-	baseCtx.strictNullChecks = strictNullChecks;
-	baseCtx.appMode = appMode;
-	baseCtx.stdRoot = resolverConfig.stdPath;
+	stampPrelude(baseCtx, targetOs, targetInfo, gcMode, strictNullChecks, appMode, resolverConfig.stdPath);
 	lastPreludeCtx = baseCtx;
 
 	const _tb0 = performance.now();
@@ -178,10 +178,29 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	dbBindGraph(db, graph);
 	const tBind = performance.now() - _tb0;
 
+	const plan = unitWanted ? planStdUnit(graph, session, holdsPrelude, unitFresh, resolverConfig, targetOs, targetInfo, gcMode, strictNullChecks, appMode) : null;
+	if (plan != null) plan.engineMark = unitEngine;
+	const loaded = plan != null ? loadStdUnit(plan.keyText, db, graph) : null;
+	if (loaded != null) {
+		baseCtx = loaded.base;
+		stampPrelude(baseCtx, targetOs, targetInfo, gcMode, strictNullChecks, appMode, resolverConfig.stdPath);
+		lastPreludeCtx = baseCtx;
+		db.preludeCtx = baseCtx;
+		adoptStdUnitTarget(loaded);
+		applyStdUnit(loaded, db, graph);
+	}
+	const writePlan = plan != null && loaded == null ? plan : null;
+	let unitWritten = false;
+
 	const _tc0 = performance.now();
 	if (modulePasses().length > 0) setModulePassExempt(globalImportClosure(graph), resolverConfig.stdPath);
 	const checked: { mod: Module, ctx: CheckerContext }[] = [];
-	for (const path of graph.loadOrder) {
+	for (let index = 0; index < graph.loadOrder.length; index += 1) {
+		if (writePlan != null && !unitWritten && index > writePlan.lastPrelude) {
+			writeUnitAfterPrelude(writePlan, db, graph, baseCtx, checked);
+			unitWritten = true;
+		}
+		const path = graph.loadOrder[index];
 		const mod = findModule(graph, path);
 		if (mod == null || (mod.source == "" && mod.program == null) || preludeOwned.has(path)) continue;
 		mod.exportNames = [];
@@ -215,20 +234,24 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 			if (!hasModuleError(mod)) mod.errors.push(createModuleError(`internal: ${path} produced no check result`, 0, 0, ErrorSeverity.Error));
 			continue;
 		}
-		if (fresh && mod.stdPrelude) promoteStdModuleIntoPrelude(baseCtx, ctx, mod.preludeSpecifier, injectedIncludes, injectedFlags);
+		const restored = loaded != null && loaded.paths.has(path);
+		if (fresh && mod.stdPrelude && !restored) promoteStdModuleIntoPrelude(baseCtx, ctx, mod.preludeSpecifier, injectedIncludes, injectedFlags);
 		if (fresh && mod.extraPrelude) promoteModuleIntoPrelude(baseCtx, ctx);
 		if (mod.extraPrelude) bindModulePasses(mod, ctx);
 		checked.push({ mod, ctx });
 		for (const e of collectExports(ctx, path)) {
 			if (!isStaticExtensionSym(e.sym) && !hasExportName(mod, e.name)) mod.exportNames.push(e.name);
 		}
+		if (loaded != null && restored) verifyRestoredExports(loaded, path, mod.exportNames);
 	}
+	if (writePlan != null && !unitWritten) writeUnitAfterPrelude(writePlan, db, graph, baseCtx, checked);
 	for (const c of checked) mirrorModuleErrors(c.mod, c.ctx);
 	const tCheck = performance.now() - _tc0;
 	if (graphTiming) {
 		console.log(`    prelude=${tPrelude}ms bind=${tBind}ms check=${tCheck}ms`);
 		const pk = preludePackStats();
 		console.log(`    preludePack: hit=${pk[3]} key=${pk[0]}ms load=${pk[1]}ms write=${pk[2]}ms`);
+		if (unitWanted) console.log(`    stdUnit: ${stdUnitReport()}`);
 		const tp = threePassTimings();
 		console.log(`    3pass: collect=${tp[0]}ms resolve=${tp[1]}ms flow=${tp[2]}ms body=${tp[3]}ms unused=${tp[4]}ms`);
 		const ip = instantiateProfile();
@@ -248,6 +271,112 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		console.log(`    getProperty: n=${gp[0]} | findVariantByFieldName: n=${fvb[0]} | findAllExtByName: n=${fae[0]}`);
 	}
 	return db.exportRegistry;
+}
+
+function stampPrelude(ctx: CheckerContext, targetOs: string, targetInfo: TargetInfo, gcMode: GcMode, strictNullChecks: boolean, appMode: string, stdRoot: string): void {
+	ctx.targetOs = targetOs;
+	ctx.targetInfo = targetInfo;
+	ctx.gcMode = gcMode;
+	ctx.strictNullChecks = strictNullChecks;
+	ctx.appMode = appMode;
+	ctx.stdRoot = stdRoot;
+}
+
+class StdUnitPlan {
+	keyText: string = "";
+	engineMark: string = "";
+	lastPrelude: int32 = -1;
+}
+
+function checkedInGraph(mod: Module | null): boolean {
+	return mod != null && (mod.source != "" || mod.program != null);
+}
+
+function preludePrefixProblem(graph: ModuleGraph): string {
+	let other = "";
+	for (const path of graph.loadOrder) {
+		const mod = findModule(graph, path);
+		if (mod == null || !checkedInGraph(mod)) continue;
+		if (mod.stdPrelude && mod.extraPrelude) return `${path} is a std prelude module and a build.ms global import`;
+		if (!mod.stdPrelude) other = path;
+		else if (other != "") return `${path} of the prelude is checked after ${other}, which is outside it`;
+	}
+	return "";
+}
+
+function lastPreludeIndex(graph: ModuleGraph): int32 {
+	let last: int32 = -1;
+	for (let i = 0; i < graph.loadOrder.length; i += 1) {
+		const mod = findModule(graph, graph.loadOrder[i]);
+		if (mod != null && checkedInGraph(mod) && mod.stdPrelude) last = i as int32;
+	}
+	return last;
+}
+
+function planStdUnit(graph: ModuleGraph, session: CheckSession | null, holdsPrelude: boolean, fresh: string, config: ResolverConfig, targetOs: string, targetInfo: TargetInfo, gcMode: GcMode, strictNullChecks: boolean, appMode: string): StdUnitPlan | null {
+	const started = performance.now();
+	let why = "";
+	if (session != null && session.keep) why = "a kept check session";
+	else if (!holdsPrelude) why = "the graph holds no prelude";
+	else if (fresh != "") why = fresh;
+	else if (stdUnitStoreOff()) why = "the global cache is off";
+	else why = preludePrefixProblem(graph);
+	let plan: StdUnitPlan | null = null;
+	if (why == "") {
+		const keyText = stdUnitKeyText(graph, config, targetOs, targetInfo, gcMode, strictNullChecks, appMode);
+		if (keyText == "") why = "no compiler identity or std path to key the unit by";
+		else {
+			const made = new StdUnitPlan();
+			made.keyText = keyText;
+			made.lastPrelude = lastPreludeIndex(graph);
+			plan = made;
+		}
+	}
+	stdUnitTimeKey(started);
+	if (why != "") noteStdUnitRefused(why);
+	return plan;
+}
+
+function preludeDiagnostic(ctx: CheckerContext): string {
+	for (const err of ctx.errors) {
+		if (err.severity == Severity.Error || err.severity == Severity.Warning) return err.message;
+	}
+	return "";
+}
+
+function writeUnitAfterPrelude(plan: StdUnitPlan, db: TransAmDb, graph: ModuleGraph, baseCtx: CheckerContext, checked: { mod: Module, ctx: CheckerContext }[]): void {
+	const input = new StdUnitInput(db, graph, baseCtx);
+	input.keyText = plan.keyText;
+	input.engineMark = plan.engineMark;
+	let prelude = 0;
+	for (const path of graph.loadOrder) {
+		const mod = findModule(graph, path);
+		if (mod != null && checkedInGraph(mod) && mod.stdPrelude) prelude += 1;
+	}
+	let why = checked.length != prelude ? `${checked.length} of ${prelude} prelude modules produced a check` : "";
+	for (const c of checked) {
+		if (why != "") break;
+		const path = c.mod.path;
+		const diagnostic = preludeDiagnostic(c.ctx);
+		const program = lookupModuleProgram(path);
+		const record = dbCheckRecord(db, path);
+		if (!c.mod.stdPrelude) why = `${path}, outside the prelude, was checked before the prelude finished`;
+		else if (diagnostic != "") why = `${path} reports '${diagnostic}'`;
+		else if (lookupModuleCtx(path) != c.ctx) why = `${path} registered another context`;
+		else if (program == null) why = `${path} registered no checked tree`;
+		else if (record == null) why = `${path} has no current check entry`;
+		else {
+			const m = new StdUnitModule();
+			m.path = path;
+			m.ctx = c.ctx;
+			m.program = program;
+			m.exportNames = c.mod.exportNames;
+			m.record = record;
+			input.modules.push(m);
+		}
+	}
+	if (why == "") why = writeStdUnit(input);
+	if (why != "") noteStdUnitRefused(why);
 }
 
 function globalImportClosure(graph: ModuleGraph): HashSet<string> {

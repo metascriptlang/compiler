@@ -237,6 +237,59 @@ let _instanceHooks: HashMap<Symbol, InstanceHook[]> = new HashMap<Symbol, Instan
 let _hookScannedInstances: HashMap<Symbol, Type[]> = new HashMap<Symbol, Type[]>();
 let _hookInstanceTypes: HashMap<Symbol, Type[]> = new HashMap<Symbol, Type[]>();
 
+export class InstanceHookRows {
+	owners: Symbol[] = [];
+	concreteTypes: Type[][] = [];
+	ops: AttachedOp[] = [];
+	syms: Symbol[] = [];
+	scannedOwners: Symbol[] = [];
+	scanned: Type[][] = [];
+	typedOwners: Symbol[] = [];
+	typed: Type[][] = [];
+}
+
+export function instanceHookRows(): InstanceHookRows {
+	const rows = new InstanceHookRows();
+	for (const [owner, hooks] of _instanceHooks) {
+		for (const hook of hooks) {
+			rows.owners.push(owner);
+			rows.concreteTypes.push(hook.concreteTypes);
+			rows.ops.push(hook.op);
+			rows.syms.push(hook.sym);
+		}
+	}
+	for (const [owner, types] of _hookScannedInstances) {
+		rows.scannedOwners.push(owner);
+		rows.scanned.push(types);
+	}
+	for (const [owner, types] of _hookInstanceTypes) {
+		rows.typedOwners.push(owner);
+		rows.typed.push(types);
+	}
+	return rows;
+}
+
+export function replayInstanceHooks(rows: InstanceHookRows): void {
+	for (let i = 0; i < rows.owners.length; i += 1) {
+		let hooks = _instanceHooks.get(rows.owners[i]);
+		if (hooks == null) {
+			hooks = [];
+			_instanceHooks.set(rows.owners[i], hooks);
+		}
+		hooks.push({ concreteTypes: rows.concreteTypes[i], op: rows.ops[i], sym: rows.syms[i] });
+	}
+	for (let i = 0; i < rows.scannedOwners.length; i += 1) _hookScannedInstances.set(rows.scannedOwners[i], rows.scanned[i]);
+	for (let i = 0; i < rows.typedOwners.length; i += 1) _hookInstanceTypes.set(rows.typedOwners[i], rows.typed[i]);
+}
+
+export function registeredModuleCount(): int32 {
+	return (_moduleCtxMap.size + _moduleProgramMap.size + _modulesInCheck.size) as int32;
+}
+
+export function localGenericCount(): int32 {
+	return (_localGenerics.size + _localInstances.size) as int32;
+}
+
 export function instanceArgsOf(sym: Symbol): Type[] {
 	if (sym.instanceArgs == null) throw new Error(`internal: instance '${sym.name}' has no retained checked arguments`);
 	return sym.instanceArgs;
