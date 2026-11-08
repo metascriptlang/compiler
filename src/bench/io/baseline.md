@@ -136,6 +136,6 @@ Why the four slower rows are slower; probes and counters were pinned to one core
   sizes put them. The reference places big chunks the same way (Nim `15dd34468` `lib/system/alloc.nim:1085-1091`,
   `addr(c.data)` of a page-aligned chunk), with no offset or colouring.
 
-Rejected: spreading big-chunk payload offsets (jemalloc's `cache_oblivious` random cache-line offset). It is a
-mechanism the reference lacks, and a speed gain alone does not justify a divergence from the reference
-(`~/metascript/CLAUDE.md` §Language behaviour).
+Open: spreading big-chunk payload offsets (jemalloc's `cache_oblivious` random cache-line offset, not traced yet)
+would move these rows off the slow end. Placement changes no program's result, so it is not a divergence from the
+reference (`~/metascript/CLAUDE.md` §Language behaviour); it waits on a trace and an A/B.
