@@ -501,6 +501,7 @@ function takeSymbol(ctx: CheckerContext, node: Node, name: string, kind: SymbolK
 	adopted.instanceArgs = null;
 	adopted.instanceParams = null;
 	adopted.ctorRoutine = null;
+	adopted.ctorOwner = null;
 	return adopted;
 }
 

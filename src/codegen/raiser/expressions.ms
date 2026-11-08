@@ -2821,7 +2821,7 @@ function compileSuperCall(s: RaiserCompState, node: Node, superSym: Symbol): int
 		funcIdx = resolveRoutine(s, superSym);
 		const fnType = superSym.symbolType;
 		const self = fnType != null && fnType.typeChildren.length > 0 ? unwrapRef(fnType.typeChildren[0]) : null;
-		parent = self != null ? self.sym : null;
+		parent = self != null && self.sym != null ? self.sym : superSym.ctorOwner;
 	} else {
 		const body = superSym.symbolType != null ? unwrapRef(superSym.symbolType) : null;
 		parent = body != null && body.sym != null ? body.sym : superSym;

@@ -37,6 +37,7 @@ export function replayCtorRoutines(rows: CtorRow[]): void {
 function registerCtorRoutine(owner: Symbol, routine: Symbol): void {
 	if (_capture != null) _capture.push({ owner, routine });
 	owner.ctorRoutine = routine;
+	routine.ctorOwner = owner;
 }
 
 export function mintCtorRoutine(ctx: CheckerContext, owner: Symbol, ownerName: string, thisType: Type, userTypes: Type[], userNames: string[], declNode: Node | null, defaults: Node[]): Symbol {

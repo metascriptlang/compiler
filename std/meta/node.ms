@@ -410,6 +410,7 @@ export class Symbol {
 	instanceArgs: Type[] | null;
 	instanceParams: Type[] | null;
 	ctorRoutine: Symbol | null;
+	ctorOwner: Symbol | null;
 	borrowedFrom: Symbol | null;
 	staticOwner: Symbol | null;
 	typeParamOwner: Symbol | null;
