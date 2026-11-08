@@ -12,6 +12,7 @@ import "./ecdhInvalidApiVectors";
 import "./ecdhValidApiVectors";
 import "./ecdhAcceptableApiVectors";
 import "./montgomeryBounds";
+import "./pcurveBaseTable";
 import "./ed25519ApiVectors";
 import "./hashApiVectors";
 import "./hashOutputBoundary";
