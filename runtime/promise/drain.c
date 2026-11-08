@@ -32,6 +32,7 @@ static int msOrphanErrorCount = 0;
 /* Registers the failed future on the thread that owns its count: the entry's
  * incref is a plain rc op, so it runs where the owner's own rc ops run. */
 void msAdoptOrphanFailure(void* fut) {
+	msArmExitDrain();
 	MS_ORPHAN_LOCK();
 	if (atomic_load_explicit(&((msFutureBase*)fut)->errorObserved, memory_order_relaxed)) {
 		MS_ORPHAN_UNLOCK();
@@ -89,6 +90,7 @@ void msNoteOrphanFailure(void* fut) {
 }
 
 void msNoteOrphanError(void* err) {
+	msArmExitDrain();
 	MS_ORPHAN_LOCK();
 	if (msOrphanErrorCount < MS_ORPHAN_MAX) {
 		msOrphanErrors[msOrphanErrorCount++] = err;
@@ -123,7 +125,7 @@ void msClearOrphanFailure(void* fut) {
 	MS_ORPHAN_UNLOCK();
 }
 
-int msReportOrphanFailures(void) {
+static int msReportOrphansNow(void) {
 	int reported = 0;
 	MS_ORPHAN_LOCK();
 	for (int i = 0; i < msOrphanCount; i++) {
@@ -186,8 +188,26 @@ void msDrainUntilIdle(void) {
 static _Atomic(msExitHookFn) msActorExitHook = NULL;
 void msSetActorExitHook(msExitHookFn hook) { atomic_store_explicit(&msActorExitHook, hook, memory_order_release); }
 
+typedef int (*msExitReportFn)(void);
+static _Atomic(msExitHookFn) msExitDrain = NULL;
+static _Atomic(msExitReportFn) msExitReport = NULL;
+
+/* Call from every creator of state that msDrainUntilIdle or the rejection report
+ * reads: a program that never armed them exits without draining or reporting. */
+void msArmExitDrain(void) {
+	if (atomic_load_explicit(&msExitReport, memory_order_relaxed) != NULL) return;
+	atomic_store_explicit(&msExitDrain, msDrainUntilIdle, memory_order_release);
+	atomic_store_explicit(&msExitReport, msReportOrphansNow, memory_order_release);
+}
+
+int msReportOrphanFailures(void) {
+	msExitReportFn report = atomic_load_explicit(&msExitReport, memory_order_acquire);
+	return report != NULL ? report() : 0;
+}
+
 void msDrainAtExit(void) {
-	msDrainUntilIdle();
+	msExitHookFn drain = atomic_load_explicit(&msExitDrain, memory_order_acquire);
+	if (drain != NULL) drain();
 	msExitHookFn hook = atomic_load_explicit(&msActorExitHook, memory_order_acquire);
 	if (hook != NULL) hook();
 }

@@ -592,6 +592,7 @@ bool msPoolSetWorkerCount(int32_t count) {
 }
 
 static void msPoolInit(void) {
+	msArmExitDrain();
 	gPool = (msThreadPool*)msMemAlloc0(sizeof(msThreadPool));
 #ifdef MS_POOL_WORKERS
 	int cpus = msPoolWorkersWanted > 0 ? msPoolWorkersWanted : MS_POOL_WORKERS;

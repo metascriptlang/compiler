@@ -335,6 +335,7 @@ msDispatcher* msGetDispatcher(void) {
 			gWakeIocps[idx] = gDispatcher->iocp;
 		}
 		msCallSoonProc = msDispatcherCallSoon;
+		msArmExitDrain();
 	}
 	return gDispatcher;
 }
@@ -566,6 +567,7 @@ static void msLoopChannelOpen(msLoopChannel* c) {
 }
 
 static void msInitQueueOnce(void) {
+	msArmExitDrain();
 	msLoopChannelOpen(&gMainChannel);
 	gCompletionQueueInited = true;
 }
@@ -840,6 +842,7 @@ msDispatcher* msGetDispatcher(void) {
 			msSelectorRegister(gDispatcher->selector, c->wake[0], MS_EVENT_READ, NULL);
 		}
 		msCallSoonProc = msDispatcherCallSoon;
+		msArmExitDrain();
 	}
 	return gDispatcher;
 }

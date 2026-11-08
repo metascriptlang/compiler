@@ -98,6 +98,7 @@ msDispatcher* msGetDispatcher(void) {
         gDispatcher = (msDispatcher*)msMemAlloc0(sizeof(msDispatcher));
         msDequeInit(&gDispatcher->callbacks);
         msCallSoonProc = (msCallSoonFn)msDequeAppend_wrapper;
+        msArmExitDrain();
     }
     return gDispatcher;
 }

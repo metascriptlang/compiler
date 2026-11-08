@@ -343,9 +343,12 @@ extern void msNotifyFutureComplete(void);
 
 void* msLoopCompletionQueue(void);
 
+void msArmExitDrain(void);
+
 static inline void msFuturePublishCrossThread(void* fp) {
 	msFutureBase* f = (msFutureBase*)fp;
 	f->crossThreadPublished = true;
+	msArmExitDrain();
 #if MS_ACTOR_JOBS
 	if (__builtin_expect(msActorCurrentForJobs() != NULL, 0)) {
 		f->actorOwned = true;

@@ -109,6 +109,7 @@ int msAdjustTimeout(msDispatcher* d, int pollTimeout, int nextTimerMs);
 void msDrainUntilIdle(void);
 typedef void (*msExitHookFn)(void);
 void msSetActorExitHook(msExitHookFn hook);
+void msArmExitDrain(void);
 void msDrainAtExit(void);
 int msReportOrphanFailures(void);
 void msNoteOrphanFailure(void* fut);
