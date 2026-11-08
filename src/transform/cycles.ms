@@ -13,15 +13,14 @@
 // a fresh IntSet marker per query and no cache at all).
 //
 // Unknown pointee (Ref with null typeReturn) is conservatively cyclic.
-// The reference non-final rule (types.nim:433-435) is implemented via the
-// OpenClass bit on the Struct arm below — a class that is extended is cyclic. An interface
-// or unnamed record is open the same way, but only to the object types the checker accepted
-// behind it, so a hierarchy whose implementers cannot reach back and cannot form a cycle
-// themselves stays acyclic.
+// A class that is extended (OpenClass) is open to the subclasses noted on it, as an interface
+// or unnamed record is open to the object types the checker accepted behind it: a cycle can run
+// through any of them, so a hierarchy whose subtypes cannot reach back and cannot form a cycle
+// themselves stays acyclic. An extended class without notes is cyclic, the reference non-final rule.
 
 import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
 import { NameSet, createNameSet, createSharingNameSet, nameSetTypeKey, nameSetRememberTypeKey, nameSetAdd, nameSetContains } from "./context";
-import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey, countedEvictElement, isAtomicRef, isOwnedRef, isUnownedRef, heldBeyond, hasGenericParams, hasTypeIdentity, createPrimitive, createArray, createTypeRef, numberType } from "../checker/types";
+import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey, countedEvictElement, isAtomicRef, isOwnedRef, isUnownedRef, heldBeyond, subclassesOf, hasGenericParams, hasTypeIdentity, createPrimitive, createArray, createTypeRef, numberType } from "../checker/types";
 import { anonTypeName, isAnonTypeName, typeKey } from "../codegen/c/types";
 import { monoInstanceName } from "../monomorphize/registry";
 
@@ -111,13 +110,8 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, sawPlainEdge:
 		},
 		TypeKind.Function | TypeKind.Unknown => true,
 		TypeKind.Struct => {
-			// Non-final rule (types.nim:436-438 `if tfFinal notin t.flags: result = true`):
-			// a class that is extended (OpenClass bit, stamped in resolveClass) can be
-			// subclassed into a back-edge, so it can form a cycle independent of its
-			// own declared fields. Independent of the typeExtra walk below (that covers
-			// field inheritance; BOTH apply).
 			if (t.typeFlags.has(TypeFlag.Acyclic)) return false;
-			if (t.typeFlags.has(TypeFlag.OpenClass)) return true;
+			if (extendedWithoutNotes(t)) return true;
 			const key = typeIdentity(t, marker);
 			if (withRef && key != "" && key == origKey) return sawPlainEdge;
 			if (key != "") {
@@ -196,20 +190,32 @@ function holdsNoCell(t: Type): boolean {
 	};
 }
 
+// A subclass holds its parent's fields flattened among its own, so its parent is no edge to walk.
 function cfaStructFields(t: Type, origKey: string, withRef: boolean, sawPlainEdge: boolean, marker: NameSet): boolean {
-	if (t.typeExtra != null && cfaAux(t.typeExtra, origKey, withRef, sawPlainEdge, marker)) return true;
+	if (t.typeExtra != null && !t.typeFlags.has(TypeFlag.HasInheritedFields) && cfaAux(t.typeExtra, origKey, withRef, sawPlainEdge, marker)) return true;
 	for (const child of t.typeChildren) {
 		if (cfaAux(child, origKey, withRef, sawPlainEdge, marker)) return true;
 	}
 	return cfaHeldBeyond(t, origKey, withRef, sawPlainEdge, marker);
 }
 
-// An interface or unnamed record stands for every object type the checker accepted behind
-// it (noteHeldBeyond); a cycle can run through any of them. An implementer with generic
-// parameters, or with no key to mark a walk by, has fields no walk can see, so it counts as
-// closing one.
+function extendedWithoutNotes(t: Type): boolean {
+	return t.typeFlags.has(TypeFlag.OpenClass) && subclassesOf(t) == null;
+}
+
+// The object types a cell of `t` can be: those the checker accepted behind an interface or unnamed
+// record (noteHeldBeyond), and the subclasses of an extended class (noteSubclass).
+function heldOrSubclasses(t: Type): Type[] {
+	const held = heldBeyond(t);
+	const subs = subclassesOf(t);
+	return subs == null ? held : held.concat(subs);
+}
+
+// An interface, unnamed record or extended class stands for every object type a cell of it can be;
+// a cycle can run through any of them. One with generic parameters, or with no key to mark a walk
+// by, has fields no walk can see, so it counts as closing one.
 function cfaHeldBeyond(t: Type, origKey: string, withRef: boolean, sawPlainEdge: boolean, marker: NameSet): boolean {
-	for (const held of heldBeyond(t)) {
+	for (const held of heldOrSubclasses(t)) {
 		if (heldKey(held, marker) == "" || cfaAux(held, origKey, withRef, sawPlainEdge, marker)) return true;
 	}
 	return false;
@@ -223,7 +229,7 @@ function cfaInstanceBody(body: Type | null, origKey: string, withRef: boolean, s
 	}
 	if (body.kind == TypeKind.Struct) {
 		if (body.typeFlags.has(TypeFlag.Acyclic)) return false;
-		if (body.typeFlags.has(TypeFlag.OpenClass)) return true;
+		if (extendedWithoutNotes(body)) return true;
 		return cfaStructFields(body, origKey, withRef, sawPlainEdge, marker);
 	}
 	if (body.kind == TypeKind.Union) {
@@ -269,8 +275,9 @@ export function canFormAcycle(t: Type | null, cyclicCache: NameSet, acyclicCache
 	return result;
 }
 
-// A cell typed by an interface is a cell of one of the types held beyond it, so it can form a
-// cycle whenever one of them can, even when no path returns to the interface itself.
+// A cell typed by an interface or an extended class is a cell of one of the types held beyond it or
+// one of its subclasses, so it can form a cycle whenever one of them can, even when no path returns
+// to the type itself.
 function implementerCanFormAcycle(t: Type, cyclicCache: NameSet): boolean {
 	const seen = createNameSet();
 	const slots: Type[] = [t];
@@ -279,7 +286,7 @@ function implementerCanFormAcycle(t: Type, cyclicCache: NameSet): boolean {
 		const inst = slot.kind == TypeKind.GenericInstance ? instanceBody(slot) : slot;
 		const body = inst != null && inst.kind == TypeKind.Ref ? inst.typeReturn : inst;
 		if (body == null || body.kind != TypeKind.Struct) continue;
-		for (const held of heldBeyond(body)) {
+		for (const held of heldOrSubclasses(body)) {
 			const key = heldKey(held, cyclicCache);
 			if (key == "") return true;
 			if (nameSetContains(seen, key)) continue;
@@ -409,7 +416,7 @@ function custodyEdgeFields(t: Type, cyclicCache: NameSet, acyclicCache: NameSet,
 	for (const child of t.typeChildren) {
 		if (custodyEdgeAux(child, false, cyclicCache, acyclicCache, marker)) return true;
 	}
-	for (const held of heldBeyond(t)) {
+	for (const held of heldOrSubclasses(t)) {
 		if (heldKey(held, marker) == "" || custodyEdgeAux(held, true, cyclicCache, acyclicCache, marker)) return true;
 	}
 	return false;
