@@ -139,3 +139,29 @@ Why the four slower rows are slower; probes and counters were pinned to one core
 Open: spreading big-chunk payload offsets (jemalloc's `cache_oblivious` random cache-line offset, not traced yet)
 would move these rows off the slow end. Placement changes no program's result, so it is not a divergence from the
 reference (`~/metascript/CLAUDE.md` §Language behaviour); it waits on a trace and an A/B.
+
+## Calloc skips memory fresh from the OS — rtx and m1m, 2026-11-08
+
+`msHeapCalloc` now zeroes only memory that has been handed out before: a big chunk carries a `zeroed` bit (set when
+its pages come from `mmap`/`VirtualAlloc`, inherited by a split, cleared on free and on every coalesce) and a small
+chunk remembers whether its bump area came from such a chunk; a cell from a free list is always zeroed. The bare and
+Wasm page sources reuse their storage, so they never claim zero (`MS_HEAP_FRESH_PAGES_ZERO`). Nim zeroes every
+`rawAlloc0` (`15dd34468` `lib/system/alloc.nim:1115-1117`); the tracking follows mimalloc's `free_is_zero`
+(`v1.8.7` `src/segment.c:621`, `v3.1.5` `src/arena.c:183-185,702`) and jemalloc's extent `zeroed` flag (`5.3.0`
+`src/extent.c:145,763,1198,1281`). Every program keeps its result, so this is not a divergence. Pinned by the guard
+`allocatorZeroOnlyWhenDirty` (red on the previous `allocator.c` and on a free that keeps the bit).
+
+Two arms on one candidate compiler (tree of this change), differing only in `runtime/allocator.{c,h}` (main
+`038c602e732` for `base`), interleaved best of 8; rtx pinned to one core (`taskset -c 31`). Rows that moved the same way in every run (three on m1m, four on rtx):
+
+| host | row | cand | base | speed |
+|---|---|---|---|---|
+| rtx | indexOf byte 1 MB (MB/s) | 219123 | 171586 | 1.28 |
+| rtx | indexOf 16 B needle 1 MB (MB/s) | 219888 | 169396 | 1.30 |
+| m1m | toString utf8 1 MB (MB/s) | 1811 | 1402 | 1.29 |
+| m1m | fs readFile utf8 1 MB (MB/s) | 1682 | 1322 | 1.27 |
+
+The indexOf rows now match the libc arm above (216301 / 222459), which closes their cause. Rows that moved in one run
+and not in another on the same code are left out, among them m1m `slice copy 64 KB` (0.80-1.55 across four runs) and
+`alloc 1 MB` (bimodal 47-107 GB/s within one process, P-core against E-core; 75 interleaved runs gave best 107264
+against 106163), rtx `array slice 10k` (0.94, then 1.00 pinned). Not measured: Windows.
