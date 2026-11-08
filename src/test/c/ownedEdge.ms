@@ -91,6 +91,25 @@ test "an extended class is classified over its subclasses" {
 	assert verdict("class N { kids: Owned<N>[] = []; up: Unowned<N> | null = null; }\nclass Leaf extends N { back: N | null = null; }\nconst l = new Leaf();", "N") == "cyclic";
 }
 
+test "an Owned closure field is a leaf of the classification; a plain closure field is cyclic" {
+	assert verdict("class W { v: int32 = 0; onClick: Owned<() => void> | null = null; }\nconst w = new W();", "W") == "acyclic";
+	assert verdict("class W { v: int32 = 0; onClick: (() => void) | null = null; }\nconst w = new W();", "W") == "cyclic";
+	assert verdict("class V { v: int32 = 0; onClick: Owned<() => void> | null = null; }\nclass W { v: int32 = 0; onClick: (() => void) | null = null; }\nconst v = new V();\nconst w = new W();", "W") == "cyclic";
+	assert verdict("class V { v: int32 = 0; onClick: Owned<() => void> | null = null; }\nclass W { v: int32 = 0; onClick: (() => void) | null = null; }\nconst v = new V();\nconst w = new W();", "V") == "acyclic";
+}
+
+test "an Owned closure whose environment can be part of a cycle is refused, naming the capture" {
+	const widget = "class Widget { onClick: (() => void) | null = null; }\n";
+	assert refused(widget + "function bad(w: Widget): Owned<() => void> {\n\treturn () => { console.log(w.onClick == null); };\n}\nconst f = bad(new Widget());\nf();\n").contains("cannot form an Owned closure: its environment can be part of a cycle through the captured 'w'");
+	assert refused("class P { v: int32 = 1; }\nfunction good(p: P): Owned<() => int32> {\n\treturn (): int32 => p.v;\n}\nconst f = good(new P());\nconsole.log(f());\n") == "compiled";
+}
+
+test "a closure formed elsewhere does not enter an Owned closure slot" {
+	const head = "class H { cb: Owned<() => void> | null = null; }\nconst h = new H();\n";
+	assert refused(head + "const f = (): void => { console.log(1); };\nh.cb = f;\n").contains("an Owned closure is formed from a function expression where it is stored");
+	assert refused(head + "h.cb = (): void => { console.log(1); };\nconst g = h.cb;\nconst k = new H();\nk.cb = g;\nh.cb = null;\n") == "compiled";
+}
+
 test "an owned Map or generic class of owned values is acyclic" {
 	assert verdict("class N { m: Owned<Map<string, Owned<N>>> = new Map<string, Owned<N>>(); }\nconst n = new N();", "N") == "acyclic";
 	assert verdict("class Box<T> { item: T; constructor(t: T) { this.item = t; } }\nclass N { b: Owned<Box<Owned<N>>> | null = null; }\nconst n = new N();", "N") == "acyclic";
