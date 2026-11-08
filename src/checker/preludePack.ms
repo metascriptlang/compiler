@@ -25,7 +25,7 @@ import { Symbol, SymbolFlag, NodeFlag, SymbolKind, SymbolState, Type, TypeKind, 
 import { pkSamples, pkDumpNode } from "../ast/fieldspec";
 import { DispatchRegistry, createDispatchRegistry } from "./dispatchRegistry";
 import { CheckerContext, createContextWithCache, createExtensionRegistry, createExtMethod, registerExtension, DispatchRecords, replayDispatchRecords, extensionsOf } from "./context";
-import { CtorRow, replayCtorRoutines } from "./ctorRoutine";
+import { CtorRow, replayCtorRoutines, startCtorCapture, endCtorCapture } from "./ctorRoutine";
 import { createIdentCache, getIdentId, identName } from "./idents";
 import { emptyType, noneType, createGenericParam, createKeyOfType, replayDuVariants } from "./types";
 import { makeSymbolState, setFlag, hasFlag } from "./symbol";
@@ -64,7 +64,7 @@ import { env, argv } from "std/process";
 import { collectStaleEntries, markUsed, nowSeconds } from "../utils/stampDirs";
 import { hashContent, collectFilesSorted } from "../utils/contentHash";
 
-const PACK_MAGIC = "MSPK11";
+const PACK_MAGIC = "MSPK12";
 
 function hashFile(path: string): string {
 	const src = try readFile(path) catch "";
@@ -959,6 +959,35 @@ test "preludePack: a symbol keeps the flags above bit 31" {
 	}
 }
 
+test "preludePack: a hit links a class and its constructor routine both ways and captures the row as the cold check did" {
+	const prevHome = pkEnterPrivateCache();
+	try {
+		const ctx = makeTestCtx();
+		const owner = makeSymbolState("PkOwner", SymbolKind.Class, noneType(), false, SymbolState.Checked);
+		const routine = makeSymbolState("PkOwner_init", SymbolKind.Function, noneType(), false, SymbolState.Checked);
+		owner.ctorRoutine = routine;
+		routine.ctorOwner = owner;
+		owner.nameId = getIdentId(ctx.table.identCache, owner.name);
+		(ctx.table.current.symbols as Map<int32, Symbol>).set(owner.nameId, owner);
+		const tables = emptyPreludeTables();
+		tables.ctorRoutines.push({ owner, routine });
+		const key = preludePackKey("ctor-routine", ".test");
+		writePreludePack(key, PK_STAMP, ctx, tables);
+		const outer = startCtorCapture();
+		const loaded = tryLoadPreludePack(key, PK_STAMP);
+		const captured = endCtorCapture(outer);
+		assert loaded != null;
+		const got = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, owner.name));
+		assert got != null && got != owner;
+		const gotRoutine = got.ctorRoutine;
+		assert gotRoutine != null && gotRoutine != routine && gotRoutine.ctorOwner == got;
+		assert captured.length == 1 && captured[0].owner == got && captured[0].routine == gotRoutine;
+		remove(`${packRoot()}/${key}.pk`);
+	} finally {
+		pkLeavePrivateCache(prevHome);
+	}
+}
+
 test "preludePack: exhaustive per-kind node roundtrip" {
 	const prevHome = pkEnterPrivateCache();
 	try {
@@ -1063,7 +1092,7 @@ test "preludePack: escaped and unicode names, negative and large int fields surv
 		const header = lines[tRow].split("\t");
 		header[2] = "x1";
 		const payload = lines[binRow].split("\t");
-		payload[19] = "q";
+		payload[20] = "q";
 		const broken: string[] = [];
 		for (let i = 0; i < lines.length; i += 1) broken.push(i == tRow ? header.join("\t") : i == binRow ? payload.join("\t") : lines[i]);
 		writeFile(path, broken.join("\n"));

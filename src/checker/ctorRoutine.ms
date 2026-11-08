@@ -31,6 +31,7 @@ export function endCtorCapture(outer: CtorRow[] | null): CtorRow[] {
 export function replayCtorRoutines(rows: CtorRow[]): void {
 	for (const row of rows) {
 		if (row.owner.ctorRoutine == null) registerCtorRoutine(row.owner, row.routine);
+		else if (_capture != null) _capture.push(row);
 	}
 }
 

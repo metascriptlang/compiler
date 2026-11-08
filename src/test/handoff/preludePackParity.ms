@@ -132,11 +132,11 @@ test "a pack read back holds the symbols, types, declaration trees and tables of
 		for (let i = 0; i < lines.length; i += 1) {
 			if (!lines[i].startsWith("N\t")) continue;
 			const f = lines[i].split("\t");
-			if (f.length < 21 || f[2] != `${NodeKind.BinaryExpr as int32}`) continue;
-			const tmp = f[19];
-			f[19] = f[20];
-			f[20] = tmp;
-			if (f[19] == f[20]) continue;
+			if (f.length < 22 || f[2] != `${NodeKind.BinaryExpr as int32}`) continue;
+			const tmp = f[20];
+			f[20] = f[21];
+			f[21] = tmp;
+			if (f[20] == f[21]) continue;
 			lines[i] = f.join("\t");
 			swapped = true;
 		}
