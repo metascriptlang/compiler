@@ -2595,6 +2595,8 @@ function readInstCache(u: UnitIn, headTag: string, rowTag: string, cache: HashMa
 
 function decodeUnit(u: UnitIn, db: TransAmDb, graph: ModuleGraph): StdUnitLoaded {
 	const out = new StdUnitLoaded();
+	const phases = env.get("MSC_STD_UNIT_PHASES") != "";
+	const t0 = performance.now();
 	let tag = u.rd.startRow();
 	while (tag >= 0 && u.objs.readObjectRow(tag, u.rd)) {
 		if (u.rd.bad) {
@@ -2605,10 +2607,12 @@ function decodeUnit(u: UnitIn, db: TransAmDb, graph: ModuleGraph): StdUnitLoaded
 	}
 	const pos = u.rd.pos;
 	const last = u.rd.last;
+	const t1 = performance.now();
 	if (!u.objs.linkTypesAndSymbols() || !u.objs.linkNodes(u.rd)) {
 		u.miss("the object rows do not link");
 		return out;
 	}
+	if (phases) console.log(`    stdUnit phases: rows=${t1 - t0}ms link=${performance.now() - t1}ms T=${u.objs.types.length} N=${u.objs.nodes.length} S=${u.objs.syms.length}`);
 	u.rd.pos = pos;
 	u.rd.last = last;
 	u.peeked = tag;
@@ -2667,6 +2671,7 @@ export function loadStdUnit(keyText: string, db: TransAmDb, graph: ModuleGraph):
 	if (db.exportRegistry.entries.length != 0 || db.dispatchRegistry.entries.length != 0 || db.contexts.size != 0) return loadMiss(started, "the db already holds checks");
 	const body = try readFile(path) catch "";
 	if (body == "") return loadMiss(started, "no unit");
+	if (env.get("MSC_STD_UNIT_PHASES") != "") console.log(`    stdUnit phases: read=${performance.now() - started}ms`);
 	const header = unitHeader(keyText);
 	if (!body.startsWith(header)) return loadMiss(started, "a foreign or mismatched unit");
 	const u = new UnitIn(body);
@@ -2678,6 +2683,7 @@ export function loadStdUnit(keyText: string, db: TransAmDb, graph: ModuleGraph):
 		u.miss(`the reader threw: ${(e as Error).message}`);
 	}
 	if (u.problem != "") return loadMiss(started, u.problem);
+	if (env.get("MSC_STD_UNIT_PHASES") != "") console.log(`    stdUnit phases: decoded=${performance.now() - started}ms`);
 	markUsed(path, nowSeconds());
 	_bytes = body.byteLength as int64;
 	_loadMs = _loadMs + (performance.now() - started);
