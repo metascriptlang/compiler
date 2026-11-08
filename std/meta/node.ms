@@ -480,6 +480,9 @@ export enum NodeFlag {
 	LendsPastCall, // checker: this call of an async routine returns while a spawn it started still borrows from the caller, so a scope exit joins its promise
 	InBounds,      // transform: the for-of lowering's own element read, whose index the loop keeps below the length its tail guard rechecks
 	WhenRaiser,    // parser: a body's `when (raiser) { … } else { … }` kept as an IfStmt; the Raiser lowering takes the consequent, every other backend the alternate
+	LengthGuard,   // transform: the for-of lowering's tail guard that throws when the array's length changed during the step
+	IntCheck,      // transform: a call intCheckInject made to check one integer operation; it reads and writes only its operands
+	WritesOperand, // transform: a call that replaced a compound assignment or a step and writes its first argument in place
 }
 
 // ===== Node Kind Enum =====

@@ -338,7 +338,9 @@ function addTarget(target: Node, out: SymSet): void {
 function lengthCheck(iterExpr: Node, lenSym: Symbol, isString: boolean, loc: SourceLocation): Node {
 	const changed = makeBinary(lengthOf(iterExpr, isString, loc), "!=", makeIdentResolved(lenSym, loc), loc);
 	const raise = createNodeAt(NodeKind.ThrowStmt, { throwArg: makeString(lengthChangedMessage(isString), loc) }, loc);
-	return makeIf(changed, makeBlock([raise], loc), makeBlock([], loc), loc);
+	const guard = makeIf(changed, makeBlock([raise], loc), makeBlock([], loc), loc);
+	if (!isString) guard.flags = guard.flags.incl(NodeFlag.LengthGuard);
+	return guard;
 }
 
 function lengthChangedMessage(isString: boolean): string {
@@ -346,17 +348,7 @@ function lengthChangedMessage(isString: boolean): string {
 }
 
 export function isArrayLengthGuard(n: Node): boolean {
-	if (n.kind != NodeKind.IfStmt) return false;
-	const then = (n.data as IfStmtData).consequent;
-	if (then.kind != NodeKind.BlockStmt) return false;
-	const stmts = (then.data as BlockStmtData).statements;
-	if (stmts.length != 1 || stmts[0].kind != NodeKind.ThrowStmt) return false;
-	const arg = (stmts[0].data as ThrowStmtData).throwArg;
-	if (arg.kind != NodeKind.StringLiteral || (arg.data as StringLiteralData).value != lengthChangedMessage(false)) return false;
-	const cond = (n.data as IfStmtData).condition;
-	if (cond.kind != NodeKind.BinaryExpr) return false;
-	const snapshot = (cond.data as BinaryExprData).right;
-	return snapshot.kind == NodeKind.Identifier && snapshot.resolvedSym != null && snapshot.resolvedSym.symbolKind == SymbolKind.Temp;
+	return n.kind == NodeKind.IfStmt && n.flags.has(NodeFlag.LengthGuard);
 }
 
 function lengthOf(iterExpr: Node, isString: boolean, loc: SourceLocation): Node {

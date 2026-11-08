@@ -19,7 +19,7 @@ import { peelToRepr, createPrimitive, typeDisplayName } from "../../checker/type
 import { wrapInConv, isBitwiseBinaryOp, isBitwiseCompoundOp } from "../../checker/fit";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, runtimeRef, makeNumber, isRuntimeProcSym } from "../util";
+import { makeCall, runtimeRef, makeNumber } from "../util";
 import { is64Kind, isSignedKind, isFloatKind } from "../numKinds";
 
 export function lowerNumberBitwiseOperands(program: Node, ctx: TransformContext): Node {
@@ -56,23 +56,8 @@ function toInt32Operand(operand: Node): Node {
 	return call;
 }
 
-const WRITING_OPS = writingOpNames();
-
-function writingOpNames(): HashSet<string> {
-	const names = new HashSet<string>();
-	names.add("msPostInc");
-	names.add("msPostDec");
-	for (const prefix of ["msAdd", "msSub", "msMul", "msDiv", "msMod", "msPow", "msPowWrap", "msAnd", "msOr", "msXor", "msShl", "msShr", "msShrU"]) {
-		for (const width of ["", "I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64", "F64"]) names.add(prefix + "Assign" + width);
-	}
-	return names;
-}
-
-// The variable or element a call this pass makes writes, as the `+=` or `++` it replaced would.
 export function checkedScalarTarget(n: Node): Node | null {
-	if (n.kind != NodeKind.CallExpr || n.resolvedSym == null) return null;
-	const name = n.resolvedSym.nativeName != "" ? n.resolvedSym.nativeName : n.resolvedSym.name;
-	return WRITING_OPS.has(name) && isRuntimeProcSym(n.resolvedSym, name) ? (n.data as CallExprData).arguments[0] : null;
+	return n.kind == NodeKind.CallExpr && n.flags.has(NodeFlag.WritesOperand) ? (n.data as CallExprData).arguments[0] : null;
 }
 
 export function injectIntChecks(program: Node, ctx: TransformContext): Node {
@@ -91,14 +76,14 @@ function intCheckVisitor(node: Node, ctx: TransformContext): Node {
 	if (floatAssign != "") {
 		const call = makeCall(runtimeRef(floatAssign, node.location), [d.left, d.right], node.location);
 		call.nodeType = d.left.nodeType;
-		return call;
+		return marked(call, false, true);
 	}
 	if (!ctx.rangeChecks) return node;
 	if (d.operator == "/" || d.operator == "%") {
 		const t = integerRepr(node.nodeType);
 		if (t == null || cannotRaise(d.right, t)) return node;
-		if (d.operator == "/" && isSubIntSigned(t.kind)) return typedCall(ownWidthName("msDiv", t), [d.left, d.right], node);
-		return atOwnWidth(makeCall(runtimeRef(helperName(d.operator == "/" ? "msDiv" : "msMod", t), node.location), [d.left, d.right], node.location), t, node);
+		if (d.operator == "/" && isSubIntSigned(t.kind)) return checkedCall(ownWidthName("msDiv", t), [d.left, d.right], node, false);
+		return atOwnWidth(marked(makeCall(runtimeRef(helperName(d.operator == "/" ? "msDiv" : "msMod", t), node.location), [d.left, d.right], node.location), true, false), t, node);
 	}
 	if (d.operator == "/=" || d.operator == "%=") {
 		const t = integerRepr(d.left.nodeType);
@@ -106,19 +91,19 @@ function intCheckVisitor(node: Node, ctx: TransformContext): Node {
 		const name = d.operator == "/=" && isSubIntSigned(t.kind) ? ownWidthName("msDivAssign", t) : helperName(d.operator == "/=" ? "msDivAssign" : "msModAssign", t);
 		const call = makeCall(runtimeRef(name, node.location), [d.left, d.right], node.location);
 		call.nodeType = d.left.nodeType;
-		return call;
+		return marked(call, true, true);
 	}
 	const arith = node.flags.has(NodeFlag.NoOverflowCheck) ? "" : overflowPrefix(d.operator);
 	if (arith != "") {
 		const t = signedRepr(node.nodeType);
 		if (t == null || isPointerRepr(d.left.nodeType) || isPointerRepr(d.right.nodeType)) return node;
-		return typedCall(ownWidthName(arith, t), [d.left, d.right], node);
+		return checkedCall(ownWidthName(arith, t), [d.left, d.right], node, false);
 	}
 	const assign = overflowAssign(d.operator);
 	if (assign != "" && (signedRepr(d.left.nodeType) != null || isChar(d.left.nodeType))) {
 		const call = makeCall(runtimeRef(assign, node.location), [d.left, d.right], node.location);
 		call.nodeType = d.left.nodeType;
-		return call;
+		return marked(call, true, true);
 	}
 	return node;
 }
@@ -146,20 +131,30 @@ function checkedNegate(node: Node): Node {
 	if (d.unaryOp != "-" || isLiteral(d.operand)) return node;
 	const t = signedRepr(node.nodeType);
 	if (t == null) return node;
-	return typedCall(ownWidthName("msNeg", t), [d.operand], node);
+	return checkedCall(ownWidthName("msNeg", t), [d.operand], node, false);
 }
 
 function checkedStep(node: Node): Node {
 	const d = node.data as UpdateExprData;
 	if (signedRepr(d.updateArg.nodeType) == null && !isChar(d.updateArg.nodeType)) return node;
 	const increment = d.updateOp == "++";
-	if (!d.isPrefix) return typedCall(increment ? "msPostInc" : "msPostDec", [d.updateArg], node);
-	return typedCall(increment ? "msAddAssign" : "msSubAssign", [d.updateArg, makeNumber(1, node.location)], node);
+	if (!d.isPrefix) return checkedCall(increment ? "msPostInc" : "msPostDec", [d.updateArg], node, true);
+	return checkedCall(increment ? "msAddAssign" : "msSubAssign", [d.updateArg, makeNumber(1, node.location)], node, true);
 }
 
 function typedCall(name: string, args: Node[], node: Node): Node {
 	const call = makeCall(runtimeRef(name, node.location), args, node.location);
 	call.nodeType = node.nodeType;
+	return call;
+}
+
+function checkedCall(name: string, args: Node[], node: Node, writes: boolean): Node {
+	return marked(typedCall(name, args, node), true, writes);
+}
+
+function marked(call: Node, check: boolean, writes: boolean): Node {
+	if (check) call.flags = call.flags.incl(NodeFlag.IntCheck);
+	if (writes) call.flags = call.flags.incl(NodeFlag.WritesOperand);
 	return call;
 }
 
@@ -204,7 +199,7 @@ function lowerPowAssign(node: Node, d: BinaryExprData, ctx: TransformContext): N
 	const helper = t != null ? exactWidthName(prefix, t) : "msPowAssignF64";
 	const call = makeCall(runtimeRef(helper, node.location), [d.left, d.right], node.location);
 	call.nodeType = d.left.nodeType;
-	return call;
+	return marked(call, false, true);
 }
 
 function exactWidthName(prefix: string, t: Type): string {
@@ -267,31 +262,12 @@ function ownWidthName(prefix: string, t: Type): string {
 	return prefix + suffix;
 }
 
-const INT_CHECK_HELPERS: HashSet<string> = intCheckHelperNames();
-
-function intCheckHelperNames(): HashSet<string> {
-	const names = new HashSet<string>();
-	for (const name of ["msAddAssign", "msSubAssign", "msMulAssign", "msPostInc", "msPostDec"]) names.add(name);
-	for (const prefix of ["msAdd", "msSub", "msMul", "msNeg", "msDiv", "msMod", "msDivAssign", "msModAssign"]) {
-		for (const suffix of ["I8", "I16", "I32", "I64", "U32", "U64"]) names.add(prefix + suffix);
-	}
-	return names;
-}
-
 export function isIntCheckCall(n: Node): boolean {
-	return intCheckName(n) != "";
+	return n.kind == NodeKind.CallExpr && n.flags.has(NodeFlag.IntCheck);
 }
 
 export function isIntCheckWrite(n: Node): boolean {
-	const name = intCheckName(n);
-	return name.includes("Assign") || name.startsWith("msPost");
-}
-
-function intCheckName(n: Node): string {
-	const sym = n.kind == NodeKind.CallExpr ? n.resolvedSym : null;
-	if (sym == null) return "";
-	const name = sym.nativeName != "" ? sym.nativeName : sym.name;
-	return INT_CHECK_HELPERS.has(name) && isRuntimeProcSym(sym, name) ? name : "";
+	return isIntCheckCall(n) && n.flags.has(NodeFlag.WritesOperand);
 }
 
 function helperKind(t: Type): TypeKind {
