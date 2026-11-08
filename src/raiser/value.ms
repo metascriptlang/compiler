@@ -1147,6 +1147,7 @@ export interface RaiserClassType {
 	cyclic: boolean[];   // per slot: the slot's type can reach the object again, so a release that leaves its referent alive registers it with the cycle collector
 	uncounted: boolean[];   // per slot: the slot borrows its referent (a cursor), so a destroy or copy of the object never counts it
 	destroyFn: int32;   // function index of the lifted destroy routine of the type, -1 when the VM destroys its cells by walking them
+	ownedCycle: boolean;   // under the collector only because this build checks owned cycles: a dead set holding one stops the program
 	tableIndex: int32;   // the entry of this type in the class type table, which a cell's header names
 }
 
@@ -1174,7 +1175,7 @@ export function createClassType(name: string, depth: int32, display: int64[], fi
 			zeroSlots.push(0);
 		}
 	}
-	const type: RaiserClassType = { name, depth, display, fields, fieldIds: constNameIds(fields), kinds, zeroSlots, zeroWordSlots, zeroRefSlots, dynCount, cyclic, uncounted, destroyFn: -1, tableIndex: classTypes.length as int32 };
+	const type: RaiserClassType = { name, depth, display, fields, fieldIds: constNameIds(fields), kinds, zeroSlots, zeroWordSlots, zeroRefSlots, dynCount, cyclic, uncounted, destroyFn: -1, ownedCycle: false, tableIndex: classTypes.length as int32 };
 	classTypes.push(type);
 	return type;
 }

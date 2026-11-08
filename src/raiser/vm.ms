@@ -4457,14 +4457,18 @@ function vmUnownedOutlives(vm: RaiserVM, handle: int64): void {
 	vm.unownedDeferred.push(handle);
 	if (vm.finalizeMark >= 0) return;
 	vm.finalizeMark = 0;
-	orcCollect(vm.arrayHeap, vm.objectHeap, (h: int64): void => { vm.dropped.push(h); });
+	orcCollect(vm.arrayHeap, vm.objectHeap, (h: int64): void => { vm.dropped.push(h); }, (names: string): void => { vmOwnedCycle(vm, names); });
 	if (vm.dropped.length == 0) vmEndFinalize(vm);
+}
+
+function vmOwnedCycle(vm: RaiserVM, names: string): void {
+	vmError(vm, `an owned cycle became garbage: ${names} objects own each other only through Owned<T> edges, so a release build would leak them; make the edge back up the cycle Unowned<T>`);
 }
 
 function vmCondemnCycles(vm: RaiserVM): void {
 	const outer = vm.finalizeMark < 0;
 	if (outer) vm.finalizeMark = vm.dropped.length as int32;
-	orcCollect(vm.arrayHeap, vm.objectHeap, (h: int64): void => { vm.dropped.push(h); });
+	orcCollect(vm.arrayHeap, vm.objectHeap, (h: int64): void => { vm.dropped.push(h); }, (names: string): void => { vmOwnedCycle(vm, names); });
 	if (outer && vm.dropped.length == vm.finalizeMark) vmEndFinalize(vm);
 }
 

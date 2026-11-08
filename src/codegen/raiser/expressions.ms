@@ -3824,6 +3824,8 @@ export function classTypeOperand(s: RaiserCompState, className: string, classSym
 	for (let i = 0; i < uncounted.length && i < classType.uncounted.length; i += 1) classType.uncounted[i] = uncounted[i];
 	const destroyOp = getOpByKey(unwrapRef(classSym.symbolType), AttachedOp.AttachedDestructor);
 	if (destroyOp != null && !isMetaWireSym(classSym)) classType.destroyFn = resolveRoutine(s, destroyOp);
+	const traceOp = getOpByKey(unwrapRef(classSym.symbolType), AttachedOp.AttachedTrace);
+	classType.ownedCycle = traceOp != null && hasFlag(traceOp, SymbolFlag.OwnedCycle);
 	s.classTypes.push(classType);
 	return s.classTypes.length;
 }

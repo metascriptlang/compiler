@@ -81,6 +81,7 @@ interface OrcEnv {
 	edges: number;
 	rcSum: number;
 	keepThreshold: boolean;
+	ownedCycles: boolean;   // a traced cell's class is under the collector only because this build checks owned cycles
 }
 
 function collectableHandle(held: RaiserValue): int64 {
@@ -143,6 +144,7 @@ function markGrayCell(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, env: 
 	if (colorAt(arrHeap, objHeap, h) == COL_GRAY) return;
 	setColorAt(arrHeap, objHeap, h, COL_GRAY);
 	env.touched += 1;
+	env.ownedCycles = env.ownedCycles || cellOwnedCycle(objHeap, h);
 	env.rcSum += countAt(arrHeap, objHeap, h);
 	traceCell(arrHeap, objHeap, env, h);
 	while (env.children.length > 0) {
@@ -153,6 +155,7 @@ function markGrayCell(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, env: 
 		if (colorAt(arrHeap, objHeap, child) != COL_GRAY) {
 			setColorAt(arrHeap, objHeap, child, COL_GRAY);
 			env.touched += 1;
+			env.ownedCycles = env.ownedCycles || cellOwnedCycle(objHeap, child);
 			env.rcSum += countAt(arrHeap, objHeap, child) + 1;
 			traceCell(arrHeap, objHeap, env, child);
 		}
@@ -192,7 +195,7 @@ function scanCell(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, env: OrcE
 	}
 }
 
-function collectColorCell(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, env: OrcEnv, h: int64, col: int32): void {
+function collectColorCell(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, env: OrcEnv, h: int64, col: int32, clear: boolean): void {
 	if (colorAt(arrHeap, objHeap, h) != col || registered(arrHeap, objHeap, h)) return;
 	setColorAt(arrHeap, objHeap, h, COL_BLACK);
 	env.toFree.push(h);
@@ -203,7 +206,7 @@ function collectColorCell(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, e
 		const index = env.indices[at];
 		const child = env.children[at];
 		popSlot(env);
-		clearSlot(arrHeap, objHeap, owner, index);
+		if (clear) clearSlot(arrHeap, objHeap, owner, index);
 		if (colorAt(arrHeap, objHeap, child) == col && !registered(arrHeap, objHeap, child)) {
 			setColorAt(arrHeap, objHeap, child, COL_BLACK);
 			env.toFree.push(child);
@@ -230,10 +233,92 @@ export function orcUnregister(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHea
 	rcForgetRoot(arrHeap, objHeap, handle);
 }
 
-export function orcCollect(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, destroy: OrcDestroy): int32 {
+function cellOwnedCycle(objHeap: RaiserObjectHeap, h: int64): boolean {
+	if (isObjectCell(h)) return objectCellClass(h).ownedCycle;
+	return handleHeapKind(h) == RaiserHeapKind.Object && objHeap.objects[handleIndex(h)].classType.ownedCycle;
+}
+
+function cellClassName(objHeap: RaiserObjectHeap, h: int64): string {
+	return isObjectCell(h) ? objectCellClass(h).name : objHeap.objects[handleIndex(h)].classType.name;
+}
+
+// A dead set leaks in a release build only where a cell of an owned-cycle class lies on a cycle
+// inside it; an owned tree hanging off a plain garbage cycle is freed there too. The cycles are the
+// strongly connected components of the set's own edges (iterative Tarjan), read before any slot is cleared.
+function ownedCycleNames(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, env: OrcEnv): string {
+	const dead = env.toFree;
+	const at = new Map<int64, int32>();
+	for (let i = 0; i < dead.length; i += 1) at.set(dead[i], i as int32);
+	const start: int32[] = [];
+	const adj: int32[] = [];
+	for (const h of dead) {
+		start.push(adj.length as int32);
+		traceCell(arrHeap, objHeap, env, h);
+		while (env.children.length > 0) {
+			const k = at.get(env.children[env.children.length - 1]);
+			popSlot(env);
+			if (k != undefined) adj.push(k);
+		}
+	}
+	start.push(adj.length as int32);
+	const order: int32[] = [];
+	const low: int32[] = [];
+	const onStack: boolean[] = [];
+	for (let i = 0; i < dead.length; i += 1) { order.push(-1); low.push(0); onStack.push(false); }
+	const stack: int32[] = [];
+	const frameNode: int32[] = [];
+	const framePos: int32[] = [];
+	const names: string[] = [];
+	let next: int32 = 0;
+	for (let root: int32 = 0; root < dead.length; root += 1) {
+		if (order[root] >= 0) continue;
+		order[root] = next; low[root] = next; next += 1;
+		stack.push(root); onStack[root] = true;
+		frameNode.push(root); framePos.push(start[root]);
+		while (frameNode.length > 0) {
+			const top = frameNode.length - 1;
+			const v = frameNode[top];
+			if (framePos[top] < start[v + 1]) {
+				const w = adj[framePos[top]];
+				framePos[top] += 1;
+				if (order[w] < 0) {
+					order[w] = next; low[w] = next; next += 1;
+					stack.push(w); onStack[w] = true;
+					frameNode.push(w); framePos.push(start[w]);
+				} else if (onStack[w] && order[w] < low[v]) low[v] = order[w];
+				continue;
+			}
+			frameNode.length = top;
+			framePos.length = top;
+			if (top > 0 && low[v] < low[frameNode[top - 1]]) low[frameNode[top - 1]] = low[v];
+			if (low[v] != order[v]) continue;
+			let base = stack.length;
+			do { base -= 1; onStack[stack[base]] = false; } while (stack[base] != v);
+			let cycle = stack.length - base > 1;
+			for (let e = start[v]; !cycle && e < start[v + 1]; e += 1) cycle = adj[e] == v;
+			for (let k = base; cycle && k < stack.length; k += 1) {
+				const h = dead[stack[k]];
+				if (cellOwnedCycle(objHeap, h) && !names.includes(cellClassName(objHeap, h))) names.push(cellClassName(objHeap, h));
+			}
+			stack.length = base;
+		}
+	}
+	return names.join(", ");
+}
+
+function clearEdges(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, env: OrcEnv, h: int64): void {
+	traceCell(arrHeap, objHeap, env, h);
+	while (env.children.length > 0) {
+		const at = env.children.length - 1;
+		clearSlot(arrHeap, objHeap, env.owners[at], env.indices[at]);
+		popSlot(env);
+	}
+}
+
+export function orcCollect(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, destroy: OrcDestroy, refuseOwnedCycle: ((names: string) => void) | null = null): int32 {
 	const roots = arrHeap.orcRoots;
 	if (roots.length == 0) return 0;
-	const env: OrcEnv = { owners: [], indices: [], children: [], toFree: [], touched: 0, edges: 0, rcSum: 0, keepThreshold: false };
+	const env: OrcEnv = { owners: [], indices: [], children: [], toFree: [], touched: 0, edges: 0, rcSum: 0, keepThreshold: false, ownedCycles: false };
 	const count = roots.length;
 	for (let i = count - 1; i >= 0; i -= 1) markGrayCell(arrHeap, objHeap, env, roots[i]);
 	let colToCollect = COL_WHITE;
@@ -246,7 +331,16 @@ export function orcCollect(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, 
 	for (let i = 0; i < count; i += 1) {
 		const h = roots[i];
 		setColorField(arrHeap, objHeap, h, colorField(arrHeap, objHeap, h) & COLOR_MASK);
-		collectColorCell(arrHeap, objHeap, env, h, colToCollect);
+		collectColorCell(arrHeap, objHeap, env, h, colToCollect, !env.ownedCycles);
+	}
+	if (env.ownedCycles) {
+		const names = refuseOwnedCycle != null ? ownedCycleNames(arrHeap, objHeap, env) : "";
+		if (refuseOwnedCycle != null && names != "") {
+			roots.length = 0;
+			refuseOwnedCycle(names);
+			return 0;
+		}
+		for (const h of env.toFree) clearEdges(arrHeap, objHeap, env, h);
 	}
 	const oldThreshold = arrHeap.orcThreshold;
 	arrHeap.orcThreshold = NEVER_COLLECT;
