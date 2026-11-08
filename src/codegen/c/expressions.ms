@@ -2238,6 +2238,9 @@ function emitExpr(g: CGen, p: CProc, node: Readonly<Node>, item: Readonly<ExprSt
 			ctx.results.push(inner);
 		} else if (d.expr.kind == NodeKind.Identifier && isIndirectRef(p, d.expr.resolvedSym, (d.expr.data as IdentifierData).name)) {
 			ctx.results.push(indirectParamCName(g, p, d.expr));
+		} else if (isRefArrayAccessCall(g, d.expr) && d.expr.nodeType != null && isPointerType(d.expr.nodeType)
+			&& getTypeDesc(g, d.expr.nodeType) != "void*") {
+			ctx.results.push(`((${getTypeDesc(g, d.expr.nodeType)}*)&(${inner}))`);
 		} else {
 			ctx.results.push(safeAddrOf(g, p, inner, d.expr, node.nodeType));
 		}
