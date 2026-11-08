@@ -6,7 +6,10 @@
 //   external or unknown function. A pure factory, a recursive pure factory, a
 //   constructor that only sets its fields, a subclass of such a class, a
 //   factory that reads a const scalar, and a pure method on the owner keep
-//   their moves.
+//   their moves. An extern whose parameters and return carry no pointer (a
+//   string in, a boolean out) has no address to keep, so a factory that calls
+//   one also keeps its move (NIM-REF AN-2), and so does a builder that fills
+//   local arrays and a Buffer through std's native methods.
 //
 // WHAT IT CATCHES: the callee check refusing a pure routine, which would make
 //   `{ move }` unusable for values built by ordinary factories.
@@ -15,6 +18,8 @@
 //   carries the wrong contents.
 //
 // GUARD-JS
+
+import { byteIsAscii } from "std/core/string/bytes";
 
 interface Counter { n: int32; }
 interface Chain { n: int32; next: Chain | null; }
@@ -56,13 +61,47 @@ async function fromConstructor(): Promise<int32> {
 	return await spawn(() => { c.n = c.n + 1; return c.n; }, { move: [c] });
 }
 
+interface Tagged { name: string; items: int32[]; ascii: boolean; }
+
+function makeTagged(name: string): Tagged {
+	return { name: name, items: [1, 2], ascii: byteIsAscii(name) };
+}
+
+async function fromScalarExtern(): Promise<int32> {
+	const source = "cube";
+	const t = makeTagged(source);
+	const moved = await spawn(() => { t.items.push(t.ascii ? 3 : 0); let s = 0; for (const i of t.items) s += i; return s + t.name.length; }, { move: [t] });
+	return moved + source.length;
+}
+
+interface Bag { items: int32[]; names: string[]; bytes: Buffer; }
+
+function buildBag(n: int32): Bag {
+	const items: int32[] = [];
+	const names: string[] = [];
+	for (let i: int32 = 0; i < n; i += 1) { items.push(i); names.push(`n${i}`); }
+	items.pop();
+	const raw = Buffer.alloc(4);
+	raw.writeUInt8(7, 0);
+	return { items: items, names: names, bytes: raw };
+}
+
+async function fromNativeBuilders(): Promise<int32> {
+	const b = buildBag(4);
+	return await spawn((): int32 => { let s: int32 = 0; for (const x of b.items) s += x; return s + b.names.length + (b.bytes[0] as int32); }, { move: [b] });
+}
+
 async function main(): Promise<int32> {
 	const a = await fromFactory();
 	const b = await fromRecursiveFactory();
 	const d = await fromConstructor();
+	const e = await fromScalarExtern();
+	const f = await fromNativeBuilders();
 	if (a != 5) { throw "GUARD RED: fromFactory"; }
 	if (b != 6) { throw "GUARD RED: fromRecursiveFactory"; }
 	if (d != 12) { throw "GUARD RED: fromConstructor"; }
+	if (e != 14) { throw "GUARD RED: fromScalarExtern"; }
+	if (f != 14) { throw "GUARD RED: fromNativeBuilders"; }
 	console.log("GUARD-OK");
 	return 0;
 }

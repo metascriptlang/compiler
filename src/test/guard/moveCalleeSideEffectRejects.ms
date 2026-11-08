@@ -20,6 +20,10 @@
 // GUARD-CHECK-FAIL a call with side effects may keep an alias of it: calls 'current'
 // GUARD-CHECK-FAIL a call with side effects may keep an alias of it: calls 'pick'
 // GUARD-CHECK-FAIL a call with side effects may keep an alias of it: calls 'describe'
+// GUARD-CHECK-FAIL a call with side effects may keep an alias of it: calls 'viaPointerExtern'
+// GUARD-CHECK-FAIL a call with side effects may keep an alias of it: calls 'viaReturnedRef'
+// GUARD-CHECK-FAIL a call with side effects may keep an alias of it: calls the external 'lendFrom'
+// GUARD-CHECK-FAIL a call with side effects may keep an alias of it: calls 'viaRefMethod'
 
 interface Box { n: int32; }
 interface Holder { b: Box | null; }
@@ -91,4 +95,44 @@ function fromWritingToString(): int32 {
 	return await spawn(() => { g.b.n = 3; return g.b.n; }, { move: [g] }); // GUARD-REFUSED
 }
 
-console.log(fromAliasingFactory() + fromPublishingConstructor() + afterStashingMethod() + fieldFromModuleState() + fieldAssignedFromCall() + fromWritingToString());
+extern function keepBox(b: Box): int32;
+function viaPointerExtern(): Holder {
+	const b: Box = { n: 1 };
+	keepBox(b);
+	return { b: b };
+}
+
+// 7 — a factory passes the value to an extern whose parameter holds a pointer.
+function fromPointerParamExtern(): int32 {
+	const g = viaPointerExtern();
+	return await spawn(() => { const b = g.b; return b != null ? b.n : 0; }, { move: [g] }); // GUARD-REFUSED
+}
+
+extern function lendBox(tag: string): Box;
+function viaReturnedRef(): Holder {
+	return { b: lendBox("x") };
+}
+
+// 8 — a factory builds from an extern that returns a reference.
+function fromRefReturningExtern(): int32 {
+	const g = viaReturnedRef();
+	return await spawn(() => { const b = g.b; return b != null ? b.n : 0; }, { move: [g] }); // GUARD-REFUSED
+}
+
+extern function lendFrom(this tag: string): Box;
+
+// 9 — an extern method that returns a reference is charged like a free extern.
+function fromRefReturningMethod(): int32 {
+	const g = "x".lendFrom();
+	return await spawn(() => { g.n = 2; return g.n; }, { move: [g] }); // GUARD-REFUSED
+}
+
+function viaRefMethod(): Box { return "y".lendFrom(); }
+
+// 10 — the same method reached inside a factory.
+function fromRefMethodInFactory(): int32 {
+	const g = viaRefMethod();
+	return await spawn(() => { g.n = 4; return g.n; }, { move: [g] }); // GUARD-REFUSED
+}
+
+console.log(fromRefReturningMethod() + fromRefMethodInFactory() + fromPointerParamExtern() + fromRefReturningExtern() + fromAliasingFactory() + fromPublishingConstructor() + afterStashingMethod() + fieldFromModuleState() + fieldAssignedFromCall() + fromWritingToString());
