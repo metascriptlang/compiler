@@ -78,6 +78,13 @@ function isForwardAlias(t: Type | null): boolean {
 	return t.sym.state == SymbolState.Shaping;
 }
 
+// A wrap over an alias still being shaped, or over a union one of whose members is, waits until it is shaped.
+function waitsOnForwardAlias(t: Type | null): boolean {
+	if (isForwardAlias(t)) return true;
+	const union = t != null ? peelThrough(t, PEEL_ALIAS) : null;
+	return union != null && union.kind == TypeKind.Union && union.typeChildren.some((m: Type): boolean => isForwardAlias(m));
+}
+
 function isDeferredNullable(t: Type): boolean {
 	for (const entry of _forwardNullables) {
 		if (entry.target == t) return true;
@@ -107,7 +114,7 @@ function settleForwardTypes(): void {
 	let w = 0;
 	while (w < _forwardWraps.length) {
 		const entry = _forwardWraps[w];
-		if (isForwardAlias(entry.inner)) {
+		if (waitsOnForwardAlias(entry.inner)) {
 			w = w + 1;
 			continue;
 		}
@@ -989,7 +996,7 @@ function readonlyAnnotationOf(viewed: Type): Type {
 }
 
 function ownedAnnotationOf(ctx: CheckerContext, inner: Type, line: int32, col: int32): Type {
-	if (isForwardAlias(inner)) return deferWrapUntilAliasShaped(ctx, AnnotationWrap.Owned, inner, line, col);
+	if (waitsOnForwardAlias(inner)) return deferWrapUntilAliasShaped(ctx, AnnotationWrap.Owned, inner, line, col);
 	if (isUnresolvedType(inner) || inner.kind == TypeKind.Error) return inner;
 	const union = peelThrough(inner, PEEL_ALIAS);
 	if (union != null && union.kind == TypeKind.Union) return ownedUnionOf(ctx, inner, union, line, col);
