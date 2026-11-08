@@ -31,7 +31,7 @@ unless its `@columns` says otherwise.
 | Structs, `Vec<T>` of scalars, nullable | copied; nested fields by leaf | `copies`, `nullableCopies`, `nullableScalars` |
 | A TS typed array result (`Float32Array`, `Int32Array`, … the nine classes), nullable | copied into a new array of the same class over a copy of its whole buffer, `byteOffset` and `length` kept; the call throws when the array is still held on the wasm side, when its `ArrayBuffer` is held by another view, or when its class extends the declared one. A typed array parameter takes a `Span<T>`, which a typed array passes to | `typedArrayResults`, `typedArrayMisuse` |
 | `Span<T>` | lent for the call; a writable Span is copied back; two views of one array share one copy | `spans`, `spanOverlap`, `spanLendResize`, `scratchArena` |
-| Callbacks | lent for the call; one kept past the call is refused at compile time | `callback*`, `refusedKeptCallback*` |
+| Callbacks | lent for the call; one the wasm side keeps (any use but a direct call of it, through helpers too) stays callable until the wasm side drops its last reference, which frees its JS slot; called while a `Span` copy is live it throws | `callback*`, `keptCallback*`, `closureEnvDestroy` |
 | Errors | a JS throw in a callback reaches the JS caller as the same object; a wasm throw reaches it as an Error; a trap ends the instance and every later call says so | `callbackThrow*`, `spanThrow`, `handleTrap` |
 | Owner `Handle<T>` of an exported class | wasm owns it, JS holds a counted reference: `release`, `retain`, `[Symbol.dispose]`; a release while a call lends it waits for that call | `handleBasic`, `handleRetain`, `handleMisuse`, `handleDestroy` |
 | `Handle<VecBox<T>>.view(f)` | a Span over wasm memory, no copy, only inside `f`; a boundary call while it is open throws (it could grow memory) | `handleView*`, `refusedKeptView*` |
@@ -42,9 +42,15 @@ The enum row was measured 2026-11-09 on m1m with a candidate of `wt/js-wasm-one-
 and Chrome (a `uint8`, a `uint16` and a negative `int32` enum; a nullable struct field; a callback
 result). Not measured: a `Vec` or `Span` of an enum, an `extern enum`, `--danger`.
 
+The kept callback row was measured 2026-11-09 on m1m with a candidate of `wt/js-wasm-one-program`
+(base 06957a98188): `wasmmix: 16/16 pass` on C, JS and mixed, `keptCallback*` red on the installed
+compiler cc97a2f5818 (refused). 70000 kept callbacks replaced one by one stay within the 65536-slot
+table, directly and through an owning object; a handler that drops itself mid-call returns cleanly.
+Not measured: a kept callback in `--danger`, one held only by a JS-to-wasm cycle (reported as a leak).
+
 Dev builds (default mode) add: argument type checks on the functions the entry re-exports, and
 the site in handle messages (`use of Handle<Counter> created at core.ms:8 after release`); at exit
-they print `msb leak: … never released` for every handle still held, and `MSB_LEAKS=error` turns
+they print `msb leak: … never released` for every handle and kept callback still held, and `MSB_LEAKS=error` turns
 that into exit code 1 (an exit code the program set is kept). Release and danger builds keep the
 three handle checks and drop the site.
 
@@ -77,6 +83,13 @@ three handle checks and drop the site.
   into two that stop seeing each other's writes. Measured 2026-11-08 on m1m (Node): a `makeVec`
   of 1000 written through a `Span` of the array returns in 0.69 us against wasm-bindgen's 0.89;
   written through `out[i]` it takes 1.28 us, the typed array subscript's own cost in std.
+- **A kept callback is freed by the wasm side's destroy, not by JS.** The wasm closure built for a
+  kept parameter captures a small owner object whose `onDestroy` frees the JS slot, so the slot
+  lives exactly as long as the last wasm reference to the closure, as a closure environment's
+  captured values do in the reference's ARC (`nimDestroyAndDispose` on the last environment
+  reference). Whether a parameter is kept is decided the safe way round: it is lent only when every
+  use calls it or passes it to a direct callee that only calls it, because a keep the analysis
+  missed would fail at run time while a lent callback taken as kept only costs one allocation.
 - **A release while a call lends the handle is deferred to the end of that call**, a deliberate
   divergence recorded as `paper/NIM-REF.md` RT-48.
 
@@ -333,6 +346,11 @@ partitioner.
 - [wasm-bindgen design](https://wasm-bindgen.github.io/wasm-bindgen/contributing/design/index.html),
   [closure lifetime](https://wasm-bindgen.github.io/wasm-bindgen/reference/passing-rust-closures-to-js.html):
   generated typed adapters and distinct borrowed/retained lifetimes.
+- [wasm-bindgen "JS objects in Rust"](https://wasm-bindgen.github.io/wasm-bindgen/contributing/design/js-objects-in-rust.html):
+  a JS value Rust keeps is an owned slot of a slab freed when the `JsValue` drops, the prior art
+  for kept callbacks (read 2026-11-09). `Closure` is the other direction, a Rust closure handed to JS.
+  Nim at 15dd34468: `compiler/liftdestructors.nim` `atomicClosureOp` and `lib/system/arc.nim`
+  `nimDestroyAndDispose`, the environment destroy the release rides on.
 - [Emscripten interaction](https://emscripten.org/docs/porting/connecting_cpp_and_javascript/Interacting-with-code.html),
   [Embind](https://emscripten.org/docs/porting/connecting_cpp_and_javascript/embind.html):
   import/export transport, explicit deletion, finalizer limitations, unsafe borrowed views.

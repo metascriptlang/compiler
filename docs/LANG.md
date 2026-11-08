@@ -3337,19 +3337,19 @@ run();
 | a struct, `Vec<T>` of scalars, `T \| null` of these | a copy, nested fields included |
 | a typed array result (`Float32Array`, `Int32Array`, … the nine TS classes), nullable | a new array of the same class over a copy of the whole buffer, `byteOffset` and `length` kept |
 | `Span<T>` parameter (a `Vec<T>`, a slice `xs[1..3]` or a typed array passes to it) | lent for the call; a writable Span's writes are copied back; two views of one array share one copy |
-| a callback parameter | lent for the call, re-entrant (a callback may call wasm again) |
+| a callback parameter | lent for the call, re-entrant (a callback may call wasm again); one the wasm side keeps (stores it, captures it, or passes it on to anything but a direct call of it) stays callable until the wasm side drops its last reference, and a dev build names at exit each one never dropped: `msb leak: callback 'visit' kept by listen at core.ms:4 never released` |
 | `Handle<C>` of an exported class `C` (`std/ffi`) | wasm owns the object, JS holds a counted reference: `release()`, `retain()`, `[Symbol.dispose]` |
 | `Handle<VecBox<T>>` with `h.view(f)` | a `Span<T>` over wasm memory inside `f` only, with no copy |
 
 **Errors cross as themselves.** A JS throw inside a callback reaches the JS caller as the same
 object; a wasm throw reaches it as an `Error` with its message. A trap cannot be unwound: it ends
-the wasm instance, and every later call to it throws saying so.
+the wasm instance, and every later call to it throws saying so. A kept callback called while a
+`Span` parameter's copy is live throws `a kept callback was called while 'bump' holds a copy of its
+Span, so a JS write to the array would be lost`, because the copy back would overwrite the write.
 
 **Refused at compile time, with the reason and the fix in the message:**
 
-- a callback the wasm side keeps past the call: `wasm-placed function 'listen' keeps its callback
-  parameter 'visit': it stores it in 'kept' at 5:7, but a JS callback is only lent for the call`;
-  the same for a `view` kept past `f`;
+- a `view` kept past `f`;
 - a module variable used by both halves: `the module variable 'total' is used by wasm-placed
   function 'bump' and also by 'peek' at 9:9, which runs on the JS side: JS and wasm each keep their
   own copy of module state, so neither sees the other's changes`;
