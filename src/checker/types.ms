@@ -2981,6 +2981,10 @@ export function isSysType(t: Type): boolean {
 	return idx >= 0 && idx < _sysTypes.length && _sysTypes[idx] == t;
 }
 
+export function wellKnownTypes(): Type[] {
+	return [..._sysTypes, ..._sealedSysTypes, ..._resultParams, _iteratorResultParam];
+}
+
 // ===== Well-Known Type Accessors =====
 // Thin wrappers over getSysType for backward compatibility + readability.
 

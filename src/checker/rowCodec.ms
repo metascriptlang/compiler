@@ -1,6 +1,6 @@
-import { Symbol, SymbolFlag, NodeFlag, SymbolKind, SymbolState, Type, TypeKind, TypeFlag, Node, NodeData, NodeKind, SourceLocation, CallingConvention, makeLoc, makeLocRange, createNodeAt, DeclKind, ExternKind, BuiltinKind } from "../ast/node";
+import { Symbol, SymbolFlag, NodeFlag, SymbolKind, SymbolState, Type, TypeKind, TypeFlag, Node, NodeData, NodeKind, SourceLocation, CallingConvention, makeLoc, makeLocRange, createNodeAt, DeclKind, ExternKind, BuiltinKind, FlowNode, InlineFrame } from "../ast/node";
 import { FieldSink, nodeFields } from "../ast/fieldspec";
-import { emptyType } from "./types";
+import { emptyType, wellKnownTypes, getSysType, createResult } from "./types";
 import { makeSymbolState, builtinKindName, builtinKindNamed } from "./symbol";
 
 // ===== Escaping =====
@@ -664,16 +664,115 @@ function packedBuiltinKind(name: string): BuiltinKind {
 	return kind;
 }
 
+export enum FieldRoleKind {
+	Encoded,
+	Derived,
+	WrittenAsNull,
+	MustBeNull,
+}
+
+export class FieldRole {
+	constructor(public kind: FieldRoleKind, public why: string) {}
+}
+
+function encoded(column: string): FieldRole {
+	return new FieldRole(FieldRoleKind.Encoded, column);
+}
+
+export const SYMBOL_FIELD_ROLES: { [K in keyof Symbol]-?: FieldRole } = {
+	name: encoded("S name"),
+	nameId: new FieldRole(FieldRoleKind.Derived, "re-interned from name in the loading context's ident cache by the loader"),
+	symbolKind: encoded("S kind"),
+	symbolType: encoded("S typeIdx"),
+	state: encoded("S state"),
+	location: encoded("S locLine locCol locEndLine locEndCol"),
+	declNode: encoded("S declIdx"),
+	overloads: encoded("S overloadsCsv"),
+	nativeName: encoded("S nativeName"),
+	exportName: encoded("S exportName"),
+	builtinKind: encoded("S builtinKind, by name"),
+	symFlags: encoded("S flags"),
+	defaultParams: encoded("S dpCsv"),
+	modulePath: encoded("S modulePath"),
+	headerPath: encoded("S headerPath"),
+	jsModulePath: encoded("S jsModulePath"),
+	overloadIdx: encoded("S overloadIdx"),
+	disamb: encoded("S disamb"),
+	mutatedParams: encoded("S mutatedParams"),
+	staticFields: encoded("S staticCsv"),
+	fieldDecoratorNames: encoded("S fieldDecoratorNamesCsv"),
+	fieldDecorators: encoded("S fieldDecoratorRows"),
+	metaKeys: encoded("S metaKeysCsv"),
+	metaValues: encoded("S metaValuesCsv"),
+	nonisolatedFields: encoded("S nonisolatedCsv"),
+	duVariantSlot: encoded("S duVariantSlot"),
+	itemModule: encoded("S itemModule"),
+	item: encoded("S item"),
+	instantiatedFrom: encoded("S originIdx"),
+	instanceArgs: encoded("S retained instArgsCsv"),
+	instanceParams: encoded("S retained instParamsCsv"),
+	ctorRoutine: encoded("S ctorRoutineIdx"),
+	ctorOwner: encoded("S ctorOwnerIdx"),
+	borrowedFrom: encoded("S borrowedFromIdx"),
+	staticOwner: encoded("S ownerIdx"),
+	typeParamOwner: encoded("S paramOwnerIdx"),
+	typeParams: encoded("S typeParamsCsv"),
+};
+
+export const TYPE_FIELD_ROLES: { [K in keyof Type]-?: FieldRole } = {
+	kind: encoded("T kind"),
+	typeName: encoded("T typeName"),
+	typeNames: encoded("T typeNamesCsv"),
+	typeChildren: encoded("T childrenCsv"),
+	typeReturn: encoded("T ret"),
+	typeExtra: encoded("T extra"),
+	typeParamDefault: encoded("T typeParamDefault"),
+	typeFlags: encoded("T flags"),
+	typeValue: encoded("T value"),
+	callConv: encoded("T callConv"),
+	attachedOps: encoded("T opsCsv"),
+	sym: encoded("T symIdx"),
+	typeInst: encoded("T typeInst"),
+	readonlyView: encoded("T readonlyView"),
+	mutableView: encoded("T mutableView"),
+	ownedType: encoded("T ownedType"),
+	plainType: encoded("T plainType"),
+	optionalFields: encoded("T optionalFieldsCsv"),
+};
+
+export const NODE_FIELD_ROLES: { [K in keyof Node]-?: FieldRole } = {
+	kind: encoded("N kind"),
+	location: encoded("N l c el ec"),
+	data: encoded("N payload: the kind's fieldspec nodeFields columns, read back by buildNodeData"),
+	nodeType: encoded("N typeIdx"),
+	resolvedSym: encoded("N symIdx"),
+	flags: encoded("N flags"),
+	variantSlot: encoded("N variantSlot"),
+	typeExpr: encoded("N typeExprIdx"),
+	typeExprs: encoded("N typeExprsCsv"),
+	genericDefaults: encoded("N genericDefaultsCsv"),
+	baseExprs: encoded("N baseExprsCsv"),
+	paramLocations: encoded("N paramLocsCsv"),
+	paramSyms: encoded("N paramSymsCsv"),
+	typeArg: encoded("N typeArg"),
+	flowNode: new FieldRole(FieldRoleKind.WrittenAsNull, "narrowing graph of its own module's check; a clone of the tree is bound again by bindFunctionFlow"),
+	nodeTypeAst: encoded("N typeAstIdx"),
+	inlineFrame: new FieldRole(FieldRoleKind.MustBeNull, "set only by transform-time inlining, after the check whose trees the codec writes"),
+};
+
 // ===== Object rows: writer =====
 //
 // Line format (tab-separated; \1.. prefixes keep the reader dumb):
-//   T idx kind flags callConv typeName typeNamesCsv childrenCsv ret extra symIdx optionalFieldsCsv
-//     opsCsv readonlyView mutableView typeInst typeParamDefault
-//   N idx kind flags l c el ec typeIdx symIdx typeExprIdx typeExprsCsv paramLocsCsv typeArg variantSlot paramSymsCsv baseExprsCsv genericDefaultsCsv <payload...>
+//   T idx kind flags value callConv typeName typeNamesCsv childrenCsv ret extra symIdx optionalFieldsCsv
+//     opsCsv readonlyView mutableView typeInst typeParamDefault ownedType plainType wellKnown
+//   N idx kind flags l c el ec typeIdx symIdx typeExprIdx typeExprsCsv paramLocsCsv typeArg variantSlot paramSymsCsv baseExprsCsv genericDefaultsCsv typeAstIdx <payload...>
 //   S idx kind state flags overloadIdx mutatedParams duVariantSlot
 //     locLine locCol locEndLine locEndCol inScope
 //     name modulePath nativeName builtinKind headerPath jsModulePath
 //     typeIdx overloadsCsv staticCsv declIdx dpCsv disamb exportName
+//     ownerIdx typeParamsCsv originIdx paramOwnerIdx retained instArgsCsv instParamsCsv
+//     fieldDecoratorNamesCsv fieldDecoratorRows metaKeysCsv metaValuesCsv nonisolatedCsv
+//     itemModule item ctorRoutineIdx ctorOwnerIdx borrowedFromIdx
 
 export class RowWriter {
 	syms: Symbol[] = [];
@@ -781,6 +880,13 @@ export function closeOver(this w: RowWriter): void {
 			}
 			w.enqNode(s.declNode);
 			for (const dp of s.defaultParams) w.enqNode(dp);
+			for (const row of s.fieldDecorators) {
+				for (const d of row) w.enqNode(d);
+			}
+			for (const v of s.metaValues) w.enqNode(v);
+			w.enqSym(s.ctorRoutine, false);
+			w.enqSym(s.ctorOwner, false);
+			w.enqSym(s.borrowedFrom, false);
 			continue;
 		}
 		if (w.nodeCursor < w.nodes.length) {
@@ -801,6 +907,7 @@ export function closeOver(this w: RowWriter): void {
 			if (n.baseExprs != null) {
 				for (const be of n.baseExprs) w.enqNode(be);
 			}
+			w.enqNode(n.nodeTypeAst);
 			nodeFields(n, walkSink);
 			continue;
 		}
@@ -815,12 +922,17 @@ export function closeOver(this w: RowWriter): void {
 		w.enqType(t.readonlyView);
 		w.enqType(t.mutableView);
 		w.enqType(t.typeInst);
+		w.enqType(t.ownedType);
+		w.enqType(t.plainType);
 		w.enqSym(t.sym, false);
 		for (const op of t.attachedOps) w.enqSym(op, false);
 	}
 }
 
 export function emitObjectRows(this w: RowWriter, lines: string[]): void {
+	const wellKnown = new HashMap<Type, int32>();
+	const known = wellKnownTypes();
+	for (let k = 0; k < known.length; k += 1) wellKnown.set(known[k], k as int32);
 	for (let i = 0; i < w.types.length; i += 1) {
 		const t = w.types[i];
 		const children: int32[] = [];
@@ -831,13 +943,14 @@ export function emitObjectRows(this w: RowWriter, lines: string[]): void {
 		const optional: string[] = t.optionalFields != null ? t.optionalFields : [];
 		const ops: int32[] = [];
 		for (const o of t.attachedOps) ops.push(w.idxSym(o));
-		lines.push(`T\t${i}\t${t.kind as int32}\t${t.typeFlags as uint32}\t${t.typeValue}\t${t.callConv as int32}\t${escapeP(t.typeName)}\t${joinCsv(names)}\t${intsCsv(children)}\t${w.idxType(t.typeReturn)}\t${w.idxType(t.typeExtra)}\t${w.idxSym(t.sym)}\t${joinCsv(optional)}\t${intsCsv(ops)}\t${w.idxType(t.readonlyView)}\t${w.idxType(t.mutableView)}\t${w.idxType(t.typeInst)}\t${w.idxType(t.typeParamDefault)}`);
+		lines.push(`T\t${i}\t${t.kind as int32}\t${t.typeFlags as uint32}\t${t.typeValue}\t${t.callConv as int32}\t${escapeP(t.typeName)}\t${joinCsv(names)}\t${intsCsv(children)}\t${w.idxType(t.typeReturn)}\t${w.idxType(t.typeExtra)}\t${w.idxSym(t.sym)}\t${joinCsv(optional)}\t${intsCsv(ops)}\t${w.idxType(t.readonlyView)}\t${w.idxType(t.mutableView)}\t${w.idxType(t.typeInst)}\t${w.idxType(t.typeParamDefault)}\t${w.idxType(t.ownedType)}\t${w.idxType(t.plainType)}\t${wellKnownIndex(wellKnown, t)}`);
 	}
 
 	_wnodeIdx = w.nodeIdx;
 	_wtypeIdx = w.typeIdx;
 	for (let i = 0; i < w.nodes.length; i += 1) {
 		const n = w.nodes[i];
+		if (n.inlineFrame != null) throw new Error(`internal: node ${i} (${n.kind.toString()}) carries an inlineFrame, which only transform-time inlining sets; the object rows hold checked trees`);
 		const loc = n.location;
 		const tes = n.typeExprs != null ? w.idxs(n.typeExprs) : "-";
 		const bes = n.baseExprs != null ? w.idxs(n.baseExprs) : "-";
@@ -852,7 +965,7 @@ export function emitObjectRows(this w: RowWriter, lines: string[]): void {
 			for (const ps of n.paramSyms) psi.push(w.idxSym(ps));
 			pss = psi.length == 0 ? "" : intsCsv(psi);
 		}
-		lines.push(`N\t${i}\t${n.kind as int32}\t${n.flags as uint64}\t${loc.line}\t${loc.column}\t${loc.endLine}\t${loc.endColumn}\t${w.idxType(n.nodeType)}\t${w.idxSym(n.resolvedSym)}\t${w.idxNode(n.typeExpr)}\t${tes}\t${pls}\t${escapeP(n.typeArg)}\t${n.variantSlot}\t${pss}\t${bes}\t${n.genericDefaults == null ? "-" : intsCsv(defaults)}\t${emitNodePayloadViaSink(n)}`);
+		lines.push(`N\t${i}\t${n.kind as int32}\t${n.flags as uint64}\t${loc.line}\t${loc.column}\t${loc.endLine}\t${loc.endColumn}\t${w.idxType(n.nodeType)}\t${w.idxSym(n.resolvedSym)}\t${w.idxNode(n.typeExpr)}\t${tes}\t${pls}\t${escapeP(n.typeArg)}\t${n.variantSlot}\t${pss}\t${bes}\t${n.genericDefaults == null ? "-" : intsCsv(defaults)}\t${w.idxNode(n.nodeTypeAst)}\t${emitNodePayloadViaSink(n)}`);
 	}
 
 	for (let i = 0; i < w.syms.length; i += 1) {
@@ -874,8 +987,14 @@ export function emitObjectRows(this w: RowWriter, lines: string[]): void {
 		const instParams: int32[] = [];
 		for (const t of s.instanceParams ?? []) instParams.push(w.idxType(t));
 		const retained = s.instanceArgs != null && s.instanceParams != null ? 1 : 0;
-		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint64}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${w.roots.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(builtinKindName(s.builtinKind))}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${w.idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${w.idxNode(s.declNode)}\t${dp}\t${s.disamb}\t${escapeP(s.exportName)}\t${w.idxSym(s.staticOwner)}\t${intsCsv(tps)}\t${w.idxSym(s.instantiatedFrom)}\t${w.idxSym(s.typeParamOwner)}\t${retained}\t${intsCsv(instArgs)}\t${intsCsv(instParams)}`);
+		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint64}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${w.roots.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(builtinKindName(s.builtinKind))}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${w.idxType(s.symbolType)}\t${intsCsv(ovl)}\t${intsCsv(stf)}\t${w.idxNode(s.declNode)}\t${dp}\t${s.disamb}\t${escapeP(s.exportName)}\t${w.idxSym(s.staticOwner)}\t${intsCsv(tps)}\t${w.idxSym(s.instantiatedFrom)}\t${w.idxSym(s.typeParamOwner)}\t${retained}\t${intsCsv(instArgs)}\t${intsCsv(instParams)}\t${joinCsv(s.fieldDecoratorNames)}\t${nestedIdxsP(s.fieldDecorators)}\t${joinCsv(s.metaKeys)}\t${w.idxs(s.metaValues)}\t${joinCsv(s.nonisolatedFields)}\t${s.itemModule}\t${s.item}\t${w.idxSym(s.ctorRoutine)}\t${w.idxSym(s.ctorOwner)}\t${w.idxSym(s.borrowedFrom)}`);
 	}
+}
+
+function wellKnownIndex(known: HashMap<Type, int32>, t: Type): int32 {
+	if (!known.has(t)) return -1;
+	const v = known.get(t);
+	return v == null ? -1 : v;
 }
 
 // ===== Object rows: reader =====
@@ -894,6 +1013,10 @@ export class RowReader {
 	typeMutableIdx: int32[] = [];
 	typeInstIdx: int32[] = [];
 	typeDefaultIdx: int32[] = [];
+	typeOwnedIdx: int32[] = [];
+	typePlainIdx: int32[] = [];
+	typeWellKnown: int32[] = [];
+	wellKnown: Type[] = wellKnownTypes();
 	symTypeIdx: int32[] = [];
 	symOverloadIdx: int32[][] = [];
 	symStaticIdx: int32[][] = [];
@@ -906,6 +1029,11 @@ export class RowReader {
 	symInstanceArgsIdx: int32[][] = [];
 	symInstanceParamsIdx: int32[][] = [];
 	symDpRaw: string[] = [];
+	symFieldDecoratorsRaw: string[] = [];
+	symMetaValuesRaw: string[] = [];
+	symCtorRoutineIdx: int32[] = [];
+	symCtorOwnerIdx: int32[] = [];
+	symBorrowedFromIdx: int32[] = [];
 	nodeTypeRef: int32[] = [];
 	nodeSymRef: int32[] = [];
 	nodeTeRef: int32[] = [];
@@ -914,6 +1042,7 @@ export class RowReader {
 	nodeDefaultsRaw: string[] = [];
 	nodePlsRaw: string[] = [];
 	nodePssRaw: string[] = [];
+	nodeTypeAstRef: int32[] = [];
 	nodePayloadPos: int32[] = [];
 	placeholder: NodeData = { nullPlaceholder: true } as NodeData;
 }
@@ -939,7 +1068,16 @@ export function readObjectRow(this a: RowReader, tag: int32, rd: PackReader): bo
 		a.typeMutableIdx.push(rd.int() as int32);
 		a.typeInstIdx.push(rd.int() as int32);
 		a.typeDefaultIdx.push(rd.int() as int32);
-		a.types.push(t);
+		a.typeOwnedIdx.push(rd.int() as int32);
+		a.typePlainIdx.push(rd.int() as int32);
+		const wk = rd.int() as int32;
+		a.typeWellKnown.push(wk);
+		if (wk == -1) a.types.push(t);
+		else if (wk >= 0 && wk < a.wellKnown.length && a.wellKnown[wk].kind == t.kind) a.types.push(a.wellKnown[wk]);
+		else {
+			rd.bad = true;
+			a.types.push(t);
+		}
 		rd.endRow();
 		return true;
 	}
@@ -963,6 +1101,7 @@ export function readObjectRow(this a: RowReader, tag: int32, rd: PackReader): bo
 		a.nodePssRaw.push(rd.dashOrStr());
 		a.nodeBesRaw.push(rd.dashOrStr());
 		a.nodeDefaultsRaw.push(rd.dashOrStr());
+		a.nodeTypeAstRef.push(rd.int() as int32);
 		a.nodePayloadPos.push(rd.last == 9 ? rd.pos : -1);
 		rd.endRow();
 		a.nodes.push(n);
@@ -1007,6 +1146,16 @@ export function readObjectRow(this a: RowReader, tag: int32, rd: PackReader): bo
 		a.symRetained.push(rd.last == 9 && rd.int() == 1);
 		a.symInstanceArgsIdx.push(rd.last == 9 ? rd.ints() : []);
 		a.symInstanceParamsIdx.push(rd.last == 9 ? rd.ints() : []);
+		s.fieldDecoratorNames = splitCsv(rd.str());
+		a.symFieldDecoratorsRaw.push(rd.str());
+		s.metaKeys = splitCsv(rd.str());
+		a.symMetaValuesRaw.push(rd.str());
+		s.nonisolatedFields = splitCsv(rd.str());
+		s.itemModule = rd.int() as int32;
+		s.item = rd.int() as int32;
+		a.symCtorRoutineIdx.push(rd.int() as int32);
+		a.symCtorOwnerIdx.push(rd.int() as int32);
+		a.symBorrowedFromIdx.push(rd.int() as int32);
 		a.syms.push(s);
 		rd.endRow();
 		return true;
@@ -1014,11 +1163,36 @@ export function readObjectRow(this a: RowReader, tag: int32, rd: PackReader): bo
 	return false;
 }
 
+function badRef(k: int32, count: int32): boolean {
+	return k < -1 || k >= count;
+}
+
+function linkNodeList(raw: string, nodes: Node[]): Node[] | null {
+	const out: Node[] = [];
+	for (const k of parseIntsCsv(raw)) {
+		if (badRef(k, nodes.length)) return null;
+		out.push(k >= 0 ? nodes[k] : null as unknown as Node);
+	}
+	return out;
+}
+
+function linkNodeRows(raw: string, nodes: Node[]): Node[][] | null {
+	const out: Node[][] = [];
+	if (raw == "-") return out;
+	for (const row of splitRows(raw)) {
+		const linked = linkNodeList(row, nodes);
+		if (linked == null) return null;
+		out.push(linked);
+	}
+	return out;
+}
+
 export function linkTypesAndSymbols(this a: RowReader): boolean {
 	const types = a.types;
 	const syms = a.syms;
 	const nodes = a.nodes;
 	for (let i = 0; i < types.length; i += 1) {
+		if (a.typeWellKnown[i] >= 0) continue;
 		const t = types[i];
 		const kids = a.typeChildrenIdx[i];
 		const children: Type[] = [];
@@ -1034,6 +1208,9 @@ export function linkTypesAndSymbols(this a: RowReader): boolean {
 		t.mutableView = a.typeMutableIdx[i] >= 0 && a.typeMutableIdx[i] < types.length ? types[a.typeMutableIdx[i]] : null;
 		t.typeParamDefault = a.typeDefaultIdx[i] >= 0 && a.typeDefaultIdx[i] < types.length ? types[a.typeDefaultIdx[i]] : null;
 		t.typeInst = a.typeInstIdx[i] >= 0 && a.typeInstIdx[i] < types.length ? types[a.typeInstIdx[i]] : null;
+		if (badRef(a.typeOwnedIdx[i], types.length) || badRef(a.typePlainIdx[i], types.length)) return false;
+		t.ownedType = a.typeOwnedIdx[i] >= 0 ? types[a.typeOwnedIdx[i]] : null;
+		t.plainType = a.typePlainIdx[i] >= 0 ? types[a.typePlainIdx[i]] : null;
 		for (const k of a.typeOpsIdx[i]) {
 			if (k >= syms.length) return false;
 			t.attachedOps.push(k >= 0 ? syms[k] : null);
@@ -1080,6 +1257,15 @@ export function linkTypesAndSymbols(this a: RowReader): boolean {
 		s.typeParamOwner = a.symParamOwnerIdx[i] >= 0 && a.symParamOwnerIdx[i] < syms.length ? syms[a.symParamOwnerIdx[i]] : null;
 		s.declNode = a.symDeclIdx[i] >= 0 && a.symDeclIdx[i] < nodes.length ? nodes[a.symDeclIdx[i]] : null as unknown as Node;
 		s.defaultParams = parseNodeArr(a.symDpRaw[i], nodes);
+		const decorators = linkNodeRows(a.symFieldDecoratorsRaw[i], nodes);
+		const metaValues = linkNodeList(a.symMetaValuesRaw[i], nodes);
+		if (decorators == null || metaValues == null) return false;
+		s.fieldDecorators = decorators;
+		s.metaValues = metaValues;
+		if (badRef(a.symCtorRoutineIdx[i], syms.length) || badRef(a.symCtorOwnerIdx[i], syms.length) || badRef(a.symBorrowedFromIdx[i], syms.length)) return false;
+		s.ctorRoutine = a.symCtorRoutineIdx[i] >= 0 ? syms[a.symCtorRoutineIdx[i]] : null;
+		s.ctorOwner = a.symCtorOwnerIdx[i] >= 0 ? syms[a.symCtorOwnerIdx[i]] : null;
+		s.borrowedFrom = a.symBorrowedFromIdx[i] >= 0 ? syms[a.symBorrowedFromIdx[i]] : null;
 	}
 	return true;
 }
@@ -1097,6 +1283,8 @@ export function linkNodes(this a: RowReader, rd: PackReader): boolean {
 		n.genericDefaults = a.nodeDefaultsRaw[i] == "-" ? null : parseNodeIdxList(a.nodeDefaultsRaw[i], nodes);
 		n.baseExprs = a.nodeBesRaw[i] == "-" ? null : parseNodeArr(a.nodeBesRaw[i], nodes);
 		n.paramLocations = a.nodePlsRaw[i] == "-" ? null : parseLocs(a.nodePlsRaw[i]);
+		if (badRef(a.nodeTypeAstRef[i], nodes.length)) return false;
+		n.nodeTypeAst = nd(a.nodeTypeAstRef[i], nodes);
 		if (a.nodePssRaw[i] != "-") {
 			const pss: Symbol[] = [];
 			for (const k of parseIntsCsv(a.nodePssRaw[i])) {
@@ -1138,4 +1326,132 @@ test "rowCodec: escape/unescape roundtrip incl separators" {
 		i = i + 1;
 	}
 	assert maxByte < 128;
+}
+
+function roundtripRows(w: RowWriter): RowReader | null {
+	w.closeOver();
+	const lines: string[] = [];
+	w.emitObjectRows(lines);
+	const rd = new PackReader(lines.join("\n"));
+	const r = new RowReader();
+	for (let tag = rd.startRow(); tag >= 0; tag = rd.startRow()) {
+		if (!r.readObjectRow(tag, rd) || rd.bad) return null;
+	}
+	return r.linkTypesAndSymbols() && r.linkNodes(rd) ? r : null;
+}
+
+test "rowCodec: a symbol keeps its field decorators, meta entries and nonisolated fields" {
+	const owner = makeSymbolState("Owner", SymbolKind.Class, null, false, SymbolState.Checked);
+	const tag = createNodeAt(NodeKind.Identifier, { name: "tag" } as NodeData, makeLoc(1, 2));
+	const meta = createNodeAt(NodeKind.StringLiteral, { value: "v" } as NodeData, makeLoc(2, 3));
+	owner.fieldDecoratorNames = ["first", "second"];
+	owner.fieldDecorators = [[tag], []];
+	owner.metaKeys = ["key"];
+	owner.metaValues = [meta];
+	owner.nonisolatedFields = ["shared"];
+	const w = new RowWriter();
+	w.enqSym(owner, true);
+	const r = roundtripRows(w);
+	assert r != null;
+	const got = r.syms[w.idxSym(owner)];
+	assert got != owner;
+	assert got.fieldDecoratorNames.length == 2 && got.fieldDecoratorNames[0] == "first" && got.fieldDecoratorNames[1] == "second";
+	assert got.fieldDecorators.length == 2 && got.fieldDecorators[0].length == 1 && got.fieldDecorators[1].length == 0;
+	assert got.fieldDecorators[0][0] == r.nodes[w.idxNode(tag)] && got.fieldDecorators[0][0] != tag;
+	assert got.metaKeys.length == 1 && got.metaKeys[0] == "key";
+	assert got.metaValues.length == 1 && got.metaValues[0] == r.nodes[w.idxNode(meta)] && got.metaValues[0] != meta;
+	assert got.nonisolatedFields.length == 1 && got.nonisolatedFields[0] == "shared";
+}
+
+test "rowCodec: a symbol keeps its item identity, constructor links and the symbol it borrows from" {
+	const owner = makeSymbolState("Owner", SymbolKind.Class, null, false, SymbolState.Checked);
+	const routine = makeSymbolState("Owner_init", SymbolKind.Function, null, false, SymbolState.Checked);
+	const lender = makeSymbolState("lender", SymbolKind.Variable, null, false, SymbolState.Checked);
+	owner.itemModule = 4;
+	owner.item = 9;
+	owner.ctorRoutine = routine;
+	routine.ctorOwner = owner;
+	owner.borrowedFrom = lender;
+	const w = new RowWriter();
+	w.enqSym(owner, true);
+	const r = roundtripRows(w);
+	assert r != null;
+	const got = r.syms[w.idxSym(owner)];
+	assert got.itemModule == 4 && got.item == 9;
+	const gotRoutine = got.ctorRoutine;
+	assert gotRoutine != null && gotRoutine == r.syms[w.idxSym(routine)] && gotRoutine != routine;
+	assert gotRoutine.ctorOwner == got;
+	assert got.borrowedFrom == r.syms[w.idxSym(lender)] && got.borrowedFrom != lender;
+}
+
+test "rowCodec: a type keeps its owned and plain forms" {
+	const plain = emptyType();
+	plain.kind = TypeKind.Ref;
+	plain.typeName = "Plain";
+	const owned = emptyType();
+	owned.kind = TypeKind.Ref;
+	owned.typeName = "Owned";
+	plain.ownedType = owned;
+	owned.plainType = plain;
+	const w = new RowWriter();
+	w.enqType(plain);
+	const r = roundtripRows(w);
+	assert r != null;
+	const gotPlain = r.types[w.idxType(plain)];
+	const gotOwned = r.types[w.idxType(owned)];
+	assert gotPlain != plain && gotOwned != owned;
+	assert gotPlain.ownedType == gotOwned && gotOwned.plainType == gotPlain;
+}
+
+test "rowCodec: a node keeps its type syntax and reads back without a flow node" {
+	const syntax = createNodeAt(NodeKind.Identifier, { name: "int32" } as NodeData, makeLoc(1, 8));
+	const read = createNodeAt(NodeKind.Identifier, { name: "x" } as NodeData, makeLoc(1, 1));
+	read.nodeTypeAst = syntax;
+	read.flowNode = new FlowNode();
+	const w = new RowWriter();
+	w.enqNode(read);
+	const r = roundtripRows(w);
+	assert r != null;
+	const got = r.nodes[w.idxNode(read)];
+	assert got.nodeTypeAst == r.nodes[w.idxNode(syntax)] && got.nodeTypeAst != null && got.nodeTypeAst != syntax;
+	assert got.flowNode == null;
+}
+
+test "rowCodec: a well-known type reads back as the process's own object" {
+	const known = wellKnownTypes();
+	const holder = emptyType();
+	holder.kind = TypeKind.Tuple;
+	holder.typeChildren = known;
+	holder.typeReturn = createResult(getSysType(TypeKind.Int32), getSysType(TypeKind.String));
+	const w = new RowWriter();
+	w.enqType(holder);
+	const r = roundtripRows(w);
+	assert r != null;
+	const got = r.types[w.idxType(holder)];
+	assert got != holder && got.typeChildren.length == known.length;
+	for (let k = 0; k < known.length; k += 1) assert got.typeChildren[k] == known[k];
+	assert r.types[w.idxType(getSysType(TypeKind.String))] == getSysType(TypeKind.String);
+	let params = 0;
+	for (const t of w.types) {
+		if (t.kind != TypeKind.GenericParam) continue;
+		assert known.indexOf(t) >= 0 && r.types[w.idxType(t)] == t;
+		params += 1;
+	}
+	assert params == known.filter((t: Type): boolean => t.kind == TypeKind.GenericParam).length;
+	assert r.types[w.idxType(holder.typeReturn)] != holder.typeReturn;
+}
+
+test "rowCodec: a node an inlining copied is refused at write" {
+	const copied = createNodeAt(NodeKind.Identifier, { name: "x" } as NodeData, makeLoc(1, 1));
+	copied.inlineFrame = new InlineFrame("callee", null, 3);
+	const w = new RowWriter();
+	w.enqNode(copied);
+	w.closeOver();
+	let message = "";
+	try {
+		w.emitObjectRows([]);
+	} catch (e) {
+		message = (e as Error).message;
+	}
+	assert message.startsWith("internal:") && message.includes("inlineFrame");
 }
