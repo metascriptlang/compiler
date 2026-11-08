@@ -121,3 +121,9 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   only the old block's bytes, so a growing array, Map, Set or string never copies out of the block
   it lands in; on SBF that copy stops the program with "Overlapping copy" (NIM-REF RT-31). Proven
   RED on `bead8cc6a` (ASan `memcpy-param-overlap` in the arena's realloc).
+- **`helloLinksNoAsyncRuntime.ms`** — a program that starts no async work links none of the async
+  runtime (exit drain, event loop, pool, actors, deferred future release), because exit work, a
+  thread's exit flush and a future's count drop go through hooks the facility arms on first use, as
+  Nim attaches exit procs and thread-destruction handlers. Proven RED on tree `7a70426b98c4`
+  (exit drain hooked only; macOS arm64: all six forbidden symbols at `--danger` and `--release`), GREEN
+  on tree `63f54c80d1bf` (macOS arm64 and Linux x86-64).
