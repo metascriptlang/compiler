@@ -10,6 +10,7 @@
 #define msHeapFree msHeapZeroProbeFree
 #define msHeapReset msHeapZeroProbeReset
 #define msHeapThreadRelease msHeapZeroProbeThreadRelease
+#define msHeapThreadFlush msHeapZeroProbeThreadFlush
 #define msHeapTryAllocPages msHeapZeroProbeTryAllocPages
 #define msHeapDeallocPages msHeapZeroProbeDeallocPages
 #define msHeapResetPages msHeapZeroProbeResetPages

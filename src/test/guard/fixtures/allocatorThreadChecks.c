@@ -9,6 +9,7 @@
 #define msHeapFree msHeapThreadProbeFree
 #define msHeapReset msHeapThreadProbeReset
 #define msHeapThreadRelease msHeapThreadProbeRelease
+#define msHeapThreadFlush msHeapThreadProbeFlush
 #define msHeapTryAllocPages msHeapThreadProbeTryAllocPages
 #define msHeapDeallocPages msHeapThreadProbeDeallocPages
 #define msHeapResetPages msHeapThreadProbeResetPages
@@ -59,6 +60,7 @@ static int attachCalls;
 void msThreadAttach(void) { __atomic_add_fetch(&attachCalls, 1, __ATOMIC_RELAXED); }
 
 enum { CELLS = 600, BIG = 64 * 1024 };
+_Static_assert(CELLS >= 100 + MS_HEAP_REMOTE_BATCH_BYTES / 48 + 2, "remoteRuns needs a run, a cap's worth and one more cell");
 static void* cells[CELLS];
 static void* bigs[8];
 
@@ -99,6 +101,52 @@ static void remoteSmallReuse(void) {
     }
     CHECK(reused > CELLS / 2);
     for (int i = 0; i < CELLS; ++i) msHeapFree(again[i]);
+}
+
+/* M10: a thread with its own region gathers the cells it frees for one owner and
+ * size class into a run, which reaches the owner's shared list in one CAS when the
+ * thread flushes, parks or exits, or when its runs reach 16 KiB; the run's header
+ * carries its length, so the owner counts the cells without visiting them. */
+enum { RUN_CELLS = 100, CAP_CELLS = MS_HEAP_REMOTE_BATCH_BYTES / 48 + 1, RUN_TOTAL = RUN_CELLS + CAP_CELLS + 1 };
+static msHeapHandle* runOwner;
+static void freeIntoRuns(void* arg) {
+    (void)arg;
+    msHeapFree(msHeapAlloc(16));
+    msHeapCell** shared = &runOwner->sharedCells[48 / MS_HEAP_ALIGN];
+    for (int i = 0; i < RUN_CELLS; ++i) msHeapFree(cells[i]);
+    CHECK(__atomic_load_n(shared, __ATOMIC_ACQUIRE) == NULL);
+    msHeapThreadFlush();
+    msHeapCell* head = __atomic_load_n(shared, __ATOMIC_ACQUIRE);
+    CHECK(head == cells[RUN_CELLS - 1]);
+    CHECK(msHeapRunLength(head) == RUN_CELLS);
+    CHECK(msHeapRunTail(head) == cells[0] && msHeapRunTail(head)->next == NULL);
+    for (int i = RUN_CELLS; i < RUN_CELLS + CAP_CELLS; ++i) msHeapFree(cells[i]);
+    head = __atomic_load_n(shared, __ATOMIC_ACQUIRE);
+    CHECK(head == cells[RUN_CELLS + CAP_CELLS - 1] && msHeapRunLength(head) == CAP_CELLS);
+    msHeapFree(cells[RUN_TOTAL - 1]);
+    CHECK(__atomic_load_n(shared, __ATOMIC_ACQUIRE) == head);
+    msHeapThreadRelease();
+}
+
+static void remoteRuns(void) {
+    phase = "remote runs";
+    runOwner = msHeapCurrent;
+    msHeapCell** shared = &runOwner->sharedCells[48 / MS_HEAP_ALIGN];
+    CHECK(__atomic_load_n(shared, __ATOMIC_ACQUIRE) == NULL);
+    for (int i = 0; i < RUN_TOTAL; ++i) cells[i] = msHeapAlloc(48);
+    size_t before = MS_HEAP_REGION(msHeapCurrent)->occupied;
+    probeJoin(probeSpawn(freeIntoRuns, NULL));
+    msHeapCell* head = __atomic_load_n(shared, __ATOMIC_ACQUIRE);
+    CHECK(head == cells[RUN_TOTAL - 1] && msHeapRunLength(head) == 1);
+    int reused = 0;
+    void* again[RUN_TOTAL];
+    for (int i = 0; i < RUN_TOTAL; ++i) {
+        again[i] = msHeapAlloc(48);
+        reused += inSet(again[i], cells, RUN_TOTAL);
+    }
+    CHECK(reused > RUN_TOTAL / 2);
+    CHECK(MS_HEAP_REGION(msHeapCurrent)->occupied == before);
+    for (int i = 0; i < RUN_TOTAL; ++i) msHeapFree(again[i]);
 }
 
 /* M10: a big chunk another thread frees is drained by the owner's next big
@@ -241,6 +289,7 @@ static void foreignThreadExit(void) {
 
 int32_t msAllocatorThreadChecks(void) {
     remoteSmallReuse();
+    remoteRuns();
     remoteBigReuse();
     foreignRealloc();
     stress();
