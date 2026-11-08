@@ -366,13 +366,11 @@ const HANDLE_METHODS = [
 	"\t\t\treturn new __msbRef(i, hu[i], hn[i]);",
 	"\t\t},",
 	"\t\tlive(r) { return hLive(r); },",
-	"\t\treport() {",
-	"\t\t\tconst out = [];",
+	"\t\thandleLeaks(out) {",
 	"\t\t\tfor (let i = 0; i < hk.length; i++) {",
 	"\t\t\t\tif (hk[i] === 2 || hk[i] === 3) out.push(\"msb leak: \" + hn[i] + "
 		+ "\" never released\");",
 	"\t\t\t}",
-	"\t\t\treturn out;",
 	"\t\t},",
 	"\t\tlend(r) {",
 	"\t\t\tif (!(r instanceof __msbRef)) throw new TypeError(\"expected a Handle "
@@ -431,6 +429,20 @@ const LEAK_EXIT = [
 	"});",
 ];
 
+function reportLines(handles: boolean, tagged: boolean): string[] {
+	const out = ["\t\treport() {", "\t\t\tconst out = [];"];
+	if (handles) out.push("\t\t\tthis.handleLeaks(out);");
+	if (tagged) {
+		out.push("\t\t\tfor (let s = 0; s < vals.length; s++) {");
+		out.push("\t\t\t\tif (vals[s] !== undefined && tags[s] !== undefined) "
+			+ "out.push(\"msb leak: \" + tags[s] + \" never released\");");
+		out.push("\t\t\t}");
+	}
+	out.push("\t\t\treturn out;");
+	out.push("\t\t},");
+	return out;
+}
+
 const SCRATCH_BYTES = 16384;
 
 function scratchLines(used: boolean): string[] {
@@ -455,14 +467,19 @@ export function preludeFor(
 	scratch: boolean,
 	views: string[],
 	handles: boolean,
+	keeps: boolean,
 	dev: boolean,
 ): string {
+	const tagged = keeps && dev;
 	const tableFull = `boundary table full: ${SLOT_CAP} live entries`;
 	const staleSlot = `vals[s] === undefined || gens[s] !== id >>> ${SLOT_BITS}`;
 	const rejectStale = (message: string): string => {
 		return `\t\t\tif (${staleSlot}) throw new Error("${message}");`;
 	};
 	const rejectFull = `throw new RangeError("${tableFull}")`;
+	const spanHeld = "\"a kept callback was called while '\" + this.span + \"' holds a copy "
+		+ "of its Span, so a JS write to the array would be lost: take a Vec in '\" + "
+		+ "this.span + \"', or call the callback from a function without a Span\"";
 	const deadGlue = "the wasm half cannot run again: a trap or a host error "
 		+ "left its frames unfinished";
 	const lentGlue = "a wasm function was called while a Span was lent to a JS "
@@ -478,6 +495,7 @@ export function preludeFor(
 		"\tconst vals = [];",
 		"\tconst gens = [];",
 		"\tconst free = [];",
+		...(tagged ? ["\tconst tags = [];"] : []),
 		"\tlet dead = false;",
 		"\tlet cause;",
 		"\tconst vw = [];",
@@ -486,7 +504,7 @@ export function preludeFor(
 		...(handles ? HANDLE_STATE : []),
 		"\treturn {",
 		...(handles ? HANDLE_METHODS : []),
-		"\t\tpush(f) {",
+		tagged ? "\t\tpush(f, t) {" : "\t\tpush(f) {",
 		"\t\t\tlet s = free.pop();",
 		"\t\t\tif (s === undefined) {",
 		`\t\t\t\tif (vals.length >= ${SLOT_CAP}) ${rejectFull};`,
@@ -495,6 +513,7 @@ export function preludeFor(
 		"\t\t\t\tgens.push(0);",
 		"\t\t\t}",
 		"\t\t\tvals[s] = f;",
+		...(tagged ? ["\t\t\ttags[s] = t;"] : []),
 		`\t\t\treturn (gens[s] << ${SLOT_BITS}) | s;`,
 		"\t\t},",
 		"\t\tpop(id) {",
@@ -510,8 +529,11 @@ export function preludeFor(
 		"\t\tcb(id) {",
 		`\t\t\tconst s = id & ${SLOT_MASK};`,
 		rejectStale("callback used after its call returned"),
+		...(keeps ? [`\t\t\tif (this.span !== null) throw new Error(${spanHeld});`] : []),
 		"\t\t\treturn vals[s];",
 		"\t\t},",
+		...(keeps ? ["\t\tspan: null,"] : []),
+		...(handles || tagged ? reportLines(handles, tagged) : []),
 		`\t\tenter() {`,
 		`\t\t\tif (dead) throw new Error("${deadGlue}", { cause });`,
 		"\t\t\tif (this.lent !== 0) {",
@@ -548,7 +570,7 @@ export function preludeFor(
 		glue.join("\n"),
 		`const __msbMod = await ${factory}({ msb: __msb });`,
 		"__msbMod._MsMain();",
-		...(handles && dev ? LEAK_EXIT : []),
+		...((handles || keeps) && dev ? LEAK_EXIT : []),
 		...scratchLines(scratch),
 		"",
 	].join("\n");
@@ -565,7 +587,7 @@ export function viewHelpers(viewsIn: boolean, viewsOut: boolean): string[] {
 }
 
 test "js glue: float32 copy-in uses the live heap with aligned bounded element offsets" {
-	const p = preludeFor("./half.mjs", false, true, [], false, false);
+	const p = preludeFor("./half.mjs", false, true, [], false, false, false);
 	const body = p.slice(
 		p.indexOf("function __msbCopyTo("),
 		p.indexOf("function __msbCopyBack("),
@@ -581,7 +603,7 @@ test "js glue: float32 copy-in uses the live heap with aligned bounded element o
 }
 
 test "js glue: copy-back and Vec results retain their bounded typed views" {
-	const p = preludeFor("./half.mjs", false, true, [], false, false);
+	const p = preludeFor("./half.mjs", false, true, [], false, false, false);
 	const body = p.slice(
 		p.indexOf("function __msbCopyBack("),
 		p.indexOf("function __msbSeal("),

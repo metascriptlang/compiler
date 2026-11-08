@@ -680,7 +680,6 @@ export function checkWasmFunctions(ctx: CheckerContext, program: Node): void {
 		if (stmt.kind == NodeKind.ExportDecl) {
 			const placed = exportedFunctionOf(stmt);
 			if (placed != null && placed.resolvedSym != null && hasFlag(placed.resolvedSym!, SymbolFlag.Wasm) && (placed.data as FunctionDeclData).fnBody != null) {
-				refuseKeptWasmCallbacks(ctx, placed);
 				refuseLentHandleUse(ctx, placed);
 				roots.push(placed);
 			}
@@ -703,7 +702,6 @@ export function checkWasmFunctions(ctx: CheckerContext, program: Node): void {
 			addError(ctx, WASM_PLACEMENT_SITE, at.line, at.column);
 			continue;
 		}
-		refuseKeptWasmCallbacks(ctx, fn);
 		refuseLentHandleUse(ctx, fn);
 		roots.push(fn);
 	}
@@ -1019,21 +1017,49 @@ function refuseLentHandleUse(ctx: CheckerContext, fn: Node): void {
 	}
 }
 
-function refuseKeptWasmCallbacks(ctx: CheckerContext, fn: Node): void {
-	if (fn.paramSyms == null) return;
-	const fnName = (fn.data as FunctionDeclData).fnName;
-	for (const param of fn.paramSyms!) {
-		if (param.symbolType == null || peelThrough(param.symbolType!, PEEL_ALIAS).kind != TypeKind.Function) continue;
-		const site = findKeptSite(routineBody(fn), { lent: [param], held: [], seen: [fn] });
-		if (site == null) continue;
-		addError(
-			ctx,
-			`wasm-placed function '${fnName}' keeps its callback parameter '${param.name}': it ${keptSiteAction(site)} at ${site.location.line}:${site.location.column}, but a JS callback is only lent for the call\n` +
-				"call it before returning, or keep the state it needs instead of the callback",
-			site.location.line,
-			site.location.column,
-		);
+export function callbackOnlyCalled(fn: Node, param: Symbol): boolean {
+	const body = routineBody(fn);
+	return body != null && onlyCalled(body, param, [param]);
+}
+
+function isIdentOf(n: Node | null, sym: Symbol): boolean {
+	return n != null && n.kind == NodeKind.Identifier && n.resolvedSym == sym;
+}
+
+function onlyCalled(node: Node | null, lent: Symbol, seen: Symbol[]): boolean {
+	if (node == null) return true;
+	if (node.kind == NodeKind.Identifier) return node.resolvedSym != lent;
+	if (node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr) return !capturesLent(node, [lent]);
+	if (node.kind == NodeKind.CallExpr) {
+		const d = node.data as CallExprData;
+		const callee = peelView(d.callee);
+		if (!isIdentOf(callee, lent) && !onlyCalled(d.callee, lent, seen)) return false;
+		const direct = callee != null && callee.kind != NodeKind.MemberExpr;
+		const routine = direct ? routineParts(node.resolvedSym != null ? node.resolvedSym : callee!.resolvedSym) : null;
+		for (let i = 0; i < d.arguments.length; i += 1) {
+			const a = d.arguments[i];
+			if (!isIdentOf(peelView(a), lent)) {
+				if (!onlyCalled(a, lent, seen)) return false;
+			} else if (!passedOnlyCalled(routine, node, i, seen)) {
+				return false;
+			}
+		}
+		return true;
 	}
+	const ok: boolean[] = [true];
+	forEachChild(node, (child: Node): void => { if (ok[0] && !onlyCalled(child, lent, seen)) ok[0] = false; });
+	return ok[0];
+}
+
+function passedOnlyCalled(routine: Node | null, call: Node, arg: int32, seen: Symbol[]): boolean {
+	if (routine == null || routine.paramSyms == null) return false;
+	const at = firstArgParam(routine, call) + arg;
+	if (at >= routine.paramSyms!.length) return false;
+	const p = routine.paramSyms![at];
+	if (seen.includes(p)) return true;
+	seen.push(p);
+	const body = routineBody(routine);
+	return body != null && onlyCalled(body, p, seen);
 }
 
 // A spawn thunk BORROWS the enclosing env (the lifted closure is handed

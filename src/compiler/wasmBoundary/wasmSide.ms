@@ -325,6 +325,7 @@ function takenBody(f: BoundaryFunction, call: string, take: string): string[] {
 function guardedExport(
 	f: BoundaryFunction,
 	sig: string,
+	keeps: string[],
 	type: string,
 	body: string[],
 	zero: string,
@@ -334,6 +335,7 @@ function guardedExport(
 		`export function ${f.exportSymbol}(${sig}): ${type} {`,
 		"\ttry {",
 	];
+	for (const l of keeps) lines.push("\t\t" + l);
 	for (const l of body) lines.push("\t\t" + l);
 	lines.push("\t} catch (e) {");
 	lines.push("\t\tmsbEscape(e.message);");
@@ -370,6 +372,14 @@ function viewLines(element: BoundaryKind): string[] {
 	];
 }
 
+function keptLines(): string[] {
+	return [
+		...importLines("msb_cb_free", "i", "v", false),
+		"class MsbKept { id: int32 = 0; }",
+		"function onDestroy(this k: MsbKept): void { msb_cb_free(k.id); }",
+	];
+}
+
 function releaseLines(alias: string): string[] {
 	return [
 		'@exportName("msb_release")',
@@ -386,6 +396,7 @@ function wrapperLines(
 ): string[] {
 	const sigs: string[] = [];
 	const argList: string[] = [];
+	const keeps: string[] = [];
 	const prefix = `msbm${modules.indexOf(f.modulePath)}_`;
 	for (let i = 0; i < f.params.length; i += 1) {
 		const p: BoundaryParam = f.params[i];
@@ -396,7 +407,13 @@ function wrapperLines(
 		match (p.kind) {
 			BoundaryKind.Callback => {
 				sigs.push(`${p.name}: int32`);
-				argList.push(closureOf(p.callback!, p.name, prefix));
+				let id = p.name;
+				if (p.mode == BoundaryMode.Kept) {
+					id = `${p.name}Kept.id`;
+					keeps.push(`const ${p.name}Kept = new MsbKept();`);
+					keeps.push(`${id} = ${p.name};`);
+				}
+				argList.push(closureOf(p.callback!, id, prefix));
 			}
 			BoundaryKind.Handle => {
 				sigs.push(`${p.name}: uint32`);
@@ -445,26 +462,26 @@ function wrapperLines(
 			}
 			const letters = leafLetters(f.resultLeaves);
 			const take = `msb_rs_${letters}(${wires.join(", ")});`;
-			guardedExport(f, sig, "void", takenBody(f, call, take), "")
+			guardedExport(f, sig, keeps, "void", takenBody(f, call, take), "")
 		},
 		BoundaryKind.Vec => {
 			const t = valueTypeOf(f.resultElement);
 			const base = `(r as Span<${t}>) as Ptr<void> as uint64 as int32`;
 			const take = `msb_rv(${base}, r.length as int32);`;
-			guardedExport(f, sig, "void", takenBody(f, call, take), "")
+			guardedExport(f, sig, keeps, "void", takenBody(f, call, take), "")
 		},
 		BoundaryKind.Typed => {
 			const take = `msbTyped${f.resultClass}(r, "${f.name}");`;
-			guardedExport(f, sig, "void", takenBody(f, call, take), "")
+			guardedExport(f, sig, keeps, "void", takenBody(f, call, take), "")
 		},
 		BoundaryKind.Handle => {
 			const ret = "return r.ptr as uint64 as uint32;";
 			const body = [`const r = ${call};`, ret];
-			guardedExport(f, sig, "uint32", body, "0")
+			guardedExport(f, sig, keeps, "uint32", body, "0")
 		},
 		BoundaryKind.String => {
 			const take = "msb_rs_s(msbStrPtr(r), r.asBytes().length);";
-			guardedExport(f, sig, "void", takenBody(f, call, take), "")
+			guardedExport(f, sig, keeps, "void", takenBody(f, call, take), "")
 		},
 		_ => {
 			const type = f.result == BoundaryKind.Void ? "void" : msTypeOf(f.result);
@@ -475,7 +492,7 @@ function wrapperLines(
 			};
 			if (f.resultNullable) {
 				const absent = enumZero == "" ? zero : enumZero;
-				guardedExport(f, sig, type, [
+				guardedExport(f, sig, keeps, type, [
 					`const r = ${call};`,
 					"msbRetSome = r != null ? 1 : 0;",
 					`return ${stored(`r ?? ${absent}`)};`,
@@ -484,7 +501,7 @@ function wrapperLines(
 				const body = f.result == BoundaryKind.Void
 					? `${call};`
 					: `return ${stored(call)};`;
-				guardedExport(f, sig, type, [body], zero)
+				guardedExport(f, sig, keeps, type, [body], zero)
 			}
 		},
 	};
@@ -552,6 +569,7 @@ interface EntryUsage {
 	typedClasses: string[];
 	resultImports: string[];
 	callbacks: BoundaryCallback[];
+	keeps: boolean;
 	handles: string[];
 	enums: string[];
 	viewElements: BoundaryKind[];
@@ -588,6 +606,7 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 		typedClasses: [],
 		resultImports: [],
 		callbacks: [],
+		keeps: false,
 		handles: [],
 		enums: [],
 		viewElements: [],
@@ -640,6 +659,7 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 			}
 			if (p.kind == BoundaryKind.Callback) {
 				const cb = p.callback!;
+				if (p.mode == BoundaryMode.Kept) usage.keeps = true;
 				for (const e of cb.enums) addEnum(usage, f, e);
 				addEnum(usage, f, cb.resultEnum);
 				if (cb.params.includes(BoundaryKind.String)) {
@@ -738,6 +758,10 @@ function jsLibraryOf(usage: EntryUsage): string {
 		const take = `${REGISTRY}.takes.pop()(${params.join(", ")})`;
 		entries.push(`\t${name}: (${params.join(", ")}) => ${take},`);
 	}
+	if (usage.keeps) {
+		const free = wireNames(0, "i");
+		entries.push(guardedImportJs("msb_cb_free", free, `${REGISTRY}.pop(${free[0]})`));
+	}
 	const escape = `${REGISTRY}.escape(a0p, a0l)`;
 	entries.push(guardedImportJs("msb_esc", ["a0p", "a0l"], escape));
 	const first = signatures.length > 0
@@ -781,6 +805,7 @@ function entryLines(
 	for (const cb of usage.callbacks) {
 		for (const l of callbackLines(cb)) lines.push(l);
 	}
+	if (usage.keeps) for (const l of keptLines()) lines.push(l);
 	for (const name of usage.resultImports) {
 		for (const l of importLines(name, resultLettersOf(name), "v", false)) lines.push(l);
 	}

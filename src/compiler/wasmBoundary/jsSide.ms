@@ -383,11 +383,16 @@ function scalarArg(kind: BoundaryKind, expr: string, absent: string): string {
 	return `${absent} ? ${scalarFacts(kind, "zero").jsZero} : ${wire}`;
 }
 
+function declared(encoded: string[], wasmOwns: boolean): string {
+	return (wasmOwns ? encoded.concat(["sent = false"]) : encoded).join(", ");
+}
+
 function wrapperLines(
 	f: BoundaryFunction,
 	bundleName: string,
 	checked: boolean,
 	dev: boolean,
+	keeps: boolean,
 ): string[] {
 	const cleanup: string[] = [];
 	const copyBacks: string[] = [];
@@ -465,8 +470,15 @@ function wrapperLines(
 				const pushed = forwardsUnchanged(p.callback!, adapter, target)
 					? target
 					: adapter;
-				lines.push(`\tconst id${i} = __msb.push(${pushed});`);
-				cleanup.push(`__msb.pop(id${i});`);
+				if (p.mode == BoundaryMode.Kept) {
+					wasmOwns = true;
+					const tag = dev ? `, ${quoted(p.keptLabel!)}` : "";
+					lines.push(`\tconst id${i} = __msb.push(${pushed}${tag});`);
+					cleanup.push(`if (!sent) __msb.pop(id${i});`);
+				} else {
+					lines.push(`\tconst id${i} = __msb.push(${pushed});`);
+					cleanup.push(`__msb.pop(id${i});`);
+				}
 				argList.push(`id${i}`);
 			}
 			BoundaryKind.Struct => {
@@ -525,6 +537,10 @@ function wrapperLines(
 		);
 		cleanup.push("for (const q of hb) __msbFree(q);");
 	}
+	if (keeps && f.params.some((p) => p.kind == BoundaryKind.Span)) {
+		lines.push(`\tconst span = __msb.span; __msb.span = ${quoted(f.name)};`);
+		cleanup.push("__msb.span = span;");
+	}
 	const sig = sigs.join(", ");
 	const call = `__msbMod._${f.exportSymbol}(${argList.join(", ")})`;
 	const guardedCall = (target: string): string => {
@@ -577,8 +593,7 @@ function wrapperLines(
 			: "";
 		if (body[0] == "let v;") lines.push(`	${body.shift()!}`);
 		for (const l of lines) out.push(l);
-		const names = encoded.join(", ") + (wasmOwns ? ", sent = false" : "");
-		out.push(`\tlet ${names};`);
+		out.push(`\tlet ${declared(encoded, wasmOwns)};`);
 		if (copyBacks.length > 0) out.push("	let ran = false;");
 		out.push("	let thrown = null, failed = false;");
 		out.push("	const mark = __msbTop;");
@@ -603,11 +618,8 @@ function wrapperLines(
 		if (tail != "") out.push(`	${tail}`);
 	} else {
 		for (const l of lines) out.push(l);
-		if (encoded.length > 0) {
-			const names = encoded.join(", ") + (wasmOwns ? ", sent = false" : "");
-			out.push(`\tlet ${names};`);
-			out.push("	const mark = __msbTop;");
-		}
+		if (encoded.length > 0 || wasmOwns) out.push(`\tlet ${declared(encoded, wasmOwns)};`);
+		if (encoded.length > 0) out.push("	const mark = __msbTop;");
 		out.push("	try {");
 		for (const l of encodes) out.push(l);
 		if (wasmOwns) out.push("		sent = true;");
@@ -635,6 +647,7 @@ export function jsBindings(
 	let anyChecked = false;
 	let handles = false;
 	const dev = options.dev ?? true;
+	const keeps = m.functions.some((f) => f.params.some((p) => p.mode == BoundaryMode.Kept));
 	for (const f of m.functions) {
 		if (f.result == BoundaryKind.Handle) handles = true;
 		for (const p of f.params) if (p.kind == BoundaryKind.Handle) handles = true;
@@ -657,7 +670,7 @@ export function jsBindings(
 		const bundleName = bundleNameOf(f);
 		const checked = options.checked(bundleName);
 		if (checked) anyChecked = true;
-		for (const l of wrapperLines(f, bundleName, checked, dev)) {
+		for (const l of wrapperLines(f, bundleName, checked, dev, keeps)) {
 			lines[at].push(l);
 		}
 	}
@@ -671,6 +684,7 @@ export function jsBindings(
 		scratch,
 		views,
 		handles,
+		keeps,
 		dev,
 	);
 	return { prelude, modules };

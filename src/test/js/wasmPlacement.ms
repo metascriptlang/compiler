@@ -68,27 +68,13 @@ test "@wasm is refused with an argument, off an export, inside a function and on
 	).contains("a class method cannot be placed in wasm yet");
 }
 
-test "a wasm-placed function that stores its callback is refused, one that calls it is not" {
-	const stored = checkErrorText(
+test "a wasm-placed function may keep its callback, directly or through a helper" {
+	assert checkErrorText(
 		"let saved: ((x: int32) => int32) | null = null;\n@wasm\nexport function keep(cb: (x: int32) => int32): int32 { saved = cb; return 0; }\n",
-	);
-	assert stored.contains(
-		"wasm-placed function 'keep' keeps its callback parameter 'cb': it stores it in 'saved'",
-	);
-	assert checkErrorText(
-		"@wasm\nexport function use(cb: (x: int32) => int32): int32 { return cb(2) + 1; }\n",
 	) == "";
 	assert checkErrorText(
-		"let saved: ((x: int32) => int32) | null = null;\nexport function keep(cb: (x: int32) => int32): int32 { saved = cb; return 0; }\n",
+		"const all: ((x: int32) => int32)[] = [];\nfunction remember(f: (x: int32) => int32): void { all.push(f); }\n@wasm\nexport function keep(cb: (x: int32) => int32): int32 { remember(cb); return 0; }\n",
 	) == "";
-}
-
-test "a wasm-placed function that keeps its callback through a helper is refused" {
-	const src =
-		"const all: ((x: int32) => int32)[] = [];\nfunction remember(f: (x: int32) => int32): void { all.push(f); }\n@wasm\nexport function keep(cb: (x: int32) => int32): int32 { remember(cb); return 0; }\n";
-	assert checkErrorText(src).contains(
-		"wasm-placed function 'keep' keeps its callback parameter 'cb': it passes it to 'remember'",
-	);
 }
 
 test "module state that only wasm-placed code uses lives in wasm, directly or through a helper" {

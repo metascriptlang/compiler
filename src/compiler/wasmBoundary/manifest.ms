@@ -19,6 +19,7 @@ import {
 	lifecycleHookOp,
 } from "../../checker/context";
 import { lookupInstanceHook } from "../../checker/instantiate";
+import { callbackOnlyCalled } from "../../checker/sendable";
 import { hasFlag } from "../../checker/symbol";
 import {
 	PEEL_ALIAS,
@@ -62,6 +63,7 @@ export enum BoundaryMode {
 	Copied,
 	Shared,
 	Borrowed,
+	Kept,
 }
 
 export interface BoundaryCallback {
@@ -85,6 +87,7 @@ export interface BoundaryParam {
 	element: BoundaryKind;
 	handle: string | null;
 	enumOf: BoundaryEnum | null;
+	keptLabel: string | null;
 }
 
 export interface BoundaryFunction {
@@ -764,6 +767,16 @@ function valueShape(
 	return null;
 }
 
+function keepsCallback(decl: Node | null, at: int32): boolean {
+	if (decl == null || decl.paramSyms == null || at >= decl.paramSyms!.length) return true;
+	return !callbackOnlyCalled(decl, decl.paramSyms![at]);
+}
+
+function keptLabel(c: Collector, param: string, fn: string, at: SourceLocation): string {
+	const file = relative(dirname(c.entryPath), c.modulePath);
+	return `callback '${param}' kept by ${fn} at ${file}:${at.line}`;
+}
+
 function handleLabel(c: Collector, target: string, at: SourceLocation): string {
 	const file = relative(dirname(c.entryPath), c.modulePath);
 	return `Handle<${target}> created at ${file}:${at.line}`;
@@ -786,6 +799,7 @@ function plainParam(
 		element,
 		handle: null,
 		enumOf: null,
+		keptLabel: null,
 	};
 }
 
@@ -1062,12 +1076,20 @@ function boundaryFunction(
 	}
 	const params: BoundaryParam[] = [];
 	let ok = true;
+	const fnDecl = fnDeclOf(sym);
 	for (let i = 0; i < ft.typeChildren.length; i += 1) {
 		const typeExpr = typeExprs != null ? typeExprs[i] : null;
 		c.at = typeExpr != null ? typeExpr.location : nameAt;
 		const p = paramOf(c, ft.typeNames[i], ft.typeChildren[i]);
-		if (p == null) ok = false;
-		else params.push(p);
+		if (p == null) {
+			ok = false;
+		} else {
+			if (p.kind == BoundaryKind.Callback && keepsCallback(fnDecl, i)) {
+				p.mode = BoundaryMode.Kept;
+				p.keptLabel = keptLabel(c, p.name, name, nameAt);
+			}
+			params.push(p);
+		}
 	}
 	const resultExpr = decl != null ? decl.typeExpr : null;
 	c.at = resultExpr != null ? resultExpr.location : nameAt;
