@@ -25,13 +25,14 @@ import { Node, NodeKind, DeclKind, SourceLocation, NodeFlag, SymbolKind, Symbol,
 import {
 	TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError, mintSym,
 } from "../context";
+import { canFormAcycleInRelease } from "../cycles";
 import { mapChildren, isFuncBoundary } from "../walker";
 import { forEachChild, initializerHoldsClosure, anyDescendant, Visit } from "../../ast/visitor";
 import {
 	makeTypedIdentResolved, makeMember, makeReturn, makeBlock, makeVarDecl, makeFnDecl, makeObjectLiteral,
 	makeHiddenDeref, makeNull, makeDefaultValue, makeAssign, makeExprStmt, syntheticToken, resolveSimpleTypeStr,
 } from "../util";
-import { createPtr, createRef, voidType, isUnresolvedType } from "../../checker/types";
+import { createPtr, createRef, voidType, isUnresolvedType, isOwnedClosure } from "../../checker/types";
 import { RoutineFlag, routineFlagSet } from "../../checker/symbol";
 import { routineFlags } from "../../checker/context";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx, checkedFnBodyStmts } from "../testUtil";
@@ -1277,6 +1278,33 @@ function carryAsync(source: Node, state: LiftState, pair: Node): Node {
 	return pair;
 }
 
+// An Owned closure is a leaf of the cycle classification, so the environment it is formed with must not
+// be able to take part in a cycle; the error names the first capture that can.
+function checkOwnedClosureEnv(state: LiftState, lambda: Node, lifted: Node): Node {
+	if (!isOwnedClosure(lambda.nodeType)) return lifted;
+	const pair = closurePairIn(lifted);
+	if (pair == null) return lifted;
+	const env = (pair.data as ObjectLiteralData).properties[1].nodeType;
+	const envStruct = env != null && (env.kind == TypeKind.Ref || env.kind == TypeKind.Ptr) ? env.typeReturn : null;
+	if (envStruct == null || !canFormAcycleInRelease(envStruct)) return lifted;
+	const captured = state.envFieldSyms.get(envStruct);
+	let culprit = "";
+	for (let i = 0; captured != null && i < envStruct.typeChildren.length && i < captured.length && culprit == ""; i += 1) {
+		if (captured[i] != null && canFormAcycleInRelease(envStruct.typeChildren[i])) culprit = captured[i].name;
+	}
+	reportTransformError(state.ctx, "cannot form an Owned closure: its environment can be part of a cycle" + (culprit != "" ? " through the captured '" + culprit + "'" : "") + "; capture only values whose types cannot reach back, or hold this closure plainly", lambda.location);
+	return lifted;
+}
+
+function closurePairIn(node: Node): Node | null {
+	if (node.kind == NodeKind.ObjectLiteral && node.flags.has(NodeFlag.Closure)) return node;
+	let found: Node | null = null;
+	forEachChild(node, (child: Node): void => {
+		if (found == null) found = closurePairIn(child);
+	});
+	return found;
+}
+
 // Try to lift a closure. Returns the original node if no captures, or a closure pair if lifted.
 function tryLiftClosure(node: Node, state: LiftState): Node {
 	// Save+clear scope state: closure body is a new scope.
@@ -1287,10 +1315,10 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 
 	if (node.kind == NodeKind.ArrowFunction) {
 		const d = node.data as ArrowFunctionData;
-		return carryAsync(node, state, liftCapturingClosureBody(state, node, d.arrowBody, d.arrowParams, d.arrowParamTypes, d.arrowFlags, d.arrowReturnType, "arrow", savedActiveRewrites, savedShared, liftArrow));
+		return checkOwnedClosureEnv(state, node, carryAsync(node, state, liftCapturingClosureBody(state, node, d.arrowBody, d.arrowParams, d.arrowParamTypes, d.arrowFlags, d.arrowReturnType, "arrow", savedActiveRewrites, savedShared, liftArrow)));
 	} else if (node.kind == NodeKind.FunctionExpr) {
 		const d = node.data as FunctionExprData;
-		return carryAsync(node, state, liftCapturingClosureBody(state, node, d.funcExprBody, d.funcExprParams, d.funcExprParamTypes, d.funcExprFlags, d.funcExprReturnType, "fexpr", savedActiveRewrites, savedShared, liftFuncExpr));
+		return checkOwnedClosureEnv(state, node, carryAsync(node, state, liftCapturingClosureBody(state, node, d.funcExprBody, d.funcExprParams, d.funcExprParamTypes, d.funcExprFlags, d.funcExprReturnType, "fexpr", savedActiveRewrites, savedShared, liftFuncExpr)));
 	} else {
 		popFuncBoundary(state.ss);
 		state.activeEnvRewrites = savedActiveRewrites;

@@ -20,7 +20,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
 import { NameSet, createNameSet, createSharingNameSet, nameSetTypeKey, nameSetRememberTypeKey, nameSetAdd, nameSetContains } from "./context";
-import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey, countedEvictElement, isAtomicRef, isOwnedRef, isUnownedRef, heldBeyond, subclassesOf, hasGenericParams, hasTypeIdentity, createPrimitive, createArray, createTypeRef, numberType } from "../checker/types";
+import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey, countedEvictElement, isAtomicRef, isOwnedRef, isUnownedRef, heldBeyond, subclassesOf, isOwnedClosure, hasGenericParams, hasTypeIdentity, createPrimitive, createArray, createTypeRef, numberType } from "../checker/types";
 import { anonTypeName, isAnonTypeName, typeKey } from "../codegen/c/types";
 import { monoInstanceName } from "../monomorphize/registry";
 
@@ -42,6 +42,17 @@ export function formsOnlyOwnedCycles(t: Type): boolean {
 		return !canFormAcycle(t, createNameSet(), createNameSet());
 	} finally {
 		_checkOwnedCycles = true;
+	}
+}
+
+// The release classification, which a build-independent rule (an owned closure's environment) must use.
+export function canFormAcycleInRelease(t: Type): boolean {
+	const was = _checkOwnedCycles;
+	_checkOwnedCycles = false;
+	try {
+		return canFormAcycle(t, createNameSet(), createNameSet());
+	} finally {
+		_checkOwnedCycles = was;
 	}
 }
 
@@ -108,7 +119,8 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, sawPlainEdge:
 			const arrayCell = t.typeReturn.kind == TypeKind.Array;
 			return cfaAux(t.typeReturn, origKey, true, sawPlainEdge || !(ownedHop || arrayCell), marker, t.typeReturn.kind == TypeKind.GenericInstance);
 		},
-		TypeKind.Function | TypeKind.Unknown => true,
+		TypeKind.Function => !isOwnedClosure(t),
+		TypeKind.Unknown => true,
 		TypeKind.Struct => {
 			if (t.typeFlags.has(TypeFlag.Acyclic)) return false;
 			if (extendedWithoutNotes(t)) return true;
@@ -254,7 +266,8 @@ export function canFormAcycle(t: Type | null, cyclicCache: NameSet, acyclicCache
 		const refInner = unwrapRefNullUnion(subject);
 		if (refInner != null) subject = skipAbstract(refInner);
 	}
-	if (subject.kind == TypeKind.Function || isUnknownType(subject)) return true;
+	if (subject.kind == TypeKind.Function) return !isOwnedClosure(subject);
+	if (isUnknownType(subject)) return true;
 	if (subject.kind == TypeKind.Ptr) return false;
 	if (subject.kind == TypeKind.Ref) {
 		if (subject.typeReturn == null) return true;
