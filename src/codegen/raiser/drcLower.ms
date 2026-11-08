@@ -513,11 +513,10 @@ export function compileOwnershipStmt(s: RaiserCompState, call: Node): boolean {
 	}
 	if (row == ROW_COPY_VALUE && d.arguments.length != 2) throw new Error(`internal: Raiser has no lowering for ${name} with ${d.arguments.length} argument(s) in statement position`);
 	if (row == ROW_INCREF) emitInst(s, raiserABC(RaiserOpcode.RcInc, refRegister(s, name, d.arguments[0]), 0, 0));
-	else if (row == ROW_DECREF) {
-		emitInst(s, raiserABC(RaiserOpcode.RcDec, refRegister(s, name, d.arguments[0]), 0, 0));
+	else if (row == ROW_DECREF || row == ROW_DECREF_CYCLIC) {
+		emitInst(s, raiserABC(RaiserOpcode.RcDec, refRegister(s, name, d.arguments[0]), row == ROW_DECREF_CYCLIC ? 1 : 0, 0));
 		if (localOfPlace(s, placeOf(d.arguments[0])) < 0) emitClear(s, name, d.arguments[0], false);
 	}
-	else if (row == ROW_DECREF_CYCLIC) emitInst(s, raiserABC(RaiserOpcode.RcDec, refRegister(s, name, d.arguments[0]), 1, 0));
 	else if (row == ROW_CLEAR) emitClear(s, name, d.arguments[0], name != "msPtrWasMoved");
 	else if (row == ROW_SINK) emitSink(s, name, d.arguments[0], d.arguments[1]);
 	else if (row == ROW_KEPT) emitInst(s, raiserABC(RaiserOpcode.RcKeptCheck, refRegister(s, name, d.arguments[0]), compileExpr(s, d.arguments[1]), 0));
