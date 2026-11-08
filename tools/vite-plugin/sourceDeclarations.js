@@ -141,11 +141,12 @@ export function sourceDeclarationWatchRoots(projectRoot, sourceRoot, dependencie
  return [...roots];
 }
 
-const escapePath = path => path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const anySeparator = "[\\\\/]";
+const escapePath = path => path.split(/[\\/]/).map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(anySeparator);
 
 export function ownedOutputPattern(options, projectRoot, compilerOutputPrefix) {
- const sep = "[\\\\/]", part = "[^\\\\/]*";
+ const part = "[^\\\\/]*";
  const declarations = escapePath(resolve(projectRoot, options.outDir));
- const family = `package\\.json$|(?:.*${sep})?(?:\\.msc-${part}(?:${sep}|$)|${part}\\.d\\.(?:ms\\.ts|jms\\.ts|ts)$)`;
- return new RegExp(`^(?!.*\\.(?:ms|jms)$)(?:${escapePath(compilerOutputPrefix)}.|${declarations}${sep}(?:${family}))`);
+ const family = `package\\.json$|(?:.*${anySeparator})?(?:\\.msc-${part}(?:${anySeparator}|$)|${part}\\.d\\.(?:ms\\.ts|jms\\.ts|ts)$)`;
+ return new RegExp(`^(?!.*\\.(?:ms|jms)$)(?:${escapePath(compilerOutputPrefix)}.|${declarations}${anySeparator}(?:${family}))`);
 }

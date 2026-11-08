@@ -105,3 +105,14 @@ process.on('message',()=>process.exit(0)); process.send('ready');`],{stdio:["ign
  assert.throws(f.open,/never automatically reclaimed/);
  assert.ok(existsSync(join(f.options.outDir,".msc-source-lease/owner.json")));
 });
+
+test("owned output pattern matches either separator, because watchpack tests Windows paths with forward slashes", async () => {
+ const { ownedOutputPattern } = await import("./sourceDeclarations.js");
+ const root = join(tmpdir(), "msc owned");
+ const pattern = ownedOutputPattern({ outDir: "types" }, root, join(root, "ws", "webpack-"));
+ for (const owned of [join(root, "types", "main.d.ts"), join(root, "ws", "webpack-1", "out.js")]) {
+  assert.ok(pattern.test(owned), owned);
+  assert.ok(pattern.test(owned.replaceAll("/", "\\")), owned);
+ }
+ assert.equal(pattern.test(join(root, "types", "main.ms").replaceAll("/", "\\")), false);
+});
