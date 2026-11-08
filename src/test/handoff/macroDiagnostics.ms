@@ -242,9 +242,8 @@ function refusalsIn(error: string): int32 {
 test "macro std tiers: a std routine the Raiser cannot run is refused once at the macro's call, naming the routine, its module, the reason and where it runs" {
 	const cases = [
 		{ imports: 'import { createSocket } from "std/net";', call: "createSocket()", refusal: "'createSocket' from 'std/net' cannot run on the Raiser: no host bridge for 'msNetSocket'; it runs on C" },
-		{ imports: 'import { blake2bSync } from "std/crypto/blake2b";', call: 'blake2bSync("abc").ok', refusal: "'blake2bSync' from 'std/crypto/blake2b' cannot run on the Raiser: no host bridge for 'msBlake2b'; it runs on C and JS" },
 		{ imports: 'import { cpus } from "std/os";', call: "cpus().length", refusal: "'cpus' from 'std/os' cannot run on the Raiser: no host bridge for 'msOsCpuCount' (and 1 more); it runs on C" },
-		{ imports: 'import { randomUUIDSync } from "std/crypto";', call: "randomUUIDSync().ok", refusal: "'randomUUIDSync' from 'std/crypto' cannot run on the Raiser: no host bridge for 'msCryptoRandomUuid'; it runs on C and JS" },
+		{ imports: 'import { randomUUIDSync } from "std/crypto";', call: "randomUUIDSync().ok", refusal: "'randomUUIDSync' from 'std/crypto/pure/coreNative' cannot run on the Raiser: no host bridge for 'ms_random_fill'; it runs on C and JS" },
 	];
 	for (const c of cases) {
 		const result = compileToCWithStd(stdCallMacro(c.imports, c.call));
@@ -254,6 +253,11 @@ test "macro std tiers: a std routine the Raiser cannot run is refused once at th
 			assert refusalsIn(result.error) == 1, result.error;
 		}
 	}
+}
+
+test "macro std tiers: a std routine written in MetaScript, secret wipes included, runs in a macro" {
+	const result = compileToCWithStd(stdCallMacro('import { blake2bSync } from "std/crypto/blake2b";', 'blake2bSync("abc").ok'));
+	assert result.ok, result.ok ? "" : result.error;
 }
 
 test "macro std tiers: an extern with no host bridge called by a macro or a @comptime block is refused by its name" {
