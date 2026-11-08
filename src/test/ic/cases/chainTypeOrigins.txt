@@ -1,0 +1,38 @@
+main reads a field of a's class through b's re-export and through b's inferred return type; a
+field type edit of a reaches main, while an edit of a that b's interface does not reach leaves
+main green.
+#!VERIFY
+#!FILE a.ms
+export class C {
+	x: int32 = 1;
+}
+export function other(): int32 {
+	return 1;
+}
+#!FILE b.ms
+import { C } from "./a";
+export { C } from "./a";
+export function make() {
+	return { value: new C() };
+}
+#!FILE main.ms
+import { C, make } from "./b";
+const c = new C();
+console.log(`${c.x} ${make().value.x}`);
+#!STEP expect: 1 1
+#!FILE a.ms
+export class C {
+	x: string = "two";
+}
+export function other(): int32 {
+	return 1;
+}
+#!STEP expect: two two; rebuilt
+#!FILE a.ms
+export class C {
+	x: string = "two";
+}
+export function other(): int64 {
+	return 1;
+}
+#!STEP expect: two two; rechecked: a.ms b.ms

@@ -1,6 +1,5 @@
 In a chain main -> b -> a, an interface edit of a reaches b; b's own interface is unchanged, so
 main is not rechecked.
-#!XFAIL an equal interface counts as changed while an import's check changed, because importers read types through it with no edge of their own (src/compiler/transam/outputs.ms outputChangedAt; cache-reuse step 1)
 #!FILE a.ms
 export function base(): int32 {
 	return 1;

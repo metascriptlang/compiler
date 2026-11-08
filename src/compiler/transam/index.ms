@@ -1242,7 +1242,6 @@ function typeCheckQuery(db: TransAmDb, filePath: string): CheckerContext | null 
 		recordDurability(db.depStack, getFileDurability(db.fileInput, fileId));
 
 		const importDepIds = getDirectImports(db.moduleDeps, fileId);
-		const interfaceDeps: TaQueryKey[] = [];
 		const reached = new HashSet<int32>();
 		reached.add(fileId);
 		for (const depId of importDepIds) reached.add(depId);
@@ -1252,7 +1251,6 @@ function typeCheckQuery(db: TransAmDb, filePath: string): CheckerContext | null 
 			const depCheckEntry = checkedElsewhere(db, getFilePath(db.fileInput, depId)) ? null : cacheGet(db.cache, depCheckKey);
 			if (depCheckEntry != null) {
 				recordDependency(db.depStack, depCheckKey);
-				if (!importReaches(db, depId, fileId)) interfaceDeps.push(depCheckKey);
 				continue;
 			}
 			recordParseRead(db, depId);
@@ -1300,7 +1298,7 @@ function typeCheckQuery(db: TransAmDb, filePath: string): CheckerContext | null 
 		}
 		const kept = db.handedToCheck == null;
 		const iface = kept ? ifaceDigest(checkerCtx) : null;
-		const checkChangedAt = outputChangedAt(db.outputs, db.cache, key, iface, interfaceDeps, db.revision.value);
+		const checkChangedAt = outputChangedAt(db.outputs, db.cache, key, iface, [], db.revision.value);
 		executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, checkChangedAt, true);
 		if (kept) storeImpl(db, fileId, implText);
 		db.checkInProgress.delete(filePath);
@@ -1335,20 +1333,6 @@ function storeImpl(db: TransAmDb, fileId: int32, impl: string): void {
 	recordDurability(db.depStack, getFileDurability(db.fileInput, fileId));
 	const changedAt = outputChangedAt(db.outputs, db.cache, implKey, impl, [checkKey], db.revision.value);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, implKey, db.revision.value, changedAt, true);
-}
-
-// A module in an import cycle with another leaves that one's digest out of its own, so two modules never chain each other's.
-function importReaches(db: TransAmDb, fromId: int32, targetId: int32): boolean {
-	const seen = new HashSet<int32>();
-	const pending: int32[] = [fromId];
-	while (pending.length > 0) {
-		const id = pending.pop()!;
-		if (id == targetId) return true;
-		if (seen.has(id)) continue;
-		seen.add(id);
-		for (const next of getDirectImports(db.moduleDeps, id)) pending.push(next);
-	}
-	return false;
 }
 
 // Salsa's deep verify: a check that is not green yet rechecks the modules it depends on first, so each one's

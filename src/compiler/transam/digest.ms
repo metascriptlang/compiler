@@ -316,7 +316,7 @@ test "an unrelated private declaration leaves the interface digest unchanged" {
 	assert base[2] != digests("const hidden = 5;\n" + BASE_DEP)[2];
 }
 
-test "a dependency's interface change reaches every importer in the chain, a body change none" {
+test "a dependency's interface change reaches the importers whose own output it moves, a body change none" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "/ch/logic.ms", "export function v(): int32 { return 1; }");
 	dbSetFileText(db, "/ch/mid.ms", 'import { v } from "./logic";\nexport function m(): int32 { return v(); }');
@@ -329,10 +329,10 @@ test "a dependency's interface change reaches every importer in the chain, a bod
 	assert body[0] == a[0] && body[1] == a[1] && body[2] == a[2];
 	dbSetFileText(db, "/ch/logic.ms", "export function v(): int64 { return 1; }");
 	const sig = chain(db);
-	assert sig[0] > a[0] && sig[1] > a[1] && sig[2] > a[2], `${a} -> ${sig}`;
+	assert sig[0] > a[0] && sig[1] > a[1] && sig[2] == a[2], `${a} -> ${sig}`;
 	dbSetFileText(db, "/ch/logic.ms", "export function v(): int32 { return 1; }");
 	const undone = chain(db);
-	assert undone[0] > sig[0] && undone[1] > sig[1] && undone[2] > sig[2], `${sig} -> ${undone}`;
+	assert undone[0] > sig[0] && undone[1] > sig[1] && undone[2] == a[2], `${sig} -> ${undone}`;
 }
 
 function chain(db: TransAmDb): int32[] {

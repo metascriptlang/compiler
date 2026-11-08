@@ -1,0 +1,17 @@
+A call in main takes b's default argument, which names a constant of a; a value edit of a reaches
+main's call although b's interface text is unchanged.
+#!VERIFY
+#!FILE a.ms
+export const N: int32 = 4;
+#!FILE b.ms
+import { N } from "./a";
+export function f(x: int32 = N): int32 {
+	return x + 1;
+}
+#!FILE main.ms
+import { f } from "./b";
+console.log(f());
+#!STEP expect: 5
+#!FILE a.ms
+export const N: int32 = 6;
+#!STEP expect: 7
