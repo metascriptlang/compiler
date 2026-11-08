@@ -95,6 +95,7 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.BitAnd => "BitAnd",
 		RaiserOpcode.BitOr => "BitOr",
 		RaiserOpcode.BitXor => "BitXor",
+		RaiserOpcode.HiXorLo => "HiXorLo",
 		RaiserOpcode.BitNot => "BitNot",
 		RaiserOpcode.ShiftLeft => "ShiftLeft",
 		RaiserOpcode.ShiftRight => "ShiftRight",

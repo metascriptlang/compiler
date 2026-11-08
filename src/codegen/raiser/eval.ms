@@ -1722,6 +1722,13 @@ test "engine: the hash builtins give the bits of the native 128-bit mix and floa
 		+ " 4609434218613702656 13830554455654793216\n";
 }
 
+test "engine: the 128-bit mix is one HiXorLo instruction, not an expansion into word operations" {
+	const f = gapFunc("@builtin(\"HiXorLo\") extern function hiXorLo(a: uint64, b: uint64): uint64;"
+		+ " function mix(a: uint64, b: uint64): uint64 { return hiXorLo(a, b); }"
+		+ " console.log(`${mix(0xa0761d6478bd642f as uint64, 0xe7037ed1a0b428db as uint64)}`);", "mix");
+	assert countNamed(f, "HiXorLo") == 1 && countNamed(f, "MulU64") == 0, disasmFunc(f);
+}
+
 test "engine: the little-endian load builtins read 8 and 4 bytes of a byte view at an offset" {
 	const ctx = evalVM("@builtin(\"LoadLE64\") extern function load64(b: Readonly<Span<uint8>>, o: int64): uint64;"
 		+ " @builtin(\"LoadLE32\") extern function load32(b: Readonly<Span<uint8>>, o: int64): uint64;"

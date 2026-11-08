@@ -31,6 +31,8 @@ import { HostCapability, HostEntry, setHostEntryInPlace, lookupHost, hostEntryAl
 import { RaiserHostFn, RaiserPrintSink, boxString, unboxFloat } from "./marshal";
 import { int64Bits } from "../utils/stdBackport";
 
+extern function msHiXorLo(a: uint64, b: uint64): uint64;
+
 @include("runtime/promise/dispatch.h");
 extern function msMonoTimeMs(): int64;
 extern function msSleepMs(ms: int32): void;
@@ -3529,6 +3531,13 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 				const ib = ((word >> 24) & 65535) as int32;
 				const ic = ((word >> 40) & 65535) as int32;
 				slots[fb + ia] = int64Bits((slots[fb + ib] as uint64) * (slots[fb + ic] as uint64));
+				break;
+			}
+			case RaiserOpcode.HiXorLo: {
+				const ia = ((word >> 8) & 65535) as int32;
+				const ib = ((word >> 24) & 65535) as int32;
+				const ic = ((word >> 40) & 65535) as int32;
+				slots[fb + ia] = int64Bits(msHiXorLo(slots[fb + ib] as uint64, slots[fb + ic] as uint64));
 				break;
 			}
 			case RaiserOpcode.NegI64: {

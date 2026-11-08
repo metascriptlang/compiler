@@ -246,9 +246,10 @@ export enum RaiserOpcode {
 	StoreFrame,
 	RetN,
 	LoadFieldRequired,
+	HiXorLo,          // ABC: words[A] = high half XOR low half of the 128-bit product of words[B] and words[C], read unsigned (msHiXorLo)
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.LoadFieldRequired;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.HiXorLo;
 
 export const FINALLY_LEAVE: int32 = 1;
 
@@ -347,7 +348,7 @@ export function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.MoveR => "yy-",
 		RaiserOpcode.AddI64 | RaiserOpcode.SubI64 | RaiserOpcode.MulI64 | RaiserOpcode.DivI64 | RaiserOpcode.ModI64
 			| RaiserOpcode.AddU64 | RaiserOpcode.SubU64 | RaiserOpcode.MulU64 | RaiserOpcode.DivU64 | RaiserOpcode.ModU64
-			| RaiserOpcode.BitAnd | RaiserOpcode.BitOr | RaiserOpcode.BitXor
+			| RaiserOpcode.BitAnd | RaiserOpcode.BitOr | RaiserOpcode.BitXor | RaiserOpcode.HiXorLo
 			| RaiserOpcode.ShiftLeft | RaiserOpcode.ShiftRight | RaiserOpcode.ShiftRightU => "iii",
 		RaiserOpcode.NegI64 | RaiserOpcode.BitNot => "ii-",
 		RaiserOpcode.AddI64Imm | RaiserOpcode.SubI64Imm => "ii-",
@@ -890,15 +891,17 @@ test "the last opcodes have their roles in the table" {
 	assert opRole(RaiserOpcode.UnownedRc, 0) == RaiserRole.Slot && opRole(RaiserOpcode.UnownedRc, 1) == RaiserRole.None;
 	assert opRole(RaiserOpcode.RetN, 0) == RaiserRole.Int;
 	assert opRole(RaiserOpcode.RetN, 2) == RaiserRole.None;
-	assert opRole(LAST_RAISER_OPCODE, 0) == RaiserRole.Any;
-	assert opRole(LAST_RAISER_OPCODE, 1) == RaiserRole.Ref;
-	assert opRole(LAST_RAISER_OPCODE, 2) == RaiserRole.None;
+	assert opRole(RaiserOpcode.LoadFieldRequired, 0) == RaiserRole.Any;
+	assert opRole(RaiserOpcode.LoadFieldRequired, 1) == RaiserRole.Ref;
+	assert opRole(RaiserOpcode.LoadFieldRequired, 2) == RaiserRole.None;
+	assert LAST_RAISER_OPCODE == RaiserOpcode.HiXorLo;
+	assert opRole(RaiserOpcode.HiXorLo, 0) == RaiserRole.Int && opRole(RaiserOpcode.HiXorLo, 1) == RaiserRole.Int && opRole(RaiserOpcode.HiXorLo, 2) == RaiserRole.Int;
 }
 
 test "frame data opcodes append to the numeric ABI and pack scalar MemKind in slot" {
 	assert (RaiserOpcode.MoveN as int32) == (RaiserOpcode.UnownedRc as int32) + 1;
 	assert (RaiserOpcode.RetN as int32) == (RaiserOpcode.StoreFrame as int32) + 1;
-	assert (LAST_RAISER_OPCODE as int32) == (RaiserOpcode.RetN as int32) + 1;
+	assert (RaiserOpcode.LoadFieldRequired as int32) == (RaiserOpcode.RetN as int32) + 1;
 	assert opRoleLetters(RaiserOpcode.MoveN) == "ii-";
 	assert opRoleLetters(RaiserOpcode.ZeroN) == "i--";
 	assert opRoleLetters(RaiserOpcode.LoadFrame) == "xi-";
