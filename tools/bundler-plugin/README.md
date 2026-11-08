@@ -35,6 +35,17 @@ The adapter adds its output exclusions to `watchOptions.ignored` in the shape th
 
 A directory the plugin creates inside the project (the declaration `outDir`, and `node_modules/.metascript` when a glob `ignored` keeps `node_modules` watched) wakes one more webpack generation, which compiles nothing. The project root is a context dependency, so a new entry in it is a change, and ignoring the directory would also stop watching sources placed in it. Suppressing that generation was rejected: webpack's `invalid` hook has already fired for the change, and swallowing the aggregated callback means re-arming the watcher, which races an edit made in between.
 
+## Testing the adapters
+
+`test.mjs` is the gate's entry: it runs the native adapter tests and the real-compiler consumers in `src/test/js/declarationBundlers/run.mjs`, after `npm ci` from `package-lock.json`. The lockfile is there because the transitive tree used to float: watchpack 2.6.x arrived unpinned and changed watch behaviour between gates. Cost on rtx: 66–91 s at low load.
+
+Traps a watch test meets, each paid for with a red gate:
+
+- **A file written just before a webpack watch starts is reported as changed.** watchpack treats a file as possibly modified while its mtime plus filesystem accuracy (up to 2 s) reaches the watch start, so a fixture file can wake an extra generation, or invalidate declarations, whenever the host is slow. Fixtures settle such files 10 s into the past (`settle` in `webpack.test.js`) and keep their own control files, such as the compiler call counter, outside the watched root.
+- **Synchronous work blocks `node:test` timeouts.** A consumer test running `tsc` through `spawnSync` cannot be interrupted, so a test over budget fails at the next `await` and looks like a bundler hang. On rtx gates the failing `webpack-watch-established` runs took 87–92 s against a 60 s budget, the passing ones 8–24 s. `skipDefaultLibCheck` halves `tsc` time without skipping the generated declarations.
+- **Deadlines come from a loaded measurement.** Pin the test and six CPU burners to two cores (`taskset`), which loads the test about 4× without loading the shared host. On tree `dac51bad01eccc62379b6dac8214e0d091f9b1ac` the watch consumers took 39–47 s and every native watch test under 8 s; watch consumer deadlines are 180 s, `tsc` 60 s, native watch tests 15 s.
+- **Watchpack versions differ in what `ignored` accepts** (§Webpack source-declaration watch). To check a shape against another version, construct that version's `Watchpack` with the adapter's options and read back its normalized `watcherOptions.ignored`, as `webpack.test.js` does for the installed one.
+
 ## Maintaining the vendored host
 
 `vendor/rollup4.json` owns input identities and artifact integrity; `vendor/buildRollup.mjs` owns the rebuild recipe. Run it through the workspace's remote-job wrapper, not on the shared editing machine. Its build-toolchain requirement is separate from the package's runtime engine declaration.
