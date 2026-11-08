@@ -36,16 +36,19 @@ const CRT_OPTIONS = [
 	"--with-default-msvcrt=ucrt", "--enable-lib64", "--disable-lib32",
 	"--disable-libarm32", "--disable-libarm64",
 ];
-const MINGW_NOTICES = [
-	"COPYING", "COPYING.MinGW-w64/COPYING.MinGW-w64.txt",
-	"COPYING.MinGW-w64-runtime/COPYING.MinGW-w64-runtime.txt", "DISCLAIMER",
-	"DISCLAIMER.PD",
+// [source in the mingw-w64 tree, name under notices/mingw-w64]
+const MINGW_NOTICES: string[][] = [
+	["COPYING", "COPYING"], ["COPYING.MinGW-w64/COPYING.MinGW-w64.txt", "COPYING.MinGW-w64.txt"],
+	["COPYING.MinGW-w64-runtime/COPYING.MinGW-w64-runtime.txt", "COPYING.MinGW-w64-runtime.txt"],
+	["DISCLAIMER", "DISCLAIMER"], ["DISCLAIMER.PD", "DISCLAIMER.PD"],
+	["mingw-w64-libraries/winpthreads/COPYING", "COPYING.winpthreads"],
 ];
+const WINPTHREADS_OPTIONS = ["--disable-shared", "--enable-static"];
 // The files the clang MinGW driver names on a link, besides the caller's.
 const DRIVER_FILES = [
 	"crt2.o", "dllcrt2.o", "crtbegin.o", "crtend.o", "libmingw32.a",
 	"libmingwex.a", "libmoldname.a", "libmsvcrt.a", "libkernel32.a",
-	"libadvapi32.a", "libshell32.a", "libuser32.a",
+	"libadvapi32.a", "libshell32.a", "libuser32.a", "libpthread.a", "libwinpthread.a",
 ];
 const DRIVER_ARCHIVES = ["libmingw32.a", "libmingwex.a", "libmoldname.a", "libmsvcrt.a"];
 // Symbols the zig runtime defined in its own archives; an archive the driver links must define each.
@@ -60,7 +63,7 @@ const MINGW_LIBRARIES = [
 ];
 const LIMITS = [
 	"the producer links and inspects; executing the runtime is the bundle's proof on a Windows host",
-	"the archives are a local build of the release sources with the engine's clang, not upstream binaries, and are not measured for bit-reproducibility",
+	"the archives are a local build of the release sources with the engine's clang, not upstream binaries; two runs on one host gave identical bytes, other hosts are not compared",
 	"aarch64-windows-gnu is not built: no Windows arm64 host consumes it",
 ];
 
@@ -119,8 +122,10 @@ export struct WindowsRuntimeReceipt {
 	variants: VariantReceipt[];
 }
 
-function tail(text: string): string {
-	return text.length > 3000 ? text.slice(text.length - 3000, text.length) : text;
+function failureText(text: string): string {
+	const errors = text.split("\n").filter((line: string): boolean => line.indexOf("error") >= 0).slice(0, 15);
+	const end = text.length > 1500 ? text.slice(text.length - 1500, text.length) : text;
+	return (errors.length > 0 ? errors.join("\n") + "\n...\n" : "") + end;
 }
 
 function runStep(
@@ -131,7 +136,7 @@ function runStep(
 	if (done.value.returnCode != 0) {
 		return Result.err(basename(file) + " " + args.slice(0, 2).join(" ") +
 			" failed (" + String(done.value.returnCode) + ") in " + cwd + ":\n" +
-			tail(done.value.output));
+			failureText(done.value.output));
 	}
 	return Result.ok(done.value.output);
 }
@@ -196,6 +201,7 @@ function copyRegularFiles(source: string, target: string): Result<BuiltFile[], s
 	if (!names.ok) { return Result.err(names.error.message); }
 	const files: BuiltFile[] = [];
 	for (const name of names.value) {
+		if (name.endsWith(".la")) { continue; }
 		const path = join(source, name);
 		const linked = isLinkLike(path);
 		if (!linked.ok) { return Result.err(linked.error.message); }
@@ -328,6 +334,17 @@ export function checkWindowsRuntime(
 			linked.push(path);
 		}
 	}
+	const thread = join(work, "thread.exe");
+	const threadArgs = ["--no-default-config", "--config",
+		join(windows, windowsVariantDirectory(WindowsTarget.X64, WindowsVariant.Exe) + ".cfg"), "-O2",
+		join(fixtures, "runtimeWindowsThread.c"), "-Wl,-Bstatic", "-lpthread", "-o", thread];
+	const threaded = captureToolUtf8(clang, threadArgs, { env: environment });
+	if (!threaded.ok) { return Result.err(threaded.error); }
+	if (threaded.value.returnCode != 0 || threaded.value.errorOutput.trim() != "") {
+		return Result.err("thread: clang exited " + String(threaded.value.returnCode) + ": " +
+			threaded.value.errorOutput.trim());
+	}
+	linked.push(thread);
 	if (!(try fileStartsWith(join(work, "exe.pdb"), "Microsoft C/C++ MSF 7.00"))) {
 		return Result.err("exe.pdb is not a PDB");
 	}
@@ -360,6 +377,11 @@ function produce(
 	}
 	const config = join(windows, windowsVariantDirectory(target, WindowsVariant.Exe) + ".cfg");
 	const environment = toolEnvironment(work, []);
+	const prefixMaps = [
+		"-ffile-prefix-map=" + inputs.mingwSource + "=/mingw-w64",
+		"-ffile-prefix-map=" + inputs.llvmSource + "=/llvm-project",
+		"-ffile-prefix-map=" + work + "=/build",
+	];
 	const autoconfHost = windowsAutoconfHost(target);
 	const headersBuild = join(work, "headers-build");
 	const headersPrefix = join(work, "headers-prefix");
@@ -374,11 +396,25 @@ function produce(
 	const tool = (name: string): string => join(engine, "bin/" + name);
 	try runStep(join(inputs.mingwSource, "mingw-w64-crt/configure"), [
 		"--host=" + autoconfHost, "--prefix=" + crtPrefix, ...CRT_OPTIONS,
-		"CC=" + join(stage, "bin/clang") + " --no-default-config --config=" + config,
+		"CC=" + [join(stage, "bin/clang"), "--no-default-config", "--config=" + config, ...prefixMaps].join(" "),
 		"AR=" + tool("llvm-ar"), "RANLIB=" + tool("llvm-ranlib"), "DLLTOOL=" + tool("llvm-dlltool"),
 	], crtBuild, environment);
 	try runStep("/usr/bin/make", ["-j" + String(inputs.jobs)], crtBuild, environment);
 	try runStep("/usr/bin/make", ["install"], crtBuild, environment);
+	// winpthreads goes in after the headers and the CRT and its headers replace the headers' pthread stubs, the
+	// order a mingw-w64 toolchain installs them in.
+	const threadsBuild = join(work, "winpthreads-build");
+	try engineIo(ensureDir(threadsBuild));
+	try runStep(join(inputs.mingwSource, "mingw-w64-libraries/winpthreads/configure"), [
+		"--host=" + autoconfHost, "--prefix=" + crtPrefix, ...WINPTHREADS_OPTIONS,
+		"CC=" + [join(stage, "bin/clang"), "--no-default-config", "--config=" + config, ...prefixMaps].join(" "),
+		"AR=" + tool("llvm-ar"), "RANLIB=" + tool("llvm-ranlib"), "DLLTOOL=" + tool("llvm-dlltool"),
+		"RC=" + tool("llvm-windres") + " --target=pe-x86-64 --preprocessor-arg=-nostdinc -I" +
+			join(windows, "include/libc/mingw-w64"),
+	], threadsBuild, environment);
+	try runStep("/usr/bin/make", ["-j" + String(inputs.jobs)], threadsBuild, environment);
+	try runStep("/usr/bin/make", ["install"], threadsBuild, environment);
+	try copyTree(join(crtPrefix, "include"), join(windows, "include/libc/mingw-w64"));
 	const libraries = join(crtPrefix, "lib");
 	for (const name of DRIVER_FILES) {
 		if (!isFile(join(libraries, name))) {
@@ -388,7 +424,7 @@ function produce(
 	const build = join(work, "builtins");
 	const cmakeEnvironment = toolEnvironment(work, [inputs.cmake, inputs.ninja]);
 	try runStep(inputs.cmake, builtinsCmakeArguments(target, inputs.llvmSource, stage, config,
-		build, inputs.ninja), work, cmakeEnvironment);
+		build, inputs.ninja, prefixMaps), work, cmakeEnvironment);
 	const triple = windowsClangTriple(target);
 	const archive = "compiler-rt/lib/" + triple + "/libclang_rt.builtins.a";
 	try runStep(inputs.ninja, ["-C", build, "-j", String(inputs.jobs), archive], work, cmakeEnvironment);
@@ -406,10 +442,10 @@ function produce(
 	const builtinsPath = builtinsDirectory(target, major) + "/libclang_rt.builtins.a";
 	try engineIo(copyFile(builtins, join(stage, builtinsPath)));
 	const notices: string[] = [];
-	for (const relative of MINGW_NOTICES) {
-		const source = join(inputs.mingwSource, relative);
-		if (!isFile(source)) { return Result.err("mingw-w64 notice " + relative + " is missing"); }
-		const copy = "notices/mingw-w64/" + basename(relative);
+	for (const notice of MINGW_NOTICES) {
+		const source = join(inputs.mingwSource, notice[0]);
+		if (!isFile(source)) { return Result.err("mingw-w64 notice " + notice[0] + " is missing"); }
+		const copy = "notices/mingw-w64/" + notice[1];
 		try engineIo(ensureDir(join(windows, "notices/mingw-w64")));
 		try engineIo(copyFile(source, join(windows, copy)));
 		notices.push(copy);
@@ -422,7 +458,7 @@ function produce(
 		limits: LIMITS,
 		llvm: { archiveSha256: inputs.llvmSha256, options: BUILTINS_DISABLED,
 			version: try llvmSourceVersion(inputs.llvmSource) },
-		mingw: { archiveSha256: inputs.mingwSha256, options: [...HEADER_OPTIONS, ...CRT_OPTIONS],
+		mingw: { archiveSha256: inputs.mingwSha256, options: [...HEADER_OPTIONS, ...CRT_OPTIONS, ...WINPTHREADS_OPTIONS],
 			version: try mingwVersion(inputs.mingwSource) },
 		notices, producerHost: host, redistributionCertified: false,
 		statement: "Built with the engine's clang from the named mingw-w64 and llvm-project release " +
@@ -456,6 +492,20 @@ function publish(
 	return writeEngineText(join(partial, WINDOWS_RUNTIME_RECEIPT), text);
 }
 
+// No file of the overlay may name a path of the producer's machine: it would reach every program's debug info.
+function refuseLeakedPaths(overlay: string, paths: string[]): Result<void, string> {
+	const args = ["-roaF"];
+	for (const path of paths) { args.push("-e"); args.push(path); }
+	args.push(overlay);
+	const done = captureToolUtf8("/usr/bin/grep", args);
+	if (!done.ok) { return Result.err(done.error); }
+	if (done.value.returnCode == 1) { return Result.ok(null); }
+	if (done.value.returnCode == 0) {
+		return Result.err("overlay files name producer paths: " + done.value.output.split("\n").slice(0, 5).join(", "));
+	}
+	return Result.err("grep failed: " + done.value.errorOutput);
+}
+
 function buildOverlay(
 	inputs: WindowsRuntimeInputs, engine: string, host: string, major: string, version: string,
 	work: string, partial: string, fixtures: string,
@@ -467,13 +517,19 @@ function buildOverlay(
 	try engineIo(ensureDir(verify));
 	try checkWindowsRuntime(join(stage, "bin/clang"), join(stage, "runtime/windows"), fixtures, verify);
 	try publish(stage, partial, receipt, inputs);
+	try refuseLeakedPaths(partial, [inputs.mingwSource, inputs.llvmSource, work, engine]);
 	return Result.ok(receipt);
 }
 
 // Write the bundle-root overlay of the x86_64-windows-gnu runtime to the new directory inputs.output.
 export function prepareWindowsRuntime(
-	inputs: WindowsRuntimeInputs, fixtures: string,
+	given: WindowsRuntimeInputs, fixtures: string,
 ): Result<WindowsRuntimeReceipt, string> {
+	const inputs: WindowsRuntimeInputs = {
+		...given,
+		mingwSource: try absoluteEnginePath(given.mingwSource),
+		llvmSource: try absoluteEnginePath(given.llvmSource),
+	};
 	if (platform == "windows") {
 		return Result.err("the mingw-w64 build needs sh and make; run the producer on Linux or macOS");
 	}

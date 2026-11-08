@@ -286,7 +286,8 @@ export function runWindowsBundle(bundle: string, fixtures: string, work: string)
 	for (const path of try checkWindowsRuntime(clang, windows, fixtures, work)) {
 		if (path.endsWith(".exe")) {
 			const ran = try runProgram(path, work);
-			if (!ran.startsWith("rc=0 ok status=0 started=0")) { return Result.err(path + " " + ran); }
+			const expected = path.endsWith("thread.exe") ? "rc=0 ok thread=42" : "rc=0 ok status=0 started=0";
+			if (!ran.startsWith(expected)) { return Result.err(path + " " + ran); }
 			lines.push("C " + ran);
 		}
 	}
