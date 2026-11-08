@@ -69,6 +69,28 @@ test "Owned of a union of records that own the class holding it waits until the 
 	assert verdict("type Leaf = { name: string };\ntype Pair = { left: Owned<N>, right: Owned<N> };\ntype D = Leaf | Pair;\nclass N { data: Owned<D> = { name: \"\" }; }\nconst n = new N();", "N") == "acyclic";
 }
 
+// How a local of the base class is released: a cell of it can be any subclass, so the release keeps a
+// cycle candidate only when one of them can form a cycle (a base with no edges of its own has an
+// edgeless trace and is acyclic in its TypeInfo whatever its subclasses are).
+function baseRelease(decls: string): string {
+	const r = compileToC(decls + "\nfunction f(): int32 { const b: B = new S(); return b.v; }\nconsole.log(f());\n", hostTargetInfo(), false, false, true);
+	if (!r.ok) return r.error;
+	if (r.value.contains("msDecrefCyclic(b_1_)")) return "cyclic";
+	if (r.value.contains("msDecref(b_1_)")) return "acyclic";
+	return r.value.split("\n").filter((line: string): boolean => line.includes("b_1_")).join("\n");
+}
+
+test "an extended class is classified over its subclasses" {
+	assert baseRelease("class B { v: int32 = 0; }\nclass S extends B { w: int32 = 0; }") == "acyclic";
+	assert baseRelease("class B { v: int32 = 0; }\nclass S extends B { back: B | null = null; }") == "cyclic";
+	assert baseRelease("class B { v: int32 = 0; }\nclass S extends B { next: S | null = null; }") == "cyclic";
+	assert baseRelease("class B { v: int32 = 0; }\nclass M extends B { w: int32 = 0; }\nclass S extends M { back: B | null = null; }") == "cyclic";
+	assert baseRelease("class B { v: int32 = 0; }\nclass S extends B { w: int32 = 0; }\nclass G<T> extends B { t: T; constructor(t: T) { super(); this.t = t; } }\nconst g = new G<int32>(1);") == "cyclic";
+	assert verdict("class N { kids: Owned<N>[] = []; up: Unowned<N> | null = null; }\nclass Leaf extends N { text: string = \"\"; }\nconst l = new Leaf();", "N") == "acyclic";
+	assert verdict("class N { kids: Owned<N>[] = []; up: Unowned<N> | null = null; }\nclass Leaf extends N { text: string = \"\"; }\nconst l = new Leaf();", "Leaf") == "acyclic";
+	assert verdict("class N { kids: Owned<N>[] = []; up: Unowned<N> | null = null; }\nclass Leaf extends N { back: N | null = null; }\nconst l = new Leaf();", "N") == "cyclic";
+}
+
 test "an owned Map or generic class of owned values is acyclic" {
 	assert verdict("class N { m: Owned<Map<string, Owned<N>>> = new Map<string, Owned<N>>(); }\nconst n = new N();", "N") == "acyclic";
 	assert verdict("class Box<T> { item: T; constructor(t: T) { this.item = t; } }\nclass N { b: Owned<Box<Owned<N>>> | null = null; }\nconst n = new N();", "N") == "acyclic";
