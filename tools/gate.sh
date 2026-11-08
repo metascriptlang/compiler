@@ -12,7 +12,7 @@ RULES=(
   'build|^tools/.*\.ms$'
   'build,tools|^tools/bundler-plugin/|^src/test/js/declarationBundlers/'
   'hcr|^src/test/(hcr|ic)/|^src/compiler/transam/|^src/compiler/(cache|compile|hcrAbi)\.ms$|^src/transform/native/hcr|^(std|runtime)/|^examples/hcrProbe/'
-  'tests|^src/test/(c|js|handoff|fmt|checker3pass|lang|crypto)/|^src/test/helpers\.ms$|^std/crypto/|^runtime/crypto/'
+  'tests|^src/test/(c|js|handoff|fmt|checker3pass|lang|crypto)/|^src/test/helpers\.ms$|^std/crypto/|^runtime/crypto/|^tools/crypto/'
   'crypto|^std/crypto/pure/|^runtime/crypto/|^src/test/crypto/'
   'lsp|^src/compiler/(lsp|transam)/|^src/checker/|^src/test/lsp/|^std/process/|^runtime/process\.h$'
   "tests,corpus|$EMITS"
@@ -2030,6 +2030,7 @@ src/test/js/declarationBundlers/run.mjs|build suite tests tools
 src/test/js/declarationBundlers/fixtures/primary.ms|build suite tests tools
 tools/managedToolchain/prepareBundle.py|tools
 tools/syncLocalBinary.ms|build tools
+tools/crypto/genPcurveTables.ms|build tests tools
 tools/solana/escrow.mjs|solana tools
 tools/solana/heapProbe.ms|build solana tools
 examples/escrow/program.ms|build solana suite
