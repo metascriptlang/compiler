@@ -766,7 +766,7 @@ export function computeAliveSet(
 	markImportedInitModulesAlive(graph, entryPath, initModules);
 	markImportedModulesAlive(graph);
 	while (markAliveGlobalDestroys(graph.dispatchRegistry, globalDestroys)) markImportedModulesAlive(graph);
-	if (_immortalizes) markReachWalks(graph.dispatchRegistry);
+	if (_immortalizes || _imageModules.size > 0) markReachWalks(graph.dispatchRegistry);
 	return takeReachability();
 }
 
