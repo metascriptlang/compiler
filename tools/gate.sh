@@ -2435,6 +2435,7 @@ run_tool_test() {
       echo "tools: $p drives real Windows LLVM tools; it runs in the Windows toolchain proof, not here"; return 0 ;;
     tools/managedToolchain/processContractTest.ms) dir=$(mktemp -u "${TMPDIR:-/tmp}/msc-tools.XXXXXX"); "$CAND" run "$p" parent "$dir" ;;
     tools/managedToolchain/nativePathTest.ms) dir=$(mktemp -u "${TMPDIR:-/tmp}/msc-tools.XXXXXX"); "$CAND" run "$p" "$dir" ;;
+    tools/managedToolchain/windowsRuntimeTest.ms) dir=$(mktemp -u "${TMPDIR:-/tmp}/msc-tools.XXXXXX"); "$CAND" run --target=raiser "$p" "$dir" ;;
     tools/managedToolchain/*Test.ms) "$CAND" run "$p" ;;
     *) return 0 ;;
   esac
