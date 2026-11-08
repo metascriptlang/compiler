@@ -808,11 +808,15 @@ function runLinkCache(): void {
 		const resource = fixture("cli-resource", "@compile(\"./native.c\");", "int probeValue(void) { return 1; }\n");
 		for (const name of ["AlphaOne", "BravoTwo"]) {
 			put(`${resource}/version.rc`, `1 VERSIONINFO\nFILEVERSION 1,2,3,4\nBEGIN\n  BLOCK "StringFileInfo"\n  BEGIN\n    BLOCK "040904B0"\n    BEGIN\n      VALUE "ProductName", "${name}"\n    END\n  END\n  BLOCK "VarFileInfo"\n  BEGIN\n    VALUE "Translation", 0x409, 1200\n  END\nEND\n`);
-			need(command(resource, `rc-${name}`, "zig", ["rc", "/fo", "version.res", "version.rc"]).code == 0, `zig rc ${name}`);
+			need(command(resource, `rc-${name}`, `${bundleRoot()}/bin/llvm-rc.exe`, ["/fo", "version.res", "version.rc"]).code == 0, `llvm-rc ${name}`);
 			need(build(resource, name, "probe", ["--link=version.res"]) == 0, `cli resource ${name}`);
-			if (name == "AlphaOne") need(holdsUtf16(`${resource}/probe`, "AlphaOne"), "cli resource initial product name");
+			if (name == "AlphaOne") need(holdsUtf16(`${resource}/probe.exe`, "AlphaOne"), "cli resource initial product name");
 		}
-		recordTrue("resource given by --link replaced", holdsUtf16(`${resource}/probe`, "BravoTwo") && !holdsUtf16(`${resource}/probe`, "AlphaOne"));
+		recordTrue("resource given by --link replaced", holdsUtf16(`${resource}/probe.exe`, "BravoTwo") && !holdsUtf16(`${resource}/probe.exe`, "AlphaOne"));
+		const linked = changeStamp(`${resource}/probe.exe`);
+		waitForNextSecond();
+		need(build(resource, "unchanged", "probe", ["--link=version.res"]) == 0, "cli resource unchanged rebuild");
+		record("an unchanged build named without an extension keeps its .exe", linked, changeStamp(`${resource}/probe.exe`));
 	}
 	if (!windows) runLinkOrder();
 }
@@ -854,6 +858,23 @@ function makeArchive(dir: string, name: string, result: int32): string {
 function homeDir(): string {
 	const home = env.get(windows ? "USERPROFILE" : "HOME");
 	return home.replaceAll("\\", "/");
+}
+
+// The prepared bundle msc builds Windows with when no --cc is given, as the words that drive its clang.
+function bundleRoot(): string {
+	const explicit = env.get("MSC_NATIVE_TOOLCHAIN").replaceAll("\\", "/");
+	return explicit != "" ? explicit : `${homeDir()}/.metascript/msc-toolchain`;
+}
+
+function bundleClangWords(): string[] {
+	const root = bundleRoot();
+	return [`${root}/bin/clang.exe`, "--no-default-config", `--config=${root}/runtime/windows/x86_64-windows-gnu.cfg`];
+}
+
+function spawnArgsC(words: string[]): string {
+	let lines = `  args[0] = quoteArgument("${words[0]}");\n`;
+	for (let i = 1; i < words.length; i++) lines = lines + `  args[${i}] = quoteArgument("${words[i]}");\n`;
+	return lines;
 }
 
 function windowsDriverQuoter(): string {
@@ -898,18 +919,17 @@ function writeWrapper(dir: string, toolValue: int32): string {
 	if (windows) {
 		const wrapper = `${dir}/cc-wrapper.exe`;
 		const source = `${dir}/cc-wrapper.c`;
-		const zig = `${homeDir()}/.metascript/zig/zig.exe`;
+		const words = [...bundleClangWords(), `-DTOOL_VALUE=${toolValue}`];
+		const n = words.length;
 		put(source,
 			"#include <process.h>\n#include <stdlib.h>\n#include <string.h>\n"
 			+ windowsDriverQuoter()
 			+ "int main(int argc, char **argv) {\n"
-			+ "  char **args = malloc(sizeof(char *) * (argc + 3));\n"
-			+ `  args[0] = quoteArgument("${zig}");\n`
-			+ "  args[1] = \"cc\";\n"
-			+ `  args[2] = "-DTOOL_VALUE=${toolValue}";\n`
-			+ "  for (int i = 1; i < argc; i++) args[i + 2] = quoteArgument(argv[i]);\n"
-			+ "  args[argc + 2] = NULL;\n"
-			+ `  return (int)_spawnv(_P_WAIT, "${zig}", (const char * const *)args);\n`
+			+ `  char **args = malloc(sizeof(char *) * (argc + ${n}));\n`
+			+ spawnArgsC(words)
+			+ `  for (int i = 1; i < argc; i++) args[i + ${n - 1}] = quoteArgument(argv[i]);\n`
+			+ `  args[argc + ${n - 1}] = NULL;\n`
+			+ `  return (int)_spawnv(_P_WAIT, "${words[0]}", (const char * const *)args);\n`
 			+ "}\n");
 		need(command(dir, `wrapper-${toolValue}`, "gcc", [source, "-o", wrapper]).code == 0, "compile cc wrapper");
 		return wrapper;
@@ -924,7 +944,8 @@ function projectDriver(dir: string): string {
 	if (windows) {
 		const wrapper = `${dir}/project-cc.exe`;
 		const source = `${dir}/project-cc.c`;
-		const zig = `${homeDir()}/.metascript/zig/zig.exe`;
+		const words = bundleClangWords();
+		const n = words.length;
 		put(source,
 			"#include <process.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n"
 			+ windowsDriverQuoter()
@@ -936,12 +957,11 @@ function projectDriver(dir: string): string {
 			+ "    for (int i = 1; i < argc; i++) if (strcmp(argv[i], \"-c\") == 0) compile = 1;\n"
 			+ "    if (compile) for (int i = 1; i < argc; i++) if (strstr(argv[i], \"_dispatch.\")) return 98;\n"
 			+ "  }\n"
-			+ "  char **args = malloc(sizeof(char *) * (argc + 2));\n"
-			+ `  args[0] = quoteArgument("${zig}");\n`
-			+ "  args[1] = \"cc\";\n"
-			+ "  for (int i = 1; i < argc; i++) args[i + 1] = quoteArgument(argv[i]);\n"
-			+ "  args[argc + 1] = NULL;\n"
-			+ `  return (int)_spawnv(_P_WAIT, "${zig}", (const char * const *)args);\n`
+			+ `  char **args = malloc(sizeof(char *) * (argc + ${n}));\n`
+			+ spawnArgsC(words)
+			+ `  for (int i = 1; i < argc; i++) args[i + ${n - 1}] = quoteArgument(argv[i]);\n`
+			+ `  args[argc + ${n - 1}] = NULL;\n`
+			+ `  return (int)_spawnv(_P_WAIT, "${words[0]}", (const char * const *)args);\n`
 			+ "}\n");
 		need(command(dir, "project-driver", "gcc", [source, "-o", wrapper]).code == 0, "compile project driver");
 		return wrapper;
@@ -1171,7 +1191,7 @@ function runArgv(): void {
 	if (quotedResult == 0) record("quoted flag value executable", "4", value(quoted));
 
 	const leading = fixture("compiler words", "@compile(\"./native.c\");", "int probeValue(void) { return TOOL_VALUE; }\n");
-	const ccWords = windows ? `${homeDir()}/.metascript/zig/zig.exe cc` : "clang";
+	const ccWords = windows ? bundleClangWords().join(" ") : "clang";
 	const firstWords = build(leading, "compiler-words", "probe", [], `${ccWords} -DTOOL_VALUE=71`);
 	record("compiler command with leading arguments", "0", `${firstWords}`);
 	if (firstWords == 0) record("compiler command leading argument reaches cc", "71", value(leading));
