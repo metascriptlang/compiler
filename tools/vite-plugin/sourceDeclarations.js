@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, parse, resolve, win32 } from "node:path";
+import { dirname, isAbsolute, join, parse, resolve, sep, win32 } from "node:path";
 import { canonicalPath, sourceRootOfOutput } from "./compilerCore.js";
 
 const ledgerName = ".msc-source-ledger.json";
@@ -149,4 +149,11 @@ export function ownedOutputPattern(options, projectRoot, compilerOutputPrefix) {
  const declarations = escapePath(resolve(projectRoot, options.outDir));
  const family = `package\\.json$|(?:.*${anySeparator})?(?:\\.msc-${part}(?:${anySeparator}|$)|${part}\\.d\\.(?:ms\\.ts|jms\\.ts|ts)$)`;
  return new RegExp(`^(?!.*\\.(?:ms|jms)$)(?:${escapePath(compilerOutputPrefix)}.|${declarations}${anySeparator}(?:${family}))`);
+}
+
+export function ownedOutputGlobs(options, projectRoot, compilerOutputPrefix) {
+ const portable = path => sep === "\\" ? path.replaceAll("\\", "/") : path;
+ const declarations = portable(resolve(projectRoot, options.outDir)), prefix = portable(compilerOutputPrefix);
+ if (/[*?[\]{}\\]/.test(declarations + prefix)) return null;
+ return [`${prefix}?*`, `${declarations}/package.json`, ...[".msc-*", "*.d.ms.ts", "*.d.jms.ts", "*.d.ts"].map(name => `${declarations}/**/${name}`)];
 }

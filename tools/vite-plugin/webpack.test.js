@@ -440,6 +440,47 @@ function sourceSettings(f) {
  return {...f.settings,declaration:false,sourceDeclarations:{outDir:"editor-types"}};
 }
 
+const userIgnoredShapes = [/keep-this/i, ["**/keep-this/**"], "**/keep-this/**", path => path.includes("keep-this"), undefined];
+
+test("composed ignored separates plugin outputs, user patterns and sources in the installed watchpack", {skip:unavailable}, t => {
+ const Watchpack = createRequire(webpackPath)("watchpack");
+ const f = fixture(t);
+ const compiler = fakeCompiler(f.root,new MetaScriptPlugin(sourceSettings(f)),{afterEnvironment:new Hook(),shutdown:new Hook()});
+ t.after(() => compiler.hooks.shutdown.call());
+ let options;
+ compiler.watchFileSystem = {watch(...values) { options = values[4]; return {close() {}}; }};
+ compiler.hooks.afterEnvironment.call();
+ const owned = ["editor-types/main.d.ms.ts","editor-types/nested/main.d.jms.ts","editor-types/package.json","editor-types/.msc-source-lease","editor-types/.msc-source-lease/owner.json","editor-types/.msc-source-ledger.json","node_modules/.metascript/webpack-private","node_modules/.metascript/webpack-private/out.js"].map(path => join(f.root,path));
+ const kept = [f.entry,f.dependency,f.settings.msc,join(f.root,"editor-types"),join(f.root,"editor-types/new.jms"),join(f.root,"editor-types/schema.json"),join(f.root,"node_modules/.metascript"),join(f.root,"node_modules/.metascript/late.ms")];
+ for (const ignored of userIgnoredShapes) {
+  compiler.watchFileSystem.watch([],[],[],0,{ignored},() => {});
+  const probe = new Watchpack(options);
+  const matcher = probe.watcherOptions?.ignored;
+  probe.close();
+  assert.ok(typeof matcher === "function" || matcher instanceof RegExp,"installed watchpack must expose its normalized ignored matcher");
+  const ignores = path => typeof matcher === "function" ? matcher(path) : matcher.test(path);
+  const label = String(ignored);
+  for (const path of owned) assert.equal(ignores(path),true,`${label}: ${path}`);
+  for (const path of kept) assert.equal(ignores(path),false,`${label}: ${path}`);
+  assert.equal(ignores(join(f.root,"keep-this/user.js")),Boolean(ignored),label);
+ }
+});
+
+test("glob ignored under a project path with glob characters names the watchpack it needs", t => {
+ const f = fixture(t), settings = sourceSettings(f);
+ const root = join(f.root,"app[1]"); mkdirSync(root);
+ const compiler = fakeCompiler(root,new MetaScriptPlugin({...settings,root}),{afterEnvironment:new Hook(),shutdown:new Hook()});
+ t.after(() => compiler.hooks.shutdown.call());
+ compiler.watchFileSystem = {watch(...values) {
+  const ignored = values[4].ignored;
+  if (Array.isArray(ignored) && !ignored.every(item => typeof item === "string")) throw new TypeError("Expected a string");
+  return {close() {}};
+ }};
+ compiler.hooks.afterEnvironment.call();
+ assert.throws(() => compiler.watchFileSystem.watch([],[],[],0,{ignored:"**/keep-this/**"},() => {}),error => /glob characters/.test(error.message) && /only from 2\.6\.0/.test(error.message) && error.cause instanceof TypeError);
+ for (const ignored of [/keep-this/, undefined]) assert.doesNotThrow(() => compiler.watchFileSystem.watch([],[],[],0,{ignored},() => {}));
+});
+
 test("source watch wrapper preserves runtime ignored options and observes callbacks before invalid coalescing", t => {
  const f = fixture(t), settings = sourceSettings(f);
  const compiler = fakeCompiler(f.root, new MetaScriptPlugin(settings), {afterEnvironment:new Hook(),shutdown:new Hook()});
@@ -451,7 +492,7 @@ test("source watch wrapper preserves runtime ignored options and observes callba
  compiler.hooks.afterEnvironment.call();
  const file = join(f.root,"editor-types/main.d.ms.ts");
  generation(compiler); assert.ok(existsSync(file));
- for (const ignored of [/keep-this/i, ["**/keep-this/**"], "**/keep-this/**", undefined]) {
+ for (const ignored of userIgnoredShapes) {
   const runtime = {aggregateTimeout:17,ignored};
   let forwarded;
   const callback = () => {};
@@ -461,10 +502,10 @@ test("source watch wrapper preserves runtime ignored options and observes callba
   });
   assert.equal(result,nativeWatcher); assert.equal(args[3],123); assert.equal(args[4].aggregateTimeout,17); assert.equal(args[5],callback);
   assert.equal(runtime.ignored,ignored);
-  assert.deepEqual(args[4].ignored.slice(0,-1), ignored === undefined ? [] : Array.isArray(ignored) ? ignored : [ignored]);
-  const outputs = args[4].ignored.at(-1);
-  for (const owned of ["editor-types/main.d.ms.ts","editor-types/package.json","editor-types/.msc-source-lease","editor-types/.msc-source-lease/owner.json","editor-types/.msc-source-ledger.json","node_modules/.metascript/webpack-private"]) assert.ok(outputs.test(join(f.root,owned)),owned);
-  for (const kept of [f.entry,f.dependency,f.settings.msc,join(f.root,"editor-types"),join(f.root,"editor-types/new.jms"),join(f.root,"editor-types/schema.json"),join(f.root,"node_modules/.metascript/late.ms")]) assert.equal(outputs.test(kept),false,kept);
+  const enriched = args[4].ignored;
+  if (typeof ignored === "function") assert.equal(typeof enriched,"function");
+  else assert.ok(enriched instanceof RegExp || (Array.isArray(enriched) && enriched.every(item => typeof item === "string")),"watchpack before 2.6 accepts ignored only as one RegExp, a glob or a glob list");
+  if (Array.isArray(enriched)) assert.deepEqual(enriched.slice(0,[ignored].flat().length),[ignored].flat());
   args[6](join(f.root,"calls"),1); assert.ok(existsSync(file));
   args[6](f.entry,2); assert.deepEqual(forwarded,[f.entry,2]);
   generation(compiler); assert.ok(existsSync(file));

@@ -25,6 +25,10 @@ Install normally after merging these fields with existing configuration. The roo
 
 The override in this plugin's own development package does not propagate into an application's dependency tree. Ordinary non-watch builds do not require this repaired host.
 
+## Webpack source-declaration watch
+
+The adapter adds its output exclusions to `watchOptions.ignored` in the shape the configured value already has: one RegExp for a RegExp or nothing, globs after a glob or glob list, a function around a function. Every watchpack 2.x that webpack 5 can resolve accepts those shapes; watchpack refuses RegExp items in an array before 2.6.0 and functions before 2.3.0. A project path containing `* ? [ ] { }` cannot be written as a glob, so with a glob `ignored` it needs watchpack 2.6.0 or later, and the adapter's error names that case on an older one. Checked with each shape against watchpack 2.0.0, 2.2.0, 2.3.1, 2.4.4, 2.5.2, 2.6.3 and 2.6.4 by reading back each version's normalized matcher: plugin outputs ignored, sources and the user's own pattern kept.
+
 ## Maintaining the vendored host
 
 `vendor/rollup4.json` owns input identities and artifact integrity; `vendor/buildRollup.mjs` owns the rebuild recipe. Run it through the workspace's remote-job wrapper, not on the shared editing machine. Its build-toolchain requirement is separate from the package's runtime engine declaration.

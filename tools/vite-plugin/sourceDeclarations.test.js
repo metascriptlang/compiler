@@ -116,3 +116,14 @@ test("owned output pattern matches either separator, because watchpack tests Win
  }
  assert.equal(pattern.test(join(root, "types", "main.ms").replaceAll("/", "\\")), false);
 });
+
+test("owned output globs refuse project paths with glob characters", async () => {
+ const { ownedOutputGlobs } = await import("./sourceDeclarations.js");
+ for (const root of ["/tmp/a[b]", "/tmp/a{b,c}", "/tmp/a*b", "/tmp/a?b"]) {
+  assert.equal(ownedOutputGlobs({ outDir: "types" }, root, join(root, "ws", "webpack-")), null, root);
+ }
+ assert.deepEqual(ownedOutputGlobs({ outDir: "types" }, "/tmp/My App (1)", "/tmp/My App (1)/ws/webpack-"), [
+  "/tmp/My App (1)/ws/webpack-?*", "/tmp/My App (1)/types/package.json", "/tmp/My App (1)/types/**/.msc-*",
+  "/tmp/My App (1)/types/**/*.d.ms.ts", "/tmp/My App (1)/types/**/*.d.jms.ts", "/tmp/My App (1)/types/**/*.d.ts",
+ ]);
+});

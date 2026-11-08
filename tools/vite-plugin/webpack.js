@@ -4,7 +4,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildCompilerGraph, canonicalPath, outputOf, stripQuery, withInstance } from "./compilerCore.js";
 
-import { createSourceDeclarationPublisher, sourceDeclarationWatchRoots, ownedOutputPattern } from "./sourceDeclarations.js";
+import { createSourceDeclarationPublisher, sourceDeclarationWatchRoots, ownedOutputGlobs, ownedOutputPattern } from "./sourceDeclarations.js";
 
 export const loader = fileURLToPath(new URL("./webpackLoader.js", import.meta.url));
 const implementationFiles = ["webpack.js", "webpackLoader.js", "compilerCore.js", "sourceDeclarations.js", "package.json"].map(file => fileURLToPath(new URL(file, import.meta.url)));
@@ -32,6 +32,25 @@ function sourceInventory(roots, outputs) {
 	return JSON.stringify([...sources].sort(([a], [b]) => a.localeCompare(b)));
 }
 
+class IgnoredWithOutputs extends RegExp {
+	constructor(ignored, outputs) {
+		super(outputs.source, outputs.flags);
+		this.ignored = ignored;
+	}
+
+	test(path) {
+		return this.ignored.test(path) || super.test(path);
+	}
+}
+
+function ignoringOutputs(ignored, outputs, outputGlobs) {
+	if (!ignored || (Array.isArray(ignored) && ignored.length === 0)) return outputs;
+	if (ignored instanceof RegExp) return new IgnoredWithOutputs(ignored, outputs);
+	if (typeof ignored === "function") return path => ignored(path) || outputs.test(path);
+	const list = Array.isArray(ignored) ? ignored : [ignored];
+	return outputGlobs && list.every(item => typeof item === "string") ? [...list, ...outputGlobs] : [...list, outputs];
+}
+
 export default class MetaScriptPlugin {
 	constructor(options) {
 		if (!options || !(Array.isArray(options.entry) ? options.entry : [options.entry]).length || (Array.isArray(options.entry) ? options.entry : [options.entry]).some(file => typeof file !== "string" || !/\.(ms|jms)$/.test(file))) {
@@ -49,21 +68,25 @@ export default class MetaScriptPlugin {
 		const msc = options.msc ? canonicalPath(resolve(options.msc)) : null;
 		const workspace = resolve(root, options.outDir ?? "node_modules/.metascript");
 		const outputs = options.sourceDeclarations && ownedOutputPattern(options.sourceDeclarations, root, join(workspace, "webpack-"));
+		const outputGlobs = options.sourceDeclarations && ownedOutputGlobs(options.sourceDeclarations, root, join(workspace, "webpack-"));
 		if (outputs) compiler.hooks.afterEnvironment?.tap(name, () => {
 			const native = compiler.watchFileSystem;
 			let previousWatchOptions, enrichedWatchOptions;
 			compiler.watchFileSystem = {
 				watch(files, directories, missing, startTime, watchOptions, callback, callbackUndelayed) {
 					if (watchOptions !== previousWatchOptions) {
-						const previous = watchOptions.ignored;
-						const ignored = [...(previous === undefined ? [] : Array.isArray(previous) ? previous : [previous]), outputs];
-						enrichedWatchOptions = { ...watchOptions, ignored };
+						enrichedWatchOptions = { ...watchOptions, ignored: ignoringOutputs(watchOptions.ignored, outputs, outputGlobs) };
 						previousWatchOptions = watchOptions;
 					}
-					return native.watch(files, directories, missing, startTime, enrichedWatchOptions, callback, (file, time) => {
-						invalidateSource(file);
-						callbackUndelayed?.(file, time);
-					});
+					try {
+						return native.watch(files, directories, missing, startTime, enrichedWatchOptions, callback, (file, time) => {
+							invalidateSource(file);
+							callbackUndelayed?.(file, time);
+						});
+					} catch (error) {
+						if (!Array.isArray(enrichedWatchOptions.ignored) || !enrichedWatchOptions.ignored.includes(outputs)) throw error;
+						throw new Error(`MetaScript webpack excludes its outputs from watchOptions.ignored ${outputGlobs ? "beside RegExp items" : `through a RegExp item, because ${root} has glob characters`}, and this watchpack accepts RegExp array items only from 2.6.0; give watchOptions.ignored as one RegExp or a function`, { cause: error });
+					}
 				},
 			};
 		});
