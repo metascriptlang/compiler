@@ -9,7 +9,7 @@ const values = new Map();
 const rows = [];
 for (const line of readFileSync(path, "utf8").split("\n")) {
 	const [arm, row, value] = line.split("\t");
-	if (!row || value === undefined || Number.isNaN(Number(value))) continue;
+	if (!row || !value || Number.isNaN(Number(value))) continue;
 	if (!rows.includes(row)) rows.push(row);
 	const key = arm + "\t" + row;
 	if (!values.has(key)) values.set(key, []);
