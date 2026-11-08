@@ -3,27 +3,43 @@
 // `{ slot: msUnownedTake(v) }`; both take `v` borrowed, so the analyzer keeps every strong
 // count of `v` as it is. An element is a slot too: `arr.push(v)` pushes `msUnownedTake(v)`, an
 // array literal takes each element, and `arr.pop()` becomes `msUnownedGive(arr.pop())`, a strong
-// value again. Generated lifecycle ops keep their raw stores: destructorLifting already counts
-// their Unowned fields.
+// value again. A read of a slot as a plain T becomes `msUnownedLoad(slot)`, which stops when the
+// target was destroyed and otherwise is a strong value the analyzer releases; a slot copied into
+// another slot is no read. Generated lifecycle ops keep their raw stores: destructorLifting
+// already counts their Unowned fields.
 
-import { Node, NodeKind, Type, BinaryExprData, ObjectLiteralData, ArrayLiteralData, CallExprData, MemberExprData, HiddenDerefData } from "../../ast/node";
+import { Node, NodeKind, Type, BinaryExprData, ObjectLiteralData, ArrayLiteralData, CallExprData, MemberExprData, ArrayAccessData, HiddenDerefData } from "../../ast/node";
 import { TransformContext } from "../context";
 import { mapChildren } from "../walker";
-import { makeCall, makeHiddenAddr, runtimeRef } from "../util";
-import { unownedSlotOf, isUnownedSlot, isReadonlyUnownedSlot, unownedElementOf, getProperty, voidType } from "../../checker/types";
+import { makeCall, makeHiddenAddr, runtimeRef, isRuntimeProcCall } from "../util";
+import { unownedSlotOf, isUnownedSlot, isReadonlyUnownedSlot, unownedElementOf, withoutUnowned, getProperty, voidType } from "../../checker/types";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 
 function visit(node: Node): Node {
 	if (node == null) return node;
 	if (node.kind == NodeKind.FunctionDecl && node.resolvedSym != null && hasFlag(node.resolvedSym, SymbolFlag.GeneratedOp)) return node;
+	if (node.kind == NodeKind.BinaryExpr && isUnownedStore(node.data as BinaryExprData)) return assign(node);
+	if (node.kind == NodeKind.HiddenAddr) {
+		mapChildren((node.data as HiddenDerefData).expr, visit);
+		return node;
+	}
 	mapChildren(node, visit);
 	if (node.kind == NodeKind.ObjectLiteral) return takeLiteralFields(node);
 	if (node.kind == NodeKind.ArrayLiteral) return takeLiteralElements(node);
 	if (node.kind == NodeKind.CallExpr) return countElementCall(node);
-	if (node.kind != NodeKind.BinaryExpr) return node;
+	const slot = readSlotType(node);
+	return slot != null ? load(node, slot) : node;
+}
+
+function isUnownedStore(d: BinaryExprData): boolean {
+	return d.operator == "=" && d.left != null && unownedSlotOf(d.left);
+}
+
+function assign(node: Node): Node {
 	const d = node.data as BinaryExprData;
-	if (d.operator != "=" || d.left == null || !unownedSlotOf(d.left)) return node;
-	const call = makeCall(runtimeRef(isReadonlyUnownedSlot(slotType(d.left)) ? "msUnownedAssignRo" : "msUnownedAssign", node.location), [makeHiddenAddr(d.left, node.location), d.right], node.location);
+	mapChildren(d.left, visit);
+	const value = edgeOf(visit(d.right));
+	const call = makeCall(runtimeRef(isReadonlyUnownedSlot(slotType(d.left)) ? "msUnownedAssignRo" : "msUnownedAssign", node.location), [makeHiddenAddr(d.left, node.location), value], node.location);
 	call.nodeType = voidType();
 	return call;
 }
@@ -32,8 +48,26 @@ function slotType(place: Node): Type | null {
 	return place.kind == NodeKind.MemberExpr && place.resolvedSym != null && isUnownedSlot(place.resolvedSym.symbolType) ? place.resolvedSym.symbolType : place.nodeType;
 }
 
+function readSlotType(node: Node): Type | null {
+	if (node.kind == NodeKind.MemberExpr) return unownedSlotOf(node) ? slotType(node) : null;
+	if (node.kind == NodeKind.ArrayAccess) return unownedElementOf((node.data as ArrayAccessData).array.nodeType);
+	return null;
+}
+
+function load(read: Node, slot: Type): Node {
+	const call = makeCall(runtimeRef(isReadonlyUnownedSlot(slot) ? "msUnownedLoadRo" : "msUnownedLoad", read.location), [read], read.location);
+	call.nodeType = read.nodeType != null && isUnownedSlot(read.nodeType) ? withoutUnowned(read.nodeType) : read.nodeType;
+	return call;
+}
+
+function edgeOf(value: Node): Node {
+	if (!isRuntimeProcCall(value, "msUnownedLoad") && !isRuntimeProcCall(value, "msUnownedLoadRo")) return value;
+	return (value.data as CallExprData).arguments[0];
+}
+
 function take(value: Node, slot: Type | null): Node {
-	const call = makeCall(runtimeRef(isReadonlyUnownedSlot(slot) ? "msUnownedTakeRo" : "msUnownedTake", value.location), [value], value.location);
+	const edge = edgeOf(value);
+	const call = makeCall(runtimeRef(isReadonlyUnownedSlot(slot) ? "msUnownedTakeRo" : "msUnownedTake", edge.location), [edge], edge.location);
 	call.nodeType = value.nodeType;
 	return call;
 }
