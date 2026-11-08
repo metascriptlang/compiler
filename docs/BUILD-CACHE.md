@@ -9,7 +9,7 @@ rules, the reasons and the measurements.
 | Layer | Where | Who shares it |
 |---|---|---|
 | Local project cache | `out/debug/.cache` or `out/release/.cache` under the working directory, unless a root is chosen (see Controls) | one working directory, one job |
-| Global store | `$HOME/.metascript/cache/` (`USERPROFILE` on Windows) unless a root is chosen: `store/`, `headers/`, `prelude/`, `stamps/`, `cc/` | every worktree and job that resolves the same root |
+| Global store | `$HOME/.metascript/cache/` (`USERPROFILE` on Windows) unless a root is chosen: `store/`, `headers/`, `prelude/`, `stdunit/`, `stamps/`, `cc/` | every worktree and job that resolves the same root |
 
 The local cache holds per-file fingerprints, emitted C, objects and link records for one tree.
 The global store holds native objects keyed by content, header records and the prelude pack, so
@@ -73,6 +73,48 @@ generated files and restored all 97 native objects. Table and commands:
 - **A hit is only as correct as its recorded inputs.** A header that appears later is an input
   only through a literal `__has_include` name; see below.
 
+## The std unit
+
+The modules every program loads first (the std prelude closure, 84 on a hello world) are checked
+once per compiler, std tree and configuration, and later processes load that result instead of
+checking them again, as an upstream crate's metadata is compiled once and read by every crate that
+uses it. The unit is one file, `stdunit/<format>/<hash>.su` in the global store, holding the
+checked trees, every symbol, type and context those checks made, and the process-wide tables they
+filled; the hash only names the file, and the full key text in its header is compared exactly.
+
+- **Key**: the compiler (its binary, `runtime/`, `vendor/`), the std tree, the std path, backend,
+  resolver search paths and aliases, target, memory mode, strict null checks, app mode, the define
+  table (which holds the project directory, so a unit serves one project), global imports, module
+  passes, module-name roots and the prelude module list.
+- **Written** only by a one-shot `msc build` or `msc check` in a fresh process whose prelude checked
+  without an error or warning, ran no macro or compile-time code, read no file at compile time and
+  left no check in flight; anything else is a counted refusal named on the `stdUnit:` line of
+  `--time`. A watch or LSP session neither writes nor loads it.
+- **Loaded** whole into fresh objects before anything is applied, so a torn, foreign or mismatched
+  file is a counted miss and the build checks std from source and writes the unit again.
+- **Every field has a role**: the row codec and the unit declare a role for every field of
+  `Symbol`, `Type`, `Node`, `CheckerContext` and the classes they reach, typed
+  `{ [K in keyof T]-?: FieldRole }`, so a field added without one does not compile.
+
+Verified with `MSC_IC_VERIFY=1`, which builds the same sources cold in a child process and compares
+every C unit and diagnostic. RTX Linux, 2026-11-09, candidate `def04849e61`: every single-file
+corpus program in one project, 2172 builds, 2167 loading the unit, `verify-differs=0`
+(the 5 others stop before the check; one, `derivedClassArgumentIsOneInstance`, fails the same way
+on `main`); the compiler itself, unit written then loaded, both `verify: 507 C units and 461
+diagnostics equal a cold build`. `src/test/ic/run.ms` check `stdUnit` pins writing, loading, a torn
+file, a foreign key and the off switch.
+
+Measured on the same host, which was shared and noisy (medians of 5): `msc check` of a hello world
+347 ms without the unit, 248 ms with it; `msc build --emit=c` of it 1090 ms and 962 ms
+(`MSC_FLOWS` total); `msc check src/index.ms` 8309 ms and 8054 ms, within noise. Loading costs
+110 to 230 ms of a 12 MB file, most of it linking 106k checked nodes (`MSC_STD_UNIT_PHASES=1`
+prints the split), so a hit still pays about 0.4 of the std check. Not measured: macOS, Windows,
+a quiet host.
+
+Code: `src/checker/stdUnit.ms` (`stdUnitKeyText`, `writeStdUnit`, `loadStdUnit`, `applyStdUnit`),
+`src/checker/rowCodec.ms` (`RowWriter`, `RowReader`, the field-role tables),
+`src/checker/orchestrator.ms` (`planStdUnit`, `writeUnitAfterPrelude`).
+
 ## Controls
 
 Each root is chosen by the first source that names it; a relative path resolves against the
@@ -87,7 +129,8 @@ working directory for the command line and the environment, and against the proj
 
 `MSC_NO_GLOBAL_CACHE=<nonempty>` turns the global store and the prelude pack off and wins over
 every source above, so a job can always isolate itself. `MSC_NO_PRELUDE_PACK=<nonempty>` turns
-only the prelude pack off. A chosen local root holds both debug and release.
+only the prelude pack off, and `MSC_NO_STD_UNIT=1` only the std unit. A chosen local root holds
+both debug and release.
 
 ```ts
 // build.ms
