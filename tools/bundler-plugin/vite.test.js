@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
-import metascript from "./index.js";
+import metascript from "./vite.js";
 import { canonicalPath } from "./compilerCore.js";
 
 function fixture(t, options = {}) {
@@ -74,19 +74,20 @@ function hot(f, server, file = f.entry) {
 }
 
 describe("Vite native hooks with fake compiler (not Vite consumer acceptance)", () => {
-	test("the existing package entry exposes option types and includes its runtime core", () => {
+	test("the Vite subpath exposes option types and includes its runtime core", () => {
 		const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
-		assert.equal(pkg.main, "index.js");
-		assert.equal(pkg.types, "./index.d.ts");
-		assert.deepEqual(pkg.exports["."], { types: "./index.d.ts", default: "./index.js" });
+		assert.equal(pkg.main, undefined);
+		assert.equal(pkg.types, undefined);
+		assert.equal(pkg.exports["."], undefined);
+		assert.deepEqual(pkg.exports["./vite"], { types: "./vite.d.ts", default: "./vite.js" });
 		assert.equal(pkg.peerDependencies.vite, ">=5");
-		for (const file of ["index.js", "index.d.ts", "compilerCore.js"]) {
+		for (const file of ["vite.js", "vite.d.ts", "compilerCore.js"]) {
 			assert.ok(pkg.files.includes(file));
 			assert.ok(existsSync(new URL(file, import.meta.url)));
 		}
 	});
 	test("the package publicly exports the typed reusable core", async () => {
-		const core = await import("vite-plugin-metascript/core");
+		const core = await import("metascript-bundler-plugin/core");
 		assert.equal(typeof core.buildCompilerGraph, "function");
 		const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
 		assert.deepEqual(pkg.exports["./core"], { types: "./compilerCore.d.ts", default: "./compilerCore.js" });

@@ -63,9 +63,10 @@ fs.writeFileSync(path.join(out, "_manifest.json"), JSON.stringify(state.manifest
 	return { root, entry, dependency, state, save, settings, plugin, watched, assets, context, calls };
 }
 
-test("Rollup subpath ships native types and leaves the Vite default unchanged", () => {
+test("Rollup subpath ships native types beside the Vite subpath and no default entry", () => {
 	const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
-	assert.deepEqual(pkg.exports["."], { types: "./index.d.ts", default: "./index.js" });
+	assert.equal(pkg.exports["."], undefined);
+	assert.deepEqual(pkg.exports["./vite"], { types: "./vite.d.ts", default: "./vite.js" });
 	assert.deepEqual(pkg.exports["./rollup"], { types: "./rollup.d.ts", default: "./rollup.js" });
 	for (const file of ["rollup.js", "rollup.d.ts"]) assert.ok(pkg.files.includes(file));
 	assert.equal(pkg.peerDependencies.rollup, ">=4");

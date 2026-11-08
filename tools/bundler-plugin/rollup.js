@@ -90,7 +90,7 @@ export default function metascript(options = {}) {
 			if (this.meta?.watchMode && inputOptions.watch !== false) watchCwd = resolve(chokidar.cwd ?? process.cwd());
 			if (!options.sourceDeclarations || !this.meta?.watchMode || inputOptions.watch === false) return null;
 			if (this.meta.rollupVersion !== SOURCE_WATCH_ROLLUP_VERSION) {
-				throw new Error(`MetaScript source-declaration watch requires Rollup ${SOURCE_WATCH_ROLLUP_VERSION}; pin the host Rollup dependency to vite-plugin-metascript/vendor/rollup4.tgz (received ${this.meta.rollupVersion ?? "no version"})`);
+				throw new Error(`MetaScript source-declaration watch requires Rollup ${SOURCE_WATCH_ROLLUP_VERSION}; pin the host Rollup dependency to metascript-bundler-plugin/vendor/rollup4.tgz (received ${this.meta.rollupVersion ?? "no version"})`);
 			}
 			return {
 				...inputOptions,

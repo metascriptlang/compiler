@@ -51,7 +51,7 @@
   "artifactSHA256": "657be935329cccd71431906c2d1383b664631a7f74bced1f969b477941ed8b3a",
   "buildNode": ">=24.12.0",
   "runtimeNode": ">=18.0.0; CJS/ESM standalone JSON/error recovery and a CLI build verified at v18.0.0 on Linux x64 GNU",
-  "recipe": "node tools/vite-plugin/vendor/buildRollup.mjs /absolute/fresh-work-directory /absolute/rollup4.tgz",
+  "recipe": "node tools/bundler-plugin/vendor/buildRollup.mjs /absolute/fresh-work-directory /absolute/rollup4.tgz",
   "stages": [
     "npm ci --ignore-scripts --no-audit --no-fund (locked upstream dev dependencies, before version mutation)",
     "npm run prepare:patch (upstream patches plus chokidar.patch)",

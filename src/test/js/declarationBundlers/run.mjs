@@ -7,12 +7,12 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadOracle } from '../../compat/typescript/run.mjs';
-import { buildCompilerGraph } from '../../../../tools/vite-plugin/compilerCore.js';
-import { watchTestQueue } from '../../../../tools/vite-plugin/watchTestQueue.js';
+import { buildCompilerGraph } from '../../../../tools/bundler-plugin/compilerCore.js';
+import { watchTestQueue } from '../../../../tools/bundler-plugin/watchTestQueue.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, '../../../..');
-const require = createRequire(new URL('../../../../tools/vite-plugin/package.json', import.meta.url));
+const require = createRequire(new URL('../../../../tools/bundler-plugin/package.json', import.meta.url));
 const pins = { vite: '6.3.5', rollup: '4.67.5+metascript.2', webpack: '5.99.9' };
 
 async function framework(name) {
@@ -168,7 +168,7 @@ test('core: real compiler multi-root graph, strict source TS/TSX and Node ESM', 
 test('vite-build: native build executes typed TSX and preserves JSX, define and aliases', { timeout: 60000 }, async t => {
   const f = fixture(t);
   const vite = await framework('vite');
-  const { default: metascript } = await import('../../../../tools/vite-plugin/index.js');
+  const { default: metascript } = await import('../../../../tools/bundler-plugin/vite.js');
   const dist = join(f.work, 'dist');
   await vite.build({ ...viteConfig(f, metascript(f.options)), build: { outDir: dist,
     minify: false, lib: { entry: join(f.src, 'host.tsx'), formats: ['es'], fileName: () => 'host.mjs' } } });
@@ -180,7 +180,7 @@ test('vite-build: native build executes typed TSX and preserves JSX, define and 
 test('rollup-build: native MS/JMS entries generate ESM with the real type-root sink', { timeout: 60000 }, async t => {
   const f = fixture(t);
   const rollup = await framework('rollup');
-  const { default: metascript } = await import('../../../../tools/vite-plugin/rollup.js');
+  const { default: metascript } = await import('../../../../tools/bundler-plugin/rollup.js');
   const bundle = await rollup.rollup({ input: { primary: f.primary, base: f.base }, plugins: [metascript({ ...f.options, root: f.src })] });
   t.after(() => bundle.close());
   const dist = join(f.work, 'dist');
@@ -193,7 +193,7 @@ test('rollup-build: native MS/JMS entries generate ESM with the real type-root s
 async function webpackCompiler(f) {
   const module = await framework('webpack');
   const webpack = module.default;
-  const { default: MetaScriptPlugin, loader } = await import('../../../../tools/vite-plugin/webpack.js');
+  const { default: MetaScriptPlugin, loader } = await import('../../../../tools/bundler-plugin/webpack.js');
   const transpiled = f.ts.transpileModule(readFileSync(join(f.src, 'host.tsx'), 'utf8'), {
     fileName: 'host.tsx', compilerOptions: { target: f.ts.ScriptTarget.ES2022,
       module: f.ts.ModuleKind.ESNext, jsx: f.ts.JsxEmit.React, jsxFactory: 'makeElement' } });
@@ -257,7 +257,7 @@ async function establishedEdits(f, success, failure, trace = () => {}) {
 test('rollup-watch-established: real edits, type changes, errors, delete and restore after BUNDLE_END', { timeout: 180000 }, async t => {
   const f = fixture(t);
   const rollup = await framework('rollup');
-  const { default: metascript } = await import('../../../../tools/vite-plugin/rollup.js');
+  const { default: metascript } = await import('../../../../tools/bundler-plugin/rollup.js');
   const queue = watchTestQueue();
   const watcher = rollup.watch({ input: { primary: f.primary, base: f.base },
     plugins: [metascript({ ...f.options, root: f.src })],
@@ -363,7 +363,7 @@ test('vite-dev: in-process SSR plus native HMR protocol, not browser E2E', { tim
   assert.ok(Number(process.versions.node.split('.')[0]) >= 24, 'acceptance tooling requires Node 24+');
   assert.equal(typeof WebSocket, 'function', 'acceptance tooling requires built-in Node WebSocket');
   const vite = await framework('vite');
-  const { default: metascript } = await import('../../../../tools/vite-plugin/index.js');
+  const { default: metascript } = await import('../../../../tools/bundler-plugin/vite.js');
   const typePublications = watchTestQueue();
   let awaitingTypePublication = false;
   const typeObserver = { name: 'acceptance-source-type-publication', enforce: 'post',

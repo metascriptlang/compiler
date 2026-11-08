@@ -113,7 +113,7 @@ function request(generation, issuer, source) {
 
 test("webpack package subpaths preserve Vite and Rollup entries", () => {
 	const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
-	assert.equal(pkg.exports["."].default, "./index.js");
+	assert.equal(pkg.exports["./vite"].default, "./vite.js");
 	assert.equal(pkg.exports["./rollup"].default, "./rollup.js");
 	assert.deepEqual(pkg.exports["./webpack"], { types: "./webpack.d.ts", default: "./webpack.js" });
 	assert.equal(pkg.exports["./webpack/loader"], "./webpackLoader.js");
@@ -385,11 +385,11 @@ test("verified TS oracle checks strict NodeNext webpack options and adapter decl
 	assert.equal(identity.version, "5.9.2");
 	const file = new URL(`./.webpack-options-${process.pid}.mts`, import.meta.url);
 	t.after(() => rmSync(file, { force: true }));
-	writeFileSync(file, `import MetaScriptPlugin, { loader } from "vite-plugin-metascript/webpack";
+	writeFileSync(file, `import MetaScriptPlugin, { loader } from "metascript-bundler-plugin/webpack";
 import type { Configuration } from "webpack";
-import metascript from "vite-plugin-metascript";
-import rollupMetascript from "vite-plugin-metascript/rollup";
-import { buildCompilerGraph } from "vite-plugin-metascript/core";
+import metascript from "metascript-bundler-plugin/vite";
+import rollupMetascript from "metascript-bundler-plugin/rollup";
+import { buildCompilerGraph } from "metascript-bundler-plugin/core";
 metascript({entry:["a.ms","b.jms"] as const, sourceDeclarations:{outDir:"editor-types"}});
 rollupMetascript({entry:["a.ms","b.jms"] as const, sourceDeclarations:{outDir:"editor-types"}});
 buildCompilerGraph({entry:["a.ms","b.jms"] as const, sourceRoot:"src"}).entries satisfies readonly string[];
@@ -402,7 +402,7 @@ new MetaScriptPlugin({ entry: ["a.ms", "b.jms"] as const, sourceDeclarations: {o
 // @ts-expect-error declarations must be boolean
 new MetaScriptPlugin({ entry: "main.ms", declaration: "yes" });
 `);
-	const roots = [fileURLToPath(file), ...["compilerCore", "index", "rollup", "webpack"].map(name => fileURLToPath(new URL(`./${name}.d.ts`, import.meta.url)))];
+	const roots = [fileURLToPath(file), ...["compilerCore", "vite", "rollup", "webpack"].map(name => fileURLToPath(new URL(`./${name}.d.ts`, import.meta.url)))];
 	const program = ts.createProgram(roots, {
 		strict: true, noEmit: true, skipLibCheck: false, module: ts.ModuleKind.NodeNext,
 		moduleResolution: ts.ModuleResolutionKind.NodeNext, target: ts.ScriptTarget.ES2022, types: [],

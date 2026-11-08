@@ -8,17 +8,17 @@ import { loadOracle } from '../../src/test/compat/typescript/run.mjs';
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, '../..');
 const pins = { vite: '6.3.5', rollup: '4.67.5+metascript.2', webpack: '5.99.9' };
-const nativeFiles = ['compilerCore', 'sourceDeclarations', 'index', 'rollup', 'webpack']
-  .map(name => `tools/vite-plugin/${name}.test.js`);
+const nativeFiles = ['compilerCore', 'sourceDeclarations', 'vite', 'rollup', 'webpack']
+  .map(name => `tools/bundler-plugin/${name}.test.js`);
 const consumerFile = 'src/test/js/declarationBundlers/run.mjs';
 const provision = `Prerequisites must be provisioned before the gate; this wrapper never installs or repairs them.
 Coordinate dependency setup before running (not a measured safe automation recipe):
-  npm ci --prefix tools/vite-plugin --ignore-scripts --prefer-offline --no-audit --no-fund
+  npm ci --prefix tools/bundler-plugin --ignore-scripts --prefer-offline --no-audit --no-fund
 Pinned devDependencies: vite@6.3.5 rollup@4.67.5+metascript.2 (vendor/rollup4.tgz) webpack@5.99.9 magic-string@0.30.17 typescript@5.9.2; package-lock.json pins every transitive package.
 The root override selects that Rollup for Vite too; app roots must select their host dependency explicitly.
 Then explicitly set existing module paths, for example after that layout is verified:
-  MSC="$PWD/out/gate/msc" VITE_MODULE="$PWD/tools/vite-plugin/node_modules/vite/dist/node/index.js" ROLLUP_MODULE="$PWD/tools/vite-plugin/node_modules/rollup/dist/es/rollup.js" WEBPACK_MODULE="$PWD/tools/vite-plugin/node_modules/webpack/lib/index.js" TS_ORACLE_MODULE="$PWD/tools/vite-plugin/node_modules/typescript/lib/typescript.js" node tools/vite-plugin/test.mjs
-MagicString must also resolve by bare ESM import from tools/vite-plugin/index.js; NODE_PATH is insufficient.
+  MSC="$PWD/out/gate/msc" VITE_MODULE="$PWD/tools/bundler-plugin/node_modules/vite/dist/node/index.js" ROLLUP_MODULE="$PWD/tools/bundler-plugin/node_modules/rollup/dist/es/rollup.js" WEBPACK_MODULE="$PWD/tools/bundler-plugin/node_modules/webpack/lib/index.js" TS_ORACLE_MODULE="$PWD/tools/bundler-plugin/node_modules/typescript/lib/typescript.js" node tools/bundler-plugin/test.mjs
+MagicString must also resolve by bare ESM import from tools/bundler-plugin/vite.js; NODE_PATH is insufficient.
 Node >=24 is required for test tooling only; use a pre-provisioned Node 24+ executable.
 Missing candidate: include the gate build lane (manual build: msc build src/index.ms --danger --lto=off --output=out/gate/msc).`;
 
@@ -49,7 +49,7 @@ async function prerequisites() {
     frameworks[name] = await pinnedFramework(name, process.env[key]);
     modules[key] = frameworks[name].path;
   }
-  // This module and index.js share the same bare-ESM lookup location.
+  // This module and vite.js share the same bare-ESM lookup location.
   const magicPath = realpathSync(fileURLToPath(import.meta.resolve('magic-string')));
   await import(pathToFileURL(magicPath).href);
   let directory = dirname(magicPath);

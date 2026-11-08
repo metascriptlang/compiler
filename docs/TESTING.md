@@ -342,12 +342,12 @@ Other rules that make these numbers real:
 
 ## Native watch boundaries
 
-On 2026-11-04, source tree `7f4551e76f172d04f46f5e58779372b927166fda`, the stock JSON control in `tools/vite-plugin/rollup.test.js` reproduced a missing rebuild on RTX/Linux 7.0.0-42, Node 24.1.0 and Rollup 4.44.1. The one-core remote job used `--no-msc`; no compiler or MetaScript plugin participated in the selected watcher.
+On 2026-11-04, source tree `7f4551e76f172d04f46f5e58779372b927166fda`, the stock JSON control in `tools/bundler-plugin/rollup.test.js` reproduced a missing rebuild on RTX/Linux 7.0.0-42, Node 24.1.0 and Rollup 4.44.1. The one-core remote job used `--no-msc`; no compiler or MetaScript plugin participated in the selected watcher.
 
 ```sh
 ROLLUP_MODULE=<isolated-rollup>/dist/es/rollup.js node --test --test-concurrency=1 --test-reporter=tap \
   --test-name-pattern='^stock Rollup observes immediate external JSON updates after initial BUNDLE_END$' \
-  tools/vite-plugin/rollup.test.js
+  tools/bundler-plugin/rollup.test.js
 ```
 
 The unchanged control and a separate public-observer/strace variant each reached the original 15000 ms timeout: `# tests 1`, `# pass 0`, `# fail 0`, `# cancelled 1`, `# skipped 0`; each returned 1. Other cells were filtered, not passes. The observational variant changed only this test body (patch SHA256 `2a59c7ae9661b4ce697a2b23fbe8032874a74103b5833fe777a0874490cfdd6c`). Collection returned 2 after a TAP-escaping decoder error; read-only recovery from complete child stdout writes did not turn the wrapper green.

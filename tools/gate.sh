@@ -10,7 +10,7 @@ EMITS='^src/(analyzer|ast|binder|checker|codegen|diagnostics|lexer|module|monomo
 RULES=(
   'tools|^tools/'
   'build|^tools/.*\.ms$'
-  'build,tools|^tools/vite-plugin/|^src/test/js/declarationBundlers/'
+  'build,tools|^tools/bundler-plugin/|^src/test/js/declarationBundlers/'
   'hcr|^src/test/(hcr|ic)/|^src/compiler/transam/|^src/compiler/(cache|compile|hcrAbi)\.ms$|^src/transform/native/hcr|^(std|runtime)/|^examples/hcrProbe/'
   'tests|^src/test/(c|js|handoff|fmt|checker3pass|lang|crypto)/|^src/test/helpers\.ms$|^std/crypto/|^runtime/crypto/'
   'lsp|^src/compiler/(lsp|transam)/|^src/checker/|^src/test/lsp/|^std/process/|^runtime/process\.h$'
@@ -2019,9 +2019,9 @@ src/test/ic/run.ms|build hcr suite
 src/test/native/programs/x.ms|build suite
 examples/hcrProbe/main.ms|build hcr suite
 tools/gate.sh|tools
-tools/vite-plugin/index.js|build tools
-tools/vite-plugin/package.json|build tools
-tools/vite-plugin/test.mjs|build tools
+tools/bundler-plugin/vite.js|build tools
+tools/bundler-plugin/package.json|build tools
+tools/bundler-plugin/test.mjs|build tools
 src/test/js/declarationBundlers/run.mjs|build suite tests tools
 src/test/js/declarationBundlers/fixtures/primary.ms|build suite tests tools
 tools/managedToolchain/prepareBundle.py|tools
@@ -2119,9 +2119,9 @@ CASES
   got=$(reds_of fmt "$log" 1 | paste -sd'|' -)
   want="src/test/handoff/x.ms|src/test/lang/a.ms"
   [ "$got" = "$want" ] || { printf 'FAIL reds fmt: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
-  printf '%s\n' 'FAIL tools/gate.sh: self-test' 'FAIL tools/wt.sh: bash -n' 'FAIL tools/vite-plugin/test.mjs: check' 'ok   tools/x.sh: check' >"$log"
+  printf '%s\n' 'FAIL tools/gate.sh: self-test' 'FAIL tools/wt.sh: bash -n' 'FAIL tools/bundler-plugin/test.mjs: check' 'ok   tools/x.sh: check' >"$log"
   got=$(reds_of tools "$log" 1 | paste -sd'|' -)
-  want="tools/gate.sh|tools/vite-plugin/test.mjs|tools/wt.sh"
+  want="tools/bundler-plugin/test.mjs|tools/gate.sh|tools/wt.sh"
   [ "$got" = "$want" ] || { printf 'FAIL reds tools: want "%s", got "%s"\n' "$want" "$got"; bad=1; }
   printf '%s\n' 'FAIL solana escrow-build: exit 1' 'FAIL solana heap-replay: exit 1' \
     'FAIL solana std/solana/test.ms: no test result' >"$log"
@@ -2444,7 +2444,7 @@ run_tool_test() {
 run_tools_lane() {
   local p rc=0 queue=0 py=0 release=0 native=0
   while IFS=$'\t' read -r _ p; do
-    case "$p" in tools/vite-plugin/* | src/test/js/declarationBundlers/*) native=1 ;; esac
+    case "$p" in tools/bundler-plugin/* | src/test/js/declarationBundlers/*) native=1 ;; esac
     [ -f "$p" ] || continue
     case "$p" in
       *.sh)
@@ -2467,17 +2467,17 @@ run_tools_lane() {
   if [ "$native" -eq 1 ]; then
     if ! command -v node >/dev/null 2>&1 || ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 24 ? 0 : 1)'; then
       echo 'native-adapters: Node >=24 test tooling is required; provision Node 24+ on PATH before the gate'
-      printf 'FAIL %s: check\n' tools/vite-plugin/test.mjs; rc=1
+      printf 'FAIL %s: check\n' tools/bundler-plugin/test.mjs; rc=1
     else
-      if ! node --test --test-concurrency=1 tools/vite-plugin/test.test.mjs; then printf 'FAIL %s: self-test\n' tools/vite-plugin/test.test.mjs; rc=1; fi
-      if ! npm ci --prefix tools/vite-plugin --ignore-scripts --prefer-offline --no-audit --no-fund; then
+      if ! node --test --test-concurrency=1 tools/bundler-plugin/test.test.mjs; then printf 'FAIL %s: self-test\n' tools/bundler-plugin/test.test.mjs; rc=1; fi
+      if ! npm ci --prefix tools/bundler-plugin --ignore-scripts --prefer-offline --no-audit --no-fund; then
         echo 'native-adapters: dependency provisioning failed; wrapper was not run'
-        printf 'FAIL %s: check\n' tools/vite-plugin/test.mjs; rc=1
-      elif ! MSC="$CAND" VITE_MODULE="$TOP/tools/vite-plugin/node_modules/vite/dist/node/index.js" \
-        ROLLUP_MODULE="$TOP/tools/vite-plugin/node_modules/rollup/dist/es/rollup.js" \
-        WEBPACK_MODULE="$TOP/tools/vite-plugin/node_modules/webpack/lib/index.js" \
-        TS_ORACLE_MODULE="$TOP/tools/vite-plugin/node_modules/typescript/lib/typescript.js" \
-        node tools/vite-plugin/test.mjs; then printf 'FAIL %s: check\n' tools/vite-plugin/test.mjs; rc=1; fi
+        printf 'FAIL %s: check\n' tools/bundler-plugin/test.mjs; rc=1
+      elif ! MSC="$CAND" VITE_MODULE="$TOP/tools/bundler-plugin/node_modules/vite/dist/node/index.js" \
+        ROLLUP_MODULE="$TOP/tools/bundler-plugin/node_modules/rollup/dist/es/rollup.js" \
+        WEBPACK_MODULE="$TOP/tools/bundler-plugin/node_modules/webpack/lib/index.js" \
+        TS_ORACLE_MODULE="$TOP/tools/bundler-plugin/node_modules/typescript/lib/typescript.js" \
+        node tools/bundler-plugin/test.mjs; then printf 'FAIL %s: check\n' tools/bundler-plugin/test.mjs; rc=1; fi
     fi
   fi
   return $rc

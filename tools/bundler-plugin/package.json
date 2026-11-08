@@ -1,14 +1,12 @@
 {
-  "name": "vite-plugin-metascript",
+  "name": "metascript-bundler-plugin",
   "version": "0.1.0",
-  "description": "Vite plugin for MetaScript — resolves .ms imports to compiler-emitted ES modules",
+  "description": "MetaScript adapters for Vite, Rollup and webpack — resolve .ms imports to compiler-emitted ES modules",
   "type": "module",
-  "main": "index.js",
-  "types": "./index.d.ts",
   "exports": {
-    ".": {
-      "types": "./index.d.ts",
-      "default": "./index.js"
+    "./vite": {
+      "types": "./vite.d.ts",
+      "default": "./vite.js"
     },
     "./core": {
       "types": "./compilerCore.d.ts",
@@ -25,8 +23,8 @@
     "./webpack/loader": "./webpackLoader.js"
   },
   "files": [
-    "index.js",
-    "index.d.ts",
+    "vite.js",
+    "vite.d.ts",
     "compilerCore.js",
     "compilerCore.d.ts",
     "sourceDeclarations.js",

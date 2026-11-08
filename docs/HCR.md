@@ -1050,7 +1050,7 @@ re-read).
 ### JavaScript bundler transport (Vite)
 
 JavaScript uses the bundler's module-update protocol, not the native image loader.
-`tools/vite-plugin/index.js` consumes the compiler's split-module manifest and keeps the
+`tools/bundler-plugin/vite.js` consumes the compiler's split-module manifest and keeps the
 source `.ms`/`.jms` identity in Vite. Returning an emitted `.js` identity instead makes an
 import and `import.meta.hot.accept("./logic.ms")` refer to different modules: Vite then
 reloads the page even though the consumer declared an acceptance boundary.

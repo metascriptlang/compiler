@@ -42,12 +42,12 @@ test('framework preflight rejects absent modules and wrong exact versions', asyn
 
 test('prerequisite failure is nonzero, named and provides pinned provisioning guidance', t => {
   const dir = fixture(t);
-  const child = spawnSync(process.execPath, ['tools/vite-plugin/test.mjs'], {
+  const child = spawnSync(process.execPath, ['tools/bundler-plugin/test.mjs'], {
     cwd: repo, encoding: 'utf8', env: { ...process.env, MSC: join(dir, 'missing') },
   });
   assert.equal(child.status, 1);
   assert.match(child.stderr, /FAIL native-adapters prerequisites:.*ENOENT/);
-  assert.match(child.stderr, /npm ci --prefix tools\/vite-plugin --ignore-scripts/);
+  assert.match(child.stderr, /npm ci --prefix tools\/bundler-plugin --ignore-scripts/);
   for (const pin of ['vite@6.3.5', 'rollup@4.67.5+metascript.2', 'webpack@5.99.9', 'magic-string@0.30.17', 'typescript@5.9.2']) {
     assert.ok(child.stderr.includes(pin));
   }
@@ -81,7 +81,7 @@ test('both complete serial commands run and persist actual statuses even after n
   assert.equal(runInterfaces(env, out, spawn), false);
   assert.equal(calls.length, 2);
   assert.deepEqual(calls[0].args, ['--test', '--test-concurrency=1', '--test-reporter=tap',
-    ...['compilerCore', 'sourceDeclarations', 'index', 'rollup', 'webpack'].map(name => `tools/vite-plugin/${name}.test.js`)]);
+    ...['compilerCore', 'sourceDeclarations', 'vite', 'rollup', 'webpack'].map(name => `tools/bundler-plugin/${name}.test.js`)]);
   assert.deepEqual(calls[1].args, ['--test', '--test-concurrency=1', '--test-reporter=tap', 'src/test/js/declarationBundlers/run.mjs']);
   for (const call of calls) {
     assert.equal(call.executable, process.execPath);
@@ -110,9 +110,9 @@ for (const [name, npmStatus] of [
 ]) test(name, t => {
   const dir = fixture(t);
   mkdirSync(join(dir, 'bin'));
-  writeFileSync(join(dir, 'why'), 'tools\ttools/vite-plugin/index.js\ntools\ttools/vite-plugin/test.mjs\ntools\tsrc/test/js/declarationBundlers/run.mjs\n');
+  writeFileSync(join(dir, 'why'), 'tools\ttools/bundler-plugin/vite.js\ntools\ttools/bundler-plugin/test.mjs\ntools\tsrc/test/js/declarationBundlers/run.mjs\n');
   const node = join(dir, 'bin/node');
-  writeFileSync(node, '#!/usr/bin/env bash\ncase "$*" in "-e "*) exit 0 ;; esac\nprintf "%s|%s\\n" "$MSC" "$*" >>"$CALLS"\ncase "$*" in tools/vite-plugin/test.mjs) printf "%s\\n" "$VITE_MODULE" "$ROLLUP_MODULE" "$WEBPACK_MODULE" "$TS_ORACLE_MODULE" >"$CALLS.env"; exit 3 ;; esac\n');
+  writeFileSync(node, '#!/usr/bin/env bash\ncase "$*" in "-e "*) exit 0 ;; esac\nprintf "%s|%s\\n" "$MSC" "$*" >>"$CALLS"\ncase "$*" in tools/bundler-plugin/test.mjs) printf "%s\\n" "$VITE_MODULE" "$ROLLUP_MODULE" "$WEBPACK_MODULE" "$TS_ORACLE_MODULE" >"$CALLS.env"; exit 3 ;; esac\n');
   chmodSync(node, 0o755);
   const npm = join(dir, 'bin/npm');
   writeFileSync(npm, '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >>"$CALLS.npm"\nexit "$NPM_STATUS"\n');
@@ -125,7 +125,7 @@ for (const [name, npmStatus] of [
       PATH: `${join(dir, 'bin')}:${process.env.PATH}`, CALLS: join(dir, 'calls'), NPM_STATUS: String(npmStatus) },
   });
   assert.equal(child.status, 1, child.stderr);
-  assert.ok(child.stdout.includes('FAIL tools/vite-plugin/test.mjs: check'));
+  assert.ok(child.stdout.includes('FAIL tools/bundler-plugin/test.mjs: check'));
   if (npmStatus) assert.match(child.stdout, /dependency provisioning failed; wrapper was not run/);
   const reds = source.match(/^reds_of\(\) \{\n[\s\S]*?^\}/m)?.[0];
   assert.ok(reds);
@@ -133,14 +133,14 @@ for (const [name, npmStatus] of [
   writeFileSync(log, child.stdout);
   const parsed = spawnSync('bash', ['-c', `${reds}\nreds_of tools "$1" 1`, '--', log], { cwd: repo, encoding: 'utf8' });
   assert.equal(parsed.status, 0, parsed.stderr);
-  assert.equal(parsed.stdout, 'tools/vite-plugin/test.mjs\n');
-  assert.equal(readFileSync(join(dir, 'calls.npm'), 'utf8'), 'ci --prefix tools/vite-plugin --ignore-scripts --prefer-offline --no-audit --no-fund\n');
+  assert.equal(parsed.stdout, 'tools/bundler-plugin/test.mjs\n');
+  assert.equal(readFileSync(join(dir, 'calls.npm'), 'utf8'), 'ci --prefix tools/bundler-plugin --ignore-scripts --prefer-offline --no-audit --no-fund\n');
   const calls = readFileSync(join(dir, 'calls'), 'utf8').trim().split('\n');
   assert.equal(calls.length, npmStatus ? 1 : 2);
   if (!npmStatus) {
-    assert.equal(calls[1], '/actual/gate/candidate|tools/vite-plugin/test.mjs');
+    assert.equal(calls[1], '/actual/gate/candidate|tools/bundler-plugin/test.mjs');
     assert.deepEqual(readFileSync(join(dir, 'calls.env'), 'utf8').trim().split('\n'), [
       'vite/dist/node/index.js', 'rollup/dist/es/rollup.js', 'webpack/lib/index.js', 'typescript/lib/typescript.js',
-    ].map(file => join(repo, 'tools/vite-plugin/node_modules', file)));
+    ].map(file => join(repo, 'tools/bundler-plugin/node_modules', file)));
   }
 });
