@@ -22,6 +22,7 @@ export const ROW_UNOWNED_DEC: int32 = 19;
 export const ROW_UNOWNED_ASSIGN: int32 = 20;
 export const ROW_UNOWNED_TAKE: int32 = 21;
 export const ROW_UNOWNED_GIVE: int32 = 22;
+export const ROW_UNOWNED_LOAD: int32 = 23;
 
 const rows = new HashMap<string, int32>();
 
@@ -58,6 +59,7 @@ define(ROW_UNOWNED_DEC, ["msUnownedDecref", "msUnownedDecrefRo"]);
 define(ROW_UNOWNED_ASSIGN, ["msUnownedAssign", "msUnownedAssignRo"]);
 define(ROW_UNOWNED_TAKE, ["msUnownedTake", "msUnownedTakeRo"]);
 define(ROW_UNOWNED_GIVE, ["msUnownedGive", "msUnownedGiveRo"]);
+define(ROW_UNOWNED_LOAD, ["msUnownedLoad", "msUnownedLoadRo"]);
 define(ROW_STR_APPEND, ["msStringAppend"]);
 define(ROW_STR_APPEND_CHAR, ["msStringAppendChar"]);
 define(ROW_STR_APPEND_CODEPOINT, ["msStringAppendCodePoint"]);

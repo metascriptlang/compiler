@@ -6,12 +6,12 @@ import { MemKind } from "./layout";
 import {
 	RaiserOpcode, RaiserInstruction, RaiserConvClass, RaiserRegClass, convClassBits, convClassSigned, convTarget, convSource, convOperand,
 	raiserABC, raiserABx, raiserAx, RaiserCombine, inRefFile, regClassLetter, operandKind, OPERAND_TAGGED, OPERAND_RAW, OPERAND_BARE, operandTagged,
-	packedOp, packedA, packedB, packedBx, packedBranch, immValue, immField, branchField, LAST_RAISER_OPCODE, FINALLY_LEAVE, slotArrayClass, slotArrayCyclic, slotArrayUncounted, slotArrayUnowned, slotArrayWidth, arrayClassSlot, ElemWidth, isShapedSite, RaiserCallShape, SHAPED_SCALAR_SITE, opHasSite
+	packedOp, packedA, packedB, packedBx, packedBranch, immValue, immField, branchField, LAST_RAISER_OPCODE, FINALLY_LEAVE, slotArrayClass, slotArrayCyclic, slotArrayUncounted, slotArrayUnowned, slotArrayWidth, UNOWNED_LIVE, arrayClassSlot, ElemWidth, isShapedSite, RaiserCallShape, SHAPED_SCALAR_SITE, opHasSite
 } from "./bytecode";
 import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, heapBoxRc, heapBoxSetRc, heapBoxSetValue, makeHandle, handleIndex, handleHeapKind, handleTag, handleKind, handleValue, bothInternedConstants, rcDecUnlessLast,
 	heapAllocViewAs, raiserNil, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserArray, raiserToString,
-	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, arrayHeldRemove, arrayHeldStore, arrayHeldInsert, arrayHeldReverse, arrayHeldSort, heapAllocView, heapArrayIsView, isSeqHandle, seqCellOf, heapArrayClass, heapArrayCyclic, heapArrayUncounted, heapArrayUnowned, heapUnownedRc, heapUnownedElements, heapArraySetFlags, heapAllocArrayLike, heapArrayRc, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
+	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, arrayHeldRemove, arrayHeldStore, arrayHeldInsert, arrayHeldReverse, arrayHeldSort, heapAllocView, heapArrayIsView, isSeqHandle, seqCellOf, heapArrayClass, heapArrayCyclic, heapArrayUncounted, heapArrayUnowned, heapUnownedRc, heapUnownedElements, heapKeepsHusk, heapIsHusk, heapArraySetFlags, heapAllocArrayLike, heapArrayRc, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectData, RaiserClassType, createClassType, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, fieldNameAt, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS, heapSeqHandles, heapObjectCellHandles,
 	heapNewObjectCell, objectCellHandle, objectCellFieldValue, objectCellStoreField, OWNED_BY_RECEIVER_RC, isObjectCell, objectCellClass, heapObjectClass, heapObjectFieldIndex, heapObjectFieldValueAt, heapObjectFieldNameAt, heapObjectFieldCount, heapObjectFieldRefusal, heapObjectStoreFieldAt, heapObjectAppendField, heapObjectSetRc, heapObjectLaidCount,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, stringHandleRc, heapBoxLive,
@@ -254,8 +254,6 @@ export interface RaiserVM {
 	disposing: int64[];   // the cells whose destroy routine has a live frame, innermost last
 	dropped: int64[];     // last-reference cells waiting for their destroy to run once the destroys in flight have returned
 	dropNest: int32;      // generic destroy walks in flight on the host stack
-	unownedDeferred: int64[];        // objects whose free waits for the end of the collector's dead set
-	finalizeMark: int32;  // while the collector's dead set drains, the height of `dropped` under it; -1 outside
 	sched: RaiserSched;
 	current: number;      // index into sched.strands.items of the running strand
 	yielded: boolean;     // set by Yield / strand completion, consumed by the scheduler
@@ -371,7 +369,7 @@ export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM 
 	const thenRuns: RaiserThen[] = [];
 	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod), thenRuns, readyOrder: [] as number[], idleWait: false, ticked: [] as number[], freeStrands: [] as number[], spareRegs: [] as RaiserRegFile[] };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, unownedDeferred: [], finalizeMark: -1, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, floor: 0, suspendedRuns: [], unsettled: false, hostArgsAt: 0, hostResult: 0, floorPending: false, inPlaceHost: -1 };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, floor: 0, suspendedRuns: [], unsettled: false, hostArgsAt: 0, hostResult: 0, floorPending: false, inPlaceHost: -1 };
 }
 
 // --- Register access ---
@@ -1847,7 +1845,6 @@ function vmLedger(vm: RaiserVM, held: RaiserStrand[], extra: RaiserValue[], extr
 function vmLedgerCollect(vm: RaiserVM): void {
 	vmCondemnCycles(vm);
 	while (vm.dropped.length > 0) vmDestroyWalk(vm, vm.dropped.pop());
-	if (vm.finalizeMark >= 0) vmEndFinalize(vm);
 }
 
 function vmProgramLedger(vm: RaiserVM): void {
@@ -4105,7 +4102,9 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			vmRcKeptCheck(vm, ia, ib);
 		},
 		RaiserOpcode.UnownedRc => {
-			heapUnownedRc(vm.arrayHeap, innerHandle(vm, vm.regs.slots[vm.base + ia]), ib == 1);
+			const target = innerHandle(vm, vm.regs.slots[vm.base + ia]);
+			if (ib == UNOWNED_LIVE) vmUnownedLive(vm, target);
+			else heapUnownedRc(vm.arrayHeap, vm.objectHeap, target, ib == 1);
 		},
 		RaiserOpcode.ArrayPop => {
 			vmHandleArrayPop(vm, ia, ib);
@@ -4440,25 +4439,18 @@ function vmRcKeptCheck(vm: RaiserVM, ia: int32, ib: int32): void {
 	vmError(vm, `onDestroy kept a reference to the ${name} it destroys; that reference would dangle once the object is freed`);
 }
 
-// Every cell is freed here, so a collector that tracks cells has one place to forget them.
+// Every cell is freed here, so a collector that tracks cells has one place to forget them. A cell that
+// Unowned<T> edges still point at stays as a husk until the last of them goes.
 function vmFreeCell(vm: RaiserVM, handle: int64): void {
-	if (vm.arrayHeap.unowned.size > 0 && vm.arrayHeap.unowned.has(handle)) {
-		vmUnownedOutlives(vm, handle);
-		return;
-	}
 	orcUnregister(vm.arrayHeap, vm.objectHeap, handle);
+	if (heapKeepsHusk(vm.arrayHeap, handle)) return;
 	rcFreeHandle(vm.arrayHeap, vm.objectHeap, handle);
 }
 
-// An object freed while Unowned<T> edges still point at it: edges held by cyclic garbage are released
-// by collecting once, inside a collection by the rest of its dead set, and edges a pending destroy holds by
-// running it; whatever is left would dangle.
-function vmUnownedOutlives(vm: RaiserVM, handle: int64): void {
-	vm.unownedDeferred.push(handle);
-	if (vm.finalizeMark >= 0) return;
-	vm.finalizeMark = 0;
-	orcCollect(vm.arrayHeap, vm.objectHeap, (h: int64): void => { vm.dropped.push(h); }, (names: string): void => { vmOwnedCycle(vm, names); });
-	if (vm.dropped.length == 0) vmEndFinalize(vm);
+function vmUnownedLive(vm: RaiserVM, handle: int64): void {
+	if (handle == 0 || !heapIsHusk(vm.arrayHeap, handle)) return;
+	const name = objectCellClass(handle).name;
+	vmError(vm, `an Unowned<${name}> edge was read after its ${name} was destroyed`);
 }
 
 function vmOwnedCycle(vm: RaiserVM, names: string): void {
@@ -4466,25 +4458,7 @@ function vmOwnedCycle(vm: RaiserVM, names: string): void {
 }
 
 function vmCondemnCycles(vm: RaiserVM): void {
-	const outer = vm.finalizeMark < 0;
-	if (outer) vm.finalizeMark = vm.dropped.length as int32;
 	orcCollect(vm.arrayHeap, vm.objectHeap, (h: int64): void => { vm.dropped.push(h); }, (names: string): void => { vmOwnedCycle(vm, names); });
-	if (outer && vm.dropped.length == vm.finalizeMark) vmEndFinalize(vm);
-}
-
-function vmEndFinalize(vm: RaiserVM): void {
-	vm.finalizeMark = -1;
-	while (vm.unownedDeferred.length > 0) {
-		const handle = vm.unownedDeferred.pop();
-		if (vm.arrayHeap.unowned.has(handle)) {
-			const name = objectCellClass(handle).name;
-			vmError(vm, `${vm.arrayHeap.unowned.get(handle)!} Unowned<${name}> edge(s) still point at the ${name} being freed; each would dangle`);
-			vm.unownedDeferred.length = 0;
-			return;
-		}
-		orcUnregister(vm.arrayHeap, vm.objectHeap, handle);
-		rcFreeHandle(vm.arrayHeap, vm.objectHeap, handle);
-	}
 }
 
 function vmDestroyFn(vm: RaiserVM, handle: int64): int32 {
@@ -4589,7 +4563,7 @@ function vmReleaseContents(vm: RaiserVM, handle: int64): void {
 					if (!t.uncounted[i]) vmReleaseChild(vm, child, t.cyclic[i]);
 				}
 			} else if (base == 0 && seqUnowned(c)) {
-				heapUnownedElements(vm.arrayHeap, handle, 0, false);
+				heapUnownedElements(vm.arrayHeap, vm.objectHeap, handle, 0, false);
 				heapArraySetLen(vm.arrayHeap, handle, 0);
 			} else if (base == 0 && !seqUncounted(c) && seqClass(c) == RaiserRegClass.Ref) {
 				const cyclic = seqCyclic(c);
@@ -4621,15 +4595,9 @@ function vmReleaseContents(vm: RaiserVM, handle: int64): void {
 // whose return comes back here.
 function vmDrain(vm: RaiserVM): void {
 	while (vm.dropped.length > 0 && vm.disposing.length == 0 && vm.dropNest == 0) {
-		if (vm.dropped.length == vm.finalizeMark) {
-			vmEndFinalize(vm);
-			if (vm.halted) return;
-			continue;
-		}
 		const handle = vm.dropped.pop();
 		vmDestroyTop(vm, handle);
 	}
-	if (vm.finalizeMark >= 0 && vm.dropped.length <= vm.finalizeMark && vm.disposing.length == 0 && vm.dropNest == 0) vmEndFinalize(vm);
 	if (vm.sched.futures.counts.dead.length > 0 && vm.disposing.length == 0 && vm.dropNest == 0) vmDrainFutures(vm);
 }
 
@@ -4720,7 +4688,7 @@ function vmReleaseByPlan(vm: RaiserVM, handle: int64, plans: RaiserCopyPlan[], p
 		if (base != 0) {
 			vmReleaseChild(vm, base, false);
 		} else if (seqUnowned(c)) {
-			heapUnownedElements(vm.arrayHeap, handle, 0, false);
+			heapUnownedElements(vm.arrayHeap, vm.objectHeap, handle, 0, false);
 			heapArraySetLen(vm.arrayHeap, handle, 0);
 		} else if (!seqUncounted(c) && seqClass(c) == RaiserRegClass.Ref) {
 			const cyclic = seqCyclic(c);
@@ -5144,10 +5112,10 @@ function vmHandleArraySplice(vm: RaiserVM, ia: int32, itemReg: int32, ic: int32)
 		const length = arrayHeldCount(vm.arrayHeap, handle) as int64;
 		const at = start < length ? start : length;
 		if (!uncounted) vmShareHold(vm, item);
-		else if (heapArrayUnowned(vm.arrayHeap, handle)) heapUnownedRc(vm.arrayHeap, item.intVal, true);
+		else if (heapArrayUnowned(vm.arrayHeap, handle)) heapUnownedRc(vm.arrayHeap, vm.objectHeap, item.intVal, true);
 		arrayHeldInsert(vm.arrayHeap, handle, at as number, item);
 	}
-	if (heapArrayUnowned(vm.arrayHeap, handle)) for (const gone of evicted) heapUnownedRc(vm.arrayHeap, gone.intVal, false);
+	if (heapArrayUnowned(vm.arrayHeap, handle)) for (const gone of evicted) heapUnownedRc(vm.arrayHeap, vm.objectHeap, gone.intVal, false);
 	vmEvictAll(vm, uncounted ? [] : evicted, heapArrayCyclic(vm.arrayHeap, handle));
 }
 
@@ -5162,8 +5130,8 @@ function vmHandleArrayFill(vm: RaiserVM, ia: int32, ib: int32): void {
 		evicted.push(arrayHeldAt(vm.arrayHeap, handle, i));
 		if (!uncounted) vmShareHold(vm, val);
 		else if (heapArrayUnowned(vm.arrayHeap, handle)) {
-			heapUnownedRc(vm.arrayHeap, val.intVal, true);
-			heapUnownedRc(vm.arrayHeap, evicted[evicted.length - 1].intVal, false);
+			heapUnownedRc(vm.arrayHeap, vm.objectHeap, val.intVal, true);
+			heapUnownedRc(vm.arrayHeap, vm.objectHeap, evicted[evicted.length - 1].intVal, false);
 		}
 		heapArraySet(vm.arrayHeap, handle, i as int64, val);
 	}
@@ -5186,7 +5154,7 @@ function vmCopyElements(vm: RaiserVM, from: int64, start: int64, end: int64, int
 		const val = heapArrayGet(vm.arrayHeap, from, i);
 		heapArrayPush(vm.arrayHeap, into, val);
 		if (!heapArrayUncounted(vm.arrayHeap, into)) vmShareHold(vm, val);
-		else if (heapArrayUnowned(vm.arrayHeap, into)) heapUnownedRc(vm.arrayHeap, val.intVal, true);
+		else if (heapArrayUnowned(vm.arrayHeap, into)) heapUnownedRc(vm.arrayHeap, vm.objectHeap, val.intVal, true);
 	}
 }
 
@@ -5241,7 +5209,7 @@ function vmHandleArraySetLen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): voi
 	if (arrayHoldsHandles(vm.arrayHeap, handle)) {
 		for (let i = (lenVal.intVal < 0 ? 0 : lenVal.intVal) as number; i < arrayHeldCount(vm.arrayHeap, handle); i += 1) evicted.push(arrayHeldAt(vm.arrayHeap, handle, i));
 	}
-	if (heapArrayUnowned(vm.arrayHeap, handle)) heapUnownedElements(vm.arrayHeap, handle, (lenVal.intVal < 0 ? 0 : lenVal.intVal) as number, false);
+	if (heapArrayUnowned(vm.arrayHeap, handle)) heapUnownedElements(vm.arrayHeap, vm.objectHeap, handle, (lenVal.intVal < 0 ? 0 : lenVal.intVal) as number, false);
 	heapArraySetLen(vm.arrayHeap, handle, lenVal.intVal);
 	vmEvictAll(vm, evicted, heapArrayCyclic(vm.arrayHeap, handle));
 }

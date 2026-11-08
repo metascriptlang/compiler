@@ -118,7 +118,7 @@ export function copyTypedValue(
 			const original = heapArrayGet(arrays, value.intVal, i);
 			if (uncounted) {
 				heapArrayPush(arrays, handle, original);
-				if (unowned) heapUnownedRc(arrays, original.intVal, true);
+				if (unowned) heapUnownedRc(arrays, objects, original.intVal, true);
 				continue;
 			}
 			const copied = copyTypedValue(arrays, objects, original, plans, plan.children[0]);

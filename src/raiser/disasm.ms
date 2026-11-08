@@ -1,7 +1,7 @@
 // Raiser VM — Disassembler
 // Human-readable bytecode formatting for debugging and test output.
 
-import { RaiserOpcode, RaiserInstruction, RaiserRegClass, regClassLetter, operandTagged, operandKind, operandRank, operandClass, OPERAND_TAGGED, raiserABC, raiserABx, raiserAx, getBx, getSignedAx, immField, immValue, isBranchI64, branchField, branchOffset, isShapedSite, SHAPED_BLOCK_SITE, opHasSite } from "./bytecode";
+import { RaiserOpcode, RaiserInstruction, RaiserRegClass, regClassLetter, operandTagged, operandKind, operandRank, operandClass, OPERAND_TAGGED, raiserABC, raiserABx, raiserAx, getBx, getSignedAx, immField, immValue, isBranchI64, branchField, branchOffset, isShapedSite, SHAPED_BLOCK_SITE, opHasSite, UNOWNED_LIVE } from "./bytecode";
 import { raiserInt, raiserToString, createArrayHeap } from "./value";
 import {
 	RaiserFunction,
@@ -235,7 +235,7 @@ export function disasmInst(inst: RaiserInstruction): string {
 	if (op == RaiserOpcode.SinkValue || op == RaiserOpcode.AssignInPlace) return `${name} ${ra} ${regText(op, 1, inst.b)} plan ${inst.c}`;
 	if (op == RaiserOpcode.RcHeld || op == RaiserOpcode.RcKeptCheck) return `${name} ${ra} ${regText(op, 1, inst.b)}`;
 	if (op == RaiserOpcode.RcDec) return inst.b == 1 ? `${name} ${ra} cyclic` : `${name} ${ra}`;
-	if (op == RaiserOpcode.UnownedRc) return inst.b == 1 ? `${name} ${ra} +1` : `${name} ${ra} -1`;
+	if (op == RaiserOpcode.UnownedRc) return inst.b == UNOWNED_LIVE ? `${name} ${ra} live` : inst.b == 1 ? `${name} ${ra} +1` : `${name} ${ra} -1`;
 	if (op == RaiserOpcode.LoadInt) return `${name} ${ra} #${immValue(inst.b)}`;
 	if (op == RaiserOpcode.AddI64Imm || op == RaiserOpcode.SubI64Imm) return `${name} ${ra} ${regText(op, 1, inst.b)} #${immValue(inst.c)}`;
 	if (isBranchI64(op)) return `${name} ${ra} ${isBranchImm(op) ? `#${immValue(inst.b)}` : regText(op, 1, inst.b)} ->${branchOffset(inst.c)}`;
@@ -330,6 +330,7 @@ test "the reference-count opcodes print their register and the cyclic flag" {
 	assert disasmInst(raiserABC(RaiserOpcode.RcKeptCheck, 1, 3, 0)) == "RcKeptCheck R1 W3";
 	assert disasmInst(raiserABC(RaiserOpcode.UnownedRc, 1, 1, 0)) == "UnownedRc R1 +1";
 	assert disasmInst(raiserABC(RaiserOpcode.UnownedRc, 1, 0, 0)) == "UnownedRc R1 -1";
+	assert disasmInst(raiserABC(RaiserOpcode.UnownedRc, 1, UNOWNED_LIVE, 0)) == "UnownedRc R1 live";
 }
 
 test "immediate operands print as numbers" {

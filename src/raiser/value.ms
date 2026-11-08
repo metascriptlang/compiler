@@ -621,6 +621,7 @@ export interface RaiserArrayHeap {
 	orcThreshold: number;
 	futures: RaiserFutureCounts | null;
 	unowned: HashMap<int64, int32>;  // per object: the Unowned<T> edges that point at it; an object with none has no entry
+	husks: HashMap<int64, boolean>;  // destroyed objects kept until the last Unowned<T> edge to them goes
 }
 
 // The counts of the VM's future table, which every heap of that VM shares, so a future held in a register, a
@@ -686,7 +687,7 @@ export const OWNED_BY_RECEIVER_RC: int32 = 1;
 
 export function createArrayHeap(): RaiserArrayHeap {
 	const orcRoots: int64[] = [];
-	return { mem: createVmMemory(), stringBytes: new HashMap<int64, int64>(), seqViews: new HashMap<int64, int64[]>(), orcRoots, orcThreshold: ORC_DEFAULT_THRESHOLD, futures: null, unowned: new HashMap<int64, int32>() };
+	return { mem: createVmMemory(), stringBytes: new HashMap<int64, int64>(), seqViews: new HashMap<int64, int64[]>(), orcRoots, orcThreshold: ORC_DEFAULT_THRESHOLD, futures: null, unowned: new HashMap<int64, int32>(), husks: new HashMap<int64, boolean>() };
 }
 
 @inline
@@ -780,16 +781,31 @@ export function heapArrayUnowned(heap: RaiserArrayHeap, handle: int64): boolean 
 	return seqUnowned(seqCellOf(arrayBaseOf(heap, handle)));
 }
 
-export function heapUnownedRc(heap: RaiserArrayHeap, handle: int64, up: boolean): void {
+export function heapUnownedRc(heap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64, up: boolean): void {
 	if (handle == 0) return;
 	const left = (heap.unowned.has(handle) ? heap.unowned.get(handle)! : 0) + (up ? 1 : -1);
-	if (left == 0) heap.unowned.delete(handle);
-	else heap.unowned.set(handle, left);
+	if (left != 0) {
+		heap.unowned.set(handle, left);
+		return;
+	}
+	heap.unowned.delete(handle);
+	if (heap.husks.size > 0 && heap.husks.delete(handle)) rcFreeHandle(heap, objHeap, handle);
 }
 
-export function heapUnownedElements(heap: RaiserArrayHeap, handle: int64, from: number, up: boolean): void {
+export function heapUnownedElements(heap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handle: int64, from: number, up: boolean): void {
 	const c = seqCellOf(handle);
-	for (let i = from; i < seqLen(c); i += 1) heapUnownedRc(heap, seqLoad(c, i), up);
+	for (let i = from; i < seqLen(c); i += 1) heapUnownedRc(heap, objHeap, seqLoad(c, i), up);
+}
+
+// A destroyed object that Unowned<T> edges still point at keeps its cell until the last of them goes.
+export function heapKeepsHusk(heap: RaiserArrayHeap, handle: int64): boolean {
+	if (heap.unowned.size == 0 || !heap.unowned.has(handle)) return false;
+	heap.husks.set(handle, true);
+	return true;
+}
+
+export function heapIsHusk(heap: RaiserArrayHeap, handle: int64): boolean {
+	return heap.husks.size > 0 && heap.husks.has(handle);
 }
 
 // A new empty array in `dst` of the element class, width and flags of the array `source` (or the one it stands on) in `src`.
@@ -1711,14 +1727,14 @@ function rcDestroySeq(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, handl
 	rcForgetRoot(arrHeap, objHeap, handle);
 	const c = seqCellOf(handle);
 	if (cellTypeIndex(c) >= 0) {
-		rcDestroyObjectCell(arrHeap, objHeap, c);
+		rcDestroyObjectCell(arrHeap, objHeap, c, heapKeepsHusk(arrHeap, handle));
 		return;
 	}
 	const base = seqBase(c);
 	if (base != 0) {
 		removeSeqView(arrHeap, base, handle);
 	} else if (seqUnowned(c)) {
-		heapUnownedElements(arrHeap, handle, 0, false);
+		heapUnownedElements(arrHeap, objHeap, handle, 0, false);
 	} else if (!seqUncounted(c) && seqClass(c) == RaiserRegClass.Ref) {
 		for (let i = 0; i < seqLen(c); i += 1) {
 			const child = seqLoad(c, i);
@@ -1778,15 +1794,18 @@ function rcDestroyObject(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, in
 }
 
 @noinline
-function rcDestroyObjectCell(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, cell: int64): void {
+function rcDestroyObjectCell(arrHeap: RaiserArrayHeap, objHeap: RaiserObjectHeap, cell: int64, husk: boolean): void {
 	const t = classTypeAt(cellTypeIndex(cell));
 	for (let i = 0; i < t.kinds.length; i += 1) {
 		const cls = t.kinds[i];
 		if (cls != RaiserRegClass.Ref && cls != RaiserRegClass.Dyn) continue;
 		if (cls == RaiserRegClass.Ref && t.uncounted[i]) continue;
 		const held = ld64(cell + (i as int64) * OBJECT_CELL_SLOT_BYTES);
-		if (held != 0) rcDecrefHandle(arrHeap, objHeap, held);
+		if (held == 0) continue;
+		rcDecrefHandle(arrHeap, objHeap, held);
+		if (husk) st64(cell + (i as int64) * OBJECT_CELL_SLOT_BYTES, 0);
 	}
+	if (husk) return;
 	if (!disposeCell(arrHeap.mem, cell, 8)) throw new Error(`internal: object cell ${cell} is not a live cell`);
 }
 
@@ -1928,7 +1947,7 @@ function fillArray(srcArr: RaiserArrayHeap, srcObj: RaiserObjectHeap, dstArr: Ra
 		const copied = copyBorrowable(srcArr, srcObj, dstArr, dstObj, arrayHeldAt(srcArr, sourceHandle, i), uncounted, map);
 		heapArrayPush(dstArr, job.dst, copied);
 		if (!uncounted) rcIncref(dstArr, dstObj, copied);
-		else if (heapArrayUnowned(srcArr, sourceHandle)) heapUnownedRc(dstArr, copied.intVal, true);
+		else if (heapArrayUnowned(srcArr, sourceHandle)) heapUnownedRc(dstArr, dstObj, copied.intVal, true);
 	}
 }
 

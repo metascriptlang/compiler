@@ -5,7 +5,7 @@ import { isRuntimeProcSym, isRuntimeProcCall } from "../../transform/util";
 import { forEachChild } from "../../ast/visitor";
 import { resolveOverloadWinner, overloadAt } from "../c/names";
 import { getOpByKey } from "../c/types";
-import { refuseOwnershipCall, refuseUnknownRuntimeProc, ownershipRow, ROW_HELD, ROW_STR_CONCAT, ROW_STR_TEXT, ROW_UNOWNED_TAKE, ROW_UNOWNED_GIVE } from "./drcRows";
+import { refuseOwnershipCall, refuseUnknownRuntimeProc, ownershipRow, ROW_HELD, ROW_STR_CONCAT, ROW_STR_TEXT, ROW_UNOWNED_TAKE, ROW_UNOWNED_GIVE, ROW_UNOWNED_LOAD } from "./drcRows";
 import { monoInstanceName } from "../../monomorphize/registry";
 import {
 	Node, NodeKind, NodeFlag, TypeKind, Type, SymbolKind, Symbol, AttachedOp,
@@ -17,7 +17,7 @@ import {
 	MoveExprData, OutExprData, VariableDeclData, AwaitExprData, NewExprData,
 	HiddenDerefData, HiddenStdConvData, BlockStmtData, ExprStmtData, PropertyDeclData, SpreadExprData, ClassDeclData, MethodDeclData,
 	createNodeAt, BuiltinKind } from "../../ast/node";
-import { RaiserOpcode, RaiserInstruction, ElemWidth, arrayClassSlot, RaiserConvClass, RaiserRegClass, RaiserCombine, raiserABC, raiserABx, raiserAx, convOperand, convClassBits, convClassSigned, fitsImm, immField, branchField, inRefFile, MAX_SLOT } from "../../raiser/bytecode";
+import { RaiserOpcode, RaiserInstruction, ElemWidth, arrayClassSlot, RaiserConvClass, RaiserRegClass, RaiserCombine, raiserABC, raiserABx, raiserAx, convOperand, convClassBits, convClassSigned, fitsImm, immField, branchField, inRefFile, MAX_SLOT, UNOWNED_LIVE } from "../../raiser/bytecode";
 import { RaiserValueKind, createClassType, raiserInt, raiserFloat, raiserNil, raiserBool, raiserConstString } from "../../raiser/value";
 import { lookupHost } from "../../raiser/hostRegistry";
 import { opName } from "../../raiser/disasm";
@@ -2484,8 +2484,15 @@ function compileCallExprBody(s: RaiserCompState, node: Node): int32 {
 		emitInst(s, raiserABC(RaiserOpcode.UnownedRc, taken, 1, 0));
 		return taken;
 	}
+	if (ownershipRow(d.callee.resolvedSym) == ROW_UNOWNED_LOAD) {
+		const loaded = compileExpr(s, d.arguments[0]);
+		emitInst(s, raiserABC(RaiserOpcode.UnownedRc, loaded, UNOWNED_LIVE, 0));
+		emitInst(s, raiserABC(RaiserOpcode.RcInc, loaded, 0, 0));
+		return loaded;
+	}
 	if (ownershipRow(d.callee.resolvedSym) == ROW_UNOWNED_GIVE) {
 		const given = compileExpr(s, d.arguments[0]);
+		emitInst(s, raiserABC(RaiserOpcode.UnownedRc, given, UNOWNED_LIVE, 0));
 		emitInst(s, raiserABC(RaiserOpcode.RcInc, given, 0, 0));
 		emitInst(s, raiserABC(RaiserOpcode.UnownedRc, given, 0, 0));
 		return given;

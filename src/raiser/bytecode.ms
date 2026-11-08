@@ -239,7 +239,7 @@ export enum RaiserOpcode {
 	IntToF64,         // ABC: floats[A] = words[B] read as a signed integer; the layout's form of a Conv to F64 from a Word register
 	UIntToF64,        // ABC: floats[A] = words[B] read as an unsigned 64-bit integer; the layout's form of a Conv to F64 from U64
 	LoadConstW,       // ABx: R[A] = the raw word of constant K[Bx], a Word, Bool or Float register; the layout's form of such a LoadConst
-	UnownedRc,        // ABC: the count of Unowned<T> edges to the object in refs[A] goes up by one when B = 1, down by one when B = 0; nil stays as it is
+	UnownedRc,        // ABC: the count of Unowned<T> edges to the object in refs[A] goes up by one when B = 1, down by one when B = 0; B = UNOWNED_LIVE stops when the object was destroyed; nil stays as it is
 	MoveN,
 	ZeroN,
 	LoadFrame,
@@ -628,6 +628,8 @@ export function branchOffset(field: number): int64 {
 // A cyclic element (its type can reach itself again, the checker's isCyclic) adds ARRAY_CYCLIC_SLOT.
 // An uncounted element (a cursor or a pointer to an uncounted type, the checker's isUncountedElement) adds
 // ARRAY_UNCOUNTED_SLOT: the array borrows its elements, so its destroy and copy never count them.
+export const UNOWNED_LIVE: int32 = 2;
+
 // Element class code ARRAY_UNOWNED_CLASS is a Ref element held on its Unowned<T> count: the array counts that
 // count where a counted array counts the strong one, and is uncounted otherwise.
 export const ARRAY_CYCLIC_SLOT = 64;
