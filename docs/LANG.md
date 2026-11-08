@@ -3332,6 +3332,7 @@ run();
 | Parameter or result | What the other side gets |
 |---|---|
 | numbers, `boolean` | the value; `int64`/`uint64` as an exact BigInt on the JS side |
+| an enum the module exports, also as a struct field, nullable, or a callback's parameter or result | the same member; a foreign JS caller passing a number outside it gets `RangeError: name: parameter 'c' expected Color, got 3` |
 | `string` | a copy, as WTF-8 both ways: lone surrogates, a BOM and NUL survive |
 | a struct, `Vec<T>` of scalars, `T \| null` of these | a copy, nested fields included |
 | a typed array result (`Float32Array`, `Int32Array`, … the nine TS classes), nullable | a new array of the same class over a copy of the whole buffer, `byteOffset` and `length` kept |
@@ -3355,8 +3356,8 @@ the wasm instance, and every later call to it throws saying so.
 - a type with no copy form, as a parameter or result; each message names what crosses instead:
   a class instance (`crosses as Handle<Counter>`, or return its values as a struct), an array
   reference `T[]` (a `Vec` of bool, integer or float elements), a `Map` or `Set` (its keys and
-  values as `Vec` parameters), an enum (`x as int32`, back with `n as Color`, which checks the
-  range), a union (a tag integer and the payload, or one `@wasm` function per variant), a function
+  values as `Vec` parameters), an enum the module does not export (`Color must be exported by this
+  module to cross`), an enum member type such as `Color.Red` (`declare it as Color`), a union (a tag integer and the payload, or one `@wasm` function per variant), a function
   as a result or a struct field (a function crosses only as a parameter), and a callback that
   returns a nullable value.
 

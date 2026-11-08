@@ -25,7 +25,8 @@ unless its `@columns` says otherwise.
 
 | Surface | Contract | Pins |
 |---|---|---|
-| Numbers, bool | typed scalars; `int64`/`uint64` as BigInt, exact; an enum crosses as its integer (`x as int32`), the enum type is refused | `scalars`, `enumAsInt`, `refusedEnum`, `wireMatrix` |
+| Numbers, bool | typed scalars; `int64`/`uint64` as BigInt, exact | `scalars`, `wireMatrix` |
+| Enums | an exported enum as itself, on the wire as its storage integer; the wasm side rebuilds it with the checked `as`, and a foreign JS caller's value outside it is a `RangeError` naming the enum; an unexported enum and an enum member type are refused | `enumCrossing`, `enumAsInt` |
 | Strings | copied as WTF-8 both ways; lone surrogates, BOM, NUL survive | `strings`, `stringsLong`, `bomStrings`, `decodeWtf8`, `interned` |
 | Structs, `Vec<T>` of scalars, nullable | copied; nested fields by leaf | `copies`, `nullableCopies`, `nullableScalars` |
 | A TS typed array result (`Float32Array`, `Int32Array`, … the nine classes), nullable | copied into a new array of the same class over a copy of its whole buffer, `byteOffset` and `length` kept; the call throws when the array is still held on the wasm side, when its `ArrayBuffer` is held by another view, or when its class extends the declared one. A typed array parameter takes a `Span<T>`, which a typed array passes to | `typedArrayResults`, `typedArrayMisuse` |
@@ -35,6 +36,11 @@ unless its `@columns` says otherwise.
 | Owner `Handle<T>` of an exported class | wasm owns it, JS holds a counted reference: `release`, `retain`, `[Symbol.dispose]`; a release while a call lends it waits for that call | `handleBasic`, `handleRetain`, `handleMisuse`, `handleDestroy` |
 | `Handle<VecBox<T>>.view(f)` | a Span over wasm memory, no copy, only inside `f`; a boundary call while it is open throws (it could grow memory) | `handleView*`, `refusedKeptView*` |
 | Classes, unions, arrays, functions, module state shared by both halves | refused with a named reason at the declaration | `refused*` |
+
+The enum row was measured 2026-11-09 on m1m with a candidate of `wt/js-wasm-one-program` (base
+64cc68a8a1f): `wasmmix: 11/11 pass`, `enumCrossing` among them on C, JS, mixed, the foreign caller
+and Chrome (a `uint8`, a `uint16` and a negative `int32` enum; a nullable struct field; a callback
+result). Not measured: a `Vec` or `Span` of an enum, an `extern enum`, `--danger`.
 
 Dev builds (default mode) add: argument type checks on the functions the entry re-exports, and
 the site in handle messages (`use of Handle<Counter> created at core.ms:8 after release`); at exit

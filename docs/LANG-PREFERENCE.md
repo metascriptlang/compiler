@@ -2025,7 +2025,7 @@ summed in wasm about 1 us. Contract and refusals: [LANG §JS and wasm](LANG.md#j
 
 | Data | Write it as |
 |---|---|
-| numbers in, numbers out | plain parameters and a plain result; an enum as `x as int32` |
+| numbers in, numbers out | plain parameters and a plain result; an exported enum as itself |
 | an array the call reads or fills in place | a `Span<T>` parameter (`Readonly<Span<T>>` when it only reads); a `Vec<T>`, a slice or a typed array passes to it |
 | an array the call makes | a typed array result (`Float32Array`, …) written through a `Span` of it; return it only when nothing on the wasm side keeps it, or return `Float32Array.from(x)` |
 | data wasm keeps between calls | an exported class behind `Handle<C>`, or `Handle<VecBox<T>>` read and written in place through `h.view(f)`; release it with `defer h.release()` |
