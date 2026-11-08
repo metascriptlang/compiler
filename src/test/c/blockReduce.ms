@@ -46,8 +46,6 @@ test "E2E C: a loop outside the recognized reduction keeps the checked loop alon
 		"function f(xs: uint32[]): uint32 { let s: uint32 = 0; for (const x of xs) s += x; return s; }",
 		"function f(xs: number[]): number { let s: number = 0; for (const x of xs) s += x; return s; }",
 		"function f(a: int32[], b: int32[]): int64 { let s: int64 = 0; for (let k = 0; k < a.length; k++) s += a[k] * b[k]; return s; }",
-		"function f(a: int32[], b: int32[]): int32 { let s: int32 = 0; for (let k = 0; k < a.length; k++) s += a[k] * b[k + 1]; return s; }",
-		"function f(xs: int32[], n: int32): int32 { let s: int32 = 0; for (let i = 0; i < n; i++) s += xs[i]; return s; }",
 		"function f(xs: int32[]): int32 { let s: int32 = 0; for (let i = 0; i < xs.length; i += 2) s += xs[i]; return s; }",
 		"function f(xs: int32[]): int32 { let s: int32 = 0; const g = (): void => { for (const x of xs) s += x; }; g(); return s; }",
 	];

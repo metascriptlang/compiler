@@ -125,6 +125,8 @@ import "./instanceofNullableUnion";
 import "./nullableDeclaredUnionJoin";
 import "./declaredUnionIntoAnonymousCarrier";
 import "./loopSpanCacheEmit";
+import "./exactIntegerNumberEmit";
+import "./blockSumEmit";
 import "./presizedPushEmit";
 import "./literalTagDispatch";
 import "./templateIntPartEmit";
