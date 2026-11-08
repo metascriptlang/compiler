@@ -5012,6 +5012,7 @@ function plainKind(t: Type): PlainKind {
 }
 
 function disjointCastReason(src: Type, target: Type, operand: Node): string {
+	if (distinctClassBase(target) != null) return "";
 	const from: Type[] = [];
 	const to: Type[] = [];
 	castLeaves(src, from, 0);
