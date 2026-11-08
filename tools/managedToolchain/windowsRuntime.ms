@@ -1,8 +1,8 @@
 import {
 	basename, dirname, join, isDir, isFile, isLinkLike, readDirNames,
-	ensureDir, removeAll, symlink, copyFile, chmod, readFileBytes,
+	ensureDir, removeAll, copyFile, chmod, readFileBytes,
 } from "std/fs";
-import { platform } from "std/process";
+import { platform, env } from "std/process";
 import { IoErrorKind } from "std/io/errors";
 import { jsonValueOf } from "std/serialize/json";
 import { stringifyPretty } from "std/serialize/json/stringify";
@@ -213,7 +213,7 @@ function copyRegularFiles(source: string, target: string): Result<BuiltFile[], s
 	return Result.ok(files);
 }
 
-function copyTree(source: string, target: string): Result<void, string> {
+export function copyTree(source: string, target: string): Result<void, string> {
 	try engineIo(ensureDir(target));
 	const names = readDirNames(source);
 	if (!names.ok) { return Result.err(names.error.message); }
@@ -229,6 +229,15 @@ function copyTree(source: string, target: string): Result<void, string> {
 		}
 	}
 	return Result.ok(null);
+}
+
+// The environment of a clang or test child: no PATH entry that could supply another toolchain.
+export function childEnvironment(work: string): Record<string, string> {
+	if (platform != "windows") {
+		return { PATH: "/usr/bin:/bin", HOME: "/nonexistent", TMPDIR: work };
+	}
+	const root = env.get("SystemRoot") ?? "C:\\Windows";
+	return { SystemRoot: root, PATH: root + "\\System32", TEMP: work, TMP: work };
 }
 
 function fileStartsWith(path: string, text: string): Result<boolean, string> {
@@ -274,7 +283,7 @@ export function checkWindowsRuntime(
 	clang: string, windows: string, fixtures: string, work: string,
 ): Result<string[], string> {
 	const linked: string[] = [];
-	const environment: Record<string, string> = { PATH: "/usr/bin:/bin", HOME: "/nonexistent", TMPDIR: work };
+	const environment = childEnvironment(work);
 	for (const variant of [WindowsVariant.Exe, WindowsVariant.Dll]) {
 		const dll = variant == WindowsVariant.Dll;
 		const name = dll ? "dll" : "exe";
