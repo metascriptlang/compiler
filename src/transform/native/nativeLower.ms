@@ -14,7 +14,7 @@
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
 import { Node, NodeKind, NodeFlag, ArrayAccessData, CallExprData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Symbol, Type, TypeKind, SymbolKind, SourceLocation, createNode, makeLoc } from "../../ast/node";
-import { isNumeric, isOwnedSlot, distinctWidenBody, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, countedEvictElement, readonlyCountedElement, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
+import { isNumeric, distinctWidenBody, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, countedEvictElement, readonlyCountedElement, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
 import { findChar } from "../../utils/string";
 import { TransformContext } from "../context";
 import { isAcyclicRefElement } from "../cycles";
@@ -271,13 +271,6 @@ export function evictHelperName(nativeName: string, elemType: Type | null, ctx: 
 	}
 	const atomic = isAtomicRef(bare);
 	const acyclic = isAcyclicRefElement(elemType, ctx.cyclicCache, ctx.acyclicCache);
-	if (isOwnedSlot(elemType) && !ctx.raiserBackend) {
-		const family = acyclic ? "msOwnedAcyclicRefArray" : "msOwnedRefArray";
-		if (nativeName == "msGenericArraySetLen") return family + "SetLen";
-		if (nativeName == "msRefArraySplice") return "msOwnedRefArraySplice";
-		if (nativeName == "msRefArraySplice3") return family + "Splice3";
-		return "";
-	}
 	if (nativeName == "msGenericArraySetLen") return atomic ? "msAtomicRefArraySetLen" : acyclic ? "msAcyclicRefArraySetLen" : "msRefArraySetLen";
 	if (nativeName == "msRefArraySplice") return atomic ? "msAtomicRefArraySplice" : "";
 	if (nativeName == "msRefArraySplice3") return atomic ? "msAtomicRefArraySplice3" : acyclic ? "msAcyclicRefArraySplice3" : "";

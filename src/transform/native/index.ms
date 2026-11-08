@@ -27,7 +27,6 @@ import { coerceOptionals } from "./optionalCoercion";
 import { lowerEnumToString } from "./enumToStringLower";
 import { insertVarParamDerefs } from "./varParamDeref";
 import { lowerUnownedStores } from "./unownedStoreLower";
-import { lowerOwnedStores } from "./ownedStoreLower";
 import { lowerDownConversions } from "./downConvLower";
 import { lowerPresizedPushes } from "./presizedPush";
 import { lowerInductionPointers } from "./inductionPointer";
@@ -58,8 +57,6 @@ export function transformForNative(program: Node, ctx: TransformContext): Node {
 	flowLap("pass.insertVarParamDerefs");
 	result = lowerUnownedStores(result, ctx);
 	flowLap("pass.native.lowerUnownedStores");
-	result = lowerOwnedStores(result, ctx);
-	flowLap("pass.native.lowerOwnedStores");
 	result = lowerPresizedPushes(result, ctx);
 	flowLap("pass.lowerPresizedPushes");
 	result = lowerInductionPointers(result, ctx);
