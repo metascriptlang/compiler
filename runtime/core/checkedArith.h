@@ -148,65 +148,6 @@ static inline int64_t msBlockEnd(int64_t b, int64_t len) {
 	return len - b > MS_REDUCE_BLOCK ? b + MS_REDUCE_BLOCK : len;
 }
 
-static inline int msRangeFits_(int64_t acc, int64_t b, int64_t e, int64_t lo, int64_t hi, int64_t min, int64_t max) {
-	int64_t top, bottom;
-	if (e <= b || __builtin_mul_overflow(hi, e - b, &top) || __builtin_add_overflow(acc, top, &top)) return 0;
-	if (__builtin_mul_overflow(lo, e - b, &bottom) || __builtin_add_overflow(acc, bottom, &bottom)) return 0;
-	return top <= max && bottom >= min;
-}
-#define msRangeFitsI8(acc, b, e, lo, hi) msRangeFits_((acc), (b), (e), (lo), (hi), INT8_MIN, INT8_MAX)
-#define msRangeFitsI16(acc, b, e, lo, hi) msRangeFits_((acc), (b), (e), (lo), (hi), INT16_MIN, INT16_MAX)
-#define msRangeFitsI32(acc, b, e, lo, hi) msRangeFits_((acc), (b), (e), (lo), (hi), INT32_MIN, INT32_MAX)
-#define msRangeFitsI64(acc, b, e, lo, hi) msRangeFits_((acc), (b), (e), (lo), (hi), INT64_MIN, INT64_MAX)
-
-#define MS_RANGE_SUM_BLOCK_(A, AT, AMIN, AMAX, E, ET) \
-static inline int msRangeSumFits##A##E##_(AT acc, int64_t len, const ET* p, int64_t b, int64_t e, int64_t lo, int64_t hi, int64_t tmax, int sub) { \
-	if (b < 0 || e > len || e <= b) return 0; \
-	int64_t mn = p[b], mx = p[b]; \
-	for (int64_t i = b + 1; i < e; i++) { mn = p[i] < mn ? p[i] : mn; mx = p[i] > mx ? p[i] : mx; } \
-	if (mx > tmax - hi) return 0; \
-	int64_t top = mx + hi, bottom = mn + lo; \
-	if (!sub) return msRangeFits_(acc, b, e, bottom, top, AMIN, AMAX); \
-	if (__builtin_sub_overflow((int64_t)0, bottom, &bottom) || __builtin_sub_overflow((int64_t)0, top, &top)) return 0; \
-	return msRangeFits_(acc, b, e, top, bottom, AMIN, AMAX); \
-}
-MS_RANGE_SUM_BLOCK_(I8, int8_t, INT8_MIN, INT8_MAX, I8, int8_t)
-MS_RANGE_SUM_BLOCK_(I16, int16_t, INT16_MIN, INT16_MAX, I8, int8_t)
-MS_RANGE_SUM_BLOCK_(I16, int16_t, INT16_MIN, INT16_MAX, I16, int16_t)
-MS_RANGE_SUM_BLOCK_(I32, int32_t, INT32_MIN, INT32_MAX, I8, int8_t)
-MS_RANGE_SUM_BLOCK_(I32, int32_t, INT32_MIN, INT32_MAX, I16, int16_t)
-MS_RANGE_SUM_BLOCK_(I32, int32_t, INT32_MIN, INT32_MAX, I32, int32_t)
-MS_RANGE_SUM_BLOCK_(I64, int64_t, INT64_MIN, INT64_MAX, I8, int8_t)
-MS_RANGE_SUM_BLOCK_(I64, int64_t, INT64_MIN, INT64_MAX, I16, int16_t)
-MS_RANGE_SUM_BLOCK_(I64, int64_t, INT64_MIN, INT64_MAX, I32, int32_t)
-MS_RANGE_SUM_BLOCK_(I64, int64_t, INT64_MIN, INT64_MAX, I64, int64_t)
-#define msRangeSumFits_(fn, acc, a, b, e, lo, hi, tmax, sub) fn((acc), (a).len, msArrayData_(a), (b), (e), (lo), (hi), (tmax), (sub))
-#define msRangeSumFitsI8I8(acc, a, b, e, lo, hi, tmax, sub) msRangeSumFits_(msRangeSumFitsI8I8_, acc, a, b, e, lo, hi, tmax, sub)
-#define msRangeSumFitsI16I8(acc, a, b, e, lo, hi, tmax, sub) msRangeSumFits_(msRangeSumFitsI16I8_, acc, a, b, e, lo, hi, tmax, sub)
-#define msRangeSumFitsI16I16(acc, a, b, e, lo, hi, tmax, sub) msRangeSumFits_(msRangeSumFitsI16I16_, acc, a, b, e, lo, hi, tmax, sub)
-#define msRangeSumFitsI32I8(acc, a, b, e, lo, hi, tmax, sub) msRangeSumFits_(msRangeSumFitsI32I8_, acc, a, b, e, lo, hi, tmax, sub)
-#define msRangeSumFitsI32I16(acc, a, b, e, lo, hi, tmax, sub) msRangeSumFits_(msRangeSumFitsI32I16_, acc, a, b, e, lo, hi, tmax, sub)
-#define msRangeSumFitsI32I32(acc, a, b, e, lo, hi, tmax, sub) msRangeSumFits_(msRangeSumFitsI32I32_, acc, a, b, e, lo, hi, tmax, sub)
-#define msRangeSumFitsI64I8(acc, a, b, e, lo, hi, tmax, sub) msRangeSumFits_(msRangeSumFitsI64I8_, acc, a, b, e, lo, hi, tmax, sub)
-#define msRangeSumFitsI64I16(acc, a, b, e, lo, hi, tmax, sub) msRangeSumFits_(msRangeSumFitsI64I16_, acc, a, b, e, lo, hi, tmax, sub)
-#define msRangeSumFitsI64I32(acc, a, b, e, lo, hi, tmax, sub) msRangeSumFits_(msRangeSumFitsI64I32_, acc, a, b, e, lo, hi, tmax, sub)
-#define msRangeSumFitsI64I64(acc, a, b, e, lo, hi, tmax, sub) msRangeSumFits_(msRangeSumFitsI64I64_, acc, a, b, e, lo, hi, tmax, sub)
-
-#define MS_SPAN_MAP_BLOCK_(E, ET) \
-static inline int msSpanMapFits##E##_(int64_t len, const ET* p, int64_t b, int64_t e, int64_t lo, int64_t hi) { \
-	if (b < 0 || e > len || e <= b) return 0; \
-	ET mn = p[b], mx = p[b]; \
-	for (int64_t i = b + 1; i < e; i++) { mn = p[i] < mn ? p[i] : mn; mx = p[i] > mx ? p[i] : mx; } \
-	return mn >= lo && mx <= hi; \
-}
-MS_SPAN_MAP_BLOCK_(I8, int8_t)
-MS_SPAN_MAP_BLOCK_(I16, int16_t)
-MS_SPAN_MAP_BLOCK_(I32, int32_t)
-#define msSpanMapFits_(fn, s, d, b, e, lo, hi) fn((s).len < (d).len ? (s).len : (d).len, (s).data, (b), (e), (lo), (hi))
-#define msSpanMapFitsI8(s, d, b, e, lo, hi) msSpanMapFits_(msSpanMapFitsI8_, s, d, b, e, lo, hi)
-#define msSpanMapFitsI16(s, d, b, e, lo, hi) msSpanMapFits_(msSpanMapFitsI16_, s, d, b, e, lo, hi)
-#define msSpanMapFitsI32(s, d, b, e, lo, hi) msSpanMapFits_(msSpanMapFitsI32_, s, d, b, e, lo, hi)
-
 static inline int msBlockFits_(uint64_t acc, uint64_t term, int64_t n, uint64_t max) {
 	if (acc > max) return 0;
 	return term <= (max - acc) / (uint64_t)n;

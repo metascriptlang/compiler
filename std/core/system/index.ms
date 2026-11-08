@@ -1058,40 +1058,6 @@ extern function msArrDataAtEither(c: boolean, a: Ptr<void>, b: Ptr<void>, i: int
 @compilerFunc
 extern function msBlockEnd(b: int64, len: int64): int64;
 @compilerFunc
-extern function msSpanMapFitsI8(s: Ptr<void>, d: Ptr<void>, b: int64, e: int64, lo: int64, hi: int64): boolean;
-@compilerFunc
-extern function msSpanMapFitsI16(s: Ptr<void>, d: Ptr<void>, b: int64, e: int64, lo: int64, hi: int64): boolean;
-@compilerFunc
-extern function msSpanMapFitsI32(s: Ptr<void>, d: Ptr<void>, b: int64, e: int64, lo: int64, hi: int64): boolean;
-@compilerFunc
-extern function msRangeFitsI8(acc: int8, b: int64, e: int64, lo: int64, hi: int64): boolean;
-@compilerFunc
-extern function msRangeFitsI16(acc: int16, b: int64, e: int64, lo: int64, hi: int64): boolean;
-@compilerFunc
-extern function msRangeFitsI32(acc: int32, b: int64, e: int64, lo: int64, hi: int64): boolean;
-@compilerFunc
-extern function msRangeFitsI64(acc: int64, b: int64, e: int64, lo: int64, hi: int64): boolean;
-@compilerFunc
-extern function msRangeSumFitsI8I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64, lo: int64, hi: int64, tmax: int64, sub: int64): boolean;
-@compilerFunc
-extern function msRangeSumFitsI16I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64, lo: int64, hi: int64, tmax: int64, sub: int64): boolean;
-@compilerFunc
-extern function msRangeSumFitsI16I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64, lo: int64, hi: int64, tmax: int64, sub: int64): boolean;
-@compilerFunc
-extern function msRangeSumFitsI32I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64, lo: int64, hi: int64, tmax: int64, sub: int64): boolean;
-@compilerFunc
-extern function msRangeSumFitsI32I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64, lo: int64, hi: int64, tmax: int64, sub: int64): boolean;
-@compilerFunc
-extern function msRangeSumFitsI32I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64, lo: int64, hi: int64, tmax: int64, sub: int64): boolean;
-@compilerFunc
-extern function msRangeSumFitsI64I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64, lo: int64, hi: int64, tmax: int64, sub: int64): boolean;
-@compilerFunc
-extern function msRangeSumFitsI64I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64, lo: int64, hi: int64, tmax: int64, sub: int64): boolean;
-@compilerFunc
-extern function msRangeSumFitsI64I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64, lo: int64, hi: int64, tmax: int64, sub: int64): boolean;
-@compilerFunc
-extern function msRangeSumFitsI64I64(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64, lo: int64, hi: int64, tmax: int64, sub: int64): boolean;
-@compilerFunc
 extern function msPowF64(x: float64, y: float64): float64;
 @compilerFunc
 extern function msAddI8(a: int8, b: int8): int8;

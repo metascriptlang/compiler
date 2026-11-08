@@ -4,7 +4,4 @@
 int64_t msTestBlockReduceMismatches(int64_t cases);
 int64_t msTestBlockReduceStops(void);
 int64_t msTestBlockReduceFastBlocks(void);
-int64_t msTestRangeReduceMismatches(int64_t cases);
-int64_t msTestRangeReduceStops(void);
-int64_t msTestRangeReduceFastBlocks(void);
 #endif
