@@ -1,5 +1,6 @@
 import { RaiserValue } from "../../raiser/value";
 import { RaiserVM, vmCallFunction } from "../../raiser/vm";
+import { takeTouched, retouch } from "../../raiser/module";
 import { canonicalModulePath } from "../../module/loader";
 import { cacheRoot } from "../package/cache";
 
@@ -17,6 +18,15 @@ export function restrictedComptimeSource(modulePath: string): string {
 	return isPathInsideRoot(canonicalSource, canonicalRoot) ? canonicalSource : "";
 }
 
+type EngineRunObserver = (vm: RaiserVM, ran: int32[]) => void;
+let _runObserver: EngineRunObserver | null = null;
+
+export function observeComptimeRuns(observer: EngineRunObserver | null): EngineRunObserver | null {
+	const previous = _runObserver;
+	_runObserver = observer;
+	return previous;
+}
+
 export function callWithComptimeHostPolicy(
 	vm: RaiserVM,
 	funcIdx: number,
@@ -28,9 +38,15 @@ export function callWithComptimeHostPolicy(
 	const restrictedSource = restrictedComptimeSource(modulePath);
 	vm.hostCallsRestricted = restrictedSource != "";
 	vm.hostPolicySource = restrictedSource;
+	const outer = takeTouched(vm.mod);
 	const result = vmCallFunction(vm, funcIdx, args);
+	const ran = takeTouched(vm.mod);
+	retouch(vm.mod, outer);
+	retouch(vm.mod, ran);
 	vm.hostCallsRestricted = previousRestricted;
 	vm.hostPolicySource = previousSource;
+	const observer = _runObserver;
+	if (observer != null) observer(vm, ran);
 	return result;
 }
 

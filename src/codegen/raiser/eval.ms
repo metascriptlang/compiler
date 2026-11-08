@@ -43,7 +43,7 @@ import { hasHostCallback, unservedCallReason } from "./expressions";
 import { getComptimeOuterCtx, setComptimeOuterCtx, ComptimeOuterCtx, registerMacroEngineCompiler, EngineMacroResult, callComptimeHelperPreparer, registerMacroEvaluator, registerMacroCompiler, registerEngineStdSymbol, enterEngineCompile, leaveEngineCompile, engineCompiling } from "../../compiler/meta/callbacks";
 import { ensureHostTableLoaded } from "../../compiler/meta/hostTable";
 import { registerTypeQueryHostFns } from "../../compiler/meta/typeQuery";
-import { callWithComptimeHostPolicy } from "../../compiler/meta/hostPolicy";
+import { callWithComptimeHostPolicy, observeComptimeRuns } from "../../compiler/meta/hostPolicy";
 import { recordBodyRead } from "../../checker/bodyReads";
 
 // --- Full Pipeline API ---
@@ -140,11 +140,14 @@ function compileCheckedBodyIntoEngine(sym: Symbol, decl: Node, engineName: strin
 	defer registerRaiserOnDemand(previousOnDemand);
 	enterEngineCompile();
 	defer leaveEngineCompile();
+	const before = _engine.image.functions.length as int32;
 	const clone = cloneNodeKeepSem(decl);
 	if (clone.kind == NodeKind.FunctionDecl) (clone.data as FunctionDeclData).fnName = engineName;
 	const program = createNode(NodeKind.Program, { programStmts: [clone] }, synthToken(decl.location));
 	const transformed = transformCheckedForEngine(program, bodyCtx);
-	return underLiftedOps(_engine.lifted, (): int32 => appendProgramToImage(_engine.image, _engine.funcMap, transformed, engineName, sym));
+	const idx = underLiftedOps(_engine.lifted, (): int32 => appendProgramToImage(_engine.image, _engine.funcMap, transformed, engineName, sym));
+	ownCompiled(before, sym, sym.modulePath);
+	return idx;
 }
 
 function compileLiftedOpIntoEngine(sym: Symbol): int32 {
@@ -152,8 +155,11 @@ function compileLiftedOpIntoEngine(sym: Symbol): int32 {
 	defer registerRaiserOnDemand(previousOnDemand);
 	enterEngineCompile();
 	defer leaveEngineCompile();
+	const before = _engine.image.functions.length as int32;
 	const program = createNode(NodeKind.Program, { programStmts: [sym.declNode] }, synthToken(sym.declNode.location));
-	return underLiftedOps(_engine.lifted, (): int32 => appendProgramToImage(_engine.image, _engine.funcMap, program, sym.name, sym));
+	const idx = underLiftedOps(_engine.lifted, (): int32 => appendProgramToImage(_engine.image, _engine.funcMap, program, sym.name, sym));
+	ownCompiled(before, sym, sym.modulePath);
+	return idx;
 }
 
 function engineDispatchRegistry(): DispatchRegistry {
@@ -198,6 +204,13 @@ interface ComptimeEngine {
 	metaSeeds: NamedSymbol[] | null;
 	instanceCtxs: HashMap<Symbol, CheckerContext>;
 	lifted: LiftedOpsState;
+	owners: HashMap<int32, EngineOwner>;
+}
+
+// The routine (null for a fold or macro body) and module whose source a function of the image was compiled from.
+interface EngineOwner {
+	sym: Symbol | null;
+	modulePath: string;
 }
 
 let _engine: ComptimeEngine = null as unknown as ComptimeEngine;
@@ -225,7 +238,7 @@ function freshEngine(dispatchRegistry: DispatchRegistry): ComptimeEngine {
 	vm.printSink = (text: string): void => { writeStderr(text + "\n"); };
 	const bodyCtxs = new HashMap<CheckerContext, CheckerContext>();
 	const instanceCtxs = new HashMap<Symbol, CheckerContext>();
-	return { image, funcMap, vm, bodyCtxs, sources: new HashMap<string, Node>(), metaSeeds: null, instanceCtxs, lifted: freshLiftedOps() };
+	return { image, funcMap, vm, bodyCtxs, sources: new HashMap<string, Node>(), metaSeeds: null, instanceCtxs, lifted: freshLiftedOps(), owners: new HashMap<int32, EngineOwner>() };
 }
 
 function withMetaSeeds(seeds: NamedSymbol[]): NamedSymbol[] {
@@ -349,11 +362,51 @@ function vmStdSeeds(sym: Symbol): NamedSymbol[] {
 
 registerEngineBodyCtxFn(engineBodyCtx);
 
-function compileProgramIntoEngine(program: Node, seeds: NamedSymbol[], exts: ExtensionMethod[], wantFn: string, wantSym: Symbol | null = null): int32 {
+// Every function appended since `before` that a nested compile did not already claim came from this compile's source.
+function ownCompiled(before: int32, sym: Symbol | null, modulePath: string): void {
+	for (let i = before; i < _engine.image.functions.length; i += 1) {
+		if (!_engine.owners.has(i)) _engine.owners.set(i, { sym, modulePath });
+	}
+}
+
+let _lastRunCallees: Symbol[] = [];
+
+// The routines the last fold, macro or decorator run entered, each once, valid until the next run ends.
+export function engineRunCallees(): Symbol[] {
+	return _lastRunCallees;
+}
+
+// A run reads the source of every function it entered, a helper an earlier run compiled included, so a body
+// edit of that helper reaches the module whose fold or macro ran it.
+function noteEngineRun(vm: RaiserVM, ran: int32[]): void {
+	if (_engine == null || vm != _engine.vm) return;
+	const callees: Symbol[] = [];
+	const seen = new HashSet<Symbol>();
+	for (const idx of ran) {
+		const owner = _engine.owners.get(idx);
+		if (owner == null) {
+			if (idx == 0) continue;
+			throw new Error(`internal: a compile-time run entered ${_engine.image.functions[idx].name} (function ${idx}), which no engine compile owns`);
+		}
+		recordBodyRead(owner.modulePath);
+		const sym = owner.sym;
+		if (sym != null && !seen.has(sym)) {
+			seen.add(sym);
+			callees.push(sym);
+		}
+	}
+	_lastRunCallees = callees;
+}
+
+observeComptimeRuns(noteEngineRun);
+
+function compileProgramIntoEngine(program: Node, seeds: NamedSymbol[], exts: ExtensionMethod[], wantFn: string, ownerPath: string, wantSym: Symbol | null = null): int32 {
 	const previousOnDemand = registerRaiserOnDemand(ensureCompiledIntoEngine);
 	defer registerRaiserOnDemand(previousOnDemand);
 	enterEngineCompile();
 	defer leaveEngineCompile();
+	const before = _engine.image.functions.length as int32;
+	defer ownCompiled(before, wantSym, ownerPath);
 	registerSeedSymbols(withMetaSeeds(seeds), exts);
 	const transformed = transformForEngine(program, _engine.lifted, _engine.funcMap.dispatchRegistry);
 	clearSeedSymbols();
@@ -410,7 +463,7 @@ function compileIntoEngineSeeded(program: Node, token: CheckerContext, macroFnNa
 	const outerHelperErrors = _pendingHelperErrors;
 	_pendingHelperErrors = [];
 	const outerCompileErrors = takeRaiserCompileErrors();
-	const funcIdx = compileProgramIntoEngine(program, seeds, exts, macroFnName);
+	const funcIdx = compileProgramIntoEngine(program, seeds, exts, macroFnName, declCtx.modulePath);
 	const errors: CheckerError[] = [];
 	for (const e of _lastEngineCheckErrors) errors.push(e);
 	for (const e of _pendingHelperErrors) errors.push(e);
@@ -698,6 +751,8 @@ function lowerBuildCheckedHelper(sym: Symbol): int32 {
 	defer registerRaiserOnDemand(previousOnDemand);
 	enterEngineCompile();
 	defer leaveEngineCompile();
+	const before = _engine.image.functions.length as int32;
+	defer ownCompiled(before, sym, sym.modulePath);
 	const outerHost = _tierInstanceHost;
 	const host = engineBodyCtx(sym.modulePath, sym, true);
 	if (host != null) _tierInstanceHost = host;
@@ -834,7 +889,7 @@ function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	const decls: Node[] = [clone];
 	const program = createNode(NodeKind.Program, { programStmts: decls }, synthToken(sym.declNode.location));
 	_engineRecheckCount += 1;
-	const idx = compileProgramIntoEngine(program, seeds, exts, engineName, sym);
+	const idx = compileProgramIntoEngine(program, seeds, exts, engineName, sym.modulePath, sym);
 	for (const e of _lastEngineCheckErrors) {
 		if (e.severity != Severity.Error) continue;
 		_pendingHelperErrors.push({
