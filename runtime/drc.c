@@ -868,6 +868,87 @@ static void finalizeCollected(msGcEnv* j) {
 	drainUnownedDeferred();
 }
 
+_Noreturn void msRaiseOwnedCycle(const msTypeInfo** types, int32_t count);
+
+#define MS_OWNED_CYCLE_NAMES 8
+
+static int32_t deadIndex(const msCellSeq* set, void* p) {
+	int32_t k = msHeader(p)->rootIdx;
+	return k >= 0 && k < set->len && set->data[k].ptr == p ? k : -1;
+}
+
+static void nameOwnedCycleType(const msTypeInfo** types, int32_t* count, const msTypeInfo* type) {
+	if (type == NULL || (type->flags & MS_TYPE_FLAG_OWNED_CYCLE) == 0) return;
+	for (int32_t k = 0; k < *count; k++) if (types[k] == type) return;
+	if (*count < MS_OWNED_CYCLE_NAMES) types[(*count)++] = type;
+}
+
+/* A dead set leaks in a release build only where a cell of an owned-cycle class lies on a cycle
+ * inside it; an owned tree hanging off a plain garbage cycle is freed there too. The cycles are the
+ * strongly connected components of the set's own edges (iterative Tarjan), read before any slot is nulled. */
+static void refuseOwnedCycle(msGcEnv* j) {
+	msCellSeq* set = &j->toFree;
+	int32_t n = set->len;
+	for (int32_t i = 0; i < n; i++) msHeader(set->data[i].ptr)->rootIdx = i;
+	int32_t* start = (int32_t*)malloc(((size_t)n + 1) * sizeof(int32_t));
+	int32_t adjCap = n > 0 ? n : 1, adjLen = 0;
+	int32_t* adj = (int32_t*)malloc((size_t)adjCap * sizeof(int32_t));
+	for (int32_t i = 0; i < n; i++) {
+		start[i] = adjLen;
+		msTrace(set->data[i].ptr, set->data[i].type, j);
+		while (j->traceStack.len > 0) {
+			void* child = *(void**)j->traceStack.data[--j->traceStack.len].ptr;
+			int32_t k = child == NULL ? -1 : deadIndex(set, child);
+			if (k < 0) continue;
+			if (adjLen == adjCap) { adjCap *= 2; adj = (int32_t*)realloc(adj, (size_t)adjCap * sizeof(int32_t)); }
+			adj[adjLen++] = k;
+		}
+	}
+	start[n] = adjLen;
+	for (int32_t i = 0; i < n; i++) msHeader(set->data[i].ptr)->rootIdx = -1;
+
+	int32_t* work = (int32_t*)malloc((size_t)(n > 0 ? n : 1) * 6 * sizeof(int32_t));
+	int32_t* order = work, * low = work + n, * stack = work + 2 * n, * onStack = work + 3 * n, * frameNode = work + 4 * n, * framePos = work + 5 * n;
+	for (int32_t i = 0; i < n; i++) { order[i] = -1; onStack[i] = 0; }
+	const msTypeInfo* types[MS_OWNED_CYCLE_NAMES];
+	int32_t count = 0, next = 0, sp = 0;
+	for (int32_t root = 0; root < n; root++) {
+		if (order[root] >= 0) continue;
+		int32_t fp = 0;
+		order[root] = low[root] = next++; stack[sp++] = root; onStack[root] = 1;
+		frameNode[fp] = root; framePos[fp] = start[root]; fp++;
+		while (fp > 0) {
+			int32_t v = frameNode[fp - 1];
+			if (framePos[fp - 1] < start[v + 1]) {
+				int32_t w = adj[framePos[fp - 1]++];
+				if (order[w] < 0) {
+					order[w] = low[w] = next++; stack[sp++] = w; onStack[w] = 1;
+					frameNode[fp] = w; framePos[fp] = start[w]; fp++;
+				} else if (onStack[w] && order[w] < low[v]) low[v] = order[w];
+				continue;
+			}
+			fp--;
+			if (fp > 0 && low[v] < low[frameNode[fp - 1]]) low[frameNode[fp - 1]] = low[v];
+			if (low[v] != order[v]) continue;
+			int32_t base = sp;
+			do { base--; onStack[stack[base]] = 0; } while (stack[base] != v);
+			bool cycle = sp - base > 1;
+			for (int32_t e = start[v]; !cycle && e < start[v + 1]; e++) cycle = adj[e] == v;
+			for (int32_t k = base; cycle && k < sp; k++) nameOwnedCycleType(types, &count, set->data[stack[k]].type);
+			sp = base;
+		}
+	}
+	free(work);
+	free(adj);
+	free(start);
+	if (count > 0) msRaiseOwnedCycle(types, count);
+}
+
+static void nilEdges(msGcEnv* j, void* p, const msTypeInfo* type) {
+	msTrace(p, type, j);
+	while (j->traceStack.len > 0) *(void**)j->traceStack.data[--j->traceStack.len].ptr = NULL;
+}
+
 /* ===== Core Collection (collectCyclesBacon parity) ===== */
 
 static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
@@ -895,13 +976,18 @@ static void collectCyclesBacon(msGcEnv* j, int32_t lowMark) {
 	/* Clear rootIdx on all roots BEFORE Phase 3.
 	 * collectColor checks rootIdx < 0 to confirm the object is eligible. */
 	bool finalizers = (j->typeFlags & MS_TYPE_FLAG_FINALIZER) != 0;
+	bool ownedCycles = (j->typeFlags & MS_TYPE_FLAG_OWNED_CYCLE) != 0;
 	for (int32_t i = 0; i < msRoots.len; i++) {
 		msRefHeader* h = msHeader(msRoots.data[i].ptr);
 		h->rootIdx = -1;
-		collectColor(j, msRoots.data[i].ptr, msRoots.data[i].type, colToCollect, !finalizers);
+		collectColor(j, msRoots.data[i].ptr, msRoots.data[i].type, colToCollect, !finalizers && !ownedCycles);
 	}
 
 	MS_DRC_STAT_ADD(MS_DS_COLLECT, 1); MS_DRC_STAT_ADD(MS_DS_COLLECT_TRACED, j->touched);
+	if (ownedCycles) {
+		refuseOwnedCycle(j);
+		for (int32_t i = 0; !finalizers && i < j->toFree.len; i++) nilEdges(j, j->toFree.data[i].ptr, j->toFree.data[i].type);
+	}
 
 	/* Protect against re-entrancy: destructors may trigger registerCycle */
 	int32_t oldThreshold = msRootsThreshold;

@@ -287,6 +287,14 @@ _Noreturn void msRaiseDestroyKeptSelf(void* p) {
 	exit(1);
 }
 
+_Noreturn void msRaiseOwnedCycle(const msTypeInfo** types, int32_t count) {
+	fprintf(stderr, "Error: an owned cycle became garbage:");
+	for (int32_t i = 0; i < count; i++) fprintf(stderr, "%s %s", i == 0 ? "" : ",", msTypeInfoShownName(types[i]));
+	fprintf(stderr, " objects own each other only through Owned<T> edges, so a release build would leak them; make the edge back up the cycle Unowned<T>\n");
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
+}
+
 _Noreturn void msRaiseUnownedOutlives(void* p, intptr_t left) {
 	fprintf(stderr, "Error: %lld Unowned<%s> edge(s) still point at the %s being freed; each would dangle\n", (long long)left, msTypeInfoShownName(msHeader(p)->type), msTypeInfoShownName(msHeader(p)->type));
 	if (msFatalTrap != NULL) msFatalTrap();
