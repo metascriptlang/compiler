@@ -127,7 +127,8 @@ let equal = 0;
 const problems: string[] = [];
 for (let k = 0; k < builds; k += 1) {
 	const what = k == 0 ? "first build" : `${steps[k - 1].kind} of ${steps[k - 1].module}`;
-	if (verdicts[k].startsWith(":")) equal += 1;
+	if (verdicts[k].endsWith("a failed cold build")) problems.push(`build ${k} (${what}): the build failed, as a cold build does (${dir}/watch.log)`);
+	else if (verdicts[k].startsWith(":")) equal += 1;
 	else if (verdicts[k] == "") problems.push(`build ${k} (${what}): no verify result; the build failed or stopped (${dir}/watch.log)`);
 	else problems.push(`build ${k} (${what}): ${verdicts[k]}`);
 }
