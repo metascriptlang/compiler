@@ -74,7 +74,7 @@ function raiserPreludeCtx(): CheckerContext {
 		const root = resolveRuntimeDir();
 		const stdPath = root != "" ? join(root, "std") : "";
 		_raiserPreludeBuilding = true;
-		_raiserPreludeCtx = buildPreludeContext(stdPath, ".rms");
+		_raiserPreludeCtx = underLiftedOps(_engine != null ? _engine.lifted : freshLiftedOps(), (): CheckerContext => buildPreludeContext(stdPath, ".rms"));
 		_raiserPreludeBuilding = false;
 	}
 	return _raiserPreludeCtx;
