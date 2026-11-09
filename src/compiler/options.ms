@@ -102,6 +102,7 @@ export interface CliOptions {
 	dryRun: boolean;           // build --dry-run: print every command the build graph would run, run none
 	graphOptions: string[];    // -Dname=value: an option build.ms declares with option()
 	graphJobs: int32;          // -j<n>: build graph processes at once; 0 = one per cpu
+	graphSeed: int32;          // --seed=<n>: start ready graph nodes in a shuffled order
 	projectRoot: string;       // set by CLI main from findProjectRoot() — dir containing build.ms
 	resolve: ResolveSection;   // build.ms resolve section of projectRoot, set by applyProjectConfig
 	extraArgs: string[];       // remaining args passed through for package manager commands (add, remove, etc.)
@@ -229,6 +230,7 @@ export function newCliOptions(): CliOptions {
 		dryRun: false,
 		graphOptions: [],
 		graphJobs: 0,
+		graphSeed: 0,
 		projectRoot: "",
 		resolve: defaultResolveSection(),
 		extraArgs: [],
@@ -586,6 +588,9 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 			opts.listNodes = true;
 		} else if (arg == "--dry-run") {
 			opts.dryRun = true;
+		} else if (arg.startsWith("--seed=")) {
+			opts.graphSeed = parseIntStr(arg.slice(7, arg.length));
+			if (opts.graphSeed < 1 || `${opts.graphSeed}` != arg.slice(7, arg.length)) return Result.err(`${arg}: --seed takes a whole number, at least 1`);
 		} else if (arg.startsWith("-j") && arg.length > 2) {
 			opts.graphJobs = parseIntStr(arg.slice(2, arg.length));
 			if (opts.graphJobs < 1 || `${opts.graphJobs}` != arg.slice(2, arg.length)) return Result.err(`${arg}: -j takes a whole number of processes, at least 1`);

@@ -24,10 +24,22 @@ export interface Execution {
 	reused: string[];
 	passArgs: string[];
 	jobs: int32;
+	seed: int32;   // nonzero: start ready nodes in an order shuffled by this seed
 }
 
 export function newExecution(graph: BuildGraph, opts: CliOptions, projectRoot: string, dryRun: boolean, passArgs: string[], jobs: int32): Execution {
-	return { graph, opts, projectRoot, outputs: new HashMap<int32, string>(), digests: new HashMap<int32, string>(), dryRun, ran: [], reused: [], passArgs, jobs };
+	return { graph, opts, projectRoot, outputs: new HashMap<int32, string>(), digests: new HashMap<int32, string>(), dryRun, ran: [], reused: [], passArgs, jobs, seed: opts.graphSeed };
+}
+
+function shuffle(plan: GraphNode[], seed: int32): void {
+	let state: number = seed % 2147483647;
+	for (let i = plan.length - 1; i > 0; i -= 1) {
+		state = (state * 16807) % 2147483647;
+		const j = (state % (i + 1)) as int32;
+		const held = plan[i];
+		plan[i] = plan[j];
+		plan[j] = held;
+	}
 }
 
 // A node's process: its output is collected while it runs and printed when it ends, so
@@ -341,6 +353,7 @@ function settle(j: Job): string {
 export function executeNode(x: Execution, id: int32): string {
 	const plan: GraphNode[] = [];
 	order(x.graph, id, new HashSet<int32>(), new HashSet<int32>(), plan);
+	if (x.seed != 0) shuffle(plan, x.seed);
 	const done = new HashSet<int32>();
 	const started = new HashSet<int32>();
 	const running: Job[] = [];
