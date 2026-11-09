@@ -117,6 +117,21 @@ function checkThroughLinkedDir(): void {
 }
 checkThroughLinkedDir();
 
+const targeted = project("targeted", "{ entry: \"main.ms\", cc: { targets: { \"linux-arm64\": { entry: \"cross.ms\" } } } }");
+put(`${targeted}/main.ms`, "console.log(\"main\");\n");
+put(`${targeted}/cross.ms`, "console.log(\"cross\");\n");
+run(targeted, ["build", "--os=linux", "--cpu=arm64", "--emit=c"]);
+record("build takes the target's cc entry over the project entry", "cross", exists(`${targeted}/out/debug/crossOms.c`) ? "cross" : (exists(`${targeted}/out/debug/mainOms.c`) ? "main" : "neither"));
+
+const unread = project("unread", "{ entry: \"main.ms\", fmt: { printwidth: 40 } }");
+put(`${unread}/main.ms`, "console.log(\"unread\");\n");
+record("a build.ms field msc does not read stops every command", "fmt.printwidth: msc does not read this field",
+	run(unread, ["check", "main.ms", "--colors=off"]).split("build.ms: ").pop().split(";")[0]);
+
+const owning = project("owning", "{ package: { name: \"owning\", version: \"0.1.0\", bin: { hello: \"hello.ms\" } } }");
+put(`${owning}/hello.ms`, "console.log(\"own command\");\n");
+record("x runs a command the project itself declares", "own command", lastLine(run(owning, ["x", "hello"])));
+
 let failures = 0;
 console.log(`root ${root}`);
 for (const r of results) {
