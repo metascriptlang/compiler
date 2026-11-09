@@ -30,10 +30,16 @@ function dirEntryName(entry: string): string {
 	return entry;
 }
 
-function searchRoots(projectRoot: string): { keys: string[], values: string[] } {
+function searchRoots(projectRoot: string, withOwn: boolean): { keys: string[], values: string[] } {
+	const keys: string[] = withOwn ? ["project"] : [];
+	const values: string[] = withOwn ? [projectRoot] : [];
 	const local = depRoots(projectRoot);
-	const keys = local.keys.slice(0, local.keys.length);
-	const values = local.values.slice(0, local.values.length);
+	for (let l = 0; l < local.keys.length; l++) {
+		if (!values.includes(local.values[l])) {
+			keys.push(local.keys[l]);
+			values.push(local.values[l]);
+		}
+	}
 	const globalRoot = globalManifestRoot();
 	if (globalRoot != "" && globalRoot != projectRoot && exists(join(globalRoot, "build.ms"))) {
 		const globals = depRoots(globalRoot);
@@ -47,12 +53,12 @@ function searchRoots(projectRoot: string): { keys: string[], values: string[] } 
 	return { keys, values };
 }
 
-function declaredCommands(projectRoot: string): { commands: string[], packages: string[], roots: string[], entries: string[] } {
+function declaredCommands(projectRoot: string, withOwn: boolean): { commands: string[], packages: string[], roots: string[], entries: string[] } {
 	const commands: string[] = [];
 	const packages: string[] = [];
 	const roots: string[] = [];
 	const entries: string[] = [];
-	const found = searchRoots(projectRoot);
+	const found = searchRoots(projectRoot, withOwn);
 	for (let i = 0; i < found.keys.length; i++) {
 		const root = found.values[i];
 		const depBuild = join(root, "build.ms");
@@ -97,7 +103,7 @@ function pruneStaleShims(shimDir: string, keep: string[]): int32 {
 }
 
 export function syncShims(projectRoot: string, shimDir: string): boolean {
-	const declared = declaredCommands(projectRoot);
+	const declared = declaredCommands(projectRoot, false);
 	if (declared.commands.length == 0) {
 		const pruned = pruneStaleShims(shimDir, []);
 		if (pruned > 0) console.log(`pruned ${pruned.toString()} stale command(s) from ${dim(shimDir)}`);
@@ -200,11 +206,11 @@ export function cmdInstallGlobal(spec: string): boolean {
 }
 
 export function cmdX(projectRoot: string, args: string[], opts: CliOptions): boolean {
-	const declared = declaredCommands(projectRoot);
+	const declared = declaredCommands(projectRoot, true);
 
 	if (args.length == 0) {
 		if (declared.commands.length == 0) {
-			console.log(`${errStyle("error")}: no dependency declares a command`);
+			console.log(`${errStyle("error")}: neither this project nor a dependency declares a command`);
 			console.log(`a package declares one with ${cyan("package.bin")} in its build.ms`);
 			return false;
 		}
@@ -228,7 +234,7 @@ export function cmdX(projectRoot: string, args: string[], opts: CliOptions): boo
 	}
 
 	if (hits.length == 0) {
-		console.log(`${errStyle("error")}: no dependency declares the command ${bold(wantCmd)}`);
+		console.log(`${errStyle("error")}: neither this project nor a dependency declares the command ${bold(wantCmd)}`);
 		if (declared.commands.length > 0) {
 			console.log(`declared here: ${declared.commands.join(", ")}`);
 		}
