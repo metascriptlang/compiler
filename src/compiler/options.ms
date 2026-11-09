@@ -13,6 +13,7 @@ import {
 	defineSymbol,
 	applyConfigDefines,
 	seedProjectDir,
+	isDefined,
 } from "./defines";
 import {
 	BuildConfig, BuildSection, ResolveSection, defaultBuildSection, defaultResolveSection, loadBuildConfig, validateCacheDirectory,
@@ -279,6 +280,12 @@ export function applyBuildTarget(opts: CliOptions, name: string): Result<void, s
 export function seedOptionDefines(opts: CliOptions): void {
 	const backendName = opts.target == Target.JS ? "js" : (opts.target == Target.Raiser ? "raiser" : "c");
 	initDefines(opts.defines, backendName, opts.targetOs, buildCpu(opts.targetOs, opts.cpuTarget), opts.gcMode, opts.mode);
+	if (backendName == "js" && runsUnderNode(opts.command)) defineSymbol(opts.defines, "nodejs", "true");
+}
+
+/** `msc run` and `msc test` run a JS build under node, so the build is a node build; any other JS build defines `nodejs` only by `-d:nodejs` or build.ms. */
+function runsUnderNode(command: string): boolean {
+	return command == "run" || command == "test";
 }
 
 function globalImportEntry(projectRoot: string, gi: string): string {
@@ -722,6 +729,22 @@ test "run: an msc option right after the file is an error that says to move it b
 	}
 	assert opts.target == Target.C;
 	assert opts.extraArgs.length == 0;
+}
+
+test "a JS build run or tested under node defines nodejs, and no other build does" {
+	for (const command of ["run", "test"]) {
+		const opts = parseForTest([command, "--target=js", "a.ms"]);
+		seedOptionDefines(opts);
+		assert isDefined(opts.defines, "nodejs");
+	}
+	for (const args of [["build", "--target=js", "a.ms"], ["run", "a.ms"], ["test", "a.ms"], ["run", "--target=raiser", "a.ms"]]) {
+		const opts = parseForTest(args);
+		seedOptionDefines(opts);
+		assert !isDefined(opts.defines, "nodejs");
+	}
+	const asked = parseForTest(["build", "--target=js", "-d:nodejs", "a.ms"]);
+	seedOptionDefines(asked);
+	assert isDefined(asked.defines, "nodejs");
 }
 
 test "build and test refuse --target=raiser instead of building C, whichever order the flags come in" {
