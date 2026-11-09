@@ -88,6 +88,23 @@ function extendedKey(
 	return out;
 }
 
+/** The error pbkdf2Sync returns before deriving anything, or null when the arguments are valid. */
+export function pbkdf2Refusal(iterations: int32, keyLength: int32, digest: HashAlgorithm): CryptoError | null {
+	if (iterations < 1) return invalidInput("pbkdf2", "iterations must be at least 1");
+	if (keyLength < 1 || keyLength > 1048576) return invalidInput("pbkdf2", "keyLength must be between 1 and 1048576");
+	if (!isHashSupported(digest)) return keyDerivationFailed("pbkdf2", "key derivation failed");
+	return null;
+}
+
+/** The error hkdfSync returns before deriving anything, or null when the arguments are valid. */
+export function hkdfRefusal(algorithm: HashAlgorithm, length: int32): CryptoError | null {
+	if (length < 1) return invalidInput("hkdf", "length must be at least 1");
+	const digest = digestSync(algorithm, "");
+	const maxLength = digest.ok ? 255 * (digest.value.length as int32) : 0;
+	if (length > maxLength) return invalidInput("hkdf", `length must be at most ${maxLength} for ${algorithm}`);
+	return null;
+}
+
 export function pbkdf2Sync<D extends ByteInput, K extends ByteInput>(
 	password: D,
 	salt: K,
@@ -95,19 +112,8 @@ export function pbkdf2Sync<D extends ByteInput, K extends ByteInput>(
 	keyLength: int32,
 	digest: HashAlgorithm,
 ): Result<Buffer, CryptoError> {
-	if (iterations < 1) {
-		return Result.err(invalidInput(
-			"pbkdf2", "iterations must be at least 1",
-		));
-	}
-	if (keyLength < 1 || keyLength > 1048576) {
-		return Result.err(invalidInput(
-			"pbkdf2", "keyLength must be between 1 and 1048576",
-		));
-	}
-	if (!isHashSupported(digest)) {
-		return Result.err(keyDerivationFailed("pbkdf2", "key derivation failed"));
-	}
+	const refusal = pbkdf2Refusal(iterations, keyLength, digest);
+	if (refusal != null) return Result.err(refusal);
 	const key = bytesOf(password);
 	const saltBytes = bytesOf(salt);
 	const kind = hashKind(digest);
@@ -142,16 +148,8 @@ export function hkdfSync<D extends ByteInput, K extends ByteInput, S extends Byt
 	info: S,
 	length: int32,
 ): Result<Buffer, CryptoError> {
-	if (length < 1) {
-		return Result.err(invalidInput("hkdf", "length must be at least 1"));
-	}
-	const digest = digestSync(algorithm, "");
-	const maxLength = digest.ok ? 255 * (digest.value.length as int32) : 0;
-	if (length > maxLength) {
-		return Result.err(invalidInput(
-			"hkdf", `length must be at most ${maxLength} for ${algorithm}`,
-		));
-	}
+	const refusal = hkdfRefusal(algorithm, length);
+	if (refusal != null) return Result.err(refusal);
 	const key = bytesOf(ikm);
 	const saltBytes = bytesOf(salt);
 	const infoBytes = bytesOf(info);
