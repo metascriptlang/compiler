@@ -182,7 +182,7 @@ What a hello world still links, and why:
   hello links its allocator and `collectCycles` the same way: `nimTestErrorFlag` drops the cyclic
   `Exception`, which reaches `registerCycle` (`lib/system/orc.nim`).
 - the thread-exit arm and its teardown (`msThreadAttach`, `msAfterThreadRuns`,
-  `msRootsThreadTeardown`, `msMsgPoolsThreadTeardown`, about 1 KB): a thread the runtime did not
+  `msRootsThreadTeardown`, about 1 KB): a thread the runtime did not
   start must release its region when it exits (ULTRALOCK M11), and the allocator cannot know which
   thread that is. Nim's `afterThreadRuns` also calls its root teardown (`nimYrcThreadTeardown`) directly rather than through a handler.
 - `msDrainAtExit` and `msReportOrphanFailures` as two hook reads.
