@@ -1,8 +1,8 @@
 /**
  * ECDSA and ECDH on P-256 and P-384 on the JavaScript backend: the same surface as index.cms.
  *
- * Asynchronous calls run on `globalThis.crypto.subtle` (browsers on secure contexts, Node 19 and later); a missing
- * `crypto.subtle` is a `CryptoError`, never a throw. ECDSA signatures are DER, as on the native backend: WebCrypto
+ * Asynchronous calls run on `globalThis.crypto.subtle` (browsers on secure contexts, Node 19 and later); without it
+ * they run the `*Sync` form and give its result. ECDSA signatures are DER, as on the native backend: WebCrypto
  * speaks the fixed-width `r || s` form, so each call converts. WebCrypto binds a key to ECDSA or ECDH when it is
  * imported, so a key object keeps its scalar and public point and imports a `CryptoKey` per use on first call and
  * reuses it. sha1 signatures are refused, as on the native backend.
@@ -34,6 +34,9 @@ const msEcPkNoSubtle = "crypto.subtle is unavailable: browsers expose it only on
 function msEcPkSubtle() {
 	const c = globalThis.crypto;
 	return c && c.subtle ? c.subtle : null;
+}
+function msEcHasSubtle() {
+	return msEcPkSubtle() != null;
 }
 function msEcPkMessage(e) {
 	return String(e && e.message ? e.message : e);
@@ -130,6 +133,7 @@ interface Pair {
 }
 
 extern function newCache(): unknown from "msEcPkCache()";
+extern function wcHasSubtle(): boolean from "msEcHasSubtle()";
 extern function wcGenerate(web: string): Promise<Pair> from "msEcGenerate(#)";
 extern function wcComplete(pkcs8: Buffer, web: string): Promise<Pair> from "msEcComplete(#, #)";
 extern function wcCheck(point: Buffer, web: string): Promise<string> from "msEcCheck(#, #)";
@@ -166,6 +170,7 @@ export class EcPublicKey {
 	_cache: unknown;
 
 	static async importPem(pem: string): Promise<Result<EcPublicKey, CryptoError>> {
+		if (!wcHasSubtle()) return EcPublicKey.importPemSync(pem);
 		const data = publicOfPem(pem);
 		if (data == null || (await wcCheck(data.point as Buffer, data.curve.webName)) != "") {
 			return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "EcPublicKey.importPem", "failed to parse a P-256 or P-384 public key PEM"));
@@ -197,6 +202,7 @@ export class EcPrivateKey {
 	_cache: unknown;
 
 	static async generate(curve: EcCurve): Promise<Result<EcPrivateKey, CryptoError>> {
+		if (!wcHasSubtle()) return EcPrivateKey.generateSync(curve);
 		const chosen = curveNamed(curve);
 		const done = await wcGenerate(chosen.webName);
 		if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "EcPrivateKey.generate", `EC key generation failed for curve ${curve}: ${done.error}`));
@@ -204,6 +210,7 @@ export class EcPrivateKey {
 	}
 
 	static async importPem(pem: string): Promise<Result<EcPrivateKey, CryptoError>> {
+		if (!wcHasSubtle()) return EcPrivateKey.importPemSync(pem);
 		const data = privateOfPem(pem);
 		const invalid = cryptoError(CryptoErrorKind.InvalidKey, "EcPrivateKey.importPem", "failed to parse a P-256 or P-384 private key PEM");
 		if (data == null) return Result.err(invalid);
@@ -270,6 +277,7 @@ export function ecdsaSign<D extends ByteInput>(key: EcPrivateKey, data: D, hash:
 }
 
 async function ecdsaSignOwned(key: EcPrivateKey, data: Buffer, hash: string): Promise<Result<Buffer, CryptoError>> {
+	if (!wcHasSubtle()) return ecdsaSignSyncOwned(key, data, hash);
 	if (hash == "sha1") return Result.err(signFailed(hash, ""));
 	const done = await wcSign(key._cache, ecPrivateToPkcs8(key._data) as Buffer, key._data.curve.webName, hash, data);
 	if (done.error != "") return Result.err(signFailed(hash, `: ${done.error}`));
@@ -294,6 +302,7 @@ export function ecdsaVerify<D extends ByteInput, S extends ByteInput>(key: EcPub
 }
 
 async function ecdsaVerifyOwned(key: EcPublicKey, data: Buffer, signature: Buffer, hash: string): Promise<boolean> {
+	if (!wcHasSubtle()) return ecdsaVerifySyncOwned(key, data, signature, hash);
 	const raw = ecdsaDerToRaw(signature, key._data.curve.size);
 	if (raw == null) return false;
 	return await wcVerify(key._cache, key._data.point as Buffer, key._data.curve.webName, hash, data, raw as Buffer);
@@ -309,6 +318,7 @@ export function ecdhSync(privateKey: EcPrivateKey, publicKey: EcPublicKey): Resu
 }
 
 export async function ecdh(privateKey: EcPrivateKey, publicKey: EcPublicKey): Promise<Result<Buffer, CryptoError>> {
+	if (!wcHasSubtle()) return ecdhSync(privateKey, publicKey);
 	const curve = privateKey._data.curve;
 	if (publicKey._data.curve.name != curve.name) return Result.err(agreementFailed(""));
 	const done = await wcDerive(privateKey._cache, ecPrivateToPkcs8(privateKey._data) as Buffer, curve.webName, publicKey._cache, publicKey._data.point as Buffer, curve.size * 8);

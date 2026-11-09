@@ -1,6 +1,6 @@
 // The async hash functions complete inside the async function with the bytes their Sync form returns, on the C
-// backend and on the Raiser (which the compiler's own sha256 call runs on), for every named hash and for digest()
-// over every HashAlgorithm.
+// backend, on JS (through crypto.subtle where it implements the hash) and on the Raiser (which the compiler's own
+// sha256 call runs on), for every named hash and for digest() over every HashAlgorithm.
 //
 // @stdout: sha256 ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad true
 // @stdout: sha384 cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7 true
@@ -9,7 +9,6 @@
 // @stdout: md5 900150983cd24fb0d6963f7d28e17f72 true
 // @stdout: digest 11 algorithms, 11 same, 0 failed
 // @exit: 0
-// @skip-js: std/crypto on JS has no ripemd160 or sha3 (the program checks digest() over all 11 algorithms); cryptoJsDigestVectors covers the six JS has
 
 import { Buffer } from "std/core/buffer";
 import { CryptoError, HashAlgorithm, digest, digestSync, md5, md5Sync, sha1, sha1Sync, sha256, sha256Sync, sha384, sha384Sync, sha512, sha512Sync, toHex } from "std/crypto";
