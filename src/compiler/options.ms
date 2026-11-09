@@ -402,6 +402,10 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 			i += 1;
 			continue;
 		}
+		if (opts.command == "build" && arg == "--") {
+			for (let rest = i + 1; rest < args.length; rest += 1) opts.extraArgs.push(args[rest]);
+			break;
+		}
 		if (opts.command == "x" && positionalIdx >= 1) {
 			if (opts.inputFile == "") {
 				opts.inputFile = arg;
@@ -732,6 +736,14 @@ test "run: everything after the first program argument is the program's, flags a
 	assert opts.extraArgs.length == 5;
 	assert opts.extraArgs[1] == "--release" && opts.extraArgs[2] == "--target=js";
 	assert opts.extraArgs[3] == "--" && opts.extraArgs[4] == "-x";
+}
+
+test "build: everything after -- is the node's, flags included" {
+	const opts = parseForTest(["build", "test", "--danger", "--", "src/a.ms", "--tests-in-dir"]);
+	assert opts.inputFile == "test";
+	assert opts.mode == MODE_DANGER;
+	assert opts.extraArgs.length == 2;
+	assert opts.extraArgs[0] == "src/a.ms" && opts.extraArgs[1] == "--tests-in-dir";
 }
 
 test "run: a flag msc does not know goes to the program even right after the file" {

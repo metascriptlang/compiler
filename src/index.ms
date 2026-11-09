@@ -151,6 +151,10 @@ export function main(): int32 {
 		},
 		"build" => {
 			if (cfg.graph && namesGraphNode(opts.inputFile)) process.exit(cmdBuildGraph(`${projectRoot}/build.ms`, projectRoot, opts, opts.inputFile, false));
+			if (opts.extraArgs.length > 0) {
+				console.log(`${error("error")}: the arguments after -- go to a build.ms node; msc build ${opts.inputFile} builds a file`);
+				process.exit(1);
+			}
 			// argv path overrides build.ms root
 			if (cfg.valid) {
 				const resolved = resolveCcForTarget(cfg.cc, opts.targetOs, opts.cpuTarget, opts.abi);
