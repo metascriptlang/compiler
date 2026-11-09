@@ -483,8 +483,8 @@ export function preludeFor(
 	const deadGlue = "the wasm half cannot run again: a trap or a host error "
 		+ "left its frames unfinished";
 	const lentGlue = "a wasm function was called while a Span was lent to a JS "
-		+ "callback: the callback's copy and the wasm side's would diverge, so "
-		+ "call it after the callback returns";
+		+ "callback: the call could move or change the elements the callback's "
+		+ "Span sees, so call it after the callback returns";
 	const base = checked
 		? GLUE.concat(views).concat(CHECK_GLUE)
 		: GLUE.concat(views);

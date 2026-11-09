@@ -211,11 +211,15 @@ function vecOut(ptr: string, len: string, element: BoundaryKind): string {
 	return `__msbVecOut(${ptr}, ${len}, ${typedArrayOf(element)}, ${bool})`;
 }
 
-function callbackSharesViews(cb: BoundaryCallback): boolean {
+function copiesSpan(cb: BoundaryCallback, i: int32): boolean {
+	return cb.params[i] == BoundaryKind.Span && cb.elements[i] == BoundaryKind.Bool;
+}
+
+function callbackSharesCopies(cb: BoundaryCallback): boolean {
 	let spans = 0;
 	let written = false;
 	for (let i = 0; i < cb.params.length; i += 1) {
-		if (cb.params[i] != BoundaryKind.Span) continue;
+		if (!copiesSpan(cb, i)) continue;
 		spans += 1;
 		if (cb.modes[i] == BoundaryMode.Shared) written = true;
 	}
@@ -259,7 +263,7 @@ function adapterOf(
 	const args: string[] = [];
 	let views = "";
 	let writesBack = "";
-	const shared = callbackSharesViews(cb);
+	const shared = callbackSharesCopies(cb);
 	const ranges: string[] = [];
 	let w = 0;
 	for (let i = 0; i < cb.params.length; i += 1) {
@@ -274,13 +278,16 @@ function adapterOf(
 		if (cb.nullables[i]) names.push(`x${w}, x${at}, x${at + 1}`);
 		else names.push(`x${at}, x${at + 1}`);
 		const t = typedArrayOf(cb.elements[i]);
-		const bool = cb.elements[i] == BoundaryKind.Bool;
 		const written = cb.modes[i] == BoundaryMode.Shared;
 		const ptr = `x${at} >>> 0`;
 		const len = `x${at + 1}`;
-		if (shared) {
+		if (!copiesSpan(cb, i)) {
+			const view = `new ${t}(__msbMod.HEAPU8.buffer, ${ptr}, ${len})`;
+			views += `const s${i} = { base: ${view}, off: 0, len: ${len} }; `;
+			args.push(`s${i}`);
+		} else if (shared) {
 			const v = `vs[${ranges.length}]`;
-			ranges.push(`[${ptr}, ${len}, ${t}, ${bool}]`);
+			ranges.push(`[${ptr}, ${len}, ${t}, true]`);
 			if (written) {
 				const dest = `${v}.base, ${v}.off`;
 				writesBack += `__msbCopyTo(${ptr}, ${dest}, ${len}, ${t}); `;
@@ -296,7 +303,7 @@ function adapterOf(
 		}
 		w = at + 2;
 	}
-	if (shared) views = `const vs = __msbVecViews([${ranges.join(", ")}]); `;
+	if (shared) views = `const vs = __msbVecViews([${ranges.join(", ")}]); ${views}`;
 	let call = `${target}(${args.join(", ")})`;
 	const isVoid = cb.result == BoundaryKind.Void;
 	if (resultAt != null && !isVoid) {
@@ -654,7 +661,7 @@ export function jsBindings(
 		if (copiesArgsIn(f)) scratch = true;
 		if (functionSharesViews(f)) viewsIn = true;
 		for (const p of f.params) {
-			if (p.kind == BoundaryKind.Callback && callbackSharesViews(p.callback!)) {
+			if (p.kind == BoundaryKind.Callback && callbackSharesCopies(p.callback!)) {
 				viewsOut = true;
 			}
 		}

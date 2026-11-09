@@ -668,13 +668,6 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 				if (cb.params.includes(BoundaryKind.Span)) {
 					usage.readsHeap = true;
 				}
-				for (let i = 0; i < cb.params.length; i += 1) {
-					if (
-						cb.params[i] == BoundaryKind.Span
-						&& cb.elements[i] == BoundaryKind.F32
-						&& cb.modes[i] == BoundaryMode.Shared
-					) usage.copiesFloat32 = true;
-				}
 				if (!usage.callbacks.some((c) => c.signature == cb.signature)) {
 					usage.callbacks.push(cb);
 				}
