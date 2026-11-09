@@ -40,7 +40,7 @@ export macro probe(value) {
 	return value;
 }
 `);
-	assert hasMessage(messages, "Restricted dependency compile-time code");
+	assert hasMessage(messages, "Restricted compile-time code");
 	assert hasMessage(messages, "host function 'msFsWriteFileMode'");
 }
 

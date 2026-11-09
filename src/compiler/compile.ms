@@ -5886,7 +5886,7 @@ export function compileRaiser(filePath: string, opts: CliOptions, session: Build
 	ensureHostTableLoaded();
 	if (opts.verbose) verboseLog(`generating bytecode (${modules.length} modules)`);
 	collectNativeDemands(buildNative);
-	const raiserMod = generateRaiserProject(modules, graph.dispatchRegistry, planDynamicModules(graph, entryCanonical, unitPaths, config.stdPath), exportRoutines ? entryExports(unitCtxs, unitPaths, entryCanonical) : []);
+	const raiserMod = generateRaiserProject(modules, graph.dispatchRegistry, planDynamicModules(graph, entryCanonical, unitPaths, config.stdPath), exportRoutines ? entryExports(unitCtxs, unitPaths, entryCanonical) : [], exportRoutines);
 	collectNativeDemands(false);
 	const demands = takeNativeDemands();
 	// Only a call the Raiser cannot run stops the build: other queued errors stay
@@ -5995,9 +5995,10 @@ function loadNativeBridges(demands: Symbol[], unitPaths: string[], unitCtxs: Che
 	}
 }
 
-export function runRaiser(mod: RaiserModule, programArgv: string[], printSink: RaiserPrintSink, auditLedger: boolean = true): RaiserContext {
+export function runRaiser(mod: RaiserModule, programArgv: string[], printSink: RaiserPrintSink, auditLedger: boolean = true, restrictedSource: string = ""): RaiserContext {
 	const ctx = createRaiserContext(false);
 	ctx.auditLedger = auditLedger;
+	ctx.restrictedSource = restrictedSource;
 	ctx.programArgv = programArgv;
 	ctx.printSink = printSink;
 	raiserLoad(ctx, mod);

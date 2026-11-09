@@ -5593,7 +5593,7 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 		if (entry == null) return;
 	}
 	if (vm.hostCallsRestricted && !hostEntryAllowedInRestrictedMode(entry)) {
-		vmError(vm, `Restricted dependency compile-time code '${vm.hostPolicySource}' cannot call host function '${entry.name}'`);
+		vmError(vm, `Restricted compile-time code '${vm.hostPolicySource}' cannot call host function '${entry.name}'`);
 		return;
 	}
 	if (vm.sandboxed && !hostEntryAllowedInSandbox(entry)) {
