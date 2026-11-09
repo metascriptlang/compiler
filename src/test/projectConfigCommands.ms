@@ -132,6 +132,52 @@ const owning = project("owning", "{ package: { name: \"owning\", version: \"0.1.
 put(`${owning}/hello.ms`, "console.log(\"own command\");\n");
 record("x runs a command the project itself declares", "own command", lastLine(run(owning, ["x", "hello"])));
 
+const graph = `${root}/graph`;
+ensureDir(`${graph}/src`);
+ensureDir(`${graph}/tools`);
+put(`${graph}/src/main.ms`, "import { argv } from \"std/process\";\nconsole.log(`app ${argv.slice(1).join(\",\")}`);\n");
+put(`${graph}/tools/table.txt`, `table of ${root}\n`);
+put(`${graph}/tools/gen.ms`, "import { Command, systemCommand, path } from \"std/build\";\nexport function upper(): Command {\n\tconst c = systemCommand([\"cat\"]);\n\tc.addFileArg(path(\"table.txt\"));\n\tc.captureStdOut();\n\treturn c;\n}\n");
+put(`${graph}/build.ms`, [
+	"import { executable, runArtifact, step, path } from \"std/build\";",
+	"import { writeFile } from \"std/fs\";",
+	"import { upper as makeUpper } from \"./tools/gen\";",
+	"export const app = executable({ entry: path(\"./src/main.ms\") });",
+	"export const run = runArtifact(app, [\"first\"]);",
+	"export const upper = makeUpper();",
+	`export const stamp = step({ description: "write a stamp", inputs: [app], make: (): void => { writeFile("${graph}/stamp.txt", "stamped"); } });`,
+	"export const bad = step({ description: \"fail\", inputs: [], make: (): void => { throw new Error(\"gate failed: 2 tests red\"); } });",
+	"export default app;",
+	"",
+].join("\n"));
+
+function errorLine(out: string): string {
+	return out.split("\n").filter((l: string): boolean => l.includes("error")).join("|").split("error: ").pop();
+}
+
+record("build --list names the exported nodes and the default", "app (default)|run|upper|stamp|bad",
+	run(graph, ["build", "--colors=off", "--list"]).split("\n").map((l: string): string => l.split("  ")[0]).join("|"));
+record("build of a run node builds the executable and runs it with its args", "app first", lastLine(run(graph, ["build", "--colors=off", "run"])));
+record("run of an executable node passes the arguments after --", "app x,y", lastLine(run(graph, ["run", "--colors=off", "app", "--", "x", "y"])));
+const firstUpper = run(graph, ["build", "--colors=off", "upper"]);
+const storedAt = firstUpper.split(" → ").pop();
+const stored = readFile(`${storedAt}/stdout`);
+record("a command input given by path() resolves against the file that calls path()", `table of ${root}`, stored.ok ? stored.value.trim() : `unreadable ${firstUpper}`);
+record("a command with unchanged inputs is reused from the store", "reused: upper", run(graph, ["build", "--colors=off", "upper"]).split("\n")[0]);
+run(graph, ["build", "--colors=off", "stamp"]);
+const stamp = readFile(`${graph}/stamp.txt`);
+record("a step's make runs with host rights after configure", "stamped", stamp.ok ? stamp.value : "missing");
+record("a step that throws fails the build with its message", "bad: unhandled exception: gate failed: 2 tests red", errorLine(run(graph, ["build", "--colors=off", "bad"])));
+record("a missing node names the exported ones", "build.ms exports no node 'nope'; it exports app, run, upper, stamp, bad", errorLine(run(graph, ["build", "--colors=off", "nope"])));
+
+const hostile = `${root}/hostile`;
+ensureDir(`${hostile}/src`);
+put(`${hostile}/src/main.ms`, "console.log(1);\n");
+put(`${hostile}/build.ms`, `import { executable, path } from "std/build";\nimport { writeFile } from "std/fs";\nwriteFile("${hostile}/leak.txt", "x");\nexport default executable({ entry: path("src/main.ms") });\n`);
+const refused = run(hostile, ["build", "--colors=off"]);
+record("configure refuses a host call that writes", "refused, nothing written",
+	refused.includes("Restricted compile-time code") && refused.includes("std/fs.writeFile") && !exists(`${hostile}/leak.txt`) ? "refused, nothing written" : refused);
+
 let failures = 0;
 console.log(`root ${root}`);
 for (const r of results) {
