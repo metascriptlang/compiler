@@ -1,7 +1,7 @@
 import {
 	Node, NodeKind, NodeFlag, DeclKind, Symbol, SymbolKind, SymbolFlag, ProgramData, ExportDeclData, DecoratedDeclData,
 	VariableDeclData, ClassDeclData, PropertyDeclData, CallExprData, MemberExprData, NewExprData,
-	ExprStmtData, BinaryExprData, UpdateExprData, HiddenDerefData, OutExprData,
+	ExprStmtData, BinaryExprData, UpdateExprData, HiddenDerefData, OutExprData, FunctionDeclData,
 } from "../../ast/node";
 import { isRoutineNode } from "../../ast/shape";
 import { forEachChild, anyChild } from "../../ast/visitor";
@@ -9,7 +9,7 @@ import { isEagerAssignOp } from "../../ast/operators";
 import { booleanType } from "../../checker/types";
 import { setFlag } from "../../checker/symbol";
 import { ModuleGraph, findModuleIndex } from "../../module/graph";
-import { findExportedSymbol, findModuleExports } from "../../checker/context";
+import { findExportedSymbol, findModuleExports, isExtensionRoutine, isLifecycleHookName } from "../../checker/context";
 import { TransformContext, mintSym, reportTransformError } from "../context";
 import { mapChildren, hasEffect } from "../walker";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
@@ -41,8 +41,10 @@ export function planModuleTdz(program: Node, ctx: TransformContext): Node {
 	const sets: Node[][] = [];
 	for (let i = 0; i < stmts.length; i += 1) sets.push([]);
 	const flagDecls: Node[] = [];
+	const entry = cycle.size == 0 && firstRun >= 0 ? createEntryWalk(stmts, modulePath, ctx) : null;
 	for (const b of bindings) {
-		const reached = deferred.has(b.sym) && (cycle.size > 0 || (firstRun >= 0 && firstRun <= b.statement));
+		if (entry != null) runStatementsThrough(entry, b.statement);
+		const reached = deferred.has(b.sym) && (cycle.size > 0 || (entry != null && entry.reads.has(b.sym)));
 		if (!reached && !imported.has(tdzBindingOf(b.sym))) continue;
 		const flag = moduleFlagOf(b.sym, modulePath, ctx);
 		const loc = stmts[b.statement].location;
@@ -70,6 +72,90 @@ export function planModuleTdz(program: Node, ctx: TransformContext): Node {
 	}
 	(program.data as ProgramData).programStmts = out;
 	return program;
+}
+
+// Without an import cycle, module code reaches a routine of this module only through a reference to it, so a
+// deferred read can run before its binding is set only when a routine holding it was entered by a statement up
+// to the binding's own. A routine the compiler may call with no reference written (an extension or lifecycle
+// routine, a decorated declaration) counts as entered from the start, and a call to a local member enters every
+// class, because dispatch may pick any of their methods.
+class EntryWalk {
+	stmts: Node[];
+	modulePath: string;
+	ctx: TransformContext;
+	units: HashMap<Symbol, Node> = new HashMap<Symbol, Node>();
+	classes: Symbol[] = [];
+	entered: HashSet<Symbol> = new HashSet<Symbol>();
+	reads: HashSet<Symbol> = new HashSet<Symbol>();
+	next: int32 = 0;
+	constructor(stmts: Node[], modulePath: string, ctx: TransformContext) { this.stmts = stmts; this.modulePath = modulePath; this.ctx = ctx; }
+}
+
+function createEntryWalk(stmts: Node[], modulePath: string, ctx: TransformContext): EntryWalk {
+	const w = new EntryWalk(stmts, modulePath, ctx);
+	for (const stmt of stmts) {
+		const decl = unwrapDecl(stmt);
+		if (decl == null || decl.resolvedSym == null) continue;
+		if (decl.kind == NodeKind.FunctionDecl || decl.kind == NodeKind.ClassDecl) w.units.set(decl.resolvedSym, decl);
+		if (decl.kind == NodeKind.ClassDecl) w.classes.push(decl.resolvedSym);
+	}
+	for (const stmt of stmts) {
+		const decl = unwrapDecl(stmt);
+		if (decl == null || decl.kind != NodeKind.FunctionDecl || decl.resolvedSym == null) continue;
+		const d = decl.data as FunctionDeclData;
+		if (isExtensionRoutine(d.fnFlags) || isLifecycleHookName(d.fnName) || stmt.kind == NodeKind.DecoratedDecl
+			|| (stmt.kind == NodeKind.ExportDecl && (stmt.data as ExportDeclData).exportedDecl.kind == NodeKind.DecoratedDecl)) enterUnit(w, decl.resolvedSym);
+	}
+	return w;
+}
+
+function runStatementsThrough(w: EntryWalk, last: int32): void {
+	while (w.next <= last && w.next < w.stmts.length) {
+		const stmt = w.stmts[w.next];
+		w.next += 1;
+		if (w.ctx.checkerCtx.liftedLocalTypeDecls.indexOf(stmt) >= 0) continue;
+		const decl = unwrapDecl(stmt);
+		if (decl == null || decl.kind == NodeKind.FunctionDecl) continue;
+		if (decl.kind == NodeKind.ClassDecl && stmt == decl) {
+			for (const member of (decl.data as ClassDeclData).classBody) {
+				if (member.kind == NodeKind.PropertyDecl && (member.data as PropertyDeclData).propIsStatic) scanEntered(w, (member.data as PropertyDeclData).propInitializer);
+			}
+			continue;
+		}
+		scanEntered(w, stmt);
+	}
+}
+
+function enterUnit(w: EntryWalk, sym: Symbol): void {
+	const unit = w.units.get(sym);
+	if (unit == null || w.entered.has(sym)) return;
+	w.entered.add(sym);
+	scanEntered(w, unit);
+}
+
+function enterEveryClass(w: EntryWalk): void {
+	for (const cls of w.classes) enterUnit(w, cls);
+}
+
+function scanEntered(w: EntryWalk, n: Node | null): void {
+	if (n == null) return;
+	const read = moduleBindingRead(n);
+	if (read != null) {
+		w.reads.add(tdzBindingOf(read));
+		if (isLocal(read, w.modulePath)) enterUnit(w, tdzBindingOf(read));
+	}
+	if (n.kind == NodeKind.NewExpr) {
+		const callee = (n.data as NewExprData).newCallee.resolvedSym;
+		if (isLocal(callee, w.modulePath)) enterUnit(w, tdzBindingOf(callee!));
+	}
+	if (n.kind == NodeKind.CallExpr) {
+		for (const sym of [n.resolvedSym, (n.data as CallExprData).callee.resolvedSym]) {
+			if (!isLocal(sym, w.modulePath)) continue;
+			if (w.units.has(tdzBindingOf(sym!))) enterUnit(w, tdzBindingOf(sym!));
+			else if (sym!.symbolKind != SymbolKind.Variable && sym!.symbolKind != SymbolKind.Parameter) enterEveryClass(w);
+		}
+	}
+	forEachChild(n, (c: Node): void => scanEntered(w, c));
 }
 
 // A plain read is left to the conditional-expression pass, which guards it with a statement before the
