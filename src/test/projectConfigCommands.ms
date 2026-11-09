@@ -233,6 +233,27 @@ copiedRuns.push(copiedText(copied));
 record("a copy of the project reuses a command's output and checks its depfile inputs in its own directory", "reused:two|ran:three", copiedRuns.join("|"));
 record("--seed keeps the build's result", "src/a.txt,src/b.txt,src/c.txt", lastLine(run(globbed, ["build", "--colors=off", "--seed=7", "found"])));
 
+const written = `${root}/written`;
+ensureDir(`${written}/gen`);
+put(`${written}/seed.txt`, "seed\n");
+put(`${written}/build.ms`, [
+	"import { writeFiles, updateSourceFiles, systemCommand, path } from \"std/build\";",
+	"const files = writeFiles();",
+	"files.add(\"a.txt\", \"made\\n\");",
+	"files.addCopyFile(path(\"seed.txt\"), \"sub/b.txt\");",
+	"export const both = systemCommand([\"sh\", \"-c\", \"cat a.txt sub/b.txt\"]);",
+	"both.setCwd(files.getDirectory());",
+	"const table = both.captureStdOut();",
+	"export const sync = updateSourceFiles();",
+	"sync.addCopyFileToSource(table, path(\"gen/table.txt\"));",
+	"sync.addBytesToSource(\"fixed\\n\", path(\"gen/fixed.txt\"));",
+	"",
+].join("\n"));
+const syncRuns = [run(written, ["build", "--colors=off", "sync"]), run(written, ["build", "--colors=off", "sync"])].map((out: string): string => out.split("\n").filter((l: string): boolean => l.startsWith("updated")).join(","));
+const table = readFile(`${written}/gen/table.txt`);
+record("writeFiles gathers bytes and a copied file that a command reads", "made|seed", table.ok ? table.value.trim().split("\n").join("|") : "missing");
+record("updateSourceFiles writes a changed file once and leaves it after", "updated gen/table.txt,updated gen/fixed.txt|", syncRuns.join("|"));
+
 const initialised = `${root}/initialised`;
 ensureDir(initialised);
 run(initialised, ["init"]);
