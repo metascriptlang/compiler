@@ -14,6 +14,7 @@ import { MODE_RELEASE, MODE_DANGER } from "../options";
 import { resolve, join, dirname, basename } from "std/fs/path";
 import { exists, readFile, readDir, realpath } from "std/fs";
 import { compileGlob, globMatch, Glob } from "std/fs/glob";
+import { execPath } from "std/process";
 import { raiseFromHost } from "../../raiser/hostRegistry";
 import { parseJson, jsonStringify, jsonValueOf, jsonValueToStruct } from "std/serialize/json";
 import { hashFile, compilerStamp } from "../cache";
@@ -144,6 +145,10 @@ function hostBuildGlob(args: RaiserValue[]): RaiserValue {
 	}
 	globsListed.push({ base, pattern, listing: listed.value });
 	return boxString(listed.value);
+}
+
+function hostBuildMscExe(args: RaiserValue[]): RaiserValue {
+	return boxString(execPath);
 }
 
 function hostBuildOption(args: RaiserValue[]): RaiserValue {
@@ -361,6 +366,7 @@ export function configure(buildFile: string, opts: CliOptions, loaded: string[] 
 	ensureHostTableLoaded();
 	registerHostFn("msBuildOption", hostBuildOption, HostCapability.Pure);
 	registerHostFn("msBuildGlob", hostBuildGlob, HostCapability.Pure);
+	registerHostFn("msBuildMscExe", hostBuildMscExe, HostCapability.Pure);
 	setParserDefines(raiser.defines);
 	defer setParserDefines(opts.defines);
 	const problems: ConfigureProblem[] = [];
