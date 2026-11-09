@@ -23,7 +23,7 @@ seed_card() {
   c=$(card_path "$1")
   [ -e "$c" ] && return 0
   printf '# %s\n\nRepo: `%s` · worktree `%s` · branch `wt/%s`\nLayer:\nKind:\nMechanism:\n\n## Goal\n\n## Done when\n\n## State\n' \
-    "$1" "$MAIN" "$(wt_dir "$1")" "$1" >"$c" || return 1
+    "$1" "${MAIN/#$HOME/\~}" "$(wt_dir "$1" | sed "s#^$HOME#~#")" "$1" >"$c" || return 1
   say "card: $c"
 }
 
