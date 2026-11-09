@@ -96,11 +96,17 @@ function alignUp(x: int64, a: int64): int64 {
 	return (x + a - 1) & ~(a - 1);
 }
 
+// The host allocator guarantees less than BLOCK_ALIGN on some targets (8 bytes on wasm32), and blocks are carved
+// from a chunk's first byte, so a chunk starts at the first BLOCK_ALIGN boundary of an allocation one alignment larger.
+export function chunkStart(raw: int64): int64 {
+	return alignUp(raw, BLOCK_ALIGN);
+}
+
 function hostGrow(mem: VmMemory, size: int64): int64 {
-	const address = calloc(1, size as uint64) as int64;
-	if (address == 0) throw new Error(`internal: the host refused ${size} bytes of VM memory`);
-	mem.blocks.push(new NativeBlock(address));
-	return address;
+	const raw = calloc(1, (size + BLOCK_ALIGN) as uint64) as int64;
+	if (raw == 0) throw new Error(`internal: the host refused ${size} bytes of VM memory`);
+	mem.blocks.push(new NativeBlock(raw));
+	return chunkStart(raw);
 }
 
 function addRegion(mem: VmMemory, start: int64, size: int64, kind: RegionKind): int32 {
@@ -494,6 +500,18 @@ export function cellAllocSize(cell: int64): int64 {
 export function disposeCell(mem: VmMemory, cell: int64, align: int64): boolean {
 	if (cell == 0) return true;
 	return heapDealloc(mem, cell - refBlockOffset(align));
+}
+
+test "a chunk starts on a block boundary whatever alignment the host allocator gave, and inside the allocation" {
+	for (const raw of [4096 as int64, 4104, 4100, 4111, 4112]) {
+		const start = chunkStart(raw);
+		assert (start & (BLOCK_ALIGN - 1)) == 0 && start >= raw && start - raw < BLOCK_ALIGN, `${raw} -> ${start}`;
+	}
+	const mem = createVmMemory();
+	for (let i = 0; i < 4; i += 1) {
+		const p = heapAlloc(mem, 300000);
+		assert (p & (BLOCK_ALIGN - 1)) == 0 && isHeapBlock(mem, p) && heapDealloc(mem, p);
+	}
 }
 
 test "a mixed alloc and free sequence leaves allocated blocks equal to the live allocations, and freeing all leaves none" {
