@@ -32,6 +32,7 @@ unless its `@columns` says otherwise.
 | A TS typed array result (`Float32Array`, `Int32Array`, … the nine classes), nullable | copied into a new array of the same class over a copy of its whole buffer, `byteOffset` and `length` kept; the call throws when the array is still held on the wasm side, when its `ArrayBuffer` is held by another view, or when its class extends the declared one. A typed array parameter takes a `Span<T>`, which a typed array passes to | `typedArrayResults`, `typedArrayMisuse` |
 | `Span<T>` | lent for the call; a writable Span is copied back; two views of one array share one copy | `spans`, `spanOverlap`, `spanLendResize`, `scratchArena` |
 | Callbacks | lent for the call; one the wasm side keeps (any use but a direct call of it, through helpers too) stays callable until the wasm side drops its last reference, which frees its JS slot; called while a `Span` copy is live it throws | `callback*`, `keptCallback*`, `closureEnvDestroy` |
+| A callback's `Span<T>` parameter | a typed array over wasm memory for the call, so a write lands in place, also one made before a throw, and two Spans of one Vec see each other's writes; a `Span<boolean>` is a copy written back after the call, two of them sharing one copy; a boundary call while it is open throws | `spanCallback`, `callbackSpanViews`, `spanOverlap`, `spanReentry`, `exportsHeap`, `typedSet` |
 | Errors | a JS throw in a callback reaches the JS caller as the same object; a wasm throw reaches it as an Error; a trap ends the instance and every later call says so | `callbackThrow*`, `spanThrow`, `handleTrap` |
 | Owner `Handle<T>` of an exported class | wasm owns it, JS holds a counted reference: `release`, `retain`, `[Symbol.dispose]`; a release while a call lends it waits for that call | `handleBasic`, `handleRetain`, `handleMisuse`, `handleDestroy` |
 | `Handle<VecBox<T>>.view(f)` | a Span over wasm memory, no copy, only inside `f`; a boundary call while it is open throws (it could grow memory) | `handleView*`, `refusedKeptView*` |
@@ -65,6 +66,31 @@ three handle checks and drop the site.
   2680 ns for 1000 floats where a view measured 1090 (table below), so views exist; a view is
   only safe because nothing can grow memory while it is open, which is enforced at runtime by the
   same counter that refuses re-entry while a Span is lent to a callback.
+- **A callback's Span is a view of wasm memory, not a copy** (2026-11-09). The callback cannot
+  call a wasm function while it holds one, as under `view(f)`, so no call grows memory under it;
+  it reads and writes the elements the all-C program's callback would, and the copy into a JS
+  `Array` and the copy back after the call bought nothing. A `Span<boolean>` stays a copy,
+  because wasm stores a bool as a byte and the callback must read `true`/`false`. A typed array's
+  own store conversion changes no result: the JS backend traps or wraps integer arithmetic before
+  the store (`msOverflowI32`, `& 255`, `BigInt.asUintN` in the emitted code; a `--danger` probe
+  printed the same wrapped `int32`, `uint8`, `int64` and `uint64` values on C and JS) and rounds a
+  float32 with `Math.fround`. A writable float32 callback Span no longer makes the wasm companion
+  export `HEAPF32`. Open, not measured, here as under `view(f)`: a `Handle` released inside the
+  callback runs its destroy in wasm without that refusal, and a destroy that allocates could grow
+  memory and empty the view. Measured on m1m (Apple M1 Pro, Node 24.1.0, headless Chrome
+  149.0.7827.114, `--danger`) with a throwaway program, a `@wasm` function calling its callback
+  1000 times with the same 1000-element `Span<float32>`: installed msc `cc97a2f5818` (before)
+  against a candidate of base `9904cc564d4` (after), five interleaved rounds in a `--quiet 6`
+  window (load 10.1 before from outside work, 11.8 after; a row's five medians spread at most 3.4%
+  in Node and 6.7% in Chrome).
+  Median ns per callback:
+
+  | the callback | Node before → after | Chrome before → after |
+  |---|---|---|
+  | sums all 1000 (`Readonly<Span>`) | 4439 → 2821 | 4361 → 2822 |
+  | scales all 1000 in place (`Span`) | 3483 → 545 | 4123 → 1709 |
+  | reads one element | 1664 → 40.8 | 1589 → 41.2 |
+  | writes one element | 2860 → 38.4 | 2437 → 37.9 |
 - **Two views of one array share one copy**, so a write through either is seen by the other, as
   in the all-C program.
 - **A callback error crosses as itself.** The glue records the thrown object, the wasm side

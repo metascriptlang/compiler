@@ -3337,7 +3337,7 @@ run();
 | a struct, `Vec<T>` of scalars, `T \| null` of these | a copy, nested fields included |
 | a typed array result (`Float32Array`, `Int32Array`, … the nine TS classes), nullable | a new array of the same class over a copy of the whole buffer, `byteOffset` and `length` kept |
 | `Span<T>` parameter (a `Vec<T>`, a slice `xs[1..3]` or a typed array passes to it) | lent for the call; a writable Span's writes are copied back; two views of one array share one copy |
-| a callback parameter | lent for the call, re-entrant (a callback may call wasm again); one the wasm side keeps (stores it, captures it, or passes it on to anything but a direct call of it) stays callable until the wasm side drops its last reference, and a dev build names at exit each one never dropped: `msb leak: callback 'visit' kept by listen at core.ms:4 never released` |
+| a callback parameter | lent for the call, re-entrant (a callback may call wasm again, except while it holds a `Span` it was handed: a `Span<T>` of numbers is a typed array over wasm memory for the call, written in place, and a `Span<boolean>` a copy written back); one the wasm side keeps (stores it, captures it, or passes it on to anything but a direct call of it) stays callable until the wasm side drops its last reference, and a dev build names at exit each one never dropped: `msb leak: callback 'visit' kept by listen at core.ms:4 never released` |
 | `Handle<C>` of an exported class `C` (`std/ffi`) | wasm owns the object, JS holds a counted reference: `release()`, `retain()`, `[Symbol.dispose]` |
 | `Handle<VecBox<T>>` with `h.view(f)` | a `Span<T>` over wasm memory inside `f` only, with no copy |
 
