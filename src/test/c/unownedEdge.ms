@@ -103,11 +103,17 @@ test "an Unowned element of a field's own array is pushed on the second count an
 	}
 }
 
-test "an Unowned edge in a union member or a type argument is refused until it is counted there" {
+test "an Unowned edge in a union member, a tuple or a type argument is refused, naming the struct that holds one" {
 	const head = "class N { id: int32 = 1; }\n";
-	const refused = "inside a union member, a tuple, a function type or a type argument it is not built yet";
+	const refused = "so a union member, a tuple, a function type or a type argument cannot hold one — store the back edge in a struct field and hold the struct, as in 'struct Up { at: Unowned<N> }' and 'Map<string, Up>'";
 	assert emitted(head + "class H { ups: (Unowned<N> | string)[] = []; }\nconsole.log(new H().ups.length);\n").contains(refused);
 	assert emitted(head + "class H { ups: Map<string, Unowned<N>> = new Map(); }\nconsole.log(new H().ups.size >= 0);\n").contains(refused);
+	assert emitted(head + "class H { ups: Set<Unowned<N>> | null = null; }\nconsole.log(new H().ups == null);\n").contains(refused);
+	assert emitted(head + "class H { pair: [Unowned<N>, int32] | null = null; }\nconsole.log(new H().pair == null);\n").contains(refused);
+	const wrapped = compileToC(head + "struct Up { at: Unowned<N>; }\nclass H { ups: Map<string, Up> = new Map<string, Up>(); }\nconst n = new N();\nconst h = new H();\nh.ups.set(\"p\", { at: n });\nconsole.log(h.ups.get(\"p\")!.at.id);\n");
+	assert wrapped.ok, wrapped.ok ? "" : wrapped.error;
+	const nullable = compileToC(head + "struct Up { at: Unowned<N>; }\nclass H { up: Up | null = null; }\nconst n = new N();\nconst h = new H();\nh.up = { at: n };\nconsole.log(h.up!.at.id);\n");
+	assert nullable.ok, nullable.ok ? "" : nullable.error;
 }
 
 test "an array of Unowned elements is held anywhere an array is: nested, nullable, a local, a parameter or a return" {
