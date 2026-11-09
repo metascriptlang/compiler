@@ -237,7 +237,25 @@ const initialised = `${root}/initialised`;
 ensureDir(initialised);
 run(initialised, ["init"]);
 record("init writes a two-line graph that run builds and runs", "hello, metascript!", lastLine(run(initialised, ["run", "--colors=off"])));
-put(`${initialised}/build.ms`, "import { executable, systemCommand, path } from \"std/build\";\nexport default executable({ entry: path(\"src/index.ms\") });\nexport const noop = systemCommand([\"true\"]);\n");
+const depLib = `${root}/deplib`;
+const depApp = `${root}/depapp`;
+ensureDir(`${depLib}/src`);
+ensureDir(`${depApp}/src`);
+put(`${depLib}/src/index.ms`, "export function greet(): string { return \"from lib\"; }\n");
+put(`${depLib}/build.ms`, "import { library, path, Linkage, Optimize, Library } from \"std/build\";\nexport function lib(o: { optimize: Optimize }): Library {\n\treturn library({ linkage: Linkage.Static, entry: path(\"src/index.ms\"), optimize: o.optimize });\n}\n");
+put(`${depApp}/src/main.ms`, "import { greet } from \"lib/src/index\";\nconsole.log(greet());\n");
+put(`${depApp}/build.ms`, [
+	"import { executable, path, project, Optimize } from \"std/build\";",
+	"import { lib } from \"lib/build\";",
+	"export const settings = project({ deps: { lib: \"file:../deplib\" } });",
+	"export const app = executable({ entry: path(\"src/main.ms\"), link: [lib({ optimize: Optimize.Debug }), lib({ optimize: Optimize.Debug }), lib({ optimize: Optimize.ReleaseFast })] });",
+	"",
+].join("\n"));
+const libBuilds = run(depApp, ["build", "--colors=off", "--dry-run", "app"]).split("\n").filter((line: string): boolean => line.includes("--app=staticlib"));
+const libOutputs = libBuilds.map((line: string): string => line.split(" ").filter((w: string): boolean => w.startsWith("--output="))[0]);
+record("a dependency's build function called twice with the same arguments builds once, and once per other arguments", "2 builds, 2 outputs",
+	`${libBuilds.length} builds, ${libOutputs.filter((o: string, i: number): boolean => libOutputs.indexOf(o) == i).length} outputs`);
+put(`${initialised}/build.ms`,"import { executable, systemCommand, path } from \"std/build\";\nexport default executable({ entry: path(\"src/index.ms\") });\nexport const noop = systemCommand([\"true\"]);\n");
 record("an export after export default is a node too", "noop  command|default  executable", run(initialised, ["build", "--colors=off", "--list"]).split("\n").join("|"));
 
 const hostile = `${root}/hostile`;
