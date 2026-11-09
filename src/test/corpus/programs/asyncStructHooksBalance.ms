@@ -7,7 +7,7 @@
 // @stdout: r5
 // @stdout: fresh made=1 copies=0 destroys=1 live=0
 // @stdout: r7
-// @stdout: nested made=1 copies=3 destroys=4 live=0
+// @stdout: nested made=1 copies=2 destroys=3 live=0
 // @skip-js: JS runs no onCopy or onDestroy hook, so its counters stay at zero
 // note: a struct returned from an async function (with zero, one and two awaits before its return, a fresh value, a value passed up through a second async function) runs each hook as on C: the future takes the value at settle and the await that is its only reader takes it out, so every value made or copied is destroyed once.
 
