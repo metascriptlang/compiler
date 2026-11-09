@@ -193,6 +193,41 @@ listings.push(run(optioned, ["build", "--colors=off", "--list"]));
 record("configure is cached until build.ms changes", "evaluated|cached|evaluated", listings.map(evaluated).join("|"));
 record("a step runs from a cached graph", "hello Debug", lastLine(run(optioned, ["build", "--colors=off", "say"])));
 
+const globbed = `${root}/globbed`;
+ensureDir(`${globbed}/src/nested`);
+for (const name of ["src/a.txt", "src/b.txt", "src/nested/n.txt"]) put(`${globbed}/${name}`, "x\n");
+put(`${globbed}/hidden.txt`, "one\n");
+put(`${globbed}/build.ms`, [
+	"import { systemCommand, step, glob } from \"std/build\";",
+	"console.log(\"configured\");",
+	"const sources = glob(\"src/*.txt\");",
+	"export const found = step({ description: \"list\", inputs: [], make: (): void => { console.log(sources.map((p) => p.sub).join(\",\")); } });",
+	`export const reader = systemCommand(["sh", "-c", "cat hidden.txt > \\"$1\\"; echo \\"$1: hidden.txt\\" > \\"$2\\"", "${root}"]);`,
+	"reader.addOutputFileArg(\"copy.txt\");",
+	"reader.addDepFileOutputArg(\"copy.d\");",
+	"",
+].join("\n"));
+record("glob lists the files its pattern names under the calling file's directory", "src/a.txt,src/b.txt", lastLine(run(globbed, ["build", "--colors=off", "found"])));
+const globListings = [run(globbed, ["build", "--colors=off", "--list"]), run(globbed, ["build", "--colors=off", "--list"])];
+put(`${globbed}/src/c.txt`, "x\n");
+globListings.push(run(globbed, ["build", "--colors=off", "--list"]));
+record("a new file matching a glob invalidates the cached configure", "cached|cached|evaluated", globListings.map(evaluated).join("|"));
+function copiedText(): string {
+	const out = run(globbed, ["build", "--colors=off", "reader"]);
+	const copy = readFile(`${out.split(" → ").pop()}/copy.txt`);
+	return `${out.startsWith("reused") ? "reused" : "ran"}:${copy.ok ? copy.value.trim() : "missing"}`;
+}
+const depRuns = [copiedText(), copiedText()];
+put(`${globbed}/hidden.txt`, "two\n");
+depRuns.push(copiedText());
+record("an input a depfile names reruns its command when it changes", "ran:one|reused:one|ran:two", depRuns.join("|"));
+record("--seed keeps the build's result", "src/a.txt,src/b.txt,src/c.txt", lastLine(run(globbed, ["build", "--colors=off", "--seed=7", "found"])));
+
+const initialised = `${root}/initialised`;
+ensureDir(initialised);
+run(initialised, ["init"]);
+record("init writes a two-line graph that run builds and runs", "hello, metascript!", lastLine(run(initialised, ["run", "--colors=off"])));
+
 const hostile = `${root}/hostile`;
 ensureDir(`${hostile}/src`);
 put(`${hostile}/src/main.ms`, "console.log(1);\n");
