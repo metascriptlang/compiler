@@ -1,4 +1,4 @@
-import { declassify, valueBarrier, valueBarrier64, wipeWords, wipeWords64 } from "./secret";
+import { declassify, valueBarrier, wipeWords, wipeWords64 } from "./secret";
 /**
  * Modular arithmetic on fixed-length unsigned integers, ported from Zig's `std.crypto.ff` (MIT, see
  * LICENSE.zig.MIT). A limb is a `uint32` carrying 31 value bits, little-endian in a `uint32[]`; a field
@@ -573,6 +573,7 @@ export function uintGcd(
 }
 
 when (c) {
+	import { valueBarrier64 } from "./secret";
 	@include("runtime/core/mulWide.h");
 	extern function msMulHi64(a: uint64, b: uint64): uint64;
 

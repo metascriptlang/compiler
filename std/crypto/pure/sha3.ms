@@ -1,5 +1,5 @@
 import { encodeHex } from "../../core/encoding";
-import { wipeBytes, wipeWords, wipeWords64 } from "./secret";
+import { wipeBytes } from "./secret";
 
 // Derived from Zig std.crypto keccak_p.zig + sha3.zig, commit 16d31ceed5de91b469e010b4a8d515236ad6bf14; see LICENSE.sha3.
 
@@ -23,6 +23,8 @@ const RC_HI: uint32[24] = [
 // JS lowers every uint64 operation to BigInt; 64-bit lanes ran 30-50x slower there than (lo, hi)
 // uint32 pairs, while on C they ran 3-5x faster (rtx, 2026-11-04).
 when (c) {
+	import { wipeWords64 } from "./secret";
+
 	export class Sha3State {
 		st: uint64[25];
 		buf: uint8[144];
@@ -210,6 +212,8 @@ when (c) {
 		return [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 	}
 } else {
+	import { wipeWords } from "./secret";
+
 	export class Sha3State {
 		st: uint32[50];
 		buf: uint8[];
