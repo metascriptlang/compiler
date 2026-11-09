@@ -58,12 +58,13 @@ test "a view of the shared prelude brings what loading that prelude puts in the 
 	assert perBuildTables(view) == loaded;
 }
 
-const PACK_ENV = ["HOME", "MSC_NO_GLOBAL_CACHE", "MSC_NO_PRELUDE_PACK"];
+const PACK_ENV = ["HOME", "MSC_GLOBAL_CACHE_DIR", "MSC_NO_GLOBAL_CACHE", "MSC_NO_PRELUDE_PACK"];
 
 function withPrivatePackCache(run: (std: string) => void): void {
 	const prev = PACK_ENV.map((name: string): string => env.get(name));
 	const home = `out/test/buildIsolationHome.${performance.now()}`;
 	env.set("HOME", home);
+	env.delete("MSC_GLOBAL_CACHE_DIR");
 	env.delete("MSC_NO_GLOBAL_CACHE");
 	env.delete("MSC_NO_PRELUDE_PACK");
 	try {
