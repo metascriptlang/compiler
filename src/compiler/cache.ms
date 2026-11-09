@@ -47,9 +47,24 @@ function settled(path: string): boolean {
 	return changed >= 0 && changed <= nowSeconds() - SETTLED_SECONDS;
 }
 
-function changedSinceBuild(path: string, startedSeconds: number): boolean {
-	const changed = changedTime(path);
-	return changed < 0 || changed >= Math.floor(startedSeconds);
+function changeMark(path: string): number {
+	const stamp = changeStamp(path);
+	return stamp == "" ? -1 : Number(stamp.substring(stamp.lastIndexOf(":") + 1, stamp.length));
+}
+
+function changedSinceBuild(path: string, startMark: number): boolean {
+	const changed = changeMark(path);
+	return changed < 0 || changed >= startMark;
+}
+
+const EVERY_FILE_CHANGED = Number.MIN_VALUE;
+
+export function buildStartMark(): number {
+	const marker = `${getCacheDir()}/started.${performance.now()}`;
+	if (!writeFile(marker, "").ok) return EVERY_FILE_CHANGED;
+	const mark = changeMark(marker);
+	remove(marker);
+	return mark > 0 ? mark : EVERY_FILE_CHANGED;
 }
 
 export function hashFile(path: string): string {
@@ -222,7 +237,7 @@ let _cacheDir = "";
 let _forceRebuild = false;
 let _nativeProjectDeps: string[] = [];
 let _nativeProjectDepSet: HashSet<string> = new HashSet<string>();
-let _buildStartedSeconds: number = 0;
+let _buildStartMark: number = 0;
 let _projectInputKey = "";
 let _projectInputHashes: string[] = [];
 let _queryRecordDeps: string[] = [];
@@ -254,7 +269,7 @@ export function initCache(mode: number, forceRebuild: boolean, trimRoots: string
 	_dirUnfoldable = new HashMap<string, string[]>();
 	_dirStamps = new HashMap<string, string>();
 	_cacheListing = null;
-	_buildStartedSeconds = Date.now() / 1000;
+	_buildStartMark = buildStartMark();
 	toolchainStamp();
 }
 
@@ -565,14 +580,14 @@ export function computeFingerprint(srcPath: string, compileCmd: string): string 
 	return `${result}:${trackedQueryPresence(nativeDepFile(srcPath, compileCmd))}`;
 }
 
-export function publishNativeObject(srcPath: string, compileCmd: string, oFile: string, fp: string, startedSeconds: number, search: HeaderSearch): Result<string, string> {
+export function publishNativeObject(srcPath: string, compileCmd: string, oFile: string, fp: string, startMark: number, search: HeaderSearch): Result<string, string> {
 	const dependencies = nativeDependencyPaths(srcPath, compileCmd);
-	const queries = recordQueries(nativeDepFile(srcPath, compileCmd), [srcPath], dependencies, search, [dirname(srcPath)], startedSeconds);
+	const queries = recordQueries(nativeDepFile(srcPath, compileCmd), [srcPath], dependencies, search, [dirname(srcPath)], startMark);
 	let settled = dependencies.length > 0 && queries;
 	// cc read these before they are hashed here: one written since the compile started may
 	// not be what cc read (ccache's include-file-too-new rule), so it keeps the first name.
 	for (const path of dependencies) {
-		if (changedSinceBuild(path, startedSeconds)) settled = false;
+		if (changedSinceBuild(path, startMark)) settled = false;
 	}
 	const settledFp = settled ? computeFingerprint(srcPath, compileCmd) : fp;
 	const resolvedFp = presenceTrusted(settledFp) ? settledFp : `${settledFp}:${hashFile(oFile)}`;
@@ -1162,9 +1177,9 @@ function newestCandidate(record: QueryRecord): number {
 	for (const dir of record.dirs) {
 		const found: string[] = [];
 		existingCandidates(dir, "", "", tree, folded, found, []);
-		for (const rel of found) newest = Math.max(newest, changedTime(`${dir}/${rel}`));
+		for (const rel of found) newest = Math.max(newest, changeMark(`${dir}/${rel}`));
 	}
-	for (const path of record.paths) newest = Math.max(newest, changedTime(path));
+	for (const path of record.paths) newest = Math.max(newest, changeMark(path));
 	return newest;
 }
 
@@ -1178,9 +1193,9 @@ function writeQueryRecord(depFile: string, record: QueryRecord, settled: boolean
 	atomicWriteFile(`${depFile}.q`, text);
 }
 
-function recordQueries(depFile: string, sources: string[], deps: string[], search: HeaderSearch, includers: string[], startedSeconds: number): boolean {
+function recordQueries(depFile: string, sources: string[], deps: string[], search: HeaderSearch, includers: string[], startMark: number): boolean {
 	const record = queryRecord(sources, deps, search, includers);
-	const settled = !record.bounded || newestCandidate(record) < Math.floor(startedSeconds);
+	const settled = !record.bounded || newestCandidate(record) < startMark;
 	writeQueryRecord(depFile, record, settled);
 	trackQueryRecord(depFile);
 	return settled;
@@ -1328,7 +1343,7 @@ function storeManifest(dependencyFile: string, source: string, search: HeaderSea
 		deps.push(path);
 	}
 	const record = queryRecord([own], deps, search, includers);
-	if (!record.bounded || newestCandidate(record) >= Math.floor(_buildStartedSeconds)) return "";
+	if (!record.bounded || newestCandidate(record) >= _buildStartMark) return "";
 	const searched = searchedDirs(search.dirs, includers, deps);
 	let text = `${STORE_FORMAT}\n`;
 	for (const rel of record.rels) text = `${text}r\t${rel}\n`;
@@ -1337,7 +1352,7 @@ function storeManifest(dependencyFile: string, source: string, search: HeaderSea
 	}
 	for (const path of record.paths) text = `${text}a\t${path}\n`;
 	for (const path of deps) {
-		if (changedSinceBuild(path, _buildStartedSeconds)) return "";
+		if (changedSinceBuild(path, _buildStartMark)) return "";
 		text = `${text}d\t${path}\t${hashFile(path)}\n`;
 	}
 	return tokensOfRoots(`${text}${presenceText(record, [])}`);
@@ -1776,14 +1791,14 @@ export function writeProjectCache(
 		const path = depPaths[i];
 		const hash = hashFile(path);
 		if (_projectInputKey == record && (i >= _projectInputHashes.length || hash != _projectInputHashes[i])) return dropStaleRecord(record);
-		if (_buildStartedSeconds > 0 && (!exists(path) || changedTime(path) >= Math.floor(_buildStartedSeconds))) return dropStaleRecord(record);
+		if (_buildStartMark > 0 && changedSinceBuild(path, _buildStartMark)) return dropStaleRecord(record);
 		if (seen.has(path)) continue;
 		seen.add(path);
 		dependencies = dependencies + `${PRE_DEP}${path}=${hash}\n`;
 	}
 	for (const path of _nativeProjectDeps) {
 		if (seen.has(path)) continue;
-		if (_buildStartedSeconds > 0 && changedTime(path) >= Math.floor(_buildStartedSeconds)) return dropStaleRecord(record);
+		if (_buildStartMark > 0 && changedSinceBuild(path, _buildStartMark)) return dropStaleRecord(record);
 		seen.add(path);
 		dependencies = dependencies + `${PRE_DEP}${path}=${hashFile(path)}\n`;
 	}
@@ -1808,7 +1823,7 @@ function withProjectRecordFixture(name: string, body: (dir: string) => void): vo
 	const savedForce = _forceRebuild;
 	const savedDeps = _nativeProjectDeps;
 	const savedDepSet = _nativeProjectDepSet;
-	const savedStarted = _buildStartedSeconds;
+	const savedStarted = _buildStartMark;
 	const savedKey = _projectInputKey;
 	const savedHashes = _projectInputHashes;
 	const dir = `${getCacheDir()}/project-record-${name}-${performance.now()}`;
@@ -1817,7 +1832,7 @@ function withProjectRecordFixture(name: string, body: (dir: string) => void): vo
 	_forceRebuild = false;
 	_nativeProjectDeps = [];
 	_nativeProjectDepSet = new HashSet<string>();
-	_buildStartedSeconds = 0;
+	_buildStartMark = 0;
 	_projectInputKey = "";
 	_projectInputHashes = [];
 	try {
@@ -1828,7 +1843,7 @@ function withProjectRecordFixture(name: string, body: (dir: string) => void): vo
 		_forceRebuild = savedForce;
 		_nativeProjectDeps = savedDeps;
 		_nativeProjectDepSet = savedDepSet;
-		_buildStartedSeconds = savedStarted;
+		_buildStartMark = savedStarted;
 		_projectInputKey = savedKey;
 		_projectInputHashes = savedHashes;
 	}
@@ -1962,9 +1977,9 @@ export function publishModuleObject(modPath: string, baseFp: string, cFile: stri
 
 function publishObjectVersion(modPath: string, baseFp: string, cFile: string, oFile: string, fp: string, search: HeaderSearch): string {
 	const headers = moduleHeaderPaths(modPath, baseFp);
-	if (!recordQueries(moduleDepFile(modPath, baseFp), [cFile], headers, search, [], _buildStartedSeconds)) return oFile;
+	if (!recordQueries(moduleDepFile(modPath, baseFp), [cFile], headers, search, [], _buildStartMark)) return oFile;
 	for (const path of headers) {
-		if (changedSinceBuild(path, _buildStartedSeconds)) return oFile;
+		if (changedSinceBuild(path, _buildStartMark)) return oFile;
 	}
 	const resolvedFp = moduleObjectFp(modPath, baseFp);
 	if (resolvedFp == fp) {
@@ -2508,15 +2523,40 @@ test "a backdated dependency keeps the header manifest and the project record fr
 		assert backdated(header, "int a;\n");
 		assert writeFile(depFile, `native: ${header}\n`).ok;
 		assert writeFile(out, "output").ok;
-		_buildStartedSeconds = nowSeconds() - 100;
+		_buildStartMark = nowSeconds() - 100;
 		assert storeManifest(depFile, `${dir}/entry.c`, { dirs: [], frameworks: [], complete: true }, []) == "";
 		writeProjectCache([dep], out, 0, "", 0, "-O0");
 		assert projectCacheChanged([dep], out, 0, "", 0, "-O0");
-		_buildStartedSeconds = 0;
+		_buildStartMark = 0;
 		writeProjectCache([dep], out, 0, "", 0, "-O0");
 		assert !projectCacheChanged([dep], out, 0, "", 0, "-O0");
 		registerNativeProjectDep(header);
-		_buildStartedSeconds = nowSeconds() - 100;
+		_buildStartMark = nowSeconds() - 100;
+		writeProjectCache([dep], out, 0, "", 0, "-O0");
+		assert projectCacheChanged([dep], out, 0, "", 0, "-O0");
+	});
+}
+
+function markAfter(path: string): number {
+	for (let attempt = 0; attempt < 100000; attempt++) {
+		const mark = buildStartMark();
+		if (mark > changeMark(path)) return mark;
+	}
+	throw new Error(`the filesystem clock never moved past ${path}`);
+}
+
+test "a dependency written just before the build started keeps the project record; one written after drops it" {
+	if (platform == "windows") return;
+	withProjectRecordFixture("start-mark", (dir: string): void => {
+		const dep = `${dir}/entry.ms`;
+		const out = `${dir}/app`;
+		assert writeFile(dep, "source").ok;
+		assert writeFile(out, "output").ok;
+		_buildStartMark = markAfter(dep);
+		writeProjectCache([dep], out, 0, "", 0, "-O0");
+		assert !projectCacheChanged([dep], out, 0, "", 0, "-O0");
+		_projectInputKey = "";
+		assert writeFile(dep, "edited").ok;
 		writeProjectCache([dep], out, 0, "", 0, "-O0");
 		assert projectCacheChanged([dep], out, 0, "", 0, "-O0");
 	});

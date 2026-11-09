@@ -99,7 +99,7 @@ import { compileC, compileCFile, trimRootList, withoutPreprocessorArgs, objectCo
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch, isDefined } from "./defines";
 import { resolveCC, requirePreparedToolchain } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, projectRecordCurrent, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, headerSearch, invalidateCompileCache, isLinkCached, writeLinkCache, linkStoreKey, restoreLinked, publishLinked, cacheDir, headerModuleKey, lookupHeaderModule, storeHeaderModule, toolchainStamp, compilerStamp, objectStamp, stdTreeStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
+import { initCache, buildStartMark, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, projectRecordCurrent, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, headerSearch, invalidateCompileCache, isLinkCached, writeLinkCache, linkStoreKey, restoreLinked, publishLinked, cacheDir, headerModuleKey, lookupHeaderModule, storeHeaderModule, toolchainStamp, compilerStamp, objectStamp, stdTreeStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
 import { stampMemoRoot } from "../utils/cachePaths";
 import { hashContent } from "../utils/contentHash";
 import { lineText } from "../utils/sourceLines";
@@ -1426,7 +1426,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 	// parent terminal by the spawn dispatcher in previous versions, and the
 	// failure path here just stopBuild()s after logging. Direct serial compile/link
 	// paths (cmdBuildC body) preserve full Result + stderr display.
-	const startedSeconds = Date.now() / 1000;
+	const startMark = buildStartMark();
 	const futures: Promise<number>[] = [];
 	for (const j of jobs) {
 		const parts = objectCompileArgs(ccOption, ccBinary, isCppFile(j.fullPath), mode, j.fileFlags);
@@ -1468,7 +1468,7 @@ function processCompileDirectives(directives: string, moduleDir: string, include
 		const compileCmd = fullCompileCmd(ccOption, mode, j.fileFlags, ccBinary, isCppFile(j.fullPath));
 		registerNativeDependencies(j.fullPath, compileCmd);
 		const dirs = headerSearch(ccOption, ccBinary, isCppFile(j.fullPath), mode, j.fileFlags);
-		const published = publishNativeObject(j.fullPath, compileCmd, j.oFile, j.fp, startedSeconds, dirs);
+		const published = publishNativeObject(j.fullPath, compileCmd, j.oFile, j.fp, startMark, dirs);
 		if (published.ok) {
 			publishToStore(j.storeKey, published.value, j.dependencyFile, j.fullPath, dirs, [dirname(j.fullPath)]);
 			oFiles[j.slot] = published.value;
