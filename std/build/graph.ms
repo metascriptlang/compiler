@@ -56,6 +56,21 @@ export macro path(sub: Node): Node {
 	return { kind: NodeKind.CallExpr, line: sub.line, column: sub.column, callee: bindSym("pathFrom"), arguments: [owner, sub], isDirectCall: false, resolvedOverloadIdx: -1 };
 }
 
+extern function msBuildGlob(base: string, pattern: string): string;
+
+export function globFrom(owner: string, pattern: string): LazyPath[] {
+	const listing = msBuildGlob(owner, pattern);
+	return listing == "" ? [] : listing.split("\n").map((sub: string): LazyPath => pathFrom(owner, sub));
+}
+
+// The files matching `pattern` under the directory of the file that calls `glob()`, sorted;
+// dot-directories are not entered. The configure cache lists them again before reusing a graph.
+export macro glob(pattern: Node): Node {
+	const file = expansionFile();
+	const owner: Node = { kind: NodeKind.StringLiteral, line: pattern.line, column: pattern.column, value: file.substring(0, file.lastIndexOf("/")) };
+	return { kind: NodeKind.CallExpr, line: pattern.line, column: pattern.column, callee: bindSym("globFrom"), arguments: [owner, pattern], isDirectCall: false, resolvedOverloadIdx: -1 };
+}
+
 export function file(this dir: LazyPath, sub: string): LazyPath {
 	return { owner: dir.owner, sub: join(dir.sub, sub), producer: dir.producer };
 }

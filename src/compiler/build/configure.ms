@@ -12,7 +12,9 @@ import { registerHostFn, HostCapability } from "../../raiser/hostRegistry";
 import { ensureHostTableLoaded } from "../meta/hostTable";
 import { MODE_RELEASE, MODE_DANGER } from "../options";
 import { resolve, join, dirname } from "std/fs/path";
-import { exists, readFile } from "std/fs";
+import { exists, readFile, readDir, realpath } from "std/fs";
+import { compileGlob, globMatch, Glob } from "std/fs/glob";
+import { raiseFromHost } from "../../raiser/hostRegistry";
 import { parseJson, jsonStringify, jsonValueOf, jsonValueToStruct } from "std/serialize/json";
 import { hashFile, compilerStamp } from "../cache";
 import { atomicWriteFile, ensureDir } from "../io";
@@ -71,11 +73,18 @@ interface CachedGraph {
 	key: string;
 	sources: string[];
 	hashes: string[];
+	globs: GlobListing[];
 	nodes: GraphNode[];
 	exportNames: string[];
 	exportIds: int32[];
 	defaultId: int32;
 	options: GraphOption[];
+}
+
+interface GlobListing {
+	base: string;
+	pattern: string;
+	listing: string;
 }
 
 const CONFIGURE_FORMAT = "cfg1";
@@ -87,6 +96,43 @@ export interface GraphOption {
 
 let givenOptions = new HashMap<string, string>();
 let declaredOptions: GraphOption[] = [];
+let globsListed: GlobListing[] = [];
+
+function walkGlob(dir: string, rel: string, g: Glob, visited: string[], found: string[]): void {
+	const real = realpath(dir);
+	if (visited.includes(real)) return;
+	visited.push(real);
+	for (const e of readDir(dir)) {
+		if (e.endsWith("/")) {
+			const name = e.slice(0, e.length - 1);
+			if (!name.startsWith(".")) walkGlob(join(dir, name), rel == "" ? name : `${rel}/${name}`, g, visited, found);
+		} else {
+			const path = rel == "" ? e : `${rel}/${e}`;
+			if (globMatch(g, path)) found.push(path);
+		}
+	}
+}
+
+// Files under `base` matching `pattern`, anchored at `base`, sorted, one per line.
+function listGlob(base: string, pattern: string): Result<string, string> {
+	const g = compileGlob(pattern.startsWith("/") ? pattern : `/${pattern}`);
+	if (!g.ok) return Result.err(`glob('${pattern}'): ${g.error}`);
+	const found: string[] = [];
+	if (exists(base)) walkGlob(base, "", g.value, [], found);
+	return Result.ok(found.sort().join("\n"));
+}
+
+function hostBuildGlob(args: RaiserValue[]): RaiserValue {
+	const base = unboxString(args[0]);
+	const pattern = unboxString(args[1]);
+	const listed = listGlob(base, pattern);
+	if (!listed.ok) {
+		raiseFromHost(listed.error, false);
+		return boxString("");
+	}
+	globsListed.push({ base, pattern, listing: listed.value });
+	return boxString(listed.value);
+}
 
 function hostBuildOption(args: RaiserValue[]): RaiserValue {
 	const name = unboxString(args[0]);
@@ -253,8 +299,10 @@ export function configure(buildFile: string, opts: CliOptions, loaded: string[] 
 	const raiser = configureOptions(opts);
 	givenOptions = optionsGiven(opts);
 	declaredOptions = [];
+	globsListed = [];
 	ensureHostTableLoaded();
 	registerHostFn("msBuildOption", hostBuildOption, HostCapability.Pure);
+	registerHostFn("msBuildGlob", hostBuildGlob, HostCapability.Pure);
 	setParserDefines(raiser.defines);
 	defer setParserDefines(opts.defines);
 	const problems: ConfigureProblem[] = [];
@@ -315,12 +363,16 @@ function cachedGraph(buildFile: string, key: string): BuildGraph | null {
 	for (let i = 0; i < c.sources.length; i += 1) {
 		if (hashFile(c.sources[i]) != c.hashes[i]) return null;
 	}
+	for (const g of c.globs) {
+		const now = listGlob(g.base, g.pattern);
+		if (!now.ok || now.value != g.listing) return null;
+	}
 	return { buildFile, nodes: c.nodes, exportNames: c.exportNames, exportIds: c.exportIds, defaultId: c.defaultId, options: c.options, run: null, steps: new HashMap<int32, RaiserHostValue>() };
 }
 
 function saveGraph(g: BuildGraph, key: string, loaded: string[]): void {
 	const c: CachedGraph = {
-		format: CONFIGURE_FORMAT, key, sources: loaded, hashes: loaded.map((p: string): string => hashFile(p)),
+		format: CONFIGURE_FORMAT, key, sources: loaded, hashes: loaded.map((p: string): string => hashFile(p)), globs: globsListed,
 		nodes: g.nodes, exportNames: g.exportNames, exportIds: g.exportIds, defaultId: g.defaultId, options: g.options,
 	};
 	ensureDir(dirname(cacheFile(g.buildFile)));
