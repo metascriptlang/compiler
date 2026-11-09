@@ -1197,8 +1197,9 @@ void msFreeImmortals(void) {
 }
 
 __attribute__((noinline)) void msDestroyAndDisposeDyn(void* p) {
-	const msTypeInfo* t = msHeader(p)->type;
-	MS_DESTROY_DISPATCH(t, p);
+	msRefHeader* h = msHeader(p);
+	if (h->rootIdx >= 0) msUnregisterCycle(p);
+	MS_DESTROY_DISPATCH(h->type, p);
 	msDestroyAndDispose(p);
 }
 

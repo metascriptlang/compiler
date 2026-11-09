@@ -416,8 +416,7 @@ static inline void msAtomicIncRef(void* p) {
 
 void msUnregisterCycle(void* p);
 
-static inline bool msDecRefIsLast(void* p) {
-	if (p == NULL) return false;
+static inline bool msDecRefIsLastKeepRoot(void* p) {
 	MS_DRC_STAT_ADD(MS_DS_RC_DEC, 1);
 	MS_LEDGER_COUNT(MS_LEDGER_RC_DEC);
 	MS_RC_FAMILY_CHECK(p, false, "msDecRefIsLast");
@@ -428,7 +427,12 @@ static inline bool msDecRefIsLast(void* p) {
 		h->rc -= MS_RC_INCREMENT;
 		return false;
 	}
-	if (h->rootIdx >= 0) msUnregisterCycle(p);
+	return true;
+}
+
+static inline bool msDecRefIsLast(void* p) {
+	if (p == NULL || !msDecRefIsLastKeepRoot(p)) return false;
+	if (msHeader(p)->rootIdx >= 0) msUnregisterCycle(p);
 	return true;
 }
 
@@ -641,18 +645,22 @@ static inline void msOrcIncRef(void* p) {
 	msHeader(p)->rc += MS_RC_INCREMENT;
 }
 
-static inline bool msOrcDecRefIsLast(void* p) {
-	if (p == NULL) return false;
+static inline bool msOrcDecRefIsLastKeepRoot(void* p) {
 	MS_LEDGER_COUNT(MS_LEDGER_RC_DEC);
 	MS_RC_FAMILY_CHECK(p, false, "msOrcDecRefIsLast");
 	msRefHeader* h = msHeader(p);
 	bool isLast = (h->rc & MS_RC_STRONG_MASK) == 0;
 	MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST, 1); MS_DRC_STAT_ADD(MS_DS_ORC_DEC_LAST_TRUE, isLast);
-	if (!isLast) {
-		h->rc -= MS_RC_INCREMENT;
-	}
-	msRememberCycle(isLast, p, h->type);
-	return isLast;
+	if (isLast) return true;
+	h->rc -= MS_RC_INCREMENT;
+	msRememberCycle(false, p, h->type);
+	return false;
+}
+
+static inline bool msOrcDecRefIsLast(void* p) {
+	if (p == NULL || !msOrcDecRefIsLastKeepRoot(p)) return false;
+	msRememberCycle(true, p, msHeader(p)->type);
+	return true;
 }
 
 static inline void msMarkMaybeCycle(void* p) {

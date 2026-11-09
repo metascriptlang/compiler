@@ -357,7 +357,7 @@ void msStringCopy(msString* dest, msString src);
 		const msTypeInfo* __t = msHeader(__msDecrefAnyP)->type; \
 		if (__t != NULL && __t->decrefFn != NULL) { \
 			__t->decrefFn(__msDecrefAnyP); \
-		} else if (msDecRefIsLast(__msDecrefAnyP)) { \
+		} else if (msDecRefIsLastKeepRoot(__msDecrefAnyP)) { \
 			msDestroyAndDisposeDyn(__msDecrefAnyP); \
 		} \
 	} \
@@ -368,7 +368,7 @@ void msStringCopy(msString* dest, msString src);
 } while(0)
 #define msDecref(p)           do { \
 	void* __msDecrefP = (void*)(p); \
-	if (__msDecrefP != NULL && msDecRefIsLast(__msDecrefP)) { \
+	if (__msDecrefP != NULL && msDecRefIsLastKeepRoot(__msDecrefP)) { \
 		msDestroyAndDisposeDyn(__msDecrefP); \
 	} \
 } while(0)
@@ -391,7 +391,7 @@ void msStringCopy(msString* dest, msString src);
 		const msTypeInfo* __t = msHeader(__msDecrefCyclicP)->type; \
 		if (__t != NULL && __t->decrefFn != NULL) { \
 			__t->decrefFn(__msDecrefCyclicP); \
-		} else if (msOrcDecRefIsLast(__msDecrefCyclicP)) { \
+		} else if (msOrcDecRefIsLastKeepRoot(__msDecrefCyclicP)) { \
 			msDestroyAndDisposeDyn(__msDecrefCyclicP); \
 		} \
 	} \
