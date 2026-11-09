@@ -84,12 +84,20 @@ function pathOf(x: Execution, p: GraphPath): string {
 }
 
 function treeHash(path: string): string {
-	if (!exists(path)) return `absent:${path}`;
+	if (!exists(path)) return "absent";
 	if (!isDir(path)) return `f:${hashFile(path)}`;
 	const names = readDir(path).map((e: string): string => e.endsWith("/") ? e.slice(0, e.length - 1) : e).sort();
 	let acc = "";
 	for (const name of names) acc = `${acc}${name}\n${treeHash(join(path, name))}\n`;
 	return `d:${hashContent(acc)}`;
+}
+
+function keyPath(x: Execution, path: string): string {
+	return path.startsWith(`${x.projectRoot}/`) ? path.slice(x.projectRoot.length + 1, path.length) : path;
+}
+
+function rootedPath(x: Execution, path: string): string {
+	return isAbsolute(path) ? path : join(x.projectRoot, path);
 }
 
 function inputHash(x: Execution, p: GraphPath): string {
@@ -98,7 +106,7 @@ function inputHash(x: Execution, p: GraphPath): string {
 		return `${p.producer}:${p.sub}:${d ?? ""}`;
 	}
 	const path = sourcePath(p);
-	return `${path}\n${treeHash(path)}`;
+	return `${keyPath(x, path)}\n${treeHash(path)}`;
 }
 
 function toolIdentity(program: string): string {
@@ -167,12 +175,12 @@ function depFileInputs(depFile: string, cwd: string): string[] {
 function runCommand(x: Execution, n: GraphNode): Job | null {
 	let key = `${STORE_FORMAT}\ncommand\n${platform}\n${toolIdentity(n.argv[0].text)}\n`;
 	for (const a of n.argv) key = `${key}${a.kind}:${a.text}:${a.path == null ? "" : inputHash(x, a.path)}\n`;
-	if (n.cwd != null) key = `${key}cwd:${pathOf(x, n.cwd)}\n`;
+	if (n.cwd != null) key = `${key}cwd:${keyPath(x, pathOf(x, n.cwd))}\n`;
 	for (const e of n.env) key = `${key}env:${e}\n`;
 	for (const p of n.inputs) key = `${key}in:${inputHash(x, p)}\n`;
 	key = `${key}stdout:${n.stdout}\n`;
 	const store = storeDir(x);
-	const known = storedOutput(store, key, hashFile);
+	const known = storedOutput(store, key, (path: string): string => hashFile(rootedPath(x, path)));
 	if (known != "") {
 		x.outputs.set(n.id, known);
 		x.digests.set(n.id, basename(known));
@@ -219,7 +227,7 @@ function runCommand(x: Execution, n: GraphNode): Job | null {
 		const found: string[] = [];
 		for (const depFile of depFiles) {
 			for (const input of depFileInputs(depFile, dir)) {
-				if (!input.startsWith(`${tmp}/`)) found.push(`${input}\t${hashFile(input)}`);
+				if (!input.startsWith(`${tmp}/`)) found.push(`${keyPath(x, input)}\t${hashFile(input)}`);
 			}
 		}
 		const digest = treeHash(tmp).slice(2);
