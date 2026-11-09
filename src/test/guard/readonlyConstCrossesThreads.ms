@@ -102,6 +102,32 @@ const cases: Case[] = [
 			+ SPAWN,
 	},
 	{
+		name: "a plain const of a generic struct instance whose Sendable field takes a struct with a nullable scalar field",
+		expect: Expect.Clean,
+		text: GENERIC_CALL
+			+ "struct Holder { id: int32; owner: uint32 | null; }\n"
+			+ "const k: Keyed<Holder> = { name: \"k\", keyOf: (row: Holder): int32 => row.id };\n"
+			+ "function read(): string { return k.name + String(k.keyOf({ id: 2, owner: null })); }\n"
+			+ SPAWN,
+	},
+	{
+		name: "a plain const struct with a nullable string field and a Sendable function, read from an actor",
+		expect: Expect.Clean,
+		text: "struct Named { label: string | null; keyOf: Sendable<(id: uint32) => uint32>; }\n"
+			+ "const n: Named = { label: \"n\", keyOf: (id: uint32): uint32 => id + 1 };\n"
+			+ "function read(): string { return (n.label ?? \"-\") + String(n.keyOf(1)); }\n"
+			+ ACTOR,
+	},
+	{
+		name: "a const struct with a nullable struct field that holds a T[], writable through the const",
+		expect: Expect.ModuleState,
+		text: "struct Tags { tags: string[]; }\n"
+			+ "struct Maybed { name: string; inner: Tags | null; keyOf: Sendable<(id: uint32) => uint32>; }\n"
+			+ "const m: Maybed = { name: \"m\", inner: { tags: [\"t\"] }, keyOf: (id: uint32): uint32 => id };\n"
+			+ "function read(): string { return m.name; }\n"
+			+ SPAWN,
+	},
+	{
 		name: "a module let struct read from an actor",
 		expect: Expect.ModuleState,
 		text: PLAIN
