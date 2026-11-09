@@ -514,6 +514,10 @@ function checkUnitStep(step: string, r: ExecFileResult, state: string, note: str
 	return unit;
 }
 
+function comptimeRead(exported: string, name: string, file: string): string {
+	return `import { readFile } from "std/fs";\n\n${exported}const ${name}: string = @comptime {\n\tconst r = readFile("${file}");\n\tif (!r.ok) return "missing";\n\treturn r.value;\n};\n`;
+}
+
 function runStdUnitSteps(dir: string, cache: string, project: string, reasons: string[]): void {
 	const a = `${project}/a`;
 	const b = `${project}/b`;
@@ -527,6 +531,13 @@ function runStdUnitSteps(dir: string, cache: string, project: string, reasons: s
 
 	const hit = checkUnitStep("step 2 (second program, same project)", unitBuild(b, `${dir}/localCache2`, true, true), "hit", "", reasons);
 	if (hit.contains(" [")) reasons.push(`step 2 (second program, same project): a hit carries notes:\n${hit}`);
+
+	const c = `${project}/c`;
+	put(`${c}/first.txt`, "a");
+	put(`${c}/second.txt`, "b");
+	put(`${c}/lib.ms`, comptimeRead("export ", "SECOND", "second.txt"));
+	put(`${c}/main.ms`, `${comptimeRead("", "FIRST", "first.txt")}import { SECOND } from "./lib";\n\nconsole.log(FIRST + SECOND);\n`);
+	checkUnitStep("step 2b (a compile-time file read in two modules after a hit)", unitBuild(c, `${dir}/localCache2b`, true, true), "hit", "", reasons);
 
 	const whole = read(path);
 	const headerEnd = whole.indexOf("\n", whole.indexOf("\n") + 1);
