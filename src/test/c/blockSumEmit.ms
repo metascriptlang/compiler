@@ -23,7 +23,7 @@ test "E2E C: a checked reduction of any pure integer term runs in sticky blocks"
 	for (const fn of fns) {
 		const c = built("sticky", fn);
 		assert !c.startsWith("error:"), c.slice(0, 400);
-		assert c.contains("msBlockSumFits("), fn;
+		assert c.contains("msBlockRangeFits("), fn;
 	}
 }
 
@@ -38,23 +38,23 @@ test "E2E C: a reduction with a call, a division, a read of its sum, a wide sum 
 	for (const fn of fns) {
 		const c = built("checked", fn);
 		assert !c.startsWith("error:"), c.slice(0, 400);
-		assert !c.contains("msBlockSumFits("), fn;
+		assert !c.contains("msBlockRangeFits("), fn;
 	}
 }
 
-test "E2E C: a sticky block runs the checks its ranges prove unchecked and checks a counter's range once per block" {
+test "E2E C: a sticky block runs proven checks unchecked, checks a counter's range once, and bounds its terms by their range or their min and max" {
 	const cases: string[][] = [
-		["function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const x of upTo(n)) t += (x ^ n) & 1023; return t; }", "int32_t dollarpos", "(dollarneg_"],
-		["function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const x of upTo(n)) t += -(x & 7); return t; }", "int32_t dollarneg", "(dollarpos_"],
-		["function f(xs: int32[], n: int32): int16 { let t: int16 = 0; for (let x: int32 = 0; x < n; x++) t += ((x & 7) - 3) as int16; return t; }", "", "msSticky"],
-		["function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const [k, x] of xs.entries()) t += x + ((k as int32) & 1); return t; }", "> 2147483648LL", "msStickyRangeI32("],
-		["function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const x of upTo(n)) t -= x * 3 + 1; return t; }", "msStickyMulI32(", ""],
+		["function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const x of upTo(n)) t += (x ^ n) & 1023; return t; }", "int32_t dollarsum", "dollarmin|msSticky"],
+		["function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const x of upTo(n)) t += -(x & 7); return t; }", "int32_t dollarsum", "dollarmin|msSticky"],
+		["function f(xs: int32[], n: int32): int16 { let t: int16 = 0; for (let x: int32 = 0; x < n; x++) t += ((x & 7) - 3) as int16; return t; }", "int32_t dollarsum", "msSticky"],
+		["function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const [k, x] of xs.entries()) t += x + ((k as int32) & 1); return t; }", "> 2147483648LL|dollarmin|int64_t dollarsum", "msSticky"],
+		["function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const x of upTo(n)) t -= x * 3 + 1; return t; }", "msStickyMulI32(|dollarmin", "msStickyAddI32("],
 	];
 	for (const [fn, kept, dropped] of cases) {
 		const c = built("ranges", fn);
 		assert !c.startsWith("error:"), c.slice(0, 400);
-		assert c.contains("msBlockSumFits("), fn;
-		assert kept == "" || c.contains(kept), `${fn} lost ${kept}`;
-		assert dropped == "" || !c.contains(dropped), `${fn} kept ${dropped}`;
+		assert c.contains("msBlockRangeFits("), fn;
+		for (const k of kept.split("|")) assert c.contains(k), `${fn} lost ${k}`;
+		for (const d of dropped.split("|")) assert !c.contains(d), `${fn} kept ${d}`;
 	}
 }
