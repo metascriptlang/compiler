@@ -3,7 +3,7 @@ import { CliOptions } from "../options";
 import { hashFile, loadFileHashes, saveFileHashes } from "../cache";
 import { hashContent } from "../../utils/contentHash";
 import { stepStoreRoot, storedOutput, storeScratch, storePublish } from "./store";
-import { atomicCopyFile } from "../io";
+import { atomicCopyFile, atomicWriteFile } from "../io";
 import { exists, isDir, readDir, readFile, writeFile, ensureDir, removeAll } from "std/fs";
 import { join, dirname, basename, isAbsolute } from "std/fs/path";
 import { execFile, execPath, platform, findOnPath } from "std/process";
@@ -80,7 +80,7 @@ function pathOf(x: Execution, p: GraphPath): string {
 	const out = x.outputs.get(p.producer);
 	if (out == null) throw new Error(`internal: node ${p.producer} has not run before a consumer read ${p.sub}`);
 	const producer = nodeById(x.graph, p.producer);
-	if (producer.kind == "command") return p.sub == "" ? out : join(out, p.sub);
+	if (producer.kind == "command" || producer.kind == "writeFiles") return p.sub == "" ? out : join(out, p.sub);
 	return out;
 }
 
@@ -244,6 +244,60 @@ function runCommand(x: Execution, n: GraphNode): Job | null {
 	}, (): void => { removeAll(tmp); });
 }
 
+function runWriteFiles(x: Execution, n: GraphNode): void {
+	let key = `${STORE_FORMAT}\nwriteFiles\n`;
+	for (const f of n.files) key = `${key}${f.sub}\t${f.from == null ? hashContent(f.bytes) : inputHash(x, f.from!)}\n`;
+	const store = storeDir(x);
+	const known = storedOutput(store, key);
+	if (known != "") {
+		x.outputs.set(n.id, known);
+		x.digests.set(n.id, basename(known));
+		x.reused.push(label(n));
+		return;
+	}
+	if (x.dryRun) {
+		for (const f of n.files) console.log(`write ${f.sub}`);
+		x.outputs.set(n.id, `${store}/tmp/dry-run`);
+		x.digests.set(n.id, `dry:${n.id}`);
+		return;
+	}
+	const tmp = storeScratch(store, key);
+	for (const f of n.files) {
+		const target = join(tmp, f.sub);
+		ensureDir(dirname(target));
+		const written = f.from == null ? atomicWriteFile(target, f.bytes) : atomicCopyFile(pathOf(x, f.from!), target);
+		if (!written) {
+			removeAll(tmp);
+			throw new Error(`${label(n)}: cannot write ${f.sub}`);
+		}
+	}
+	const digest = treeHash(tmp, []).slice(2);
+	const placed = storePublish(store, key, tmp, digest);
+	if (placed == "") throw new Error(`${label(n)}: cannot place its output in ${store}/o`);
+	x.outputs.set(n.id, placed);
+	x.digests.set(n.id, digest);
+	x.ran.push(label(n));
+}
+
+function updateSources(x: Execution, n: GraphNode): void {
+	x.outputs.set(n.id, "");
+	for (const f of n.files) {
+		const dest = sourcePath(f.dest!);
+		if (x.dryRun) {
+			console.log(`update ${dest}`);
+			continue;
+		}
+		const from = f.from == null ? "" : pathOf(x, f.from!);
+		const same = exists(dest) && (from == "" ? (try readFile(dest) catch "") == f.bytes : hashFile(dest) == hashFile(from));
+		if (same) continue;
+		ensureDir(dirname(dest));
+		const written = from == "" ? atomicWriteFile(dest, f.bytes) : atomicCopyFile(from, dest);
+		if (!written) throw new Error(`${label(n)}: cannot write ${dest}`);
+		console.log(`updated ${keyPath(x, dest)}`);
+	}
+	x.ran.push(label(n));
+}
+
 function runLibrary(x: Execution, n: GraphNode): Job | null {
 	if (n.from != null) {
 		const path = pathOf(x, n.from);
@@ -307,6 +361,8 @@ function startNode(x: Execution, n: GraphNode): Job | null {
 	if (n.kind == "run") runArtifactNode(x, n);
 	else if (n.kind == "install") installNode(x, n);
 	else if (n.kind == "step") runStep(x, n);
+	else if (n.kind == "writeFiles") runWriteFiles(x, n);
+	else if (n.kind == "updateSourceFiles") updateSources(x, n);
 	else throw new Error(`build.ms: msc does not know the node kind '${n.kind}' of ${label(n)}`);
 	return null;
 }

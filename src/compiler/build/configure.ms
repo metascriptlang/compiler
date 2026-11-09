@@ -34,6 +34,13 @@ export interface GraphArg {
 	path: GraphPath | null;
 }
 
+export interface GraphFile {
+	sub: string;
+	bytes: string;
+	from: GraphPath | null;
+	dest: GraphPath | null;
+}
+
 export interface GraphNode {
 	id: int32;
 	kind: string;
@@ -55,6 +62,7 @@ export interface GraphNode {
 	stdout: boolean;
 	artifact: int32;
 	args: string[];
+	files: GraphFile[];
 }
 
 export interface BuildGraph {
@@ -88,7 +96,7 @@ interface GlobListing {
 	listing: string;
 }
 
-const CONFIGURE_FORMAT = "cfg2";
+const CONFIGURE_FORMAT = "cfg3";
 
 export interface GraphOption {
 	name: string;
@@ -223,6 +231,7 @@ function shapeOf(n: GraphNode): string {
 	for (const a of n.argv) s = `${s}|${a.kind}:${a.text}:${pathShape(a.path, n.id)}`;
 	s = `${s}|${pathShape(n.cwd, n.id)}`;
 	for (const p of n.inputs) s = `${s}|in:${pathShape(p, n.id)}`;
+	for (const f of n.files) s = `${s}|file:${f.sub}:${hashContent(f.bytes)}:${pathShape(f.from, n.id)}:${pathShape(f.dest, n.id)}`;
 	return `${s}|${n.env.join(",")}|${n.stdout}|${n.artifact}|${n.args.join(",")}`;
 }
 
@@ -272,7 +281,7 @@ function readNode(r: Reader, v: RaiserHostValue): int32 {
 	const node: GraphNode = {
 		id, kind: v.field("kind").text(), name: "", description: v.field("description").text(), deps: [],
 		entry: null, from: null, os: "", cpu: "", abi: "", optimize: 0, linkage: 0, link: [],
-		argv: [], cwd: null, inputs: [], env: [], stdout: false, artifact: -1, args: [],
+		argv: [], cwd: null, inputs: [], env: [], stdout: false, artifact: -1, args: [], files: [],
 	};
 	r.nodes.push(node);
 	if (node.kind == "step") r.steps.set(id, v);
@@ -316,6 +325,13 @@ function readNode(r: Reader, v: RaiserHostValue): int32 {
 	}
 	if (node.kind == "run" || node.kind == "install") node.artifact = readNode(r, v.field("artifact"));
 	if (node.kind == "run") node.args = strings(v.field("args"));
+	if (node.kind == "writeFiles" || node.kind == "updateSourceFiles") {
+		const files = v.field("files");
+		for (let i = 0; i < files.length(); i += 1) {
+			const f = files.at(i);
+			node.files.push({ sub: f.field("sub").text(), bytes: f.field("bytes").text(), from: readPath(r, f.field("from")), dest: readPath(r, f.field("dest")) });
+		}
+	}
 	return keepOne(r, node);
 }
 
