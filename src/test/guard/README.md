@@ -131,4 +131,7 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   `msDecrefCyclic`, `msAtomicDecref`, `msDecrefCyclicEdge`) decides inline and disposes through one
   out-of-line call, as Nim inlines only `nimDecRefIsLast` and calls `nimDestroyAndDispose`. Compiles
   each macro at `-O3` and reads the object's symbols. Proven RED on tree `9966bc7d6d35` (macOS arm64:
-  all five reference `msUnownedOutlives`), GREEN on the slice-2 tree.
+  all five reference `msUnownedOutlives`), GREEN on the slice-2 tree. Since the husk change the
+  inline dispose marker is `msHeapFree`. The four plain releases also leave a last ref's cycle-root
+  unregister to the out-of-line call (the edge release keeps it): RED on tree `516f13436208`, where
+  `msDecref`, `msDecrefAny` and `msDecrefCyclic` call `msUnregisterCycle`.

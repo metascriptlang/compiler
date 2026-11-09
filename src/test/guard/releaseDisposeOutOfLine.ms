@@ -3,7 +3,7 @@
 // a copy of the destroy dispatch and the free path at each of msc's ~146k release sites costs
 // a quarter of its .text. This compiles one function per release macro of
 // runtime/core/system.h at -O3 and reads the object's symbol table: each must call its
-// out-of-line last-ref routine, and none may reach `msUnownedOutlives`, which only the inline
+// out-of-line last-ref routine, and none may reach `msHeapFree`, which only the inline
 // dispose calls. The four plain releases also leave the cycle-root unregister of a last ref to
 // that routine, so none may call `msUnregisterCycle` itself; the edge release keeps it, because
 // its deferred path destroys without the routine.
@@ -16,7 +16,9 @@
 // RED PRE-FIX: tree 9966bc7d6d35: all five functions reference `msUnownedOutlives` and none calls
 // its out-of-line routine (macOS arm64, 2026-11-09). The unregister rows: RED on tree
 // 516f13436208, where `msDecref`, `msDecrefAny` and `msDecrefCyclic` call `msUnregisterCycle`
-// (macOS arm64, 2026-11-09).
+// (macOS arm64, 2026-11-09). The dispose marker was `msUnownedOutlives` until the husk change
+// made that path inline; an inline `msDestroyAndDispose` now references `msHeapFree` (macOS
+// arm64, 2026-11-10).
 // GREEN POST-FIX: GUARD-OK.
 
 import { execFileResult, cwd, exit, cmdExists } from "std/process";
@@ -32,7 +34,7 @@ const SITES = [
 	{ name: "releaseAtomicDecref", body: "msAtomicDecref(p);", call: "msDestroyAndDisposeDyn", rootAtSite: false },
 	{ name: "releaseDecrefCyclicEdge", body: "(void)msDecrefCyclicEdge(o, p);", call: "msDestroyAndDisposeDyn", rootAtSite: true },
 ];
-const INLINE_DISPOSE = "msUnownedOutlives";
+const INLINE_DISPOSE = "msHeapFree";
 const ROOT_UNREGISTER = "msUnregisterCycle";
 
 if (!cmdExists("cc") || !cmdExists("nm")) {
