@@ -9,6 +9,8 @@ MSC=${MSC:-$([ -x ./msc ] && echo ./msc || echo msc)}
 NODE=${NODE:-node}
 LUAJIT=${LUAJIT:-out/bench/lua/luajit}
 LUA54=${LUA54:-out/bench/lua/lua54}
+NOBLE=${NOBLE:-out/bench/noble}
+NOBLE_VERSION=2.4.0
 mkdir -p "$OUT"
 
 # An area lists its arms in $HERE/arms; base is the first arm's build by MSBENCH_BASE.
@@ -19,7 +21,7 @@ case " ${wanted[*]} " in *" lua"*) src/bench/buildLua.sh out/bench/lua ;; esac
 build() { # <arm> <msc> <output>
 	case $1 in
 		candidate | c) "$2" build "$HERE/bench.ms" --release --output="$OUT/$3" >/dev/null ;;
-		js) "$2" build "$HERE/bench.ms" --target=js --output="$OUT/$3.mjs" >/dev/null ;;
+		js | js-port) "$2" build "$HERE/bench.ms" --target=js --output="$OUT/$3.mjs" >/dev/null ;;
 		mixed) "$2" build "$HERE/bench.ms" --target=js --danger --output="$OUT/$3.mjs" >/dev/null ;;
 		jsonly) "$2" build "$HERE/bench.ms" --target=js --danger --wasm-placement=off --output="$OUT/$3.mjs" >/dev/null ;;
 		mixed-chrome) "$2" build "$HERE/bench.ms" --target=js --danger --output="$OUT/$3.mjs" >/dev/null ;;
@@ -51,6 +53,9 @@ runArm() { # <arm>
 			esac ;;
 		raiser) "$MSC" run --target=raiser "$HERE/bench.ms" ;;
 		js) "$NODE" "$OUT/js.mjs" ;;
+		# js-port: the js build with crypto.subtle removed, so every row, async included, runs the MetaScript port.
+		js-port) "$NODE" --import "data:text/javascript,Object.defineProperty(globalThis.crypto,'subtle',{value:undefined,configurable:true})" "$OUT/js-port.mjs" ;;
+		noble) MSBENCH_NOBLE="$PWD/$NOBLE" "$NODE" "$HERE/bench.noble.mjs" ;;
 		mixed | jsonly) "$NODE" "$OUT/$1.mjs" ;;
 		neon) NEON_ADDON="$PWD/$OUT/neon.node" "$NODE" "$HERE/neon/bench.mjs" ;;
 		wasmbindgen) WB_MODULE="$PWD/$OUT/wb/wbbench.js" "$NODE" "$HERE/wasmbindgen/bench.mjs" ;;
@@ -69,6 +74,11 @@ for arm in "${wanted[@]}"; do
 	case $arm in
 		base) build "${wanted[0]}" "$MSBENCH_BASE" base ;;
 		node) versions+=" · node $("$NODE" --version)" ;;
+		# noble: @noble/hashes, curves and ciphers at NOBLE_VERSION, installed into $NOBLE on first use.
+		noble)
+			[ -f "$NOBLE/node_modules/@noble/curves/package.json" ] && grep -q "\"version\": \"$NOBLE_VERSION\"" "$NOBLE/node_modules/@noble/curves/package.json" ||
+				npm install --silent --no-save --prefix "$NOBLE" "@noble/hashes@$NOBLE_VERSION" "@noble/curves@$NOBLE_VERSION" "@noble/ciphers@$NOBLE_VERSION"
+			versions+=" · noble $NOBLE_VERSION" ;;
 		# MSBENCH_RUST or MSBENCH_NIM names a twin binary built elsewhere, for a host that lacks that toolchain.
 		rust)
 			if [ -n "${MSBENCH_RUST:-}" ]; then cp "$MSBENCH_RUST" "$OUT/rust"; versions+=" · rust prebuilt $MSBENCH_RUST"
