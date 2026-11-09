@@ -57,7 +57,6 @@ export function validateCacheDirectory(value: string): Result<void, string> {
 export interface DefinesSection {
 	keys: string[];
 	values: string[];
-	refused: string[];
 }
 
 export interface ResolveSection {
@@ -304,6 +303,138 @@ function findConfigObject(program: Node): Node | null {
 	return configObj;
 }
 
+enum FieldKind { Str, Num, Bool, Strs, Scalar, Obj, MapOf, Imports }
+
+interface ConfigField {
+	key: string;
+	kind: FieldKind;
+	fields: ConfigField[];
+}
+
+export interface ConfigProblem {
+	message: string;
+	line: int32;
+}
+
+function field(key: string, kind: FieldKind): ConfigField { return { key, kind, fields: [] }; }
+function objField(key: string, fields: ConfigField[]): ConfigField { return { key, kind: FieldKind.Obj, fields }; }
+function mapField(key: string, value: ConfigField): ConfigField { return { key, kind: FieldKind.MapOf, fields: [value] }; }
+
+function configFields(): ConfigField[] {
+	const ccTarget = [field("entry", FieldKind.Str), field("compiler", FieldKind.Str), field("flags", FieldKind.Strs), field("linkFlags", FieldKind.Strs)];
+	return [
+		field("entry", FieldKind.Str),
+		objField("build", [
+			field("target", FieldKind.Str), field("outDir", FieldKind.Str), field("outFile", FieldKind.Str),
+			field("optimize", FieldKind.Str), field("cacheDir", FieldKind.Str), field("globalCacheDir", FieldKind.Str),
+			field("globalCache", FieldKind.Bool), field("trimpath", FieldKind.Bool),
+		]),
+		objField("resolve", [mapField("alias", field("", FieldKind.Str))]),
+		objField("fmt", [
+			field("printWidth", FieldKind.Num), field("tabWidth", FieldKind.Num),
+			field("useTabs", FieldKind.Bool), field("singleQuote", FieldKind.Bool),
+		]),
+		objField("lsp", [field("os", FieldKind.Str), field("mm", FieldKind.Str)]),
+		objField("cc", [
+			field("compiler", FieldKind.Str), field("flags", FieldKind.Strs), field("linkFlags", FieldKind.Strs),
+			mapField("targets", objField("", ccTarget)),
+		]),
+		objField("package", [
+			field("name", FieldKind.Str), field("version", FieldKind.Str), field("description", FieldKind.Str),
+			field("license", FieldKind.Str), field("repository", FieldKind.Str), field("homepage", FieldKind.Str),
+			field("author", FieldKind.Str), field("keywords", FieldKind.Strs), field("files", FieldKind.Strs),
+			field("ignore", FieldKind.Strs), mapField("bin", field("", FieldKind.Str)),
+		]),
+		mapField("deps", field("", FieldKind.Str)),
+		mapField("devDeps", field("", FieldKind.Str)),
+		mapField("defines", field("", FieldKind.Scalar)),
+		field("globalImports", FieldKind.Imports),
+	];
+}
+
+function problemAt(node: Node, message: string): ConfigProblem {
+	return { message, line: node.location.line };
+}
+
+function isLiteral(node: Node, kind: NodeKind): boolean {
+	return node != null && node.kind == kind;
+}
+
+function checkStrings(node: Node, path: string): ConfigProblem | null {
+	if (!isLiteral(node, NodeKind.ArrayLiteral)) return problemAt(node, `${path}: must be an array of string literals`);
+	for (const elem of (node.data as ArrayLiteralData).elements) {
+		if (!isLiteral(elem, NodeKind.StringLiteral)) return problemAt(elem, `${path}: must be an array of string literals`);
+	}
+	return null;
+}
+
+function checkImports(node: Node, path: string): ConfigProblem | null {
+	if (!isLiteral(node, NodeKind.ArrayLiteral)) return problemAt(node, `${path}: must be an array literal`);
+	const entry = [field("from", FieldKind.Str), field("modulePass", FieldKind.Str)];
+	for (const elem of (node.data as ArrayLiteralData).elements) {
+		if (isLiteral(elem, NodeKind.StringLiteral)) continue;
+		if (!isLiteral(elem, NodeKind.ObjectLiteral)) return problemAt(elem, `${path}: an entry is a string literal or { from, modulePass }`);
+		const p = checkObject(elem, path, entry);
+		if (p != null) return p;
+		if (findObjField(elem, "from") == null) return problemAt(elem, `${path}: an object entry needs from`);
+	}
+	return null;
+}
+
+function checkValue(node: Node, path: string, f: ConfigField): ConfigProblem | null {
+	switch (f.kind) {
+		case FieldKind.Str:
+			return isLiteral(node, NodeKind.StringLiteral) ? null : problemAt(node, `${path}: must be a string literal`);
+		case FieldKind.Num:
+			return isLiteral(node, NodeKind.NumberLiteral) ? null : problemAt(node, `${path}: must be a number literal`);
+		case FieldKind.Bool:
+			return isLiteral(node, NodeKind.BooleanLiteral) ? null : problemAt(node, `${path}: must be a boolean literal`);
+		case FieldKind.Scalar:
+			return isLiteral(node, NodeKind.StringLiteral) || isLiteral(node, NodeKind.NumberLiteral) || isLiteral(node, NodeKind.BooleanLiteral)
+				? null : problemAt(node, `${path}: must be a string, a number or a boolean literal`);
+		case FieldKind.Strs:
+			return checkStrings(node, path);
+		case FieldKind.Imports:
+			return checkImports(node, path);
+		case FieldKind.Obj:
+			return isLiteral(node, NodeKind.ObjectLiteral) ? checkObject(node, path, f.fields) : problemAt(node, `${path}: must be an object literal`);
+		case FieldKind.MapOf: {
+			if (!isLiteral(node, NodeKind.ObjectLiteral)) return problemAt(node, `${path}: must be an object literal`);
+			const od = node.data as ObjectLiteralData;
+			for (let i = 0; i < od.keys.length && i < od.properties.length; i += 1) {
+				const p = checkValue(od.properties[i], `${path}.${od.keys[i]}`, f.fields[0]);
+				if (p != null) return p;
+			}
+			return null;
+		}
+	}
+}
+
+function checkObject(node: Node, prefix: string, fields: ConfigField[]): ConfigProblem | null {
+	const od = node.data as ObjectLiteralData;
+	for (let i = 0; i < od.properties.length; i += 1) {
+		const value = od.properties[i];
+		const key = i < od.keys.length ? od.keys[i] : "";
+		const path = prefix == "" ? key : `${prefix}.${key}`;
+		if (value != null && (value.kind == NodeKind.SpreadExpr || value.kind == NodeKind.ComputedProperty)) {
+			return problemAt(value, `${prefix == "" ? "build.ms" : prefix}: spread and computed fields require direct literal declarations`);
+		}
+		let known: ConfigField | null = null;
+		for (const f of fields) if (f.key == key) known = f;
+		if (known == null) {
+			const line = i < od.keyLocations.length ? od.keyLocations[i].line : node.location.line;
+			return { message: `${path}: msc does not read this field; it reads ${fields.map((f) => f.key).join(", ")}`, line };
+		}
+		const p = checkValue(value, path, known);
+		if (p != null) return p;
+	}
+	return null;
+}
+
+export function checkConfigShape(configObj: Node): ConfigProblem | null {
+	return checkObject(configObj, "", configFields());
+}
+
 // Extract FmtSection from an ObjectLiteral node.
 function extractFmt(fmtNode: Node): FmtSection {
 	const fmt = defaultFmtSection();
@@ -492,7 +623,7 @@ function extractGlobalImports(giNode: Node): string[] {
 }
 
 export function defaultDefinesSection(): DefinesSection {
-	return { keys: [], values: [], refused: [] };
+	return { keys: [], values: [] };
 }
 
 function extractDefines(node: Node): DefinesSection {
@@ -502,7 +633,6 @@ function extractDefines(node: Node): DefinesSection {
 	for (let i = 0; i < od.keys.length && i < od.properties.length; i += 1) {
 		const value = od.properties[i];
 		let text = "";
-		let held = true;
 		if (value != null && value.kind == NodeKind.StringLiteral) {
 			text = nodeString(value);
 		} else if (value != null && value.kind == NodeKind.NumberLiteral) {
@@ -511,14 +641,10 @@ function extractDefines(node: Node): DefinesSection {
 		} else if (nodeBool(value) >= 0) {
 			text = nodeBool(value) == 1 ? "true" : "false";
 		} else {
-			held = false;
+			continue;
 		}
-		if (held) {
-			ds.keys.push(od.keys[i]);
-			ds.values.push(text);
-		} else {
-			ds.refused.push(od.keys[i]);
-		}
+		ds.keys.push(od.keys[i]);
+		ds.values.push(text);
 	}
 	return ds;
 }
@@ -600,6 +726,8 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 
 	const entry = nodeString(findObjField(configObj, "entry"));
 	const bs = extractConfigBuild(configObj);
+	const problem = checkConfigShape(configObj);
+	if (problem != null) bs.cacheError = `${problem.message} (line ${problem.line})`;
 	const rs = extractResolve(findObjField(configObj, "resolve"));
 	const fmt = extractFmt(findObjField(configObj, "fmt"));
 	const lsp = extractLsp(findObjField(configObj, "lsp"));
@@ -641,9 +769,11 @@ export function validateBuildConfig(dir: string, source: string): BuildWarning[]
 	const warnings: BuildWarning[] = [];
 	const configObj = parseBuildSource(source);
 	if (configObj == null) return warnings;
+	const problem = checkConfigShape(configObj);
+	if (problem != null) warnings.push({ message: problem.message, line: problem.line });
 	const buildNode = findObjField(configObj, "build");
 	const build = extractConfigBuild(configObj);
-	if (build.cacheError != "") {
+	if (problem == null && build.cacheError != "") {
 		const line = buildNode == null ? configObj.location.line : buildNode.location.line;
 		warnings.push({ message: build.cacheError, line });
 	}
@@ -671,10 +801,6 @@ export function validateBuildConfig(dir: string, source: string): BuildWarning[]
 			if (osVal != "bare" && osVal != "solana" && osVal != "wasm" && osVal != "emcc" && osVal != "linux" && osVal != "macos" && osVal != "windows" && osVal != "darwin" && osVal != "freebsd" && osVal != "ios" && osVal != "android") {
 				warnings.push({ message: `lsp.os: unknown target '${osVal}' — valid: bare, solana, wasm, emcc, linux, macos, windows, darwin, freebsd, ios, android`, line: osNode.location.line });
 			}
-		}
-		const gcNode = findObjField(lspNode, "gc");
-		if (gcNode != null) {
-			warnings.push({ message: "lsp.gc is gone: write lsp.mm (drc, manual or none)", line: gcNode.location.line });
 		}
 		const mmNode = findObjField(lspNode, "mm");
 		if (mmNode != null) {
@@ -843,12 +969,69 @@ test "extractLsp partial fields" {
 	assert cfg.lsp.mm == "";
 }
 
-test "validateBuildConfig flags bad lsp.os and lsp.mm, and lsp.gc as gone" {
+test "validateBuildConfig flags bad lsp.os and lsp.mm, and lsp.gc as a field msc does not read" {
 	const src = "const config = { lsp: { os: \"bar\", mm: \"orc\" } }; export default config;";
 	assert validateBuildConfig(".", src).length == 2;
 	const old = validateBuildConfig(".", "const config = { lsp: { gc: \"manual\" } }; export default config;");
 	assert old.length == 1;
-	assert old[0].message == "lsp.gc is gone: write lsp.mm (drc, manual or none)";
+	assert old[0].message == "lsp.gc: msc does not read this field; it reads os, mm";
+}
+
+function shapeProblem(source: string): string {
+	registerCoreParsers();
+	_parsersRegistered = true;
+	const configObj = parseBuildSource(source);
+	if (configObj == null) return "unparsed";
+	const p = checkConfigShape(configObj);
+	return p == null ? "" : p.message;
+}
+
+test "every section msc reads passes the shape check" {
+	assert shapeProblem(`const config = {
+		entry: "src/main.ms",
+		build: { target: "c", outDir: "o", outFile: "a", optimize: "release", cacheDir: "c", globalCacheDir: "g", globalCache: false, trimpath: true },
+		resolve: { alias: { "@lib": "../lib" } },
+		fmt: { printWidth: 100, tabWidth: 4, useTabs: true, singleQuote: false },
+		lsp: { os: "linux", mm: "drc" },
+		cc: { compiler: "clang", flags: ["-g"], linkFlags: [], targets: { "linux-arm64": { entry: "src/arm.ms", compiler: "cc", flags: [], linkFlags: [] } } },
+		package: { name: "p", version: "0.1.0", description: "d", license: "MIT", repository: "r", homepage: "h", author: "a", keywords: ["k"], files: [], ignore: [], bin: { p: "src/main.ms" } },
+		deps: { a: "file:../a" }, devDeps: { b: "1.0.0" },
+		defines: { flavor: "x", level: 2, on: true },
+		globalImports: ["std/x", { from: "./refresh", modulePass: "refreshModule" }],
+	}; export default config;`) == "";
+}
+
+test "a field msc does not read is an error naming its path, at every depth" {
+	assert shapeProblem(`export default { scripts: { gate: "x" } };`).startsWith("scripts: msc does not read this field; it reads entry, build,");
+	assert shapeProblem(`export default { root: "src" };`).startsWith("root: msc does not read this field");
+	assert shapeProblem(`export default { fmt: { printwidth: 40 } };`) == "fmt.printwidth: msc does not read this field; it reads printWidth, tabWidth, useTabs, singleQuote";
+	assert shapeProblem(`export default { build: { outfile: "zz" } };`).startsWith("build.outfile: msc does not read this field");
+	assert shapeProblem(`export default { cc: { targets: { "linux-arm64": { cflags: [] } } } };`).startsWith("cc.targets.linux-arm64.cflags: msc does not read this field");
+	assert shapeProblem(`export default { resolve: { searchPaths: ["src"] } };`).startsWith("resolve.searchPaths: msc does not read this field");
+	assert shapeProblem(`export default { globalImports: [{ from: "./a", names: ["x"] }] };`).startsWith("globalImports.names: msc does not read this field");
+}
+
+test "a value msc cannot read as a literal of its kind is an error naming its path" {
+	assert shapeProblem(`const e = "src/main.ms"; export default { entry: e };`) == "entry: must be a string literal";
+	assert shapeProblem(`export default { fmt: { useTabs: "yes" } };`) == "fmt.useTabs: must be a boolean literal";
+	assert shapeProblem(`export default { cc: { flags: ["-g", f] } };`) == "cc.flags: must be an array of string literals";
+	assert shapeProblem(`export default { deps: { a: 1 } };`) == "deps.a: must be a string literal";
+	assert shapeProblem(`export default { defines: { a: [1] } };`) == "defines.a: must be a string, a number or a boolean literal";
+	assert shapeProblem(`export default { globalImports: [{ modulePass: "m" }] };`) == "globalImports: an object entry needs from";
+}
+
+test "loadBuildConfig carries the shape problem and its line to every command" {
+	const project = `out/test/buildShape${Date.now()}`;
+	const file = project + "/build.ms";
+	try {
+		assert ensureDir(project).ok;
+		assert writeFile(file, "export default {\n\tentry: \"a.ms\",\n\tscripts: {},\n};\n").ok;
+		const error = loadBuildConfig(file, false).build.cacheError;
+		assert error.startsWith("scripts: msc does not read this field");
+		assert error.endsWith("(line 3)");
+	} finally {
+		removeAll(project);
+	}
 }
 
 test "validateBuildConfig accepts valid lsp values" {

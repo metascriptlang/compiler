@@ -354,9 +354,6 @@ export function applyProjectConfig(opts: CliOptions, projectRoot: string): Resul
 	seedOptionDefines(opts);
 	if (config.valid) {
 		seedProjectDir(opts.defines, projectRoot);
-		if (config.defines.refused.length > 0) {
-			return Result.err(`${buildMsPath}: define '${config.defines.refused[0]}' must be a string, a number or a boolean`);
-		}
 		const reserved = applyConfigDefines(opts.defines, config.defines.keys, config.defines.values);
 		if (reserved != "") {
 			return Result.err(`${buildMsPath}: define '${reserved}' is a name msc sets from its own options (backend, --os, --cpu, --mm, the build mode); give the project's define another name`);
