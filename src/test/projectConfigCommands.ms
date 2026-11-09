@@ -288,7 +288,7 @@ put(`${checks}/build.ms`, [
 	"import { executable, runArtifact, systemCommand, path } from \"std/build\";",
 	"export const app = executable({ entry: path(\"src/main.ms\") });",
 	"export const touch = systemCommand([\"sh\", \"-c\", \"echo x >> runs.txt\"]);",
-	"export const checked = systemCommand([\"sh\", \"-c\", \"echo x >> checked.txt\"]);",
+	`export const checked = systemCommand(["sh", "-c", "echo ${root} >> checked.txt"]);`,
 	"checked.expectExitCode(0);",
 	"export const failing = systemCommand([\"sh\", \"-c\", \"echo x >> failed.txt; exit 3\"]);",
 	"failing.expectExitCode(0);",
@@ -324,8 +324,22 @@ run(checks, ["build", "--colors=off", "failing"]);
 record("a checked command that failed runs again", "2|exited with 3, expected 0", `${lines(`${checks}/failed.txt`)}|${failedOnce.includes("exited with 3, expected 0") ? "exited with 3, expected 0" : failedOnce}`);
 record("expectExitCode accepts the code it names", "passed", passes(run(checks, ["build", "--colors=off", "three"])));
 record("runArtifact runs the built executable and can capture its stdout", "app second", storedStdout(run(checks, ["build", "--colors=off", "shown"])));
-record("addPrefixedArtifactArg passes the built executable's path", `--msc=${checks}/out/app`, storedStdout(run(checks, ["build", "--colors=off", "named"])));
+const namedOut = storedStdout(run(checks, ["build", "--colors=off", "named"]));
+record("addPrefixedArtifactArg passes the built executable's path", "--msc=/tmp/…/checks/out/app", namedOut.startsWith("--msc=/tmp/") && namedOut.endsWith("/checks/out/app") ? "--msc=/tmp/…/checks/out/app" : namedOut);
 record("arguments after -- reach the command node msc build names", "args a b", lastLine(run(checks, ["build", "--colors=off", "echoed", "--", "a", "b"])));
+
+const staged = `${root}/staged`;
+ensureDir(`${staged}/src`);
+put(`${staged}/src/main.ms`, "console.log(1);\n");
+put(`${staged}/build.ms`, [
+	"import { executable, path, LtoMode } from \"std/build\";",
+	"export const stage1 = executable({ entry: path(\"src/main.ms\"), lto: LtoMode.None });",
+	"export const stage2 = executable({ entry: path(\"src/main.ms\"), compiler: stage1 });",
+	"",
+].join("\n"));
+const stagedPlan = run(staged, ["build", "--colors=off", "--dry-run", "stage2"]).split("\n");
+record("lto: LtoMode.None builds with --lto=off", "--lto=off", stagedPlan[0].split(" ").filter((w: string): boolean => w.startsWith("--lto")).join(" "));
+record("an executable with a compiler is built by that artifact", `${staged}/out/stage1`, stagedPlan.length > 1 ? stagedPlan[1].split(" ")[0] : stagedPlan.join("|"));
 
 const hostile = `${root}/hostile`;
 ensureDir(`${hostile}/src`);
