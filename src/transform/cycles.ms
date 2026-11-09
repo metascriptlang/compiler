@@ -20,7 +20,7 @@
 
 import { Type, TypeKind, TypeFlag, SymbolKind } from "../ast/node";
 import { NameSet, createNameSet, createSharingNameSet, nameSetTypeKey, nameSetRememberTypeKey, nameSetAdd, nameSetContains } from "./context";
-import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey, countedEvictElement, isAtomicRef, isOwnedRef, isUnownedRef, heldBeyond, subclassesOf, isOwnedClosure, hasGenericParams, hasTypeIdentity, createPrimitive, createArray, createTypeRef, numberType } from "../checker/types";
+import { isAwaitable, unwrapRefNullUnion, isUnknownType, genericParamsOf, instantiateGenericBody, nominalTypeKey, countedEvictElement, isAtomicRef, isOwnedRef, isUnownedRef, heldBeyond, subclassesOf, isOwnedClosure, hasGenericParams, hasTypeIdentity, isStdCollection, createPrimitive, createArray, createTypeRef, numberType } from "../checker/types";
 import { anonTypeName, isAnonTypeName, typeKey } from "../codegen/c/types";
 import { monoInstanceName } from "../monomorphize/registry";
 
@@ -116,8 +116,8 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, sawPlainEdge:
 			if (t.typeReturn == null) return true;
 			if (isUnownedRef(t)) return false;
 			const ownedHop = !_checkOwnedCycles && isOwnedRef(t);
-			const arrayCell = t.typeReturn.kind == TypeKind.Array;
-			return cfaAux(t.typeReturn, origKey, true, sawPlainEdge || !(ownedHop || arrayCell), marker, t.typeReturn.kind == TypeKind.GenericInstance);
+			const collectionCell = t.typeReturn.kind == TypeKind.Array || isStdCollection(t.typeReturn);
+			return cfaAux(t.typeReturn, origKey, true, sawPlainEdge || !(ownedHop || collectionCell), marker, t.typeReturn.kind == TypeKind.GenericInstance);
 		},
 		TypeKind.Function => !isOwnedClosure(t),
 		TypeKind.Unknown => true,
