@@ -75,9 +75,12 @@ three handle checks and drop the site.
   the store (`msOverflowI32`, `& 255`, `BigInt.asUintN` in the emitted code; a `--danger` probe
   printed the same wrapped `int32`, `uint8`, `int64` and `uint64` values on C and JS) and rounds a
   float32 with `Math.fround`. A writable float32 callback Span no longer makes the wasm companion
-  export `HEAPF32`. Open, not measured, here as under `view(f)`: a `Handle` released inside the
-  callback runs its destroy in wasm without that refusal, and a destroy that allocates could grow
-  memory and empty the view. Measured on m1m (Apple M1 Pro, Node 24.1.0, headless Chrome
+  export `HEAPF32`. A `Handle` released inside the callback or inside `view(f)` still runs its
+  destroy at once, as in the all-C program; when that destroy grows wasm memory, a view made
+  before it would stop seeing memory (and a slice cut from it too), so the release throws `wasm
+  memory grew while a Span view was open, so the view stopped seeing it: …` and the callback's end
+  checks again (pin `callbackSpanGrowth`: a 10-element destroy releases and the write lands, a
+  20000000-element one throws; the copy glue before this change printed the write instead). Measured on m1m (Apple M1 Pro, Node 24.1.0, headless Chrome
   149.0.7827.114, `--danger`) with a throwaway program, a `@wasm` function calling its callback
   1000 times with the same 1000-element `Span<float32>`: installed msc `cc97a2f5818` (before)
   against a candidate of base `9904cc564d4` (after), five interleaved rounds in a `--quiet 6`
