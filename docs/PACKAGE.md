@@ -241,6 +241,27 @@ merging by shape gives that result without intercepting calls (`keepOne`,
   over it was not built, because this one answers the same question.
 - `updateSourceFiles` writes a generated file into the source tree only when its content changed.
 
+**Commands, checks and runs** follow Zig's `Run` step (`hasSideEffects`, `Step.writeManifest`):
+- A command with no output file, no captured stdout and no check runs every time, streams its
+  output and gets no stdin; `hasSideEffects = true` makes any command run every time.
+- `expectExitCode(n)` makes the command a check: it is reused only after it passed, and a failure
+  prints `exited with 3, expected 0` and runs again next time. Its key holds the content of every
+  artifact and `addFileInput` it names, so editing one input reruns it and reverting reuses it.
+- `runArtifact(app, args)` is a command whose program is `app`; `addArtifactArg(app)` and
+  `addPrefixedArtifactArg("--msc=", app)` pass an artifact's path and key the command by its
+  content; `getEmittedBin()` names the binary as a file argument.
+- `msc build <node> -- a b` appends `a b` to that node's command only (Zig `b.args`); in file
+  mode the arguments after `--` are an error.
+- `executable({ lto: LtoMode.None, compiler: stage1 })` builds with `--lto=off` and with the graph's
+  `stage1` binary as the compiler (Zig `Compile.lto`, Rust bootstrap stages); `mscExe()` names the
+  `msc` running the build (Zig `b.graph.zig_exe`).
+
+Each of these is pinned in `src/test/projectConfigCommands.ms` (54 tests, candidate of tree
+`b009bd13a`, rtx, 2026-11-10). A draft recompiler `build.ms` measured on that candidate: `msc`
+84 s then `Up to date` in 2.4 s; `stage2` built by `out/msc` in 68 s; `corpus` against `out/msc`;
+`test -- src/utils/color.ms --tests-in-dir` reran after an edit to `color.ms` and was reused after
+the revert. Not verified: Windows and macOS, a check over a whole suite.
+
 ## Packages
 
 A package is a directory with a `build.ms` carrying a `package` block. `name` and `version` are
