@@ -33,8 +33,6 @@ import { genericParamsOf, literalBase, setRepr } from "../../checker/types";
 import { ctorRoutineFor } from "../../checker/ctorRoutine";
 import { peelHidden } from "../../checker/sendable";
 
-// msMessage.data[56] holds 7 pointer-sized slots (56 / 8 on 64-bit).
-const MS_MSG_MAX_ARGS = 7;
 // void* type for HiddenStdConv casts in actor message packing/completion.
 const VOID_PTR: Type = createPtr(createPrimitive(TypeKind.Void));
 
@@ -595,11 +593,6 @@ function emitActorMethods(d: ActorDeclData, name: string, methods: Node[], lower
 				continue;
 			}
 			const isVoid = md.methodReturnType == "" || md.methodReturnType == "void";
-			// Guard: data[56] inline buffer fits 7 args max
-			const argCount = md.methodParams.length - 1;
-			if (argCount > MS_MSG_MAX_ARGS) {
-				console.log(`warning: actor method '${name}.${md.methodName}' has ${argCount} args (max ${MS_MSG_MAX_ARGS} for inline message buffer)`);
-			}
 
 			// _impl handler: original body.
 			// Phase 5: skip if already extracted by lowerActorPre (sentinel "async_actor").
