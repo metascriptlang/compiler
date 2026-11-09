@@ -24,6 +24,8 @@
 // GUARD-CHECK-FAIL a call with side effects may keep an alias of it: calls 'viaReturnedRef'
 // GUARD-CHECK-FAIL a call with side effects may keep an alias of it: calls the external 'lendFrom'
 // GUARD-CHECK-FAIL a call with side effects may keep an alias of it: calls 'viaRefMethod'
+// GUARD-CHECK-FAIL a call with side effects may keep an alias of it: calls 'viaWritableView'
+// GUARD-CHECK-FAIL a call with side effects may keep an alias of it: calls 'viaRefView'
 
 interface Box { n: int32; }
 interface Holder { b: Box | null; }
@@ -135,4 +137,32 @@ function fromRefMethodInFactory(): int32 {
 	return await spawn(() => { g.n = 4; return g.n; }, { move: [g] }); // GUARD-REFUSED
 }
 
-console.log(fromRefReturningMethod() + fromRefMethodInFactory() + fromPointerParamExtern() + fromRefReturningExtern() + fromAliasingFactory() + fromPublishingConstructor() + afterStashingMethod() + fieldFromModuleState() + fieldAssignedFromCall() + fromWritingToString());
+extern function fillView(v: Span<uint8>): boolean;
+interface Bytes { bytes: uint8[]; }
+function viaWritableView(): Bytes {
+	const b: Bytes = { bytes: [1, 2, 3] };
+	fillView(b.bytes);
+	return b;
+}
+
+// 11 — a writable byte view handed to an extern is charged: only a read-only one is trusted.
+function fromWritableViewExtern(): int32 {
+	const g = viaWritableView();
+	return await spawn(() => g.bytes.length as int32, { move: [g] }); // GUARD-REFUSED
+}
+
+extern function readBoxes(v: Readonly<Span<Box>>): boolean;
+interface Boxes { boxes: Box[]; }
+function viaRefView(): Boxes {
+	const b: Boxes = { boxes: [{ n: 1 }] };
+	readBoxes(b.boxes);
+	return b;
+}
+
+// 12 — a read-only view whose elements are references is charged: C could keep an element.
+function fromRefViewExtern(): int32 {
+	const g = viaRefView();
+	return await spawn(() => g.boxes.length as int32, { move: [g] }); // GUARD-REFUSED
+}
+
+console.log(fromWritableViewExtern() + fromRefViewExtern() + fromRefReturningMethod() + fromRefMethodInFactory() + fromPointerParamExtern() + fromRefReturningExtern() + fromAliasingFactory() + fromPublishingConstructor() + afterStashingMethod() + fieldFromModuleState() + fieldAssignedFromCall() + fromWritingToString());
