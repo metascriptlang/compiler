@@ -306,3 +306,58 @@ export function step(o: StepOptions): CustomStep {
 export function describe(this n: BuildNode, description: string): void {
 	n.description = description;
 }
+
+export interface FileWrite {
+	sub: string;
+	bytes: string;
+	from: LazyPath | null;
+	dest: LazyPath | null;
+}
+
+export class WriteFiles extends BuildNode {
+	files: FileWrite[];
+	constructor() {
+		super("writeFiles", "");
+		this.files = [];
+	}
+}
+
+export function writeFiles(): WriteFiles {
+	return new WriteFiles();
+}
+
+export function add(this w: WriteFiles, sub: string, bytes: string): LazyPath {
+	w.files.push({ sub, bytes, from: null, dest: null });
+	return generated(w, sub);
+}
+
+export function addCopyFile(this w: WriteFiles, source: LazyPath, sub: string): LazyPath {
+	dependOn(w, source);
+	w.files.push({ sub, bytes: "", from: source, dest: null });
+	return generated(w, sub);
+}
+
+export function getDirectory(this w: WriteFiles): LazyPath {
+	return generated(w, "");
+}
+
+export class UpdateSourceFiles extends BuildNode {
+	files: FileWrite[];
+	constructor() {
+		super("updateSourceFiles", "");
+		this.files = [];
+	}
+}
+
+export function updateSourceFiles(): UpdateSourceFiles {
+	return new UpdateSourceFiles();
+}
+
+export function addCopyFileToSource(this u: UpdateSourceFiles, source: LazyPath, dest: LazyPath): void {
+	dependOn(u, source);
+	u.files.push({ sub: "", bytes: "", from: source, dest });
+}
+
+export function addBytesToSource(this u: UpdateSourceFiles, bytes: string, dest: LazyPath): void {
+	u.files.push({ sub: "", bytes, from: null, dest });
+}
