@@ -210,7 +210,9 @@ function callArgumentRoots(w: WriteEffects, p: Partitions, call: Node, roots: Sy
 
 function isHandleType(type: Type | null): boolean {
 	let t = type;
+	let viaRef = false;
 	for (let depth = 0; t != null && depth < 8; depth += 1) {
+		if (t.kind == TypeKind.Ref && t.typeReturn != null) viaRef = true;
 		if ((t.kind == TypeKind.Ref || t.kind == TypeKind.Alias || t.kind == TypeKind.Distinct || t.kind == TypeKind.Lent) && t.typeReturn != null) { t = t.typeReturn; continue; }
 		if (isReadonlyView(t)) { t = withoutReadonlyView(t); continue; }
 		if (t.kind == TypeKind.Union) {
@@ -222,7 +224,7 @@ function isHandleType(type: Type | null): boolean {
 			}
 			return handles > 0;
 		}
-		return t.kind == TypeKind.Array || (t.kind == TypeKind.Struct && t.sym != null && t.sym.symbolKind == SymbolKind.Class);
+		return t.kind == TypeKind.Array || (t.kind == TypeKind.Struct && (viaRef || (t.sym != null && t.sym.symbolKind == SymbolKind.Class)));
 	}
 	return false;
 }
