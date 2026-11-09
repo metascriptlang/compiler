@@ -164,3 +164,21 @@ Read: the curves run as fast as noble (Ed25519, X25519, ECDSA verify within 12%;
 times slower). The 32-bit hashes are 3 to 4 times slower (SHA-256 107 against 346 MB/s), the 64-bit ones far slower
 (SHA-512 9.5 against 183 MB/s, BLAKE2b 25 against 80), and the ciphers 6 to 15 times slower (AES-256-GCM 18 against 101
 MB/s, ChaCha 33 against 346). MD5 is faster.
+
+Where the gap comes from, same host and day, load 1.49 before, 2.34 after: the js-port rows by build mode, one round
+each, MB/s (pbkdf2 and the curves us/op).
+
+| row | default | `--release` | `--danger` | noble |
+|---|---|---|---|---|
+| sha256 digest 1 MB | 101.9 | 108.6 | 131.0 | 346.2 |
+| sha512 digest 1 MB | 9.35 | 9.48 | 16.3 | 182.5 |
+| blake2b-512 digest 1 MB | 25.1 | 25.4 | 39.5 | 79.8 |
+| aes-256-gcm sealSync 1 MB | 17.8 | 17.6 | 25.5 | 104.4 |
+| chacha20-poly1305 seal 1 MB | 32.9 | 33.3 | 37.9 | 346.3 |
+| pbkdf2-sha256 100k | 130216 | 117943 | 96756 | 58536 |
+
+The checks the default build keeps (overflow, bounds) cost 1.3 to 1.7 times; the rest of the gap is the code shape. A
+`node --cpu-prof` of 20 SHA-512 digests of 1 MB built `--danger`: 57.5% self time in `compress512Block`, 19.4% in
+`rotrHigh` and 12.2% in `rotrLow`, which take the rotation count as an argument, branch on it and are not inlined, and
+every `uint32` result is normalised with `>>> 0`, so values above 2^31 leave the int32 range. noble rotates with one
+function per constant count and computes in int32 (`| 0`).
