@@ -9,7 +9,7 @@ import {
 	MatchExprData, MatchCaseData, ExprStmtData, IfStmtData, TryCatchStmtData, DestructuringDeclData, ObjectPatternData,
 	ObjectPatternPropData, ArrayPatternData, ActorDeclData, createNodeAt, BuiltinKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { receiverOf, returnsView, routineBody, viewCallSources, isViewCall, aliasTarget, boundRoutine, isImmortalModuleConst, moduleSourceOf, EffectCause } from "./effects";
+import { receiverOf, returnsView, routineBody, viewCallSources, isViewCall, aliasTarget, boundRoutine, isImmortalModuleConst, moduleSourceOf, moduleStateCause, mayStoreIntoReceiver, EffectCause } from "./effects";
 import { isOwnedRef, ownsNoStorage, typeVisitAdd, viewStructChangesInPlace, isPrimitiveKind, isViewType, isViewStruct, nestedViewType, nestedViewShown, ownedAlternativeOf, holdsViewSkippingClear, TypeVisitSet, isReadonlyView, isStructType, typeDisplayName, isLockedRef, isAtomicRef, typeCarriesRef, withoutReadonlyView, withoutNullMember } from "./types";
 import { hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "./symbol";
 import { CheckerContext, DispatchRegistry, addError, dispatchEntryFor, dispatchOverridesFor } from "./context";
@@ -48,6 +48,7 @@ export interface VarEntry {
 	external: boolean;
 	fromTemp: boolean;
 	moduleSource: EffectCause | null;
+	moduleSourceTime: int32;
 }
 
 export interface MutationInfo {
@@ -105,6 +106,7 @@ export function registerVariable(p: Partitions, sym: Symbol | null, isParam: boo
 		external: isParam,
 		fromTemp: false,
 		moduleSource: null,
+		moduleSourceTime: MAX_TIME,
 	});
 }
 
@@ -880,6 +882,23 @@ function lendsPastCall(dispatchRegistry: DispatchRegistry, call: Node, atModule:
 	return false;
 }
 
+function lendsGlobal(dispatchRegistry: DispatchRegistry, call: Node): boolean {
+	if (isMessageSend(call)) return false;
+	const roots: Symbol[] = [];
+	callLentRoots(dispatchRegistry, call, roots, []);
+	return roots.some((r: Symbol): boolean => hasFlag(r, SymbolFlag.Global));
+}
+
+function refuseGlobalCallLends(u: BorrowUnit, site: Node): void {
+	if (isMessageSend(site)) return;
+	const found: Symbol[] = [];
+	const tasks: Node[] = [];
+	callLentRoots(u.ctx.dispatchRegistry, site, found, tasks);
+	for (let i = 0; i < found.length; i += 1) {
+		if (variableId(u.p, found[i]) < 0 && hasFlag(found[i], SymbolFlag.Global)) refuseModuleCallLend(u, site, found[i], tasks[i]);
+	}
+}
+
 function isActorLend(dispatchRegistry: DispatchRegistry, call: Node): boolean {
 	if (call.kind != NodeKind.CallExpr || !isMessageSend(call)) return false;
 	const roots: Symbol[] = [];
@@ -1444,13 +1463,19 @@ function markModuleSource(u: BorrowUnit, dests: Symbol[], src: Node | null): voi
 	if (c == null) return;
 	for (const d of dests) {
 		const id = variableId(u.p, d);
-		if (id >= 0 && u.p.vars[id].moduleSource == null) u.p.vars[id].moduleSource = c;
+		if (id >= 0 && u.p.vars[id].moduleSource == null) {
+			u.p.vars[id].moduleSource = c;
+			u.p.vars[id].moduleSourceTime = u.p.abstractTime;
+		}
 	}
 }
 
-function moduleSourceIn(u: BorrowUnit, root: int32): EffectCause | null {
+function moduleSourceIn(u: BorrowUnit, root: int32, upTo: int32 = MAX_TIME, site: Node | null = null): EffectCause | null {
 	for (let i = 0; i < u.p.vars.length; i += 1) {
-		if (u.p.vars[i].moduleSource != null && ufRoot(u.p, i) == root) return u.p.vars[i].moduleSource;
+		if (ufRoot(u.p, i) != root) continue;
+		if (u.p.vars[i].moduleSource != null && u.p.vars[i].moduleSourceTime <= upTo) return u.p.vars[i].moduleSource;
+		const held = site != null ? moduleStateCause(u.ctx.dispatchRegistry, u.p.vars[i].sym, site) : null;
+		if (held != null) return held;
 	}
 	return null;
 }
@@ -1547,10 +1572,23 @@ function storedIntoOther(u: BorrowUnit, args: Node[], summary: ResizeSummary): v
 		for (let j = 0; j < args.length; j += 1) {
 			if (j != i && keysMeet(own, holdsKeys(args[j].nodeType))) {
 				escape(u, args[i]);
+				joinStored(u, args[i], args[j]);
 				break;
 			}
 		}
 	}
+}
+
+function joinStored(u: BorrowUnit, value: Node, into: Node): void {
+	if (!carriesPointer(into.nodeType)) return;
+	const targets: Symbol[] = [];
+	rootsOf(into, targets);
+	const sources: Symbol[] = [];
+	rootsOf(value, sources);
+	for (const t of targets) {
+		for (const s of sources) { ufConnect(u.p, t, s); }
+	}
+	markModuleSource(u, targets, value);
 }
 
 function changeSym(u: BorrowUnit, sym: Symbol, viaRef: boolean, summary: ResizeSummary, site: Node): void {
@@ -1663,6 +1701,7 @@ function callEffects(u: BorrowUnit, node: Node): void {
 		argEffect(u, a, formalAt(fnType, i + offset), false, summary);
 		if (a.nodeType != null && a.nodeType.kind == TypeKind.Function) passesRoutine = true;
 		all.push(a);
+		if (recv != null && carriesPointer(a.nodeType) && mayStoreIntoReceiver(node)) joinStored(u, a, recv);
 	}
 	storedIntoOther(u, all, summary);
 	const local = sym != null && sym.declNode != null && u.routines.includes(sym.declNode);
@@ -1944,6 +1983,7 @@ function walk(u: BorrowUnit, node: Node | null): void {
 			for (const a of d.arguments) { walk(u, a); }
 			if (u.pass == 1 && isSpawnCall(node) && d.arguments.length > 0) openLend(u, node, d.arguments[0]);
 			if (u.pass == 1 && opensCallLend(u.ctx.dispatchRegistry, node)) openCallLend(u, node);
+			else if (u.pass == 1 && node.kind == NodeKind.CallExpr) refuseGlobalCallLends(u, node);
 			if (u.pass == 2 && !isSpawnCall(node)) callEffects(u, node);
 			if (u.pass == 2 && isMessageSend(node)) refuseModuleArgs(u, node);
 		},
@@ -2234,11 +2274,21 @@ function openCallLend(u: BorrowUnit, site: Node): void {
 	const roots: Symbol[] = [];
 	const kept: Node[] = [];
 	for (let i = 0; i < found.length; i += 1) {
-		if (variableId(u.p, found[i]) < 0 && hasFlag(found[i], SymbolFlag.Global)) continue;
+		if (variableId(u.p, found[i]) < 0 && hasFlag(found[i], SymbolFlag.Global)) {
+			refuseModuleCallLend(u, site, found[i], tasks[i]);
+			continue;
+		}
 		roots.push(found[i]);
 		kept.push(tasks[i]);
 	}
 	pushLend(u, site, roots, [], kept, calleeName(site));
+}
+
+function refuseModuleCallLend(u: BorrowUnit, site: Node, sym: Symbol, task: Node): void {
+	if (isMessageSend(task)) return;
+	const held = moduleStateCause(u.ctx.dispatchRegistry, sym, site);
+	if (held == null) return;
+	addError(u.ctx, `'${sym.name}' is lent to the spawn at ${task.location.line}:${task.location.column}, which the call of '${calleeName(site)}' at ${site.location.line}:${site.location.column} starts, but it ${held.text}${MODULE_LEND_RULE}`, site.location.line, site.location.column);
 }
 
 function onlyActorCaptureLends(pending: PendingLend[]): boolean {
@@ -2321,13 +2371,18 @@ function checkLends(u: BorrowUnit, unitEnd: string): void {
 			const r = l.roots[ri];
 			const task = l.tasks[ri];
 			const actor = isMessageSend(task);
-			const via = l.callee != "" && task != l.site ? `, which the call of '${l.callee}' at ${l.site.location.line}:${l.site.location.column} starts,` : "";
+			const via = l.callee != "" && task != l.site ? `, which the call of '${l.callee}' at ${l.site.location.line}:${l.site.location.column} starts` : "";
 			const spawnAt = `${actor ? "actor call of '" + calleeName(task) + "'" : "spawn"} at ${task.location.line}:${task.location.column}${via}`;
 			const reader = actor ? "the actor" : "the task";
 			const id = variableId(u.p, r);
+			const held = actor || id >= 0 ? null : moduleStateCause(u.ctx.dispatchRegistry, r, l.site);
+			if (held != null) {
+				addError(u.ctx, `'${r.name}' is lent to the ${spawnAt}, but it ${held.text}${MODULE_LEND_RULE}`, l.site.location.line, l.site.location.column);
+				break;
+			}
 			if (id < 0) continue;
 			const root = ufRoot(u.p, id);
-			const reached = actor ? null : moduleSourceIn(u, root);
+			const reached = actor ? null : moduleSourceIn(u, root, l.end < 0 ? MAX_TIME : l.end, l.site);
 			if (reached != null) {
 				addError(u.ctx, `'${r.name}' is lent to the ${spawnAt}, but it holds a value that ${reached.text}${MODULE_LEND_RULE}`, l.site.location.line, l.site.location.column);
 				break;
@@ -2377,7 +2432,7 @@ function scanUnitBody(dispatchRegistry: DispatchRegistry, node: Node | null, sca
 	if (node.kind == NodeKind.CallExpr && lendsPastCall(dispatchRegistry, node, scan.module)) {
 		node.flags = node.flags.incl(NodeFlag.LendsPastCall);
 		scan.spawn = true;
-	}
+	} else if (!scan.spawn && node.kind == NodeKind.CallExpr && lendsGlobal(dispatchRegistry, node)) scan.spawn = true;
 	if (!scan.view && node.resolvedSym != null && (node.kind == NodeKind.VariableDecl || node.kind == NodeKind.ForOfStmt)
 		&& holdsViewSkippingClear(node.resolvedSym.symbolType, scan.clear)) scan.view = true;
 	if (!scan.view && node.kind == NodeKind.DestructuringDecl && bindsView((node.data as DestructuringDeclData).destrPattern, scan.clear)) scan.view = true;

@@ -85,6 +85,7 @@ let viewParams: string[] = [];
 let forOfSources = new HashMap<Symbol, Node>();
 let assignedSources = new HashMap<Symbol, Node[]>();
 let heldSources = new HashMap<Symbol, Node[]>();
+let fieldSources = new HashMap<Symbol, Node[]>();
 let flowScanned: Node[] = [];
 let resolving: Symbol[] = [];
 const UNFOLLOWED = "a value the checker cannot follow";
@@ -176,6 +177,7 @@ export function runDeferredEffectChecks(ctx: CheckerContext, program: Node): voi
 	forOfSources = new HashMap<Symbol, Node>();
 	assignedSources = new HashMap<Symbol, Node[]>();
 	heldSources = new HashMap<Symbol, Node[]>();
+	fieldSources = new HashMap<Symbol, Node[]>();
 	flowScanned = [];
 }
 
@@ -764,6 +766,13 @@ function pointsAtConstantState(dispatchRegistry: DispatchRegistry, sym: Symbol, 
 	return pointee != null && pointee != sym && isModuleState(pointee) && isConstantValue(dispatchRegistry, pointee, e);
 }
 
+export function moduleStateCause(dispatchRegistry: DispatchRegistry, sym: Symbol, site: Node): EffectCause | null {
+	const t = sym.symbolType;
+	if (!isModuleState(sym) || t == null || !typeCarriesRef(t) || isAtomicRef(t) || holdsOnlyPids(t)) return null;
+	if (isConstantValue(dispatchRegistry, sym, Effect.SpawnUnsafe)) return null;
+	return cause(site, "is " + stateName(sym));
+}
+
 function stateName(sym: Symbol): string {
 	if (hasFlag(sym, SymbolFlag.Static)) return "static '" + sym.name + "'";
 	if (sym.staticOwner != null) return "static '" + sym.staticOwner.name + "." + sym.name + "'";
@@ -1001,6 +1010,7 @@ export function moduleSourceOf(dispatchRegistry: DispatchRegistry, node: Node | 
 	return match (p.kind) {
 		NodeKind.Identifier => p.resolvedSym == null ? null
 			: isModuleState(p.resolvedSym!) ? useEffect(dispatchRegistry, p, Effect.ActorReach)
+			: isLocalBinding(p.resolvedSym) ? localModuleSource(dispatchRegistry, p.resolvedSym!)
 			: moduleSourceOf(dispatchRegistry, constBindingInitializer(p.resolvedSym)),
 		NodeKind.MemberExpr => p.resolvedSym != null && isModuleState(p.resolvedSym!) ? useEffect(dispatchRegistry, p, Effect.ActorReach) : moduleSourceOf(dispatchRegistry, (p.data as MemberExprData).object),
 		NodeKind.ArrayAccess => moduleSourceOf(dispatchRegistry, (p.data as ArrayAccessData).array),
@@ -1023,6 +1033,19 @@ export function moduleSourceOf(dispatchRegistry: DispatchRegistry, node: Node | 
 
 const resultSourceOpen: Symbol[] = [];
 
+function localModuleSource(dispatchRegistry: DispatchRegistry, sym: Symbol): EffectCause | null {
+	if (resolving.includes(sym)) return null;
+	resolving.push(sym);
+	const decl = sym.declNode;
+	const bound = decl != null && decl.kind == NodeKind.VariableDecl ? (decl.data as VariableDeclData).initializer : null;
+	const c = moduleSourceOf(dispatchRegistry, bound)
+		?? firstModuleSource(dispatchRegistry, assignedSources.get(sym) ?? [])
+		?? firstModuleSource(dispatchRegistry, heldSources.get(sym) ?? [])
+		?? firstModuleSource(dispatchRegistry, fieldSources.get(sym) ?? []);
+	resolving.pop();
+	return c;
+}
+
 function callResultModuleSource(dispatchRegistry: DispatchRegistry, call: Node): EffectCause | null {
 	const recv = receiverOf(call);
 	const merged = (recv != null ? moduleSourceOf(dispatchRegistry, recv) : null) ?? firstModuleSource(dispatchRegistry, (call.data as CallExprData).arguments);
@@ -1032,6 +1055,7 @@ function callResultModuleSource(dispatchRegistry: DispatchRegistry, call: Node):
 	const body = routineBody(unpackDecl(sym!.declNode));
 	if (body == null) return null;
 	resultSourceOpen.push(sym!);
+	scanFlows(body);
 	const returned: Node[] = [];
 	if (body.kind == NodeKind.BlockStmt) collectReturned(body, returned);
 	else returned.push(body);
@@ -1271,6 +1295,9 @@ function scanFlows(node: Node | null): void {
 			else if (left.kind == NodeKind.ArrayAccess) {
 				const root = pathRoot(left);
 				if (isLocalBinding(root)) addSource(heldSources, root!, peelConv(d.right));
+			} else if (left.kind == NodeKind.MemberExpr) {
+				const root = pathRoot(left);
+				if (isLocalBinding(root)) addSource(fieldSources, root!, peelConv(d.right));
 			}
 		}
 		if (n.kind == NodeKind.CallExpr) {
@@ -1285,7 +1312,7 @@ function scanFlows(node: Node | null): void {
 	visit(node);
 }
 
-function mayStoreIntoReceiver(call: Node): boolean {
+export function mayStoreIntoReceiver(call: Node): boolean {
 	if (!call.flags.has(NodeFlag.ExtCall)) return true;
 	const sig = calledRoutineType(call);
 	const formal = sig != null && sig.typeChildren.length > 0 ? sig.typeChildren[0] : null;
