@@ -1887,7 +1887,7 @@ function unownedIn(t: Type | null, depth: int32, countedByArray: boolean): Type 
 	if (isUnownedRef(t)) return t;
 	if (countedByArray && t.kind == TypeKind.Array && isUnownedSlot(t.typeReturn)) return null;
 	if (t.kind == TypeKind.Array || t.kind == TypeKind.SizedArray || t.kind == TypeKind.Distinct || t.kind == TypeKind.Alias
-			|| t.kind == TypeKind.Sink || t.kind == TypeKind.Var) return unownedIn(t.typeReturn, depth + 1, countedByArray);
+			|| t.kind == TypeKind.Sink || t.kind == TypeKind.Var || isMaybeType(t)) return unownedIn(t.typeReturn, depth + 1, countedByArray);
 	if (t.kind == TypeKind.Ref) {
 		const p = t.typeReturn;
 		return p != null && (p.kind == TypeKind.GenericInstance || p.kind == TypeKind.Array) ? unownedIn(p, depth + 1, countedByArray) : null;

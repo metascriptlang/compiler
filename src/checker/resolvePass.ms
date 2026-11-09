@@ -493,7 +493,7 @@ export function refuseUnownedPosition(ctx: CheckerContext, what: string, t: Type
 		addError(ctx, what + " cannot be " + typeDisplayName(t) + ": Unowned<T> is the type of a class or struct field, the back edge an object stores — declare it '" + typeDisplayName(withoutUnowned(t)) + "', which reads the target and keeps it alive while it is used", line, col);
 		return;
 	}
-	addError(ctx, what + " of type " + typeDisplayName(t) + " holds Unowned<" + target + "> inside it: an Unowned edge is counted where a class or struct field or an array's element stores it; inside a union member, a tuple, a function type or a type argument it is not built yet — store the back edge in a field or in an array", line, col);
+	addError(ctx, what + " of type " + typeDisplayName(t) + " holds Unowned<" + target + "> inside it: an Unowned edge is counted where a class or struct field or an array's element stores it, so a union member, a tuple, a function type or a type argument cannot hold one — store the back edge in a struct field and hold the struct, as in 'struct Up { at: Unowned<" + target + "> }' and 'Map<string, Up>'", line, col);
 }
 
 export function refuseNestedView(ctx: CheckerContext, what: string, t: Type | null, line: int32, col: int32): void {
