@@ -1137,13 +1137,13 @@ extern function msStickyAt(a: Ptr<void>, i: int64, bad: boolean): int64;
 @compilerFunc
 extern function msStickySpanAt(s: Ptr<void>, i: int64, bad: boolean): int64;
 @compilerFunc
-extern function msBlockSumFits(acc: int64, pos: int64, neg: int64, sub: boolean, lo: int64, hi: int64): boolean;
+extern function msBlockRangeFits(acc: int64, n: int64, lo: int64, hi: int64, sub: boolean, min: int64, max: int64): boolean;
 @compilerFunc
 extern function msBlockWithin(a: Ptr<void>, b: int64, e: int64): boolean;
 @compilerFunc
 extern function msBlockWithinSpan(s: Ptr<void>, b: int64, e: int64): boolean;
 @compilerFunc
-extern function msBlockSumOf(acc: int64, pos: int64, neg: int64, sub: boolean): int64;
+extern function msBlockSumOf(acc: int64, sum: int64, sub: boolean): int64;
 @compilerFunc
 extern function msPowF64(x: float64, y: float64): float64;
 @compilerFunc

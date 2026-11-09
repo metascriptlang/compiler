@@ -177,14 +177,16 @@ static inline int64_t msBlockEndOf(int64_t b, int64_t len, int64_t size) {
 #define msStickyExactI64(v, bad) ({ int64_t __v = (v); (bad) |= (__v <= -9007199254740992LL) | (__v >= 9007199254740992LL); __v; })
 #define msStickyAt(a, i, bad) ({ int64_t __i = (i); int __in = (uint64_t)__i < (uint64_t)(a).len; (bad) |= !__in; __in ? (a).p->data[__i] : 0; })
 #define msStickySpanAt(s, i, bad) ({ int64_t __i = (i); int __in = (uint64_t)__i < (uint64_t)(s).len; (bad) |= !__in; __in ? (s).data[__i] : 0; })
-/* A block of a reduction sums its positive and its negative terms apart: every partial sum lies between acc plus
-   the negatives and acc plus the positives, so when both ends fit no step of the block overflows. */
-#define msBlockSumFits(acc, pos, neg, sub, lo, hi) ((sub) \
-	? ((int64_t)(acc) - (pos) >= (lo) && (int64_t)(acc) - (neg) <= (hi)) \
-	: ((int64_t)(acc) + (neg) >= (lo) && (int64_t)(acc) + (pos) <= (hi)))
+/* After k of a block's n terms, each in [lo, hi], the partial sum lies between acc + n * min(lo, 0) and
+   acc + n * max(hi, 0), so when both ends fit no step of the block overflows. */
+static inline int msBlockRangeFits(int64_t acc, int64_t n, int64_t lo, int64_t hi, int sub, int64_t min, int64_t max) {
+	if (n > (1LL << 20) || lo < -(1LL << 40) || hi > (1LL << 40)) return 0;
+	int64_t down = n * (lo < 0 ? lo : 0), up = n * (hi > 0 ? hi : 0);
+	return sub ? acc - up >= min && acc - down <= max : acc + down >= min && acc + up <= max;
+}
 #define msBlockWithin(a, b, e) ((b) >= 0 && (e) <= (int64_t)(a).len)
 #define msBlockWithinSpan(s, b, e) ((b) >= 0 && (e) <= (int64_t)(s).len)
-#define msBlockSumOf(acc, pos, neg, sub) ((sub) ? (int64_t)(acc) - (pos) - (neg) : (int64_t)(acc) + (pos) + (neg))
+#define msBlockSumOf(acc, sum, sub) ((sub) ? (int64_t)(acc) - (sum) : (int64_t)(acc) + (sum))
 
 static inline int msBlockFits_(uint64_t acc, uint64_t term, int64_t n, uint64_t max) {
 	if (acc > max) return 0;
