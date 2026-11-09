@@ -19,7 +19,8 @@ import { join, dirname, basename, normalize, isAbsolute } from "std/fs/path";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { localCacheDir, globalCacheRoot, stampMemoRoot } from "../utils/cachePaths";
 import { collectStaleEntries, collectStaleFlatEntries, markUsed, nowSeconds } from "../utils/stampDirs";
-import { ensureDir, atomicWriteFile, renameReplace, stopBuild } from "./io";
+import { ensureDir, atomicWriteFile, atomicCopyFile, renameReplace, stopBuild } from "./io";
+import { stepStoreRoot, storedOutput, storeScratch, storePublish, collectStepStore } from "./build/store";
 import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArgsKey, objectCompileArgs, objectSearchDirs, buildPch, prefixMapsByToken } from "./cc";
 import { hashContent, collectFilesSorted } from "../utils/contentHash";
 import { headerQueries, type HeaderQueries } from "./headerQueries";
@@ -1487,6 +1488,7 @@ export function collectGlobalCache(now: float64 = nowSeconds()): void {
 	collectStaleEntries(`${root}/headers`, now, [".hi"]);
 	collectStaleEntries(`${root}/stdunit`, now, [".su"], STD_UNIT_UNUSED_SECONDS);
 	collectStaleFlatEntries(stampMemoRoot(), now, [".sum", ".files", ".exe", ".bundle"]);
+	collectStepStore(stepStoreRoot());
 }
 
 // Remove a file if it exists (reference-aligned: tryRemoveFile).
@@ -2258,6 +2260,39 @@ export function writeLinkCache(oFiles: string[], externalInputs: string[], linkF
 	content = content + `${PRE_LINKINPUTS}${externalInputKey(externalInputs)}\n`;
 	content = content + `${PRE_OUTHASH}${outputIdentity(outputFile)}\n`;
 	atomicWriteFile(linkCacheFile(image), content);
+}
+
+// The linked-output store: an image linked from the same object contents, flags and toolchain
+// is restored from the shared step store instead of linked again, across trees and projects.
+export function linkStoreKey(oFiles: string[], linkFlags: string, ccOption: number, ccBinary: string, mode: number, targetOs: string, appMode: string): string {
+	let key = `link1\n${platform}\n${targetOs}\n${mode}\n${appMode}\n${linkToolchainKey(ccOption, ccBinary)}\n${linkFlags}\n`;
+	for (const path of oFiles) key = `${key}${hashFile(path)}\n`;
+	for (const token of linkFlags.split(" ")) {
+		if (token != "" && !token.startsWith("-") && exists(token) && !isDir(token)) key = `${key}${token}:${hashFile(token)}\n`;
+	}
+	return key;
+}
+
+const LINKED_IMAGE = "image";
+
+export function restoreLinked(key: string, outBinary: string): boolean {
+	const store = stepStoreRoot();
+	if (store == "" || _forceRebuild) return false;
+	const stored = storedOutput(store, key);
+	if (stored == "") return false;
+	ensureDir(dirname(outBinary));
+	return atomicCopyFile(`${stored}/${LINKED_IMAGE}`, outBinary);
+}
+
+export function publishLinked(key: string, outBinary: string): void {
+	const store = stepStoreRoot();
+	if (store == "") return;
+	const scratch = storeScratch(store, key);
+	if (!atomicCopyFile(outBinary, `${scratch}/${LINKED_IMAGE}`)) {
+		removeAll(scratch);
+		return;
+	}
+	storePublish(store, key, scratch, hashFile(outBinary).replace(":", "_"));
 }
 
 // ===== Header Module Cache (Layer 5) =====

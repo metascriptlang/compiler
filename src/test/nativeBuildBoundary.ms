@@ -45,8 +45,8 @@ const cacheRootGroups = [
 	"cache-roots-native-build", "cache-roots-native-test", "cache-symlink", "cache-shared-source",
 ];
 if (!cacheRootGroups.includes(group) && group != "cache-preservation" &&
-	group != "argv" && group != "compile-cache" && group != "link-cache" && group != "audit" && group != "run-cache" && group != "manual-cross-module-throw" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "byte-order" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "test-dynamic-import" && group != "support-alias" && group != "reproducible-link" && group != "test-timing" && group != "windows-cross" && group != "all") {
-	console.log("group must be argv, compile-cache, link-cache, run-cache, manual-cross-module-throw, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, byte-order, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, test-scope, test-dynamic-import, support-alias, reproducible-link, test-timing, windows-cross, or all");
+	group != "argv" && group != "compile-cache" && group != "link-cache" && group != "link-store" && group != "audit" && group != "run-cache" && group != "manual-cross-module-throw" && group != "comptime-cache" && group != "object-store" && group != "project-cache" && group != "directive-paths" && group != "spawn-drain" && group != "upcast-cast" && group != "byte-order" && group != "emcc-argv-fs" && group != "emcc-watch-process" && group != "emcc-jspi" && group != "module-names" && group != "wasi-platform" && group != "ios-process" && group != "flows" && group != "test-scope" && group != "test-dynamic-import" && group != "support-alias" && group != "reproducible-link" && group != "test-timing" && group != "windows-cross" && group != "all") {
+	console.log("group must be argv, compile-cache, link-cache, link-store, run-cache, manual-cross-module-throw, audit, comptime-cache, object-store, project-cache, directive-paths, spawn-drain, upcast-cast, byte-order, emcc-argv-fs, emcc-watch-process, emcc-jspi, module-names, wasi-platform, ios-process, flows, test-scope, test-dynamic-import, support-alias, reproducible-link, test-timing, windows-cross, or all");
 	console.log(`cache-preservation and ${cacheRootGroups.join(", ")} are also supported`);
 	exit(2);
 }
@@ -1322,6 +1322,30 @@ function runComptimeCache(): void {
 	record("build with -d:tier=2", "two:", builtValue(defines, build(defines, "define-removed", "probe", ["-d:tier=2"])));
 }
 
+function runLinkStore(): void {
+	if (windows) return;
+	const linked = fixture("link store", "@compile(\"./native.c\");", "int probeValue(void) { return 61; }\n");
+	need(build(linked, "first") == 0, "link store first build");
+	removeAll(`${linked}/out`);
+	remove(`${linked}/probe`);
+	const rebuilt = command(linked, "restored", "sh", ["-c", `"$0" build main.ms --cc=clang --output=probe --colors=off 2>&1`, compiler]);
+	need(rebuilt.code == 0, "link store rebuild");
+	recordTrue("a tree whose out/ is gone restores its linked image", rebuilt.stdout.includes("(link restored)"));
+	record("the restored image runs", "61", value(linked));
+
+	const named = fixture("link store flags", "", "int probeValue(void) { return 7; }\n");
+	put(`${named}/build.ms`, "const config = { cc: { linkFlags: [\"libnative.a\"] } };\nexport default config;\n");
+	for (const label of ["seven", "eight"]) {
+		if (label == "eight") put(`${named}/native.c`, "int probeValue(void) { return 8; }\n");
+		need(command(named, `cc-${label}`, "clang", ["-c", "native.c", "-o", "native.o"]).code == 0, `cc ${label}`);
+		need(command(named, `ar-${label}`, "ar", ["rcs", "libnative.a", "native.o"]).code == 0, `ar ${label}`);
+		removeAll(`${named}/out`);
+		remove(`${named}/probe`);
+		need(build(named, label) == 0, `link store flags ${label}`);
+	}
+	record("an archive named in linkFlags is part of the stored link", "8", value(named));
+}
+
 function runObjectStore(): void {
 	const first = includedFixture("store first", "static inline int probeValue(void) { return 55; }\n");
 	const second = includedFixture("store second", "static inline int probeValue(void) { return 55; }\n");
@@ -2149,6 +2173,7 @@ if (group == "test-dynamic-import" || group == "all") runTestDynamicImport();
 if (group == "support-alias" || group == "all") runSupportAlias();
 if (group == "compile-cache" || group == "all") runCompileCache();
 if (group == "link-cache" || group == "all") runLinkCache();
+if (group == "link-store" || group == "all") runLinkStore();
 if (group == "manual-cross-module-throw" || group == "all") runManualCrossModuleThrow();
 if (group == "run-cache" || group == "all") runRunCache();
 if (group == "audit" || group == "all") runAudit();

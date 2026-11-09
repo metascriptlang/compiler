@@ -95,11 +95,11 @@ import { placedModuleErrors, placedImportErrors, placedMemberUses } from "./wasm
 import { wasmReachedRoutines } from "../checker/sendable";
 import { flowStart, flowStop, flowAddMs, flowsEnabled, flowsWrite } from "./flows";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
-import { compileC, compileCFile, trimRootList, withoutPreprocessorArgs, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, buildsPch, linkObjects, warmLinkPlan, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, resolveSanitizerCC, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
+import { compileC, compileCFile, trimRootList, withoutPreprocessorArgs, objectCompileArgs, compilePlanFor, useDriverPlans, driverPlansOn, NO_PLAN, includePrefix, buildPch, buildsPch, linkObjects, pdbLinkArg, dsymutilArgv, warmLinkPlan, archiveStatic, linkSolana, SBF_MAIN_NOINLINE_FLAG, reportsSbfFrameOverflow, appendFlag, cliCompileFlags, cliLinkFlags, resolveBpfClang, resolveSbfLinker, markCppCompile, isCppFile, getCompilerName, resolveLto, resolveSanitizerCC, toolchainHeaderRoot, resolveSbfObjcopy } from "./cc";
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch, isDefined } from "./defines";
 import { resolveCC, requirePreparedToolchain } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, projectRecordCurrent, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, headerSearch, invalidateCompileCache, isLinkCached, writeLinkCache, cacheDir, headerModuleKey, lookupHeaderModule, storeHeaderModule, toolchainStamp, compilerStamp, objectStamp, stdTreeStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
+import { initCache, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, projectRecordCurrent, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, headerSearch, invalidateCompileCache, isLinkCached, writeLinkCache, linkStoreKey, restoreLinked, publishLinked, cacheDir, headerModuleKey, lookupHeaderModule, storeHeaderModule, toolchainStamp, compilerStamp, objectStamp, stdTreeStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
 import { stampMemoRoot } from "../utils/cachePaths";
 import { hashContent } from "../utils/contentHash";
 import { lineText } from "../utils/sourceLines";
@@ -4742,7 +4742,11 @@ resetLiftedOps();
 	}
 
 	if (opts.verbose) verboseLog("linking → " + outBinary);
-	if (opts.appMode == "staticlib") {
+	const storeKey = linkStorable(opts, outBinary, hcrBuildAbi != null) ? linkStoreKey(oFiles, linkFlags, opts.ccCompiler, opts.ccBinary, opts.mode, opts.targetOs, opts.appMode) : "";
+	const restored = storeKey != "" && restoreLinked(storeKey, outBinary);
+	if (restored) {
+		if (opts.verbose) verboseLog("  restored the linked image from the store");
+	} else if (opts.appMode == "staticlib") {
 		const arRes = archiveStatic(oFiles, outBinary, opts.ccCompiler, opts.ccBinary);
 		if (!arRes.ok) {
 			printError(`ar failed ${dim(`(exit ${arRes.error.exitCode})`)}`);
@@ -4782,6 +4786,7 @@ resetLiftedOps();
 		}
 	}
 	if (hcrBuildAbi != null) publishHcrBuildAbi(hcrBuildAbi, recompiledModulePaths);
+	if (storeKey != "" && !restored) publishLinked(storeKey, outBinary);
 
 	// Persist link cache after successful link
 	writeLinkCache(oFiles, externalLinkInputs, linkFlags, outBinary, opts.ccCompiler, opts.ccBinary);
@@ -4796,7 +4801,7 @@ resetLiftedOps();
 
 	if (opts.showTime) printTiming("phase D (link)", tD);
 	flowStop("phase.link", fD);
-	printDiag(success(`Built ${compiled} module(s) → ${bold(outBinary)}`));
+	printDiag(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + (restored ? dim(" (link restored)") : ""));
 	if (opts.showTime) printTiming("total", t0);
 	session.lastBuilt = true;
 	return BuildStatus.Built;
@@ -5993,6 +5998,14 @@ function loadNativeBridges(demands: Symbol[], unitPaths: string[], unitCtxs: Che
 		printDiag(`${red("raiser error")}: ${refusal}`);
 		stopBuild();
 	}
+}
+
+// Only a link that writes one file is stored: a debug map, a pdb, an HCR ABI or an emscripten
+// bundle would leave its other outputs behind.
+function linkStorable(opts: CliOptions, outBinary: string, hcr: boolean): boolean {
+	if (hcr || opts.isHcr || opts.targetOs == "emcc" || opts.targetOs == "solana") return false;
+	if (opts.appMode != "console" && opts.appMode != "staticlib") return false;
+	return pdbLinkArg(opts.mode, opts.targetOs, opts.ccCompiler, outBinary) == "" && dsymutilArgv(opts.mode, opts.targetOs, opts.ccCompiler, "", outBinary).length == 0;
 }
 
 export function runRaiser(mod: RaiserModule, programArgv: string[], printSink: RaiserPrintSink, auditLedger: boolean = true, restrictedSource: string = ""): RaiserContext {

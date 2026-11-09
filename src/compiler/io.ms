@@ -1,7 +1,7 @@
 // MetaScript Compiler CLI — File I/O and shared error helpers
 
 import { exit, platform } from "std/process";
-import { readFile, writeFile, ensureDir as fsEnsureDir, rename, remove } from "std/fs";
+import { readFile, writeFile, ensureDir as fsEnsureDir, rename, remove, copyFile, isExecutable, chmod } from "std/fs";
 import { error, dim } from "../utils/color";
 import { msModuleExtensions, stripMsModuleExtension } from "../module/resolver";
 
@@ -58,6 +58,18 @@ export function atomicWriteFile(path: string, content: string): boolean {
 	const w = writeFile(tmp, content);
 	if (!w.ok) return false;
 	if (renameReplace(tmp, path)) return true;
+	remove(tmp);
+	return false;
+}
+
+const EXECUTABLE_MODE: int32 = 493;
+
+// Copy a file the way atomicWriteFile writes one, keeping its exec bit.
+export function atomicCopyFile(from: string, to: string): boolean {
+	const tmp = `${to}.tmp.${performance.now()}`;
+	if (!copyFile(from, tmp).ok) return false;
+	if (isExecutable(from)) chmod(tmp, EXECUTABLE_MODE);
+	if (renameReplace(tmp, to)) return true;
 	remove(tmp);
 	return false;
 }
