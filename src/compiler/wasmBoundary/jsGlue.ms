@@ -389,7 +389,9 @@ const HANDLE_METHODS = [
 	"\t\t\ttry {",
 	"\t\t\t\tconst ptr = __msbMod[\"_msb_vec_ptr_\" + name](p) >>> 0;",
 	"\t\t\t\tconst len = __msbMod[\"_msb_vec_len_\" + name](p);",
-	"\t\t\t\tf({ base: new T(__msbMod.HEAPU8.buffer, ptr, len), off: 0, len });",
+	"\t\t\t\tconst mb = __msbMod.HEAPU8.buffer;",
+	"\t\t\t\tf({ base: new T(mb, ptr, len), off: 0, len });",
+	"\t\t\t\tthis.fresh(mb);",
 	"\t\t\t} finally { vw.pop(); this.lent -= 1; this.unlend(r); }",
 	"\t\t},",
 	"\t\tunlend(r) { if (--hl[r.i] === 0 && hk[r.i] === 3) hFinish(r.i); },",
@@ -402,8 +404,10 @@ const HANDLE_METHODS = [
 	"\t\t\tif (!hLive(r)) throw new Error(\"release of \" + r.name + \": "
 		+ "already released\");",
 	"\t\t\tif (--hr[r.i] !== 0) return;",
-	"\t\t\tif (hl[r.i] > 0) hk[r.i] = 3;",
-	"\t\t\telse hFinish(r.i);",
+	"\t\t\tif (hl[r.i] > 0) { hk[r.i] = 3; return; }",
+	"\t\t\tconst mb = __msbMod.HEAPU8.buffer;",
+	"\t\t\thFinish(r.i);",
+	"\t\t\tif (this.lent > 0) this.fresh(mb);",
 	"\t\t},",
 ];
 
@@ -482,6 +486,9 @@ export function preludeFor(
 		+ "this.span + \"', or call the callback from a function without a Span\"";
 	const deadGlue = "the wasm half cannot run again: a trap or a host error "
 		+ "left its frames unfinished";
+	const grownView = "wasm memory grew while a Span view was open, so the view "
+		+ "stopped seeing it: a Handle release inside the callback or view ran a "
+		+ "destroy that allocated; release it after the callback or view returns";
 	const lentGlue = "a wasm function was called while a Span was lent to a JS "
 		+ "callback: the call could move or change the elements the callback's "
 		+ "Span sees, so call it after the callback returns";
@@ -544,6 +551,9 @@ export function preludeFor(
 		"\t\t\t\t}",
 		`\t\t\t\tthrow new Error("${lentGlue}");`,
 		"\t\t\t}",
+		"\t\t},",
+		"\t\tfresh(b) {",
+		`\t\t\tif (__msbMod.HEAPU8.buffer !== b) throw new Error("${grownView}");`,
 		"\t\t},",
 		"\t\tdie(e) { if (!dead) { dead = true; cause = e; } return e; },",
 		"\t\tfail(e, z) {",

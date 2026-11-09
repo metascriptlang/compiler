@@ -265,6 +265,7 @@ function adapterOf(
 	let writesBack = "";
 	const shared = callbackSharesCopies(cb);
 	const ranges: string[] = [];
+	let viewed = false;
 	let w = 0;
 	for (let i = 0; i < cb.params.length; i += 1) {
 		if (cb.params[i] != BoundaryKind.Span) {
@@ -282,6 +283,7 @@ function adapterOf(
 		const ptr = `x${at} >>> 0`;
 		const len = `x${at + 1}`;
 		if (!copiesSpan(cb, i)) {
+			viewed = true;
 			const view = `new ${t}(__msbMod.HEAPU8.buffer, ${ptr}, ${len})`;
 			views += `const s${i} = { base: ${view}, off: 0, len: ${len} }; `;
 			args.push(`s${i}`);
@@ -310,7 +312,13 @@ function adapterOf(
 		call = valueCheck(cb.result, cb.resultEnum, call, resultAt);
 	}
 	const returned = isVoid ? "" : jsValueToWire(cb.result, call);
-	const body = isVoid ? `${call};` : `return ${returned};`;
+	let body = isVoid ? `${call};` : `return ${returned};`;
+	if (viewed) {
+		views += "const mb = __msbMod.HEAPU8.buffer; ";
+		body = isVoid
+			? `${call}; __msb.fresh(mb);`
+			: `const r = ${returned}; __msb.fresh(mb); return r;`;
+	}
 	const params = names.join(", ");
 	if (views != "") {
 		const inner = writesBack != ""
