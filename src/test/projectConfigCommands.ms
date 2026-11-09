@@ -285,8 +285,10 @@ const checks = `${root}/checks`;
 ensureDir(`${checks}/src`);
 put(`${checks}/src/main.ms`, "import { argv } from \"std/process\";\nconsole.log(`app ${argv.slice(1).join(\",\")}`);\n");
 put(`${checks}/build.ms`, [
-	"import { executable, runArtifact, systemCommand, path } from \"std/build\";",
+	"import { executable, runArtifact, systemCommand, path, mscExe } from \"std/build\";",
 	"export const app = executable({ entry: path(\"src/main.ms\") });",
+	"export const self = systemCommand([\"echo\", mscExe()]);",
+	"self.captureStdOut();",
 	"export const touch = systemCommand([\"sh\", \"-c\", \"echo x >> runs.txt\"]);",
 	`export const checked = systemCommand(["sh", "-c", "echo ${root} >> checked.txt"]);`,
 	"checked.expectExitCode(0);",
@@ -326,6 +328,7 @@ record("expectExitCode accepts the code it names", "passed", passes(run(checks, 
 record("runArtifact runs the built executable and can capture its stdout", "app second", storedStdout(run(checks, ["build", "--colors=off", "shown"])));
 const namedOut = storedStdout(run(checks, ["build", "--colors=off", "named"]));
 record("addPrefixedArtifactArg passes the built executable's path", "--msc=/tmp/…/checks/out/app", namedOut.startsWith("--msc=/tmp/") && namedOut.endsWith("/checks/out/app") ? "--msc=/tmp/…/checks/out/app" : namedOut);
+record("mscExe() is the msc that runs the build", compiler, storedStdout(run(checks, ["build", "--colors=off", "self"])));
 record("arguments after -- reach the command node msc build names", "args a b", lastLine(run(checks, ["build", "--colors=off", "echoed", "--", "a", "b"])));
 
 const staged = `${root}/staged`;
