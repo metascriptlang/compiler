@@ -11,8 +11,9 @@
 1	msPoolSubmit
 1	msThreadTimers
 1	msWorkerLoopPump
-11	msActorDestroyWithReason
+10	msActorPollLocal
 11	msCDDispatch
+12	msActorDestroyWithReason
 2	SsrcZtestZcorpusZprogramsZ409U2DawaitU53tructU41ctorU53pawnOms__Init000
 2	msActorCreate
 2	msActorFromPid
@@ -49,4 +50,3 @@
 6	msActorVisitEnd
 6	msPoolWorkerLoop
 7	msActorPostJob
-9	msActorPollLocal
