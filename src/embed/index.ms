@@ -198,7 +198,7 @@ export function selectRoutine(interp: Interpreter, name: string): Result<Routine
 	if (run == null) return Result.err(`no evaluated module to select '${name}' from: no evalModule has succeeded`);
 	let found: Routine | null = null;
 	for (const exported of run.mod.exports) {
-		if (exported.name != name) continue;
+		if (exported.name != name || exported.global >= 0) continue;
 		if (found != null) return Result.err(`'${name}' is overloaded in the evaluated module; a host selects only a unique routine`);
 		found = { name, mod: run.mod, funcIdx: exported.funcIdx, arity: exported.arity };
 	}

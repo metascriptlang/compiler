@@ -65,6 +65,7 @@ export interface RaiserExport {
 	funcIdx: int32;
 	arity: int32;
 	sinks: boolean[];
+	global: int32;   // the global slot of an exported value; -1 for a function
 }
 
 export interface RaiserModule {

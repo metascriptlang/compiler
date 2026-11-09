@@ -522,7 +522,7 @@ function hasTopLevelAwait(node: Node): boolean {
 	return anyDescendant(node, topLevelAwaitVerdict);
 }
 
-export function generateRaiserProject(modules: RaiserModuleInput[], dispatchRegistry: DispatchRegistry, plan: DynamicModulePlan = new DynamicModulePlan(), exported: ExportedSymInfo[] = []): RaiserModule {
+export function generateRaiserProject(modules: RaiserModuleInput[], dispatchRegistry: DispatchRegistry, plan: DynamicModulePlan = new DynamicModulePlan(), exported: ExportedSymInfo[] = [], keepGlobals: boolean = false): RaiserModule {
 	const functions: RaiserFunction[] = [];
 	const globals: RaiserGlobalMap = { items: [] };
 	let globalCount: int32 = 0;
@@ -557,6 +557,12 @@ export function generateRaiserProject(modules: RaiserModuleInput[], dispatchRegi
 	}
 
 	for (const info of exported) {
+		if (info.sym.symbolKind == SymbolKind.Variable) {
+			for (const entry of globals.items) {
+				if (entry.symbol == info.sym) exports.push({ name: info.name, funcIdx: -1, arity: 0, sinks: [], global: entry.index });
+			}
+			continue;
+		}
 		if (info.sym.symbolKind != SymbolKind.Function) continue;
 		const declared = [info.sym];
 		for (const ov of info.sym.overloads) declared.push(ov);
@@ -566,7 +572,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], dispatchRegi
 			const arity = projectDecls[idx].paramSyms.length;
 			const sinks: boolean[] = [];
 			for (let i = 0; i < arity; i += 1) sinks.push(i < sym.symbolType.typeChildren.length && sym.symbolType.typeChildren[i].kind == TypeKind.Sink);
-			exports.push({ name: info.name, funcIdx: idx, arity: arity as int32, sinks });
+			exports.push({ name: info.name, funcIdx: idx, arity: arity as int32, sinks, global: -1 });
 		}
 	}
 
@@ -653,7 +659,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], dispatchRegi
 	defer setRaiserModulePath("");
 
 	// --- Pass 3: Compile init functions for each module ---
-	const hostKeepsGlobals = exports.length > 0;
+	const hostKeepsGlobals = keepGlobals || exports.length > 0;
 	const initIndices: number[] = [];
 	const deinitIndices: number[] = [];
 	for (let mi = 0; mi < modules.length; mi += 1) {
@@ -701,6 +707,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], dispatchRegi
 		initIndices.push(functions.length - 1);
 	}
 	for (const exported of exports) {
+		if (exported.global >= 0) continue;
 		demandBody(exported.funcIdx);
 		const packed = globalFuncMap.packed.get(exported.funcIdx);
 		if (packed != null) exported.funcIdx = packed.entryIdx;
