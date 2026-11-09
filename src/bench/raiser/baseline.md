@@ -71,12 +71,12 @@ LuaJIT and a row behind runs more of them or dearer ones.
 |---|---|---|---|
 | int add, field read/write | 2, 8 | 2, 8 | none: parity |
 | float add, int to float | 3 | 2 | a loop-invariant constant reloaded; the int conversion LuaJIT does not need |
-| module variable / object read | 6 / 7 | 3 / 4 | a TDZ guard (LoadGlobal, BTruthy, two Jump) inside the loop |
+| module variable / object read | 6 / 7 | 3 / 4 | a TDZ guard (LoadGlobal, BTruthy, two Jump) inside the loop; gone since `5a5d1a68eaf` (a binding is guarded only when a routine entered before its declaration reads it): 7.97 → 4.00 and 8.95 → 4.83 us/op on rtx, one low-load round (load 11 → 8), LuaJIT -joff 2.27 / 3.01 |
 | fib(25), per call | 4.5 | 7.5 | fewer instructions: CallDirect+Ret costs about 7.7 ns against about 2 |
 | closure call | 7 | 8 | CallClosureTyped about 10 ns |
 | Math.sqrt | 5 | 5 | CallHost about 18 ns; LuaJIT runs `math.sqrt` as a fast function |
 | object alloc | 18 | 6 | constructor not inlined; Try/Finally around each iteration, a constructor being assumed to raise |
-| union / tag rows | 25–29 | ~13 | the `for of` element is an owned copy: RcInc, MoveR, WasMoved, Try/Finally/RcDec per element |
+| union / tag rows | 25–29 | ~13 | the `for of` element was an owned copy (RcInc, MoveR, WasMoved, Try/Finally/RcDec per element); a cursor since `b275ad7da4f`, the loop 18 → 10 instructions per element, but the rows moved only 3–6% (int tag 47.3 → 44.5 us/op, rtx): what remains is the call to `area` and its body |
 | Map get / set | 94 / 102 | 6 / 3 | the std Map runs as bytecode across 6–8 routines; LuaJIT runs one table instruction in C |
 
 The ns costs of the call opcodes are differences between rows, not measured in isolation. Not measured: m1m.
