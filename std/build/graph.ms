@@ -162,6 +162,32 @@ export function host(): Target {
 	return { os: "", cpu: "", abi: "" };
 }
 
+extern function msBuildOption(name: string, description: string): string;
+
+// `msc build -Dname=value`; a bare `-Dname` gives "true". Null when the command line does not name it.
+export function option(name: string, description: string): string | null {
+	const given = msBuildOption(name, description);
+	return given == "" ? null : given.slice(1, given.length);
+}
+
+// `-Doptimize=Debug|ReleaseSafe|ReleaseFast`, or `--release` / `--danger`; Debug otherwise.
+export function standardOptimizeOption(): Optimize {
+	const given = option("optimize", "Debug, ReleaseSafe or ReleaseFast; --release and --danger name the last two");
+	if (given == null || given == "Debug") return Optimize.Debug;
+	if (given == "ReleaseSafe") return Optimize.ReleaseSafe;
+	if (given == "ReleaseFast") return Optimize.ReleaseFast;
+	throw new Error(`optimize: '${given}' is not Debug, ReleaseSafe or ReleaseFast`);
+}
+
+// `--os`, `--cpu` and `--abi` (or `-Dos=` …); the host for each one not given.
+export function standardTargetOptions(): Target {
+	return {
+		os: option("os", "the target os, as --os takes it") ?? "",
+		cpu: option("cpu", "the target cpu, as --cpu takes it") ?? "",
+		abi: option("abi", "the libc of a linux target, as --abi takes it") ?? "",
+	};
+}
+
 export interface ExecutableOptions {
 	entry: LazyPath;
 	target?: Target;

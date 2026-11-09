@@ -2,11 +2,12 @@ import { BuildGraph, GraphNode, GraphPath, ArgKind, nodeById, sourcePath } from 
 import { CliOptions } from "../options";
 import { hashFile } from "../cache";
 import { hashContent } from "../../utils/contentHash";
-import { globalCacheRoot } from "../../utils/cachePaths";
-import { atomicWriteFile, renameReplace } from "../io";
-import { exists, isDir, readDir, readFile, writeFile, ensureDir, removeAll, rename, copyFile } from "std/fs";
+import { stepStoreRoot, storedOutput, storeScratch, storePublish } from "./store";
+import { atomicCopyFile } from "../io";
+import { exists, isDir, readDir, writeFile, ensureDir, removeAll } from "std/fs";
 import { join, dirname, basename, isAbsolute } from "std/fs/path";
-import { execFile, execFileCapture, execPath, platform, findOnPath } from "std/process";
+import { execFile, execPath, platform, findOnPath } from "std/process";
+import { spawn, ChildProcess, ChildStream } from "std/process/child";
 import { vmCallFunction } from "../../raiser/vm";
 import { field } from "../../raiser/marshal";
 
@@ -22,15 +23,37 @@ export interface Execution {
 	ran: string[];
 	reused: string[];
 	passArgs: string[];
+	jobs: int32;
 }
 
-export function newExecution(graph: BuildGraph, opts: CliOptions, projectRoot: string, dryRun: boolean, passArgs: string[]): Execution {
-	return { graph, opts, projectRoot, outputs: new HashMap<int32, string>(), digests: new HashMap<int32, string>(), dryRun, ran: [], reused: [], passArgs };
+export function newExecution(graph: BuildGraph, opts: CliOptions, projectRoot: string, dryRun: boolean, passArgs: string[], jobs: int32): Execution {
+	return { graph, opts, projectRoot, outputs: new HashMap<int32, string>(), digests: new HashMap<int32, string>(), dryRun, ran: [], reused: [], passArgs, jobs };
+}
+
+// A node's process: its output is collected while it runs and printed when it ends, so
+// parallel nodes do not interleave.
+interface Job {
+	node: GraphNode;
+	exe: string;
+	args: string[];
+	cwd: string;
+	shown: string;
+	child: ChildProcess | null;
+	out: string;
+	err: string;
+	outEnded: boolean;
+	errEnded: boolean;
+	finish: (j: Job) => void;
+	abandon: () => void;
+}
+
+function job(node: GraphNode, exe: string, args: string[], cwd: string, shown: string, finish: (j: Job) => void, abandon: () => void): Job {
+	return { node, exe, args, cwd, shown, child: null, out: "", err: "", outEnded: false, errEnded: false, finish, abandon };
 }
 
 function storeDir(x: Execution): string {
-	const root = globalCacheRoot();
-	return root == "" ? join(x.projectRoot, "out/.build") : `${root}/build`;
+	const root = stepStoreRoot();
+	return root == "" ? join(x.projectRoot, "out/.build") : root;
 }
 
 function label(n: GraphNode): string {
@@ -86,7 +109,7 @@ function targetFlags(n: GraphNode): string[] {
 	return flags;
 }
 
-function runCompile(x: Execution, n: GraphNode, staticLib: boolean): void {
+function runCompile(x: Execution, n: GraphNode, staticLib: boolean): Job | null {
 	const entry = sourcePath(n.entry!);
 	if (n.name == "") n.name = basename(entry).replace(".ms", "");
 	const outDir = join(x.projectRoot, "out");
@@ -102,16 +125,16 @@ function runCompile(x: Execution, n: GraphNode, staticLib: boolean): void {
 		console.log(`${execPath} ${args.join(" ")}`);
 		x.outputs.set(n.id, out);
 		x.digests.set(n.id, `dry:${n.id}`);
-		return;
+		return null;
 	}
-	const code = execFile(execPath, args);
-	if (code != 0) throw new Error(`${label(n)}: msc build ${entry} exited with ${code}`);
-	x.outputs.set(n.id, out);
-	x.digests.set(n.id, hashFile(out));
-	x.ran.push(label(n));
+	return job(n, execPath, args, x.projectRoot, `msc build ${entry}`, (j: Job): void => {
+		x.outputs.set(n.id, out);
+		x.digests.set(n.id, hashFile(out));
+		x.ran.push(label(n));
+	}, (): void => {});
 }
 
-function runCommand(x: Execution, n: GraphNode): void {
+function runCommand(x: Execution, n: GraphNode): Job | null {
 	let key = `${STORE_FORMAT}\ncommand\n${platform}\n${toolIdentity(n.argv[0].text)}\n`;
 	for (const a of n.argv) key = `${key}${a.kind}:${a.text}:${a.path == null ? "" : inputHash(x, a.path)}\n`;
 	if (n.cwd != null) key = `${key}cwd:${pathOf(x, n.cwd)}\n`;
@@ -119,16 +142,14 @@ function runCommand(x: Execution, n: GraphNode): void {
 	for (const p of n.inputs) key = `${key}in:${inputHash(x, p)}\n`;
 	key = `${key}stdout:${n.stdout}\n`;
 	const store = storeDir(x);
-	const manifest = `${store}/m/${hashContent(key)}`;
-	const known = exists(manifest) ? (try readFile(manifest) catch "") : "";
-	if (known != "" && exists(`${store}/o/${known}`)) {
-		x.outputs.set(n.id, `${store}/o/${known}`);
-		x.digests.set(n.id, known);
+	const known = storedOutput(store, key);
+	if (known != "") {
+		x.outputs.set(n.id, known);
+		x.digests.set(n.id, basename(known));
 		x.reused.push(label(n));
-		return;
+		return null;
 	}
-	const tmp = `${store}/tmp/${hashContent(`${key}${performance.now()}`)}`;
-	if (!x.dryRun) ensureDir(tmp);
+	const tmp = x.dryRun ? `${store}/tmp/dry-run` : storeScratch(store, key);
 	const argv: string[] = [];
 	for (const a of n.argv) {
 		if (a.kind == ArgKind.Text) argv.push(a.text);
@@ -156,35 +177,31 @@ function runCommand(x: Execution, n: GraphNode): void {
 		console.log(`(cd ${dir} && ${argv.join(" ")})`);
 		x.outputs.set(n.id, tmp);
 		x.digests.set(n.id, `dry:${n.id}`);
-		return;
+		return null;
 	}
-	const r = execFileCapture(exe, args, dir);
-	if (!r.ok) {
-		removeAll(tmp);
-		throw new Error(`${label(n)}: ${argv.join(" ")} failed: ${r.error.message}\n${r.error.errorOutput}`);
-	}
-	if (n.stdout) writeFile(join(tmp, "stdout"), r.value);
-	const digest = treeHash(tmp).slice(2);
-	const placed = `${store}/o/${digest}`;
-	ensureDir(`${store}/o`);
-	if (exists(placed)) removeAll(tmp);
-	else if (!rename(tmp, placed).ok && !exists(placed)) throw new Error(`${label(n)}: cannot place its output at ${placed}`);
-	ensureDir(`${store}/m`);
-	atomicWriteFile(manifest, digest);
-	x.outputs.set(n.id, placed);
-	x.digests.set(n.id, digest);
-	x.ran.push(label(n));
+	return job(n, exe, args, dir, argv.join(" "), (j: Job): void => {
+		if (n.stdout) {
+			writeFile(join(tmp, "stdout"), j.out);
+			j.out = "";
+		}
+		const digest = treeHash(tmp).slice(2);
+		const placed = storePublish(store, key, tmp, digest);
+		if (placed == "") throw new Error(`${label(n)}: cannot place its output in ${store}/o`);
+		x.outputs.set(n.id, placed);
+		x.digests.set(n.id, digest);
+		x.ran.push(label(n));
+	}, (): void => { removeAll(tmp); });
 }
 
-function runLibrary(x: Execution, n: GraphNode): void {
+function runLibrary(x: Execution, n: GraphNode): Job | null {
 	if (n.from != null) {
 		const path = pathOf(x, n.from);
 		if (!x.dryRun && !exists(path)) throw new Error(`${label(n)}: library({ from }) names ${path}, which its producer did not write`);
 		x.outputs.set(n.id, path);
 		x.digests.set(n.id, x.dryRun ? `dry:${n.id}` : hashFile(path));
-		return;
+		return null;
 	}
-	runCompile(x, n, true);
+	return runCompile(x, n, true);
 }
 
 function runArtifactNode(x: Execution, n: GraphNode): void {
@@ -210,8 +227,7 @@ function installNode(x: Execution, n: GraphNode): void {
 	}
 	if (from == dest) return;
 	ensureDir(dirname(dest));
-	const staged = `${dest}.${performance.now()}.tmp`;
-	if (!copyFile(from, staged).ok || !renameReplace(staged, dest)) throw new Error(`${label(n)}: cannot install ${from} at ${dest}`);
+	if (!atomicCopyFile(from, dest)) throw new Error(`${label(n)}: cannot install ${from} at ${dest}`);
 }
 
 function runStep(x: Execution, n: GraphNode): void {
@@ -219,8 +235,8 @@ function runStep(x: Execution, n: GraphNode): void {
 		console.log(`step: ${label(n)}`);
 		return;
 	}
-	const vm = x.graph.run.vm!;
-	const make = n.live.field("make");
+	const vm = x.graph.run!.vm!;
+	const make = x.graph.steps.get(n.id)!.field("make");
 	const fn = make.field("fn").root.intVal;
 	const env = make.field("env").root;
 	vm.hostCallsRestricted = false;
@@ -233,28 +249,120 @@ function runStep(x: Execution, n: GraphNode): void {
 	x.ran.push(label(n));
 }
 
-function runNode(x: Execution, n: GraphNode): void {
-	if (n.kind == "executable") runCompile(x, n, false);
-	else if (n.kind == "library") runLibrary(x, n);
-	else if (n.kind == "command") runCommand(x, n);
-	else if (n.kind == "run") runArtifactNode(x, n);
+function startNode(x: Execution, n: GraphNode): Job | null {
+	if (n.kind == "executable") return runCompile(x, n, false);
+	if (n.kind == "library") return runLibrary(x, n);
+	if (n.kind == "command") return runCommand(x, n);
+	if (n.kind == "run") runArtifactNode(x, n);
 	else if (n.kind == "install") installNode(x, n);
 	else if (n.kind == "step") runStep(x, n);
 	else throw new Error(`build.ms: msc does not know the node kind '${n.kind}' of ${label(n)}`);
+	return null;
 }
 
-function visit(x: Execution, id: int32, done: HashSet<int32>, active: HashSet<int32>): void {
+function order(g: BuildGraph, id: int32, done: HashSet<int32>, active: HashSet<int32>, into: GraphNode[]): void {
 	if (done.has(id)) return;
-	const n = nodeById(x.graph, id);
+	const n = nodeById(g, id);
 	if (active.has(id)) throw new Error(`build.ms: ${label(n)} depends on itself`);
 	active.add(id);
-	for (const dep of n.deps) visit(x, dep, done, active);
-	runNode(x, n);
+	for (const dep of n.deps) order(g, dep, done, active, into);
 	active.delete(id);
 	done.add(id);
+	into.push(n);
+}
+
+function drain(j: Job, stream: ChildStream, timeoutMs: int32): boolean {
+	const got = j.child!.read(stream, timeoutMs);
+	if (!got.ok) return false;
+	if (stream == ChildStream.Stdout) {
+		j.out = `${j.out}${got.value.data}`;
+		if (got.value.ended) j.outEnded = true;
+	} else {
+		j.err = `${j.err}${got.value.data}`;
+		if (got.value.ended) j.errEnded = true;
+	}
+	return true;
+}
+
+// True once both pipes of the job's process have ended, so its output is complete.
+function pump(j: Job, timeoutMs: int32): boolean {
+	let moved = false;
+	if (!j.outEnded) moved = drain(j, ChildStream.Stdout, timeoutMs);
+	if (!j.errEnded) moved = drain(j, ChildStream.Stderr, moved ? 0 : timeoutMs) || moved;
+	return j.outEnded && j.errEnded;
+}
+
+function settle(j: Job): string {
+	const status = j.child!.wait(60000);
+	j.child!.close();
+	const code = status.ok ? status.value.code : -1;
+	if (code != 0) {
+		if (j.out != "") console.log(j.out.trimEnd());
+		if (j.err != "") console.log(j.err.trimEnd());
+		j.abandon();
+		return `${label(j.node)}: ${j.shown} exited with ${code}`;
+	}
+	try {
+		j.finish(j);
+	} catch (e) {
+		return e.message;
+	}
+	if (j.out != "") console.log(j.out.trimEnd());
+	if (j.err != "") console.log(j.err.trimEnd());
+	return "";
 }
 
 export function executeNode(x: Execution, id: int32): string {
-	visit(x, id, new HashSet<int32>(), new HashSet<int32>());
+	const plan: GraphNode[] = [];
+	order(x.graph, id, new HashSet<int32>(), new HashSet<int32>(), plan);
+	const done = new HashSet<int32>();
+	const started = new HashSet<int32>();
+	const running: Job[] = [];
+	let failure = "";
+	while (done.size < plan.length) {
+		let moved = false;
+		for (const n of plan) {
+			if (failure != "" || started.has(n.id) || running.length >= x.jobs) continue;
+			if (!n.deps.every((d: int32): boolean => done.has(d))) continue;
+			started.add(n.id);
+			moved = true;
+			try {
+				const j = startNode(x, n);
+				if (j == null) {
+					done.add(n.id);
+					continue;
+				}
+				const child = spawn(j.exe, j.args, { cwd: j.cwd });
+				if (!child.ok) {
+					j.abandon();
+					failure = `${label(n)}: cannot start ${j.shown}: ${child.error.message}`;
+					continue;
+				}
+				j.child = child.value;
+				running.push(j);
+			} catch (e) {
+				failure = e.message;
+			}
+		}
+		for (let i = running.length - 1; i >= 0; i -= 1) {
+			const j = running[i];
+			if (!pump(j, 0)) continue;
+			running.splice(i, 1);
+			const problem = settle(j);
+			if (problem != "" && failure == "") failure = problem;
+			done.add(j.node.id);
+			moved = true;
+		}
+		if (failure != "" && running.length == 0) throw new Error(failure);
+		if (!moved && running.length > 0) pump(running[0], 10);
+		else if (!moved) throw new Error(`internal: the build graph stalled with ${plan.length - done.size} node(s) left`);
+	}
 	return x.outputs.get(id) ?? "";
+}
+
+// A step's make is a closure of the configure VM, which a cached graph does not have.
+export function planRunsStep(g: BuildGraph, id: int32): boolean {
+	const plan: GraphNode[] = [];
+	order(g, id, new HashSet<int32>(), new HashSet<int32>(), plan);
+	return plan.some((n: GraphNode): boolean => n.kind == "step");
 }

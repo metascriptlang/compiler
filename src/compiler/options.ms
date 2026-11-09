@@ -100,6 +100,8 @@ export interface CliOptions {
 	showDefines: boolean;      // --help-defines: list every define, then exit
 	listNodes: boolean;        // build --list: print the nodes build.ms exports, then exit
 	dryRun: boolean;           // build --dry-run: print every command the build graph would run, run none
+	graphOptions: string[];    // -Dname=value: an option build.ms declares with option()
+	graphJobs: int32;          // -j<n>: build graph processes at once; 0 = one per cpu
 	projectRoot: string;       // set by CLI main from findProjectRoot() — dir containing build.ms
 	resolve: ResolveSection;   // build.ms resolve section of projectRoot, set by applyProjectConfig
 	extraArgs: string[];       // remaining args passed through for package manager commands (add, remove, etc.)
@@ -225,6 +227,8 @@ export function newCliOptions(): CliOptions {
 		showDefines: false,
 		listNodes: false,
 		dryRun: false,
+		graphOptions: [],
+		graphJobs: 0,
 		projectRoot: "",
 		resolve: defaultResolveSection(),
 		extraArgs: [],
@@ -582,6 +586,11 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 			opts.listNodes = true;
 		} else if (arg == "--dry-run") {
 			opts.dryRun = true;
+		} else if (arg.startsWith("-j") && arg.length > 2) {
+			opts.graphJobs = parseIntStr(arg.slice(2, arg.length));
+			if (opts.graphJobs < 1 || `${opts.graphJobs}` != arg.slice(2, arg.length)) return Result.err(`${arg}: -j takes a whole number of processes, at least 1`);
+		} else if (arg.startsWith("-D") && arg.length > 2) {
+			opts.graphOptions.push(arg.includes("=") ? arg.slice(2, arg.length) : `${arg.slice(2, arg.length)}=true`);
 		} else if (arg == "--colors=on") {
 			setColorEnabled(true);
 		} else if (arg == "--colors=off" || arg == "--no-color") {

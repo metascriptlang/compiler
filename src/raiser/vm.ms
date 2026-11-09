@@ -270,6 +270,7 @@ export interface RaiserVM {
 	hostCallsRestricted: boolean;
 	hostPolicySource: string;
 	sandboxed: boolean;
+	restrictedReads: int32;   // file-read host calls made under the restricted policy
 	programArgv: string[] | null;   // what the program's `argv` reads; null leaves the host's own argv visible
 	floor: number;
 	suspendedRuns: RaiserRun[];
@@ -371,7 +372,7 @@ export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM 
 	const thenRuns: RaiserThen[] = [];
 	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod), thenRuns, readyOrder: [] as number[], idleWait: false, ticked: [] as number[], freeStrands: [] as number[], spareRegs: [] as RaiserRegFile[] };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", sandboxed: activeSystem() != null, programArgv: null, floor: 0, suspendedRuns: [], unsettled: false, hostArgsAt: 0, hostResult: 0, floorPending: false, inPlaceHost: -1 };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", sandboxed: activeSystem() != null, restrictedReads: 0, programArgv: null, floor: 0, suspendedRuns: [], unsettled: false, hostArgsAt: 0, hostResult: 0, floorPending: false, inPlaceHost: -1 };
 }
 
 // --- Register access ---
@@ -5600,6 +5601,7 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 		vmError(vm, `a sandboxed interpreter cannot call host function '${entry.name}': it reaches the machine and the embedder's system does not provide it`);
 		return;
 	}
+	if (vm.hostCallsRestricted && entry.capability == HostCapability.FileRead) vm.restrictedReads += 1;
 	if (vm.comptime && hostEntrySpawnsChild(entry)) {
 		vmError(vm, "spawn is not available in compile-time evaluation: the child process would outlive the build");
 		return;

@@ -5815,10 +5815,11 @@ function entryExports(unitCtxs: CheckerContext[], unitPaths: string[], entryPath
 	return entry != null ? entry.symbols : [];
 }
 
-export function compileRaiser(filePath: string, opts: CliOptions, session: BuildSession | null = null, exportRoutines: boolean = false, buildNative: boolean = false): RaiserModule {
+export function compileRaiser(filePath: string, opts: CliOptions, session: BuildSession | null = null, exportRoutines: boolean = false, buildNative: boolean = false, loaded: string[] | null = null): RaiserModule {
 	if (session != null) startSessionBuild(session);
 	const config = buildResolverConfig(Target.Raiser, opts);
 	const graph = loadAndCheckGraph(filePath, config, opts, hostTargetInfo(), GcMode.Drc, session != null ? session.check : null);
+	if (loaded != null) for (const modPath of graph.loadOrder) loaded.push(modPath);
 
 	const modules: RaiserModuleInput[] = [];
 	const entryCanonical = canonicalModulePath(filePath);
