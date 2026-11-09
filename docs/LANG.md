@@ -3391,12 +3391,18 @@ call and a write to it would be lost`, for the same reason.
   that names an element a `Span` argument views, because wasm writes a separate copy of each where
   the all-C program writes one variable: `both: parameter 'a' and parameter 'b' reach the same
   variable, and wasm works on a separate copy of each, so a write through one would be lost to the
-  other: pass separate variables`.
+  other: pass separate variables`;
+- a `Handle` release inside a callback holding a `Span`, or inside `view(f)`, whose destroy grows
+  wasm memory, because the open view would stop seeing it: `wasm memory grew while a Span view was
+  open, so the view stopped seeing it`. A release that does not grow memory runs its destroy at once,
+  as in the all-C program.
 
 **Default (dev) builds check more.** They check argument types on the functions the entry
 re-exports (a foreign JS caller passes a `ref` or `out` argument as the pair `[object, key]` the JS
 backend passes, holding a value of its type), name the creation site in handle messages, and at exit print `msb leak: Handle<Counter>
-created at handleLeakWasm.ms:8 never released` for each handle still held; `MSB_LEAKS=error` makes
+created at handleLeakWasm.ms:8 never released` for each handle still held and `msb leak: callback
+'visit' kept by listen at core.ms:4 never released` for each kept callback the wasm side never
+dropped; `MSB_LEAKS=error` makes
 that exit 1, and an exit code the program set is kept. `--release` and `--danger` keep the three
 handle checks and drop the site.
 
@@ -3405,11 +3411,11 @@ The example, run as written on m1m 2026-11-08 (main `d8910b23c70`, Node 24.1.0, 
 wasmmix program under `src/test/wasmmix/programs/` (the example's parts `typedArrayResults` and
 `callback`, the refusals `refused*`, `typedArrayMisuse`, `handleMisuse`, `handleViewOpen`,
 `handleLeak`, the errors `callbackThrow*` and `trapPoison`). `src/test/wasmmix/check.sh` runs them
-on C, JS, mixed JS + wasm and headless Chrome 149: the same day and tree, all 80 programs pass (the
-units, 174/174, last ran on main `5e2b893c5bc`, before a docs and bench-only change). The `ref`, `out` and `sink`
-rows and their refusals are `refOutScalars`, `refOutStructs`, `sinkCopies`, `refusedModes`,
-`refAliased`, `keptCallbackDuringRef` and `refForeign`, all 91 programs and 187 units passing on
-m1m 2026-11-09 (tip `044a13c5cc0`). Not run:
+on C, JS, mixed JS + wasm and headless Chrome 149. Kept callbacks are `keptCallback*` and
+`closureEnvDestroy`; a callback's `Span` view is `callbackSpanViews` and `callbackSpanGrowth`; the
+`ref`, `out` and `sink` rows and their refusals are `refOutScalars`, `refOutStructs`, `sinkCopies`,
+`refusedModes`, `refAliased`, `keptCallbackDuringRef` and `refForeign`. On m1m 2026-11-09, main
+`379c2cb440b`: all 93 programs and the units, 188/188, pass. Not run:
 Windows and Linux hosts, other browsers. Design, rejected paths and
 measurements, including the bench against wasm-bindgen: [`WASM.md`](WASM.md).
 

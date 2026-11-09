@@ -48,7 +48,12 @@ The kept callback row was measured 2026-11-09 on m1m with a candidate of `wt/js-
 (base 06957a98188): `wasmmix: 16/16 pass` on C, JS and mixed, `keptCallback*` red on the installed
 compiler cc97a2f5818 (refused). 70000 kept callbacks replaced one by one stay within the 65536-slot
 table, directly and through an owning object; a handler that drops itself mid-call returns cleanly.
-Not measured: a kept callback in `--danger`, one held only by a JS-to-wasm cycle (reported as a leak).
+The release rides on a closure environment's destroy, pinned by `closureEnvDestroy` (columns c and
+mixed): clearing or replacing a stored closure runs the `onDestroy` of a struct and of a class it
+captured at that moment on the wasm half; JS runs no hooks. The bench on the same base: `accept.mjs`
+exit 0, `callback 1k` 6.797 us against the baseline's 6.7-6.82, because a lent callback's glue is
+emitted unchanged. Not measured: a kept callback in `--danger`, one held only by a JS-to-wasm cycle
+(reported as a leak).
 
 The `ref`/`out`/`sink` row was measured 2026-11-09 on m1m with a candidate of `wt/js-wasm-one-program`
 (base 9904cc564d4, tip 044a13c5cc0): `WASMMIX_BROWSER=1 check.sh` passed 91 of the 91 programs in the
@@ -127,9 +132,16 @@ three handle checks and drop the site.
   kept parameter captures a small owner object whose `onDestroy` frees the JS slot, so the slot
   lives exactly as long as the last wasm reference to the closure, as a closure environment's
   captured values do in the reference's ARC (`nimDestroyAndDispose` on the last environment
-  reference). Whether a parameter is kept is decided the safe way round: it is lent only when every
+  reference). The owner is a class (`MsbKept`), not a struct, because a moved-from struct copy is
+  destroyed too, with zero fields (LANG.md: "A struct `onDestroy` hook must tolerate a zeroed,
+  moved-from value"), and a copied owner would free the slot
+  twice. Whether a parameter is kept is decided the safe way round: it is lent only when every
   use calls it or passes it to a direct callee that only calls it, because a keep the analysis
-  missed would fail at run time while a lent callback taken as kept only costs one allocation.
+  missed would fail at run time while a lent callback taken as kept only costs one allocation. The
+  compile-time refusal it replaced searched for a keep instead and missed two: a store into a field
+  of a fresh local object later stored (`const l = new Listener(); l.visit = cb; owner = l`) and a
+  push into a fresh local array later stored; the actor borrow check shares that search (inbox card
+  `2026-10-26-a-call-receiver-writes-returns-or-outlives-its-borrowed-argument.md`).
 - **A release while a call lends the handle is deferred to the end of that call**, a deliberate
   divergence recorded as `paper/NIM-REF.md` RT-48.
 - **A `ref` or `out` parameter is a copy written back, through the result takers.** Wasm cannot
@@ -167,7 +179,11 @@ Two checks answer it, both outside the land gate and the core tests, run on a ho
 
 - **Correct:** `src/test/wasmmix/check.sh` runs every wasm boundary unit test and every wasmmix
   program in all its columns; `WASMMIX_BROWSER=1 CHROME=<path>` adds headless Chrome. It ends with
-  `js-wasm check: GREEN` and exit 0. 2026-11-08 on m1m with `WASMMIX_BROWSER=1`: main `5e2b893c5bc` units 174/174; main `d8910b23c70` wasmmix 80/80.
+  `js-wasm check: GREEN` and exit 0. 2026-11-09 on m1m with `WASMMIX_BROWSER=1`: main
+  `379c2cb440b` units 188/188 and wasmmix 93/93. A `run-remote.sh` directory on a host keeps files
+  deleted from the tree, so a program removed since that directory's first run is built there and
+  fails (`refusedEnum`, `refusedKeptCallback*` on m1m); count the programs of the tree, and read a
+  red there against `git ls-files`.
 - **Fast enough:** `CHROME=<path> src/bench/run.sh wasmBoundary` then `node src/bench/wasmBoundary/accept.mjs`
   times the same rows in MetaScript and wasm-bindgen on Node and in headless Chrome, and prints which
   rows meet wasm-bindgen on the same runtime (exit 0 when all do); neon-bindings, a native Node-only
