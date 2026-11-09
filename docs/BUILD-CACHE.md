@@ -9,7 +9,7 @@ rules, the reasons and the measurements.
 | Layer | Where | Who shares it |
 |---|---|---|
 | Local project cache | `out/debug/.cache` or `out/release/.cache` under the working directory, unless a root is chosen (see Controls) | one working directory, one job |
-| Global store | `$HOME/.metascript/cache/` (`USERPROFILE` on Windows) unless a root is chosen: `store/`, `headers/`, `prelude/`, `stdunit/`, `stamps/`, `cc/` | every worktree and job that resolves the same root |
+| Global store | `$HOME/.metascript/cache/` (`USERPROFILE` on Windows) unless a root is chosen: `store/`, `headers/`, `prelude/`, `stdunit/`, `stamps/`, `cc/`, `build/` | every worktree and job that resolves the same root |
 
 The local cache holds per-file fingerprints, emitted C, objects and link records for one tree.
 The global store holds native objects keyed by content, header records and the prelude pack, so
@@ -49,6 +49,16 @@ written by older compilers only, and `gate-ctl` by gates before the records.
   path, so self-host builds of one tree at two paths differ in 2.8 MB of 25 MB of C, while one
   checkout built twice is byte-identical. Inbox card
   `2026-10-23-emitted-c-names-depend-on-the-compilers-install-path.md` owns the fix.
+- **A build graph command** (`systemCommand`, `writeFiles` in `build.ms`) is keyed by its tool,
+  its arguments and the content of its inputs, each input path relative to the project root
+  (`runCommand`, `src/compiler/build/execute.ms`), so a copy of the project at another path
+  reuses its output from `build/o/`. The inputs a depfile names are recorded relative to the root
+  too and checked in the reusing tree, not in the tree that ran the command
+  (`src/test/projectConfigCommands.ms`, "a copy of the project reuses …").
+- **A linked image** is stored under `build/` keyed by its objects and link flags
+  (`linkStoreKey`, `src/compiler/cache.ms`) and restored when the same tree lost `out/`
+  ("(link restored)"). Another worktree never hits it: its objects embed absolute paths, so its
+  key differs, even under `--trimpath` (the card above).
 
 Measured on installed v0.3.2 (tree `5d2c1980d`, macOS arm64, Apple clang 21, fresh `HOME` and
 local caches): a second root building `console.log(42)` with the first root's global store
@@ -185,6 +195,7 @@ std unit and the prelude pack: one day), and a temporary file of an entry left o
 | `stamps/` | `<key>.sum`, `.files`, `.exe` | no; a miss recomputes the memo |
 | `stdunit/<format>/` | `<key>.su`, unused for a day, units of an older format included | yes, at most hourly, on a unit load |
 | `prelude/<stamp>/` | `<key>.pk` with its `.deps`, after each pack write, unused for a day | yes, at most hourly, on a pack hit |
+| `build/` | `m/<key>.m` (a node's manifest: output digest, then `path<TAB>hash` per depfile input); `o/<digest>/` with its stamp `o/<digest>.u`; scratch `tmp/<id>/` after an hour | yes, on a hit (`collectStepStore`, `src/compiler/build/store.ms`) |
 
 The collector deletes only files with those names, record before companion, so a reader never
 finds a companion without its record; it never enters a directory whose real path leaves the
