@@ -93,6 +93,7 @@ let assumedOpen = false;
 let uncheckedBodiesReported = false;
 let inAsync = false;
 let ownParams: string[] = [];
+let enclosingParams: string[] = [];
 let ownResult: Type | null = null;
 interface DeferredCheck {
 	site: Node;
@@ -308,11 +309,14 @@ function walkNestedRoutine(dispatchRegistry: DispatchRegistry, decl: Node, e: Ef
 	const outerAsync = inAsync;
 	const outerParams = viewParams;
 	const outerResult = ownResult;
+	const outerEnclosing = enclosingParams;
+	enclosingParams = enclosingParams.concat(outer);
 	ownParams = routineParams(decl);
 	ownResult = routineResult(decl);
 	inAsync = isAsyncFunctionNode(decl);
 	viewParams = viewParams.filter((p: string): boolean => !ownParams.includes(p));
 	const c = (e == Effect.StoresBorrowed ? expressionResultStore(dispatchRegistry, decl) : null) ?? walkChildren(dispatchRegistry, decl, e);
+	enclosingParams = outerEnclosing;
 	ownParams = outer;
 	ownResult = outerResult;
 	inAsync = outerAsync;
@@ -329,9 +333,40 @@ function isOwnParam(n: Node | null): boolean {
 function isOwnParamField(n: Node | null, e: Effect): boolean {
 	if (n == null || !reachesModuleState(e)) return false;
 	let cur = peelConv(n);
-	if (cur.kind != NodeKind.MemberExpr) return false;
-	while (cur.kind == NodeKind.MemberExpr) cur = peelConv((cur.data as MemberExprData).object);
-	return isOwnParam(cur);
+	if (cur.kind == NodeKind.Identifier) {
+		const bound = cur.resolvedSym != null && cur.resolvedSym!.symbolKind == SymbolKind.Variable ? constBindingInitializer(cur.resolvedSym) : null;
+		if (bound == null) return false;
+		cur = peelConv(bound);
+	}
+	return cur.kind == NodeKind.MemberExpr && fromCallerParams(cur, 0);
+}
+
+function fromCallerParams(n: Node, depth: int32): boolean {
+	if (depth > 16) return false;
+	const p = peelConv(n);
+	return match (p.kind) {
+		NodeKind.MemberExpr => fromCallerParams((p.data as MemberExprData).object, depth + 1),
+		NodeKind.Identifier => p.resolvedSym != null && (isCallerParam(p.resolvedSym!)
+			|| (p.resolvedSym!.symbolKind == SymbolKind.Variable && constBindingInitializer(p.resolvedSym) != null && fromCallerParams(constBindingInitializer(p.resolvedSym)!, depth + 1))),
+		NodeKind.CallExpr | NodeKind.NewExpr => partsFromCallerParams(p, depth),
+		_ => false,
+	};
+}
+
+function partsFromCallerParams(call: Node, depth: int32): boolean {
+	const parts: Node[] = [];
+	if (call.kind == NodeKind.NewExpr) {
+		for (const a of (call.data as NewExprData).newArguments) parts.push(a);
+	} else {
+		const recv = receiverOf(call);
+		if (recv != null) parts.push(recv);
+		for (const a of (call.data as CallExprData).arguments) parts.push(a);
+	}
+	return parts.every((a: Node): boolean => !typeCarriesRef(a.nodeType) || fromCallerParams(a, depth + 1));
+}
+
+function isCallerParam(sym: Symbol): boolean {
+	return sym.symbolKind == SymbolKind.Parameter && (ownParams.includes(sym.name) || enclosingParams.includes(sym.name));
 }
 
 function peelConv(n: Node): Node {
@@ -365,7 +400,7 @@ function boundRoutineEffect(dispatchRegistry: DispatchRegistry, sym: Symbol, e: 
 }
 
 function argumentEffect(dispatchRegistry: DispatchRegistry, arg: Node, e: Effect): EffectCause | null {
-	if (functionSlotOf(arg.nodeType) == null) return null;
+	if (functionSlotOf(arg.nodeType) == null) return capturedFunctionHolder(arg, e);
 	if (reachesModuleState(e) && isSendableFunction(arg.nodeType)) return null;
 	const a = peelConv(arg);
 	if (isRoutineNode(a) || isOwnParam(a) || isOwnParamField(a, e)) return null;
@@ -374,6 +409,23 @@ function argumentEffect(dispatchRegistry: DispatchRegistry, arg: Node, e: Effect
 		if (boundRoutine(a.resolvedSym) != null) return boundRoutineEffect(dispatchRegistry, a.resolvedSym!, e);
 	}
 	return e == Effect.StoresBorrowed || e == Effect.ActorReach ? null : cause(arg, "passes a function value");
+}
+
+function capturedFunctionHolder(arg: Node, e: Effect): EffectCause | null {
+	if (!reachesModuleState(e)) return null;
+	const root = pathRoot(arg);
+	if (root == null || !viewSyms.includes(root) || !holdsUnsendableFunction(arg.nodeType, 0)) return null;
+	return cause(arg, "takes '" + root.name + "', a captured value holding a function value it may call,");
+}
+
+function holdsUnsendableFunction(t: Type | null, depth: int32): boolean {
+	if (t == null || depth > 6) return false;
+	if (functionSlotOf(t) != null) return !isSendableFunction(t);
+	return match (t.kind) {
+		TypeKind.Ref | TypeKind.Var | TypeKind.Array | TypeKind.Alias | TypeKind.Distinct => holdsUnsendableFunction(t.typeReturn, depth + 1),
+		TypeKind.Struct | TypeKind.Union | TypeKind.Tuple | TypeKind.GenericInstance => t.typeChildren.some((c: Type): boolean => holdsUnsendableFunction(c, depth + 1)),
+		_ => false,
+	};
 }
 
 export function returnsView(t: Readonly<Type | null>): boolean {

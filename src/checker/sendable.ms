@@ -1900,7 +1900,7 @@ function requireSpawnSafe(ctx: CheckerContext, fn: Node, runs: string, at: Node)
 	deferEffectCheck(at, "spawnSafe", (ctx: CheckerContext): void => {
 		const stored = spawnEffectOf(ctx, peelHidden(fn), Effect.StoresBorrowed, borrowed);
 		if (stored != null) addError(ctx, runs + ", but it " + stored.text + "; " + (stored.advice ?? storedValueName(stored.site) + " is a view the task does not own and a view takes no count, so pass it to a routine whose parameters are Readonly (the borrow form), or store an explicit copy of it (clone or spread) when the container must own its elements"), at.location.line, at.location.column);
-		const c = spawnEffectOf(ctx, peelHidden(fn), Effect.SpawnUnsafe);
+		const c = spawnEffectOf(ctx, peelHidden(fn), Effect.SpawnUnsafe, views);
 		if (c == null) return;
 		addError(ctx, runs + ", but it " + c.text + MODULE_STATE_RULE, at.location.line, at.location.column);
 	});
