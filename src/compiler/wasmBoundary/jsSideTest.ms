@@ -42,6 +42,8 @@ export function peekBoth(a: Readonly<Span<int32>>, b: Readonly<Span<int32>>): in
 export function flipAll(all: Vec<boolean>, part: Span<boolean>): int32 { return 0; }
 export function smearBy(cb: (dst: Span<float64>, src: Readonly<Span<float64>>) => void): void {}
 export function lookBoth(cb: (a: Readonly<Span<int32>>, b: Readonly<Span<int32>>) => void): void {}
+export function flipBy(cb: (all: Readonly<Span<boolean>>, part: Span<boolean>) => int32): int32 { return 0; }
+export function mixBy(cb: (bs: Span<boolean>, xs: Span<float32>, cs: Readonly<Span<boolean>>) => void): void {}
 export function bump(x: int32): int32 { return x + 1; }
 export function bump(x: float64): float64 { return x + 0.5; }
 export function rampF(n: int32): Float32Array { return new Float32Array(n); }
@@ -282,9 +284,9 @@ test "js side: a callback string parameter arrives as pointer and length and is 
 	assert code.includes("const id0 = __msb.push((x0, x1, x2) => a0(__msbDec(x0, x1), x2));");
 }
 
-test "js side: a callback Span parameter arrives as a copied view, a writable one is copied back after the call even when the callback throws" {
+test "js side: a callback Span of numbers arrives as a view of wasm memory, a bool one as a copy that is copied back after the call even when the callback throws" {
 	const code = bindingsFor(["sumBy", "edit"]).modules[0].code;
-	assert code.includes("const id1 = __msb.push((x0, x1) => { __msb.lent += 1; try { const s0 = { base: __msbVecOut(x0 >>> 0, x1, Float32Array, false), off: 0, len: x1 }; return a1(s0); } finally { __msb.lent -= 1; } });");
+	assert code.includes("const id1 = __msb.push((x0, x1) => { __msb.lent += 1; try { const s0 = { base: new Float32Array(__msbMod.HEAPU8.buffer, x0 >>> 0, x1), off: 0, len: x1 }; return a1(s0); } finally { __msb.lent -= 1; } });");
 	assert code.includes("const id0 = __msb.push((x0, x1, x2) => { __msb.lent += 1; try { const s0 = { base: __msbVecOut(x0 >>> 0, x1, Uint8Array, true), off: 0, len: x1 }; try { a0(s0, x2); } finally { __msbCopyTo(x0 >>> 0, s0.base, 0, x1, Uint8Array); } } finally { __msb.lent -= 1; } });");
 }
 
@@ -427,9 +429,11 @@ test "js side: a Span is copied in for the call, and a writable one is copied ba
 	assert bindingsFor(["fill"]).prelude.includes("function __msbCopyBack(p, a, off, n, T, bool) {");
 }
 
-test "js side: a callback that returns a value still copies a writable Span back after the call, also when it throws" {
-	const code = bindingsFor(["patch"]).modules[0].code;
-	assert code.includes("try { return a0(s0); } finally { __msbCopyTo(x0 >>> 0, s0.base, 0, x1, Int32Array); }");
+test "js side: a callback's writable Span of numbers is written in place, so nothing is copied back after it returns or throws" {
+	const b = bindingsFor(["patch"]);
+	assert b.modules[0].code.includes("const id0 = __msb.push((x0, x1) => { __msb.lent += 1; try { const s0 = { base: new Int32Array(__msbMod.HEAPU8.buffer, x0 >>> 0, x1), off: 0, len: x1 }; return a0(s0); } finally { __msb.lent -= 1; } });");
+	assert !b.modules[0].code.includes("__msbCopyTo");
+	assert !b.modules[0].code.includes("__msbVecOut");
 }
 
 test "js side: the copy-back of a Span runs only once every argument is encoded, so a failed encode writes nothing back" {
@@ -473,7 +477,7 @@ test "js side: a Span is range-checked before its copy is allocated, so a throw 
 test "js side: the registry poisons itself on the first exception that crossed the wasm frames and every later wrapper call refuses" {
 	const p = bindingsFor(["add64"]).prelude;
 	assert p.includes("\tlet dead = false;\n\tlet cause;\n");
-	assert p.includes("\t\tenter() {\n\t\t\tif (dead) throw new Error(\"the wasm half cannot run again: a trap or a host error left its frames unfinished\", { cause });\n\t\t\tif (this.lent !== 0) {\n\t\t\t\tconst top = vw[vw.length - 1];\n\t\t\t\tif (top !== undefined && top[0] === this.lent) {\n\t\t\t\t\tthrow new Error(\"boundary call while a view of \" + top[1] + \" is open: the call could grow wasm memory\");\n\t\t\t\t}\n\t\t\t\tthrow new Error(\"a wasm function was called while a Span was lent to a JS callback: the callback's copy and the wasm side's would diverge, so call it after the callback returns\");\n\t\t\t}\n\t\t},\n");
+	assert p.includes("\t\tenter() {\n\t\t\tif (dead) throw new Error(\"the wasm half cannot run again: a trap or a host error left its frames unfinished\", { cause });\n\t\t\tif (this.lent !== 0) {\n\t\t\t\tconst top = vw[vw.length - 1];\n\t\t\t\tif (top !== undefined && top[0] === this.lent) {\n\t\t\t\t\tthrow new Error(\"boundary call while a view of \" + top[1] + \" is open: the call could grow wasm memory\");\n\t\t\t\t}\n\t\t\t\tthrow new Error(\"a wasm function was called while a Span was lent to a JS callback: the call could move or change the elements the callback's Span sees, so call it after the callback returns\");\n\t\t\t}\n\t\t},\n");
 	assert p.includes("\t\tlent: 0,\n");
 	assert p.includes("\t\tdie(e) { if (!dead) { dead = true; cause = e; } return e; },\n");
 }
@@ -691,7 +695,7 @@ test "js side: without two views and a writer a call keeps one copy per argument
 	assert !p.modules[0].code.includes("const hb = []");
 	assert !p.modules[0].code.includes("__msbCopyInViews");
 	assert !p.modules[0].code.includes("__msbVecViews");
-	assert p.modules[0].code.includes("const id0 = __msb.push((x0, x1, x2, x3) => { __msb.lent += 1; try { const s0 = { base: __msbVecOut(x0 >>> 0, x1, Int32Array, false), off: 0, len: x1 }; const s1 = { base: __msbVecOut(x2 >>> 0, x3, Int32Array, false), off: 0, len: x3 }; a0(s0, s1); } finally { __msb.lent -= 1; } });");
+	assert p.modules[0].code.includes("const id0 = __msb.push((x0, x1, x2, x3) => { __msb.lent += 1; try { const s0 = { base: new Int32Array(__msbMod.HEAPU8.buffer, x0 >>> 0, x1), off: 0, len: x1 }; const s1 = { base: new Int32Array(__msbMod.HEAPU8.buffer, x2 >>> 0, x3), off: 0, len: x3 }; a0(s0, s1); } finally { __msb.lent -= 1; } });");
 	assert !p.prelude.includes("__msbGroups");
 	assert !p.prelude.includes("__msbCopyInViews");
 }
@@ -708,9 +712,17 @@ test "js side: the shared copy is range-checked and recorded before it is filled
 	assert !p.includes("__msbVecViews");
 }
 
-test "js side: two views handed to a callback of which one is written share one snapshot of wasm memory and are written back by range" {
+test "js side: two Spans of numbers handed to a callback of which one is written are two views of the same wasm memory, with no shared copy" {
 	const p = bindingsFor(["smearBy"]);
-	assert p.modules[0].code.includes("const id0 = __msb.push((x0, x1, x2, x3) => { __msb.lent += 1; try { const vs = __msbVecViews([[x0 >>> 0, x1, Float64Array, false], [x2 >>> 0, x3, Float64Array, false]]); try { a0(vs[0], vs[1]); } finally { __msbCopyTo(x0 >>> 0, vs[0].base, vs[0].off, x1, Float64Array); } } finally { __msb.lent -= 1; } });");
+	assert p.modules[0].code.includes("const id0 = __msb.push((x0, x1, x2, x3) => { __msb.lent += 1; try { const s0 = { base: new Float64Array(__msbMod.HEAPU8.buffer, x0 >>> 0, x1), off: 0, len: x1 }; const s1 = { base: new Float64Array(__msbMod.HEAPU8.buffer, x2 >>> 0, x3), off: 0, len: x3 }; a0(s0, s1); } finally { __msb.lent -= 1; } });");
+	assert !p.prelude.includes("__msbVecViews");
+	assert !p.prelude.includes("__msbGroups");
+}
+
+test "js side: two bool Spans handed to a callback of which one is written share one copy and are written back by range, beside a view of numbers" {
+	const p = bindingsFor(["flipBy", "mixBy"]);
+	assert p.modules[0].code.includes("const id0 = __msb.push((x0, x1, x2, x3) => { __msb.lent += 1; try { const vs = __msbVecViews([[x0 >>> 0, x1, Uint8Array, true], [x2 >>> 0, x3, Uint8Array, true]]); try { return a0(vs[0], vs[1]); } finally { __msbCopyTo(x2 >>> 0, vs[1].base, vs[1].off, x3, Uint8Array); } } finally { __msb.lent -= 1; } });");
+	assert p.modules[0].code.includes("const id0 = __msb.push((x0, x1, x2, x3, x4, x5) => { __msb.lent += 1; try { const vs = __msbVecViews([[x0 >>> 0, x1, Uint8Array, true], [x4 >>> 0, x5, Uint8Array, true]]); const s1 = { base: new Float32Array(__msbMod.HEAPU8.buffer, x2 >>> 0, x3), off: 0, len: x3 }; try { a0(vs[0], s1, vs[1]); } finally { __msbCopyTo(x0 >>> 0, vs[0].base, vs[0].off, x1, Uint8Array); } } finally { __msb.lent -= 1; } });");
 	assert p.prelude.includes("function __msbVecViews(rs) {");
 	assert p.prelude.includes("function __msbGroups(vs) {");
 	assert !p.prelude.includes("__msbCopyInViews");

@@ -230,8 +230,8 @@ test "wasm entry: float32 Span copies request the live HEAPF32 view" {
 	assert entryFor(["total"]).runtimeMethods.join(",") == "HEAPU8,HEAPF32";
 }
 
-test "wasm entry: mutable float32 callback Spans request the live HEAPF32 view" {
-	assert entryFor(["editFloat"]).runtimeMethods.join(",") == "HEAPU8,HEAPF32";
+test "wasm entry: a mutable float32 callback Span is a view of HEAPU8's buffer and exports no HEAPF32" {
+	assert entryFor(["editFloat"]).runtimeMethods.join(",") == "HEAPU8";
 }
 
 test "wasm entry: float32 output-only paths keep bounded views without exporting HEAPF32" {
@@ -272,7 +272,7 @@ test "wasm entry: each runtime export is used by the js glue of that function an
 		if (allocates) want += ",_free";
 		want += ",_MsMain";
 		assert e.exportedFunctions.join(",") == want;
-		const copiesFloat32 = ["scale", "total", "editFloat"].includes(name);
+		const copiesFloat32 = ["scale", "total"].includes(name);
 		assert e.runtimeMethods.join(",") == (
 			copiesFloat32 ? "HEAPU8,HEAPF32" : "HEAPU8"
 		);
