@@ -19,7 +19,7 @@ import { parseJson, jsonStringify, jsonValueOf, jsonValueToStruct } from "std/se
 import { hashFile, compilerStamp } from "../cache";
 import { atomicWriteFile, ensureDir } from "../io";
 
-export enum ArgKind { Text, File, OutputFile, OutputDir }
+export enum ArgKind { Text, File, OutputFile, OutputDir, DepFile }
 
 export interface GraphPath {
 	owner: string;

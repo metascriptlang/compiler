@@ -4,7 +4,7 @@ import { hashFile } from "../cache";
 import { hashContent } from "../../utils/contentHash";
 import { stepStoreRoot, storedOutput, storeScratch, storePublish } from "./store";
 import { atomicCopyFile } from "../io";
-import { exists, isDir, readDir, writeFile, ensureDir, removeAll } from "std/fs";
+import { exists, isDir, readDir, readFile, writeFile, ensureDir, removeAll } from "std/fs";
 import { join, dirname, basename, isAbsolute } from "std/fs/path";
 import { execFile, execPath, platform, findOnPath } from "std/process";
 import { spawn, ChildProcess, ChildStream } from "std/process/child";
@@ -134,6 +134,24 @@ function runCompile(x: Execution, n: GraphNode, staticLib: boolean): Job | null 
 	}, (): void => {});
 }
 
+// The prerequisites of a make-style depfile (`out: a b \\\n c`), as absolute paths.
+function depFileInputs(depFile: string, cwd: string): string[] {
+	const text = (try readFile(depFile) catch "").replaceAll("\\\r\n", " ").replaceAll("\\\n", " ");
+	const inputs: string[] = [];
+	for (const rule of text.split("\n")) {
+		const colon = rule.indexOf(": ", 0);
+		if (colon < 0) continue;
+		const words = rule.slice(colon + 2, rule.length).replaceAll("\\ ", "\u0000").split(" ");
+		for (const word of words) {
+			if (word == "") continue;
+			const path = word.replaceAll("\u0000", " ");
+			const absolute = isAbsolute(path) ? path : join(cwd, path);
+			if (!inputs.includes(absolute)) inputs.push(absolute);
+		}
+	}
+	return inputs;
+}
+
 function runCommand(x: Execution, n: GraphNode): Job | null {
 	let key = `${STORE_FORMAT}\ncommand\n${platform}\n${toolIdentity(n.argv[0].text)}\n`;
 	for (const a of n.argv) key = `${key}${a.kind}:${a.text}:${a.path == null ? "" : inputHash(x, a.path)}\n`;
@@ -142,7 +160,7 @@ function runCommand(x: Execution, n: GraphNode): Job | null {
 	for (const p of n.inputs) key = `${key}in:${inputHash(x, p)}\n`;
 	key = `${key}stdout:${n.stdout}\n`;
 	const store = storeDir(x);
-	const known = storedOutput(store, key);
+	const known = storedOutput(store, key, hashFile);
 	if (known != "") {
 		x.outputs.set(n.id, known);
 		x.digests.set(n.id, basename(known));
@@ -151,13 +169,15 @@ function runCommand(x: Execution, n: GraphNode): Job | null {
 	}
 	const tmp = x.dryRun ? `${store}/tmp/dry-run` : storeScratch(store, key);
 	const argv: string[] = [];
+	const depFiles: string[] = [];
 	for (const a of n.argv) {
 		if (a.kind == ArgKind.Text) argv.push(a.text);
 		else if (a.kind == ArgKind.File) argv.push(pathOf(x, a.path!));
-		else if (a.kind == ArgKind.OutputFile) {
+		else if (a.kind == ArgKind.OutputFile || a.kind == ArgKind.DepFile) {
 			const target = join(tmp, a.path!.sub);
 			if (!x.dryRun) ensureDir(dirname(target));
-			argv.push(target);
+			argv.push(`${a.text}${target}`);
+			if (a.kind == ArgKind.DepFile) depFiles.push(target);
 		} else {
 			const target = join(tmp, a.path!.sub);
 			if (!x.dryRun) ensureDir(target);
@@ -184,8 +204,14 @@ function runCommand(x: Execution, n: GraphNode): Job | null {
 			writeFile(join(tmp, "stdout"), j.out);
 			j.out = "";
 		}
+		const found: string[] = [];
+		for (const depFile of depFiles) {
+			for (const input of depFileInputs(depFile, dir)) {
+				if (!input.startsWith(`${tmp}/`)) found.push(`${input}\t${hashFile(input)}`);
+			}
+		}
 		const digest = treeHash(tmp).slice(2);
-		const placed = storePublish(store, key, tmp, digest);
+		const placed = storePublish(store, key, tmp, digest, found);
 		if (placed == "") throw new Error(`${label(n)}: cannot place its output in ${store}/o`);
 		x.outputs.set(n.id, placed);
 		x.digests.set(n.id, digest);

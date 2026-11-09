@@ -17,7 +17,7 @@ export interface LazyPath {
 	producer: BuildNode | null;
 }
 
-export enum ArgKind { Text, File, OutputFile, OutputDir }
+export enum ArgKind { Text, File, OutputFile, OutputDir, DepFile }
 
 export interface CommandArg {
 	kind: ArgKind;
@@ -257,6 +257,17 @@ export function addOutputFileArg(this c: Command, name: string): LazyPath {
 export function addPrefixedOutputDirectoryArg(this c: Command, prefix: string, name: string): LazyPath {
 	const out = generated(c, name);
 	c.argv.push({ kind: ArgKind.OutputDir, text: prefix, path: out });
+	return out;
+}
+
+// The tool writes a make-style depfile there; the files it lists become inputs of this command.
+export function addDepFileOutputArg(this c: Command, name: string): LazyPath {
+	return c.addPrefixedDepFileOutputArg("", name);
+}
+
+export function addPrefixedDepFileOutputArg(this c: Command, prefix: string, name: string): LazyPath {
+	const out = generated(c, name);
+	c.argv.push({ kind: ArgKind.DepFile, text: prefix, path: out });
 	return out;
 }
 
