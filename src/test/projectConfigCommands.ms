@@ -237,6 +237,8 @@ const initialised = `${root}/initialised`;
 ensureDir(initialised);
 run(initialised, ["init"]);
 record("init writes a two-line graph that run builds and runs", "hello, metascript!", lastLine(run(initialised, ["run", "--colors=off"])));
+put(`${initialised}/build.ms`, "import { executable, systemCommand, path } from \"std/build\";\nexport default executable({ entry: path(\"src/index.ms\") });\nexport const noop = systemCommand([\"true\"]);\n");
+record("an export after export default is a node too", "noop  command|default  executable", run(initialised, ["build", "--colors=off", "--list"]).split("\n").join("|"));
 
 const hostile = `${root}/hostile`;
 ensureDir(`${hostile}/src`);
