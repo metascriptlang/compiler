@@ -2,7 +2,7 @@
 //
 //   while (i < LEN) BODY        BODY: `acc op= xs[i]` or `acc op= a[i] * b[i]` (op is += or -=) and the step of i
 //   → while (i < LEN) {
-//       const $end = msBlockEnd(i, LEN);
+//       const $end = msBlockEndOf(i, LEN, 1024);
 //       if (msSumFits<A><E>(acc, xs, i, $end)) { acc = msSumAdd<A><E>(acc, xs, i, $end); i = $end; }
 //       else while (i < $end) BODY
 //     }
@@ -41,7 +41,7 @@ function versionLoop(loop: Node, ctx: TransformContext): Node {
 	const endSym = freshTempSym(ctx, "end", i64);
 	const size = makeIntNumber(REDUCE_BLOCK, loc);
 	size.nodeType = i64;
-	const endCall = makeCall(runtimeRef("msBlockEnd", loc), [ident(r.index, loc), clonePlace(r.len, loc), size], loc);
+	const endCall = makeCall(runtimeRef("msBlockEndOf", loc), [ident(r.index, loc), clonePlace(r.len, loc), size], loc);
 	endCall.nodeType = i64;
 	const endDecl = makeVarDecl(endSym.name, endCall, DeclKind.Const, loc);
 	endDecl.resolvedSym = endSym;

@@ -2,7 +2,7 @@
 //
 //   while (i < E [&& i < F]) { DECLS; acc op= TERM; i += 1 }      op is += or -=, acc a signed local of 32 bits or less
 //   → while (i < E [&& i < F]) {
-//       const $end = msBlockEnd(i, min(E, F));
+//       const $end = msBlockEndOf(i, min(E, F), 1024);
 //       DECLS and TERM over $j in [i, $end) with every raising operation sticky: positive terms summed in $pos,
 //       negative in $neg, both int64;
 //       if (!$bad && msBlockSumFits(acc, $pos, $neg)) { acc = msBlockSumOf(acc, $pos, $neg); i = $end; }
@@ -421,7 +421,7 @@ function sumLoop(s: SumLoop, loop: Node, ctx: TransformContext): Node {
 		const less = typed(makeBinary(bound, "<", next, loc), booleanType());
 		bound = typed(makeConditional(less, clonePlace(bound, loc), clonePlace(next, loc), loc), i64);
 	}
-	const endCall = typed(makeCall(runtimeRef("msBlockEnd", loc), [wide(cloneIdent(s.index, loc), loc), bound, int64(REDUCE_BLOCK, loc)], loc), i64);
+	const endCall = typed(makeCall(runtimeRef("msBlockEndOf", loc), [wide(cloneIdent(s.index, loc), loc), bound, int64(REDUCE_BLOCK, loc)], loc), i64);
 	const end = declareLocal(head, ctx, "end", i64, endCall, DeclKind.Const, loc);
 	const bad = declareLocal(head, ctx, "bad", booleanType(), makeBool(false, loc), DeclKind.Let, loc);
 	const j = declareLocal(head, ctx, "j", indexType, cloneIdent(s.index, loc), DeclKind.Let, loc);

@@ -141,10 +141,13 @@ static inline double msPowF64(double x, double y) {
 #define msPostInc(lv) msPostStep_(lv, __builtin_add_overflow)
 #define msPostDec(lv) msPostStep_(lv, __builtin_sub_overflow)
 
-static inline int64_t msBlockEnd(int64_t b, int64_t len, int64_t size) {
+static inline int64_t msBlockEndOf(int64_t b, int64_t len, int64_t size) {
 	if (b < 0) return b + 1;
 	return len - b > size ? b + size : len;
 }
+/* The installed msc that builds this tree's compiler still emits the two-argument form; drop it once
+   tools/syncLocalBinary.ms has delivered a compiler that emits msBlockEndOf. */
+#define msBlockEnd(b, len) msBlockEndOf(b, len, 1024)
 
 #define msStickyOp_(T, op, a, b, bad) ({ T __r; (bad) |= op((T)(a), (T)(b), &__r); __r; })
 #define msStickyWide_(T, op, a, b, bad) ({ int64_t __w = (int64_t)(T)(a) op (int64_t)(T)(b); (bad) |= __w != (int64_t)(T)__w; (T)__w; })

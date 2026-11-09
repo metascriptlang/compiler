@@ -25,7 +25,7 @@ test "E2E C: a checked reduction over an array runs in guarded blocks" {
 	];
 	for (const c of cases) {
 		const out = emitted(c[1]);
-		assert out.contains("msBlockEnd(") && out.contains(c[0]), c[1];
+		assert out.contains("msBlockEndOf(") && out.contains(c[0]), c[1];
 	}
 }
 
@@ -49,7 +49,7 @@ test "E2E C: a loop outside the recognized reduction keeps the checked loop alon
 		"function f(xs: int32[]): int32 { let s: int32 = 0; for (let i = 0; i < xs.length; i += 2) s += xs[i]; return s; }",
 		"function f(xs: int32[]): int32 { let s: int32 = 0; const g = (): void => { for (const x of xs) s += x; }; g(); return s; }",
 	];
-	for (const c of cases) assert !emitted(c).contains("msBlockEnd("), c;
+	for (const c of cases) assert !emitted(c).contains("msBlockEndOf("), c;
 }
 
 test "E2E C: the fused loop of values() reduces in guarded blocks, and one that also writes the array does not" {
@@ -57,5 +57,5 @@ test "E2E C: the fused loop of values() reduces in guarded blocks, and one that 
 	assert sums.contains("msSumFitsI32I32("), sums.slice(0, 400);
 	const writes = builtModuleC("blockReduce", "valueswrite", "function f(xs: int32[]): int32 { let s: int32 = 0; for (const x of xs.values()) { s += x; xs[0] = 1; } return s; }\nconsole.log(f([1, 2, 3]));\n", ["--release"]);
 	assert !writes.startsWith("error:"), writes.slice(0, 400);
-	assert !writes.contains("msBlockEnd("), "a values() loop that writes its array was versioned";
+	assert !writes.contains("msBlockEndOf("), "a values() loop that writes its array was versioned";
 }

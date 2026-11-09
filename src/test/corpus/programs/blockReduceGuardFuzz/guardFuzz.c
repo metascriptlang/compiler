@@ -50,7 +50,7 @@ static int gfRef##A##E(AT acc, const ET* x, int64_t n, int sub, AT* out, int64_t
 } \
 static int gfBlk##A##E(AT acc, gfArr##A##E a, int sub, AT* out, int64_t* at) { \
 	for (int64_t i = 0; i < a.len;) { \
-		int64_t e = msBlockEnd(i, a.len, 1024); \
+		int64_t e = msBlockEndOf(i, a.len, 1024); \
 		if (msSumFits##A##E(acc, a, i, e)) { \
 			gfFast++; \
 			acc = sub ? msSumSub##A##E(acc, a, i, e) : msSumAdd##A##E(acc, a, i, e); \
@@ -109,7 +109,7 @@ static int gfDotRef##T(ET acc, const ET* x, const ET* y, int64_t n, int sub, ET*
 static int gfDotBlk##T(ET acc, gfDot##T a, gfDot##T b, int sub, ET* out, int64_t* at) { \
 	ET p; \
 	for (int64_t i = 0; i < a.len;) { \
-		int64_t e = msBlockEnd(i, a.len, 1024); \
+		int64_t e = msBlockEndOf(i, a.len, 1024); \
 		if (msDotFits##T(acc, a, b, i, e)) { \
 			gfFast++; \
 			acc = sub ? msDotSub##T(acc, a, b, i, e) : msDotAdd##T(acc, a, b, i, e); \

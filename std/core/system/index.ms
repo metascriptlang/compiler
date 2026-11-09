@@ -1083,7 +1083,9 @@ extern function msArrDataAt(p: Ptr<void>, i: int64): Ptr<void>;
 @compilerFunc
 extern function msArrDataAtEither(c: boolean, a: Ptr<void>, b: Ptr<void>, i: int64): Ptr<void>;
 @compilerFunc
-extern function msBlockEnd(b: int64, len: int64, size: int64): int64;
+extern function msBlockEnd(b: int64, len: int64): int64;
+@compilerFunc
+extern function msBlockEndOf(b: int64, len: int64, size: int64): int64;
 @compilerFunc
 extern function msStickyAddI8(a: int64, b: int64, bad: boolean): int64;
 @compilerFunc
