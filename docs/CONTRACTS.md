@@ -98,7 +98,7 @@ names a kind of check, not a certificate that every path is implemented correctl
 | `Handle<T>` | `Handle.retain` explicitly retains; `Handle.borrow` does not. Neither proves that the foreign user has stopped before release/owner death, callback affinity or absence of races. Those need the real registration/teardown consumer. |
 | `Borrow<T>` | Internal, checkable access/lifetime proof. Not complete: the tested returned-call root bypasses readonly checks that locals/parameters enforce. Do not promote that acceptance to writable access. |
 | `Cursor<T>` | Internal no-count view treatment. The approved target requires lender/lifetime proof; current explicit annotations are not a certificate of that proof or a weak-reference liveness check. |
-| `Unowned<T>` | Stored-edge implementation landed on main `8f166cdb812`. Does not keep the target alive; native target death with edges remaining stops rather than producing an expired/null weak reference. Checked scope, async and platform limits below. |
+| `Unowned<T>` | Does not keep the target alive and never becomes null. On `wt/unified-drc` (not landed): the target is destroyed with its last strong reference, its memory is kept until the last edge goes, and a read through a dead edge stops, on C and Raiser, 64- and 32-bit; JS reads never stop. Checked scope below. |
 | `Span<T>` / `Readonly<Span<T>>` | Internal source-relative views; readonly additionally restricts writes through that view. Neither owns its source. The view/storage cases named in LANG are scoped pins, not proof for every escape or foreign pointer. |
 | `Ref<T>` / parameter `ref` | A managed storage tool and a parameter mode, respectively; not synonyms for raw `Ptr`. Follow LANG's distinct lifetime/write-back contracts. Casting their address across FFI reintroduces the foreign obligations. |
 | `Readonly<T>` | Restricts access without replacing T's owning/borrowed contract or freezing every alias. It does not by itself prove hidden foreign effects, no retention, fresh returns or thread safety. |
@@ -111,7 +111,7 @@ Approved direction and shipped enforcement are separate facts. As of this 2026-1
 |---|---|
 | `@pure` | Removed with `WritesCell`/`constReadEffect` on main `fb69f51edc9`. No replacement purity marker or whole-function `func` contract. Installed binary/support `d60be1a7f75` at this follow-up predates it; landing is not toolchain sync. |
 | Cursor | Retain inference/no-count views; an explicit no-count request must not override lender/lifetime proof. This is the approved target, not proof that every current local, stored or returned shape is enforced. |
-| Unowned | Fields and own-array elements landed on main `8f166cdb812`; use a build carrying it, not installed `56ad1fdf80f`. Arbitrary nesting/generic containers and async use are not established recipes. |
+| Unowned | Fields and own-array elements landed on main `8f166cdb812` (a free with edges remaining stops). `wt/unified-drc` replaces that with destroy-at-strong-zero and a checked read, arrays of Unowned anywhere and 32-bit counts; a type argument or union member stays refused. |
 
 The landed native-call gate follows borrowed operands: module consts, parameters bound to
 them, task views and pointer casts of those views. The receiving parameter determines the
@@ -136,25 +136,14 @@ Its guard log records `ok readonlyConstReadPathWritesNothing [drc]` and
 C-only builtins are not claimed on JS). Both guard sources match the landed tree.
 This follow-up inspects existing gate evidence; it adds no FFI runtime, SAN or hidden-alias proof.
 
-For Unowned, target/holder destruction order is observable: a local target declared after its
-holder can die first and trigger the check; a global target must precede its holder. Arena
-links need a proved bulk teardown. A suspending frame can keep a holder alive too long, so do
-not recommend Unowned in async code yet. The gate's native death checks cover C/Raiser on
-64-bit; the 32-bit path has no second count, and JS does not reproduce native death checks.
-Those results do not establish checked target-death behavior on either platform. Do not claim backend-independent checked
-lifetime support from the type's accepted spelling.
-
-Unowned land evidence: GREEN gate `q1105115549-rtx`, tip `56268ffed57`, candidate source tree
-`7d89b989c742`. Its `src/test/c/unownedEdge.ms` passed 14 cases. The five `unownedEdge*` corpus
-programs passed 17 execution cells, five SAN cells and five parity comparisons: C/danger/Raiser,
-plus JS/ESM for valid field reads only. Dangling fields/elements intentionally exit 1; JS is
-excluded from native death/destructor tests. The six pin/consumer sources are byte-identical
-after landing. The clean rebase to `8f166cdb812` also carries concurrent typed-array changes;
-this doc pass inspected the recorded gate evidence, not a new post-rebase runtime run.
-
-That evidence establishes the named gate scope and the Git fact of landing, not universal
-lifetime safety, async support, 32-bit/JS checked death semantics or the 13 proposed Scope/CToken
-migrations. A new view model, a counter protocol and a rename remain different things.
+For Unowned, target/holder destruction order is observable: on `wt/unified-drc` a target that dies before its
+holder is destroyed on time and a later read through the edge stops (`Error: an Unowned<N> edge was read after its N
+was destroyed`), while a holder that never reads the dead edge exits cleanly. Arena links need a proved bulk teardown.
+Evidence (candidates of `wt/unified-drc`, rtx and d87, 2026-11-09): corpus `unownedEdge*`, `unownedArrayHeldAnywhere`,
+`unownedLocalArrayReadAfterTargetDies`, `unownedHuskFreedByLastEdge` on C, danger and Raiser (JS on the programs with
+no stop), `src/test/c/unownedEdge.ms` (18), guard `bareWasmUnownedEdges` on wasm32. Not established: async frames, threads, HCR,
+and the gate of the landed slice; the main `8f166cdb812` evidence (gate `q1105115549-rtx`) covers the earlier
+stop-at-free contract only.
 
 ## What a status means
 
@@ -231,7 +220,7 @@ research transcripts are not portable regression pins or an exhaustive safety au
 |---|---|
 | `Ptr`, `Handle`, `Borrow`, `Readonly`, `Cursor` look similar | They answer different address, retention, access and lifetime questions. No runtime redundancy is established by the naming overlap. |
 | Read-only views versus mutable non-owning data views | Keep mutability separate from no-count lifetime proof. The approved Cursor target does not make read-only Borrow a replacement for mutable AST/VM views; each migration still needs proof. |
-| Stored non-owning back edges | Unowned fields/own-array elements landed at `8f166cdb812` in the checked scope above. Compiler graph/arena/context migrations still need their own lifetime/teardown proof. |
+| Stored non-owning back edges | Unowned fields/own-array elements landed at `8f166cdb812`; the Swift-style semantics above are on `wt/unified-drc`. Compiler graph/arena/context migrations still need their own lifetime/teardown proof. |
 | Foreign operand writes versus hidden effects and result aliasing | The marker was removed by the landed operand-sensitive gate. Foreign hidden-state trust, operand permissions and result isolation remain distinct; not all are compiler proofs. |
 | Maybe versus union | Presence over a payload union is not the payload union alone. Neither nullable lowering nor similar names justify deleting its absence state or promising arbitrary nested Option states. |
 | Structural constraints versus operation-based concepts | Structural shape does not require arbitrary operations to resolve. A missing concept mechanism needs a concrete consumer, not automatic porting from a reference manual. |

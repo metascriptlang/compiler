@@ -3880,66 +3880,84 @@ holes and the distinction from foreign trust are in
 
 #### Stored back edges: `Unowned<T>`
 
-**Implementation landed on main `8f166cdb812`:** Unowned is a checked non-owning stored edge,
-not another name for Cursor or a weak reference that becomes null. It does not retain the
-target. The design counts stored edges separately and stops when a target would be freed with
-edges remaining. Values read out are ordinary `T`; local copy elision remains the analyzer's
-job. Nullability is still explicit.
+`Unowned<T>` is a back edge an object stores without keeping its target alive: a class or struct field
+(`parent: Unowned<Node> | null`) or the element of an array (`ups: Unowned<Node>[]`). It counts on the target's
+second count, not its strong count, so a class whose other references are `Owned<T>` stays acyclic (5b). It reads
+as a plain `T`; nullability stays explicit.
 
-Fields and field-owned array elements are implemented in builds carrying that commit; the
-installed `56ad1fdf80f` used by the older documentation probes predates it. The checked gate
-scope and platform exclusions are recorded below, not a blanket post-rebase runtime certificate.
-This is not a recommendation to use Unowned in async/suspending code: a lifted holder can
-outlive its target because of frame destruction timing. Destroy order and arena
-teardown must be established; changing a field's spelling does not prove them. Worker views,
-identity-only collections, value-struct cursors and arbitrary nested containers are not
-mechanical migration targets. See [the current status and limits](CONTRACTS.md#approved-contract-transitions).
+| Written | Result on C and Raiser |
+|---|---|
+| `h.at = n`, `{ at: n }`, `h.ups.push(n)`, an array literal | the edge counts on `n`'s Unowned count |
+| `const p = h.at`, `h.ups[0].id`, `for (const n of h.ups)` | a checked read: a strong `T` while it is used |
+| the last strong reference to the target goes while edges remain | the target is destroyed then (`onDestroy` runs); its memory stays until the last edge goes |
+| a read of an edge whose target was destroyed | the program stops: `Error: an Unowned<N> edge was read after its N was destroyed` |
+| `a.at = b.at`, `a.ups.push(b.ups[0])` | a copy of the edge, no read: nothing stops |
+| `const xs: Unowned<N>[]`, a parameter, a return, `Unowned<N>[] \| null`, `Unowned<N>[][]`, `filter`/`slice`/`sort`/`concat` | accepted: an array of Unowned elements counts its own elements wherever it is held |
+| `const p: Unowned<N> = n`, a parameter or return `Unowned<N>` | error `Unowned<T> is the type of a class or struct field` |
+| `h.ups = xs` with `xs: N[]`, or `f(h.ups)` with `f(a: N[])` | error `an array of N holds its elements strongly and an array of Unowned<N> on their Unowned count, so one array cannot stand for the other` |
+| `Map<string, Unowned<N>>`, `(Unowned<N> \| string)[]` | error `inside a union member, a tuple, a function type or a type argument it is not built yet`; a struct `{ at: Unowned<N> }` holds one in a container |
+
+On JS every edge is a plain reference, so a read never stops (the programs that pin the stop skip JS). A 32-bit target (wasm32, i386, arm) counts as a 64-bit
+one does: the reference count is 64 bits everywhere and the object header 24 bytes. A read costs a compare and a
+count pair: on the scene-graph benchmark of `udrcp/step6bench` (200 000 leaf-to-root walks through `parent` per
+round), +8.0% instructions and +3.5% time against an unchecked read (rtx, 2026-11-09). Design the teardown order of
+a structure so that a back edge is not read after its target goes.
+
+Measured on candidates of `wt/unified-drc` (rtx, 2026-11-09, C, danger and Raiser; JS where the program has no
+`onDestroy`): corpus `unownedEdgeReadsItsTarget`, `unownedEdgeElements` and `unownedEdgeOutlivesItsTarget` (the stop),
+`unownedLocalArrayReadAfterTargetDies` (the stop through a returned array), `unownedArrayHeldAnywhere`,
+`unownedEdgeGlobalTargetDeclaredAfterHolder` (a global target destroyed before its holder exits cleanly),
+`unownedEdgeInsideCollectedCycle`, `unownedHuskFreedByLastEdge` (a million husks in 2.2 MB; 95 MB with the husk
+free disabled); `src/test/c/unownedEdge.ms`; guard `bareWasmUnownedEdges` (wasm32: the dead read traps, 16 384 husks
+fit 1 MiB). Not measured: threads, HCR.
 
 ### 5b. Owned edges (`Owned<T>`)
 
-`Owned<T>` marks a class reference as the unique owning edge to its object, like `Readonly<T>` marks a view: a
-type wrapper with the representation of `T`. Any number of plain references to the same object may exist; they keep
-it alive after the owner goes. `Owned<T>` takes a class; a `Vec`, a string and a struct are refused (a `Vec` is
-already unique, a struct is a value).
+`Owned<T>` marks a reference its holder owns: the author's statement that owned edges never close a cycle. Use
+sites stay plain TypeScript: a plain value enters an owned slot, an owned slot reads as a plain `T`, and an object
+may sit in several owned slots (a DAG). `Owned<T>` takes a class, a union of classes or records, or a closure type;
+a `Vec`, a string and a struct are refused.
 
 ```typescript
 class Node {
 	id: int32 = 0;
-	kids: Vec<Owned<Node>> = [];
-	next: Owned<Node> | null = null;
+	kids: Owned<Node>[] = [];
+	parent: Unowned<Node> | null = null;
 }
 ```
 
-| Written | Result |
-|---|---|
-| `const o: Owned<N> = new N()`, an object literal, `null` | accepted: a fresh value has no other owner |
-| `const b = new N(); root.kids.push(b)` inside a function | accepted when `push(b)` is the last read of `b`, which keeps its type `N`; a later read is `cannot copy 'b'`; a module-level `b` is never a last read |
-| `const o: Owned<N> = p` or `take(p)` with `p: N` (a `let`, or a `const` bound to anything but a fresh value) | error `Type 'N' is not assignable to type 'Owned<N>'` |
-| `p as Owned<N>` with `p: N` or `unknown` and no fresh operand (also `(p as unknown) as Owned<N>`) | error `cannot cast 'N' to 'Owned<N>'`; a fresh operand or an `Owned` operand casts |
-| `const p: N = o` | accepted: a plain reference to the same object |
-| a second owner from an owned local, field or element | error `cannot copy 'o'` unless it is the last read, where it is a move |
-| copy of a `Vec<Owned<N>>` or a struct holding an owned field | the same error, unless it is the last read |
-| `for (const k of root.kids)` at any scope | `k` is a lent view of the element, no copy, unless the body can write `root.kids` |
+A cycle needs a plain edge. A class every cycle of which must pass an owned edge is acyclic in a release build and
+stays out of the cycle collector: no root registration, no collection. This holds through a nullable field,
+`Owned<T>[]` and `Vec<Owned<T>>` (a shared array too: a cycle through an array cell continues through one of its
+elements), nested arrays, nullable elements, an array of value structs whose references are owned, `Owned<A | B>` over
+records, a class extended in the program (classified over every subclass, so a subclass with a plain back edge makes
+the base cyclic), and an `Owned` container (`Owned<Map<string, Owned<N>>>`). A plain `Map<string, Owned<N>>` field is a
+plain edge into the map, so `N` stays cyclic.
 
-An owning edge is move-only, so owning edges form a forest: a cycle needs one edge that is not owned. A class whose
-references are all owned is therefore acyclic and stays out of the cycle collector (`isCyclic = MS_FALSE` in its
-TypeInfo). `Vec<Owned<N>>` and `Owned<N> | null` keep `N` acyclic; `N[]` does not, because the shared array cell is a
-plain edge. An owned element in a shared array is refused, because two holders of the array would own the same element
-(`kids: Owned<N>[]`, measured on a candidate of main df3e3d84c17, 2026-11-08: `error: 'Owned<N>' cannot be an array
-element: every holder of an array shares it, so two of them would own the same element; hold owned elements in
-'Vec<Owned<N>>'`; `Array<Owned<N> | null>` and an alias `Kid[]` of `type Kid = Owned<N>` are refused the same way).
-`A.owned -> B` with `B.plain -> A` stays cyclic. The `new` expression is typed as plain `N`:
-write the owned type on the binding or the field.
+An owned closure, `Owned<(t: Texture) => void>`, is a leaf: its environment cannot take part in a cycle. A slot of it
+takes a function expression, another owned closure or `null`; a closure formed elsewhere is refused
+(`an Owned closure is formed from a function expression where it is stored`), and a function expression whose
+environment can be part of a cycle is refused where it is formed (`cannot form an Owned closure: its environment
+can be part of a cycle through the captured 'w'`). A function that forms the closure returns `Owned<…>`.
 
-Known limit: the forest holds only while no owned value is moved into its own subtree. `r.kids.push(r)`, or
-`k.kids.push(r)` where `k` is a plain reference to a descendant of `r`, compiles and forms an owned cycle `r -> k -> r`
-that the collector never visits, because `N` is acyclic. The result is a leak, never a use-after-free; the check would
-need alias tracking the language does not do. Both forms build and print `1` on C (probe `cyc2.ms`, measured on
-`wt/udrc-owned` 1dc6f5bee).
+When owned edges do close a cycle, a release build leaks it, like a wrong `@acyclic`, never unsafe; a debug or test
+build keeps such classes under the collector and stops when the cycle becomes garbage:
+`Error: an owned cycle became garbage: N objects own each other only through Owned<T> edges, so a release build would
+leak them; make the edge back up the cycle Unowned<T>`. JS collects every cycle and reports nothing.
 
-Measured with `msc` built from this tree: `src/test/c/ownedEdge.ms` (25 tests), corpus programs `1167-ownedTreeDrop`
-(C: a 40-node `Vec<Owned<N>>` tree runs `onDestroy` 40 times on drop) and `1168-ownedTreeSum` (C and `--target=js`
-print the same lines). Not measured: `Owned<T>` on a generic parameter, the Raiser backend, threads.
+Cost, `udrcp/step6bench` (a scene graph of 5.85 million nodes over 60 rounds, `--release`, rtx, 2026-11-09):
+
+| Arm | Instructions | CPU median |
+|---|---|---|
+| `kids: Owned<Node>[]`, `parent: Unowned<Node> \| null` | 7 951 808 304 | 570 ms |
+| `@acyclic`, `kids: Node[]`, the same `parent` | 7 951 809 423 | 570 ms |
+| `kids: Node[]`, the same `parent` (collector) | 10 220 797 954 | 620 ms |
+| `kids: Node[]`, `parent: Node \| null` (plain TypeScript) | 15 832 640 853 | 1 070 ms |
+
+Measured on candidates of `wt/unified-drc` (rtx, 2026-11-09): `src/test/c/ownedEdge.ms` (74 tests), corpus
+`1167-ownedTreeDrop`, `1168-ownedTreeSum`, `ownedStructElementsDropWithTheirHolder`,
+`ownedUnionOfRecordsThatOwnTheirHolder`, `ownedTreeWithSubclassesDrops`, `ownedClosureFieldLeavesTheCollector` and the
+other `owned*` programs (C, danger, Raiser), guard `ownedCycleStopsDebugBuild`. Not measured: threads, HCR.
 
 ### 6. Nullable Types and `Maybe<T>` (Deep Dive)
 

@@ -527,13 +527,14 @@ count must survive until C is finished. Calling `process.exit()` is not a substi
 | `Span<T>` | Pointer plus length; bounded non-owning access, not copied elements. |
 | `Borrow<T>` | Reads an existing location; its owner/storage must outlive every use. |
 | `Cursor<T>` | No-count non-owning view treatment, not an implicit nullable/weak edge. Prefer inference; the approved target requires lender/lifetime proof rather than an unchecked RC override. |
-| `Unowned<T>` | Stored field/field-owned-array edge, implemented on main `8f166cdb812`; not a general local/parameter/result type. Observe the checked native/platform scope and teardown limits; do not migrate by name alone. |
+| `Unowned<T>` | Back edge stored in a field or an array element; not a local, parameter or result type (an array of them is held anywhere). The target is destroyed with its last strong reference and a read after that stops; design the teardown order. See [LANG 5a](LANG.md#stored-back-edges-unownedt). |
+| `Owned<T>` | An edge its holder owns: the class leaves the cycle collector when every cycle must pass one. Use sites stay plain TS; an object may sit in several owned slots. See [LANG 5b](LANG.md#5b-owned-edges-ownedt). |
 | `Readonly<T>` | Access restriction; storage and ownership still follow `T`. |
 
 Cursor does not choose mutability or nullability for you. A mutable AST/VM view cannot simply
 be replaced with read-only Borrow. A parameter/result needs its lender; a worker view needs its
 source owners pinned through the join without count writes. Unowned has a different stored-edge
-contract and strict target/holder teardown; do not recommend it in async code yet. Read
+contract: its target dies with its last strong reference, and a read through the edge after that stops. Read
 [LANG's definitions](LANG.md#5a-non-owning-treatment-cursort) and the
 [current enforcement limits](CONTRACTS.md#approved-contract-transitions) before migrating.
 

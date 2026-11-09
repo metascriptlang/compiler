@@ -350,8 +350,11 @@ Under ASan the heap is libc's (`MS_HEAP_USE_MALLOC`), so LeakSanitizer sees ever
 | `bareArenaReallocCopy` | Array/Map/Set/string growth, ASan with LSan on | green | green | green |
 | `bareWasmDrcReleasesScopes` | wasm32, 4096 scoped blocks over 1 KiB in a 1 MiB memory, no imports | green | green | green |
 | `bareRefusesAsync` | async refused with E01 | green | green | green |
+| `bareWasmUnownedEdges` | wasm32: a read through a dead `Unowned<T>` edge traps, 16 384 husks fit 1 MiB | green | not run | green |
 
-All on the candidate of tree `wt/runtime-allocator` on 2026-11-06. On the installed build of
+All on the candidate of tree `wt/runtime-allocator` on 2026-11-06, except `bareWasmUnownedEdges`: candidates of
+`wt/unified-drc` on 2026-11-09, red on the installed build (no Unowned count on 32-bit then) and red with the husk
+free disabled. On the installed build of
 that day (bare default manual) `bareDrcRunsHooks`, `bareDrcCollectsCycles` and
 `bareWasmDrcReleasesScopes` were red (Linux); the manual ASan cell of `bareArenaReallocCopy`
 leaked 3721 B in 13 objects (rtx, 2026-11-06), because manual never disposes. Not verified: hardware execution of an
