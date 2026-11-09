@@ -141,11 +141,9 @@ static inline double msPowF64(double x, double y) {
 #define msPostInc(lv) msPostStep_(lv, __builtin_add_overflow)
 #define msPostDec(lv) msPostStep_(lv, __builtin_sub_overflow)
 
-#define MS_REDUCE_BLOCK 1024
-
-static inline int64_t msBlockEnd(int64_t b, int64_t len) {
+static inline int64_t msBlockEnd(int64_t b, int64_t len, int64_t size) {
 	if (b < 0) return b + 1;
-	return len - b > MS_REDUCE_BLOCK ? b + MS_REDUCE_BLOCK : len;
+	return len - b > size ? b + size : len;
 }
 
 #define msStickyOp_(T, op, a, b, bad) ({ T __r; (bad) |= op((T)(a), (T)(b), &__r); __r; })

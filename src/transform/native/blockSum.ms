@@ -16,7 +16,7 @@
 import { Node, NodeKind, Symbol, Type, TypeKind, DeclKind, SourceLocation, BinaryExprData, UnaryExprData, CallExprData, BlockStmtData, ExprStmtData, VariableDeclData, MemberExprData, ArrayAccessData, WhileStmtData, HiddenStdConvData, HiddenDerefData, NumberLiteralData, TypeAssertionData, ConditionalExprData, NodeFlag } from "../../ast/node";
 import { peelToRepr, peelTransparentInstance, getSysType, booleanType } from "../../checker/types";
 import { TransformContext, freshTempSym } from "../context";
-import { makeCall, runtimeRef, generatedRef, makeIdentResolved, cloneIdent, makeVarDecl, makeBlock, makeWhile, makeIf, makeBinary, makeAssign, makeExprStmt, makeHiddenDeref, makeHiddenStdConv, makeConditional, isRuntimeProcCall } from "../util";
+import { makeCall, runtimeRef, generatedRef, makeIdentResolved, cloneIdent, makeVarDecl, makeBlock, makeWhile, makeIf, makeBinary, makeUnary, makeAssign, makeExprStmt, makeHiddenDeref, makeHiddenStdConv, makeConditional, isRuntimeProcCall } from "../util";
 import { makeIntNumber, makeBool } from "../../checker/literalNodes";
 import { clonePlace } from "../place";
 import { isSignedKind, bitsOfKind } from "../numKinds";
@@ -24,7 +24,8 @@ import { forEachChild } from "../../ast/visitor";
 import { cloneFresh } from "../lowering/iterInline";
 
 type SumLoop = { acc: Node, sub: boolean, index: Node, bounds: Node[], decls: Node[], term: Node };
-type Fast = { bad: Symbol, counters: HashSet<Symbol>, guarded: Node[], loc: SourceLocation };
+type Fast = { bad: Symbol, counters: HashSet<Symbol>, guarded: Node[], ranges: HashMap<Symbol, Range>, counterChecks: Range[], loc: SourceLocation };
+type Range = { lo: int64, hi: int64 };
 
 export function versionSumLoop(loop: Node, ctx: TransformContext): Node | null {
 	const s = matchSumLoop(loop);
@@ -145,12 +146,18 @@ function pureBinary(): HashSet<string> {
 	return ops;
 }
 
-// The sticky twin of a call that raises, or "" for a call the sticky block may not run.
-function stickyName(n: Node): string {
+function calleeName(n: Node): string {
 	const d = n.data as CallExprData;
 	if (d.callee.kind != NodeKind.Identifier || d.callee.resolvedSym == null) return "";
 	const sym = d.callee.resolvedSym!;
-	const name = sym.nativeName != "" ? sym.nativeName : sym.name;
+	return sym.nativeName != "" ? sym.nativeName : sym.name;
+}
+
+// The sticky twin of a call that raises, or "" for a call the sticky block may not run.
+function stickyName(n: Node): string {
+	const d = n.data as CallExprData;
+	const name = calleeName(n);
+	if (name == "") return "";
 	if (n.flags.has(NodeFlag.IntCheck) && !n.flags.has(NodeFlag.WritesOperand)) {
 		for (const op of ["Add", "Sub", "Mul", "Neg"]) {
 			for (const w of ["I8", "I16", "I32", "I64"]) {
@@ -170,8 +177,10 @@ function sticky(n: Node, f: Fast): Node {
 	const loc = f.loc;
 	if (n.kind == NodeKind.CallExpr) {
 		const name = stickyName(n);
+		const safe = cannotRaise(n, f);
 		const args: Node[] = [];
 		for (const a of (n.data as CallExprData).arguments) args.push(sticky(a, f));
+		if (safe) return unchecked(n, args, loc);
 		args.push(makeIdentResolved(f.bad, loc));
 		const call = makeCall(runtimeRef(name, loc), args, loc);
 		call.nodeType = n.nodeType;
@@ -210,6 +219,159 @@ function counterOf(n: Node, counters: HashSet<Symbol>): Symbol | null {
 		} else break;
 	}
 	return e.kind == NodeKind.Identifier && e.resolvedSym != null && counters.has(e.resolvedSym!) ? e.resolvedSym : null;
+}
+
+// ===== Ranges =====
+
+const MAX_SAFE: int64 = 9007199254740991;
+export const REDUCE_BLOCK: int64 = 1024;
+
+function cannotRaise(n: Node, f: Fast): boolean {
+	const accepted = acceptedRange(n, f);
+	if (accepted == null) return false;
+	const args = (n.data as CallExprData).arguments;
+	if (within(computedRange(n, f), accepted)) return true;
+	if (n.flags.has(NodeFlag.IntCheck) || counterOf(args[0], f.counters) == null) return false;
+	f.counterChecks.push(accepted);
+	return true;
+}
+
+function unchecked(n: Node, args: Node[], loc: SourceLocation): Node {
+	const name = calleeName(n);
+	const op = arithOp(name);
+	if (name.startsWith("msNeg")) return typed(makeUnary("-", args[0], loc), n.nodeType!);
+	if (op != "") return typed(makeBinary(args[0], op, args[1], loc), n.nodeType!);
+	return makeHiddenStdConv(args[0], n.nodeType!, loc);
+}
+
+function arithOp(name: string): string {
+	if (name.startsWith("msAdd")) return "+";
+	if (name.startsWith("msSub")) return "-";
+	return name.startsWith("msMul") ? "*" : "";
+}
+
+function acceptedRange(n: Node, f: Fast): Range | null {
+	const name = calleeName(n);
+	const args = (n.data as CallExprData).arguments;
+	if (name == "msExactI64") return { lo: -MAX_SAFE, hi: MAX_SAFE };
+	if (n.flags.has(NodeFlag.IntCheck)) return typeRange(n.nodeType);
+	const lo = rangeOf(args[1], f);
+	const hi = rangeOf(args[2], f);
+	return lo != null && hi != null ? { lo: lo.hi, hi: hi.lo } : null;
+}
+
+function computedRange(n: Node, f: Fast): Range | null {
+	const name = calleeName(n);
+	const args = (n.data as CallExprData).arguments;
+	if (name.startsWith("msNeg")) return negate(rangeOf(args[0], f));
+	const op = arithOp(name);
+	return op != "" ? arith(op, rangeOf(args[0], f), rangeOf(args[1], f)) : rangeOf(args[0], f);
+}
+
+// A refused block still runs every operation proven unchecked, so a range holds in every block, never only in
+// an accepted one: a sticky check lets a value its type holds through, not one its check accepts.
+function rangeOf(n: Node, f: Fast): Range | null {
+	if (n.kind == NodeKind.NumberLiteral) {
+		const d = n.data as NumberLiteralData;
+		return d.isFloat ? null : { lo: d.intVal, hi: d.intVal };
+	}
+	if (isBoolean(n.nodeType)) return { lo: 0, hi: 1 };
+	if (n.kind == NodeKind.Identifier) {
+		return n.resolvedSym != null && f.ranges.has(n.resolvedSym!) ? f.ranges.get(n.resolvedSym!)! : typeRange(n.nodeType);
+	}
+	if (n.kind == NodeKind.BinaryExpr) {
+		const d = n.data as BinaryExprData;
+		return wrap(binaryRange(d.operator, rangeOf(d.left, f), rangeOf(d.right, f)), n.nodeType);
+	}
+	if (n.kind == NodeKind.UnaryExpr) {
+		const d = n.data as UnaryExprData;
+		const a = rangeOf(d.operand, f);
+		if (a == null) return typeRange(n.nodeType);
+		return wrap(d.unaryOp == "-" ? negate(a) : { lo: ~a.hi, hi: ~a.lo }, n.nodeType);
+	}
+	if (n.kind == NodeKind.TypeAssertion) return wrap(rangeOf((n.data as TypeAssertionData).asExpr, f), n.nodeType);
+	if (n.kind == NodeKind.HiddenStdConv) return wrap(rangeOf((n.data as HiddenStdConvData).convExpr, f), n.nodeType);
+	if (n.kind == NodeKind.ConditionalExpr) {
+		const d = n.data as ConditionalExprData;
+		const a = rangeOf(d.ternaryConsequent, f);
+		const b = rangeOf(d.ternaryAlternate, f);
+		return wrap(a != null && b != null ? { lo: a.lo < b.lo ? a.lo : b.lo, hi: a.hi > b.hi ? a.hi : b.hi } : null, n.nodeType);
+	}
+	if (n.kind == NodeKind.CallExpr) return meet(computedRange(n, f), typeRange(n.nodeType));
+	return typeRange(n.nodeType);
+}
+
+function binaryRange(op: string, a: Range | null, b: Range | null): Range | null {
+	if (op == "&") {
+		if (a != null && a.lo >= 0 && b != null && b.lo >= 0) return { lo: 0, hi: a.hi < b.hi ? a.hi : b.hi };
+		if (a != null && a.lo >= 0) return { lo: 0, hi: a.hi };
+		return b != null && b.lo >= 0 ? { lo: 0, hi: b.hi } : null;
+	}
+	if (a == null || b == null) return null;
+	if (op == "|" || op == "^") return a.lo >= 0 && b.lo >= 0 ? { lo: 0, hi: ones(a.hi > b.hi ? a.hi : b.hi) } : null;
+	const shift = b.lo == b.hi && b.lo >= 0 && b.lo < 31;
+	if (shift && (op == ">>" || (op == ">>>" && a.lo >= 0))) return { lo: a.lo >> b.lo, hi: a.hi >> b.lo };
+	return arith(op, a, b);
+}
+
+function arith(op: string, a: Range | null, b: Range | null): Range | null {
+	if (a == null || b == null) return null;
+	if (op == "+" || op == "-") {
+		if (!small(a, MAX_SAFE) || !small(b, MAX_SAFE)) return null;
+		return op == "+" ? { lo: a.lo + b.lo, hi: a.hi + b.hi } : { lo: a.lo - b.hi, hi: a.hi - b.lo };
+	}
+	if (op != "*" || !small(a, 2147483648) || !small(b, 2147483648)) return null;
+	let lo = a.lo * b.lo;
+	let hi = lo;
+	for (const p of [a.lo * b.hi, a.hi * b.lo, a.hi * b.hi]) {
+		if (p < lo) lo = p;
+		if (p > hi) hi = p;
+	}
+	return { lo, hi };
+}
+
+function negate(a: Range | null): Range | null {
+	return a != null && small(a, MAX_SAFE) ? { lo: -a.hi, hi: -a.lo } : null;
+}
+
+function ones(x: int64): int64 {
+	let m: int64 = 0;
+	while (m < x) m = m * 2 + 1;
+	return m;
+}
+
+function small(r: Range, limit: int64): boolean {
+	return r.lo >= -limit && r.hi <= limit;
+}
+
+function within(r: Range | null, bounds: Range): boolean {
+	return r != null && r.lo >= bounds.lo && r.hi <= bounds.hi;
+}
+
+function meet(a: Range | null, b: Range | null): Range | null {
+	if (a == null || b == null) return a == null ? b : a;
+	const lo = a.lo > b.lo ? a.lo : b.lo;
+	const hi = a.hi < b.hi ? a.hi : b.hi;
+	return lo <= hi ? { lo, hi } : b;
+}
+
+function wrap(r: Range | null, t: Type | null): Range | null {
+	const own = typeRange(t);
+	if (r == null) return own;
+	if (own != null) return within(r, own) ? r : own;
+	const k = peelToRepr(t);
+	return k != null && k.kind == TypeKind.Int64 ? r : null;
+}
+
+function typeRange(t: Type | null): Range | null {
+	if (isBoolean(t)) return { lo: 0, hi: 1 };
+	const r = peelToRepr(t);
+	const bits = r != null ? bitsOfKind(r.kind) : 0;
+	if (bits == 0 || bits == 64) return null;
+	const signed = isSignedKind(r!.kind);
+	if (bits == 8) return signed ? { lo: -128, hi: 127 } : { lo: 0, hi: 255 };
+	if (bits == 16) return signed ? { lo: -32768, hi: 32767 } : { lo: 0, hi: 65535 };
+	return signed ? { lo: -2147483648, hi: 2147483647 } : { lo: 0, hi: 4294967295 };
 }
 
 function widens(from: Type | null, to: Type | null): boolean {
@@ -259,46 +421,54 @@ function sumLoop(s: SumLoop, loop: Node, ctx: TransformContext): Node {
 		const less = typed(makeBinary(bound, "<", next, loc), booleanType());
 		bound = typed(makeConditional(less, clonePlace(bound, loc), clonePlace(next, loc), loc), i64);
 	}
-	const endCall = typed(makeCall(runtimeRef("msBlockEnd", loc), [wide(cloneIdent(s.index, loc), loc), bound], loc), i64);
+	const endCall = typed(makeCall(runtimeRef("msBlockEnd", loc), [wide(cloneIdent(s.index, loc), loc), bound, int64(REDUCE_BLOCK, loc)], loc), i64);
 	const end = declareLocal(head, ctx, "end", i64, endCall, DeclKind.Const, loc);
-	const pos = declareLocal(head, ctx, "pos", i64, int64(0, loc), DeclKind.Let, loc);
-	const neg = declareLocal(head, ctx, "neg", i64, int64(0, loc), DeclKind.Let, loc);
 	const bad = declareLocal(head, ctx, "bad", booleanType(), makeBool(false, loc), DeclKind.Let, loc);
 	const j = declareLocal(head, ctx, "j", indexType, cloneIdent(s.index, loc), DeclKind.Let, loc);
 
 	const renames = new HashMap<Symbol, Symbol>();
 	renames.set(s.index.resolvedSym!, j);
-	const f: Fast = { bad, counters: new HashSet<Symbol>(), guarded: [], loc };
+	const f: Fast = { bad, counters: new HashSet<Symbol>(), guarded: [], ranges: new HashMap<Symbol, Range>(), counterChecks: [], loc };
 	f.counters.add(j);
 	const fast: Node[] = [];
 	for (const d of s.decls) {
 		const copy = cloneFresh(d, renames, ctx, true);
 		const init = (copy.data as VariableDeclData).initializer;
 		if (copy.resolvedSym != null && init != null && isIntegral(copy.resolvedSym!.symbolType) && counterOf(init, f.counters) != null) f.counters.add(copy.resolvedSym!);
+		const r = copy.resolvedSym != null && init != null ? wrap(rangeOf(init, f), copy.resolvedSym!.symbolType) : null;
 		fast.push(sticky(copy, f));
+		if (r != null) f.ranges.set(copy.resolvedSym!, r);
 	}
-	const termSym = freshTempSym(ctx, "t", i64);
-	const term = sticky(cloneFresh(s.term, renames, ctx, true), f);
-	const termDecl = makeVarDecl(termSym.name, wide(term, loc), DeclKind.Const, loc);
+	const termCopy = cloneFresh(s.term, renames, ctx, true);
+	const termRange = rangeOf(termCopy, f);
+	const sumType = blockSumType(termRange);
+	const pos = declareLocal(head, ctx, "pos", sumType, zero(sumType, loc), DeclKind.Let, loc);
+	const neg = declareLocal(head, ctx, "neg", sumType, zero(sumType, loc), DeclKind.Let, loc);
+	const termSym = freshTempSym(ctx, "t", sumType);
+	const termDecl = makeVarDecl(termSym.name, convert(sticky(termCopy, f), sumType, loc), DeclKind.Const, loc);
 	termDecl.resolvedSym = termSym;
-	termDecl.nodeType = i64;
+	termDecl.nodeType = sumType;
 	fast.push(termDecl);
-	fast.push(accumulate(pos, termSym, ">", loc));
-	fast.push(accumulate(neg, termSym, "<", loc));
+	if (termRange == null || termRange.hi > 0) fast.push(accumulate(pos, termSym, termRange != null && termRange.lo >= 0 ? "" : ">", loc));
+	if (termRange == null || termRange.lo < 0) fast.push(accumulate(neg, termSym, termRange != null && termRange.hi <= 0 ? "" : "<", loc));
 	const one = makeIntNumber(1, loc);
 	one.nodeType = indexType;
 	fast.push(makeExprStmt(makeAssign(makeIdentResolved(j, loc), typed(makeBinary(makeIdentResolved(j, loc), "+", one, loc), indexType), loc), loc));
 	for (const a of f.guarded) {
 		const within = typed(makeCall(runtimeRef(isSpan(a.nodeType) ? "msBlockWithinSpan" : "msBlockWithin", loc), [a, wide(cloneIdent(s.index, loc), loc), makeIdentResolved(end, loc)], loc), booleanType());
-		const outside = typed(makeUnaryNot(within, loc), booleanType());
-		head.push(makeExprStmt(makeAssign(makeIdentResolved(bad, loc), typed(makeBinary(makeIdentResolved(bad, loc), "||", outside, loc), booleanType()), loc), loc));
+		head.push(markBad(bad, typed(makeUnaryNot(within, loc), booleanType()), loc));
+	}
+	for (const r of f.counterChecks) {
+		const below = typed(makeBinary(wide(cloneIdent(s.index, loc), loc), "<", int64(r.lo, loc), loc), booleanType());
+		const above = typed(makeBinary(makeIdentResolved(end, loc), ">", int64(r.hi + 1, loc), loc), booleanType());
+		head.push(markBad(bad, typed(makeBinary(below, "||", above, loc), booleanType()), loc));
 	}
 	head.push(makeWhile(typed(makeBinary(wide(makeIdentResolved(j, loc), loc), "<", makeIdentResolved(end, loc), loc), booleanType()), makeBlock(fast, loc), loc));
 
 	const accType = s.acc.nodeType!;
-	const k = signedKindOf(accType)!;
+	const accRange = typeRange(accType)!;
 	const sub = makeBool(s.sub, loc);
-	const fitsCall = typed(makeCall(runtimeRef("msBlockSumFits", loc), [cloneIdent(s.acc, loc), makeIdentResolved(pos, loc), makeIdentResolved(neg, loc), sub, int64(minOf(k), loc), int64(maxOf(k), loc)], loc), booleanType());
+	const fitsCall = typed(makeCall(runtimeRef("msBlockSumFits", loc), [cloneIdent(s.acc, loc), makeIdentResolved(pos, loc), makeIdentResolved(neg, loc), sub, int64(accRange.lo, loc), int64(accRange.hi, loc)], loc), booleanType());
 	const clean = typed(makeUnaryNot(makeIdentResolved(bad, loc), loc), booleanType());
 	const fits = typed(makeBinary(clean, "&&", fitsCall, loc), booleanType());
 	const sum = typed(makeCall(runtimeRef("msBlockSumOf", loc), [cloneIdent(s.acc, loc), makeIdentResolved(pos, loc), makeIdentResolved(neg, loc), makeBool(s.sub, loc)], loc), i64);
@@ -312,14 +482,26 @@ function sumLoop(s: SumLoop, loop: Node, ctx: TransformContext): Node {
 	return makeWhile(w.whileCondition, makeBlock(head, loc), loc);
 }
 
+function blockSumType(term: Range | null): Type {
+	const fits = term != null && small(term, 2147483648) && term.lo * REDUCE_BLOCK > -2147483648 && term.hi * REDUCE_BLOCK < 2147483647;
+	return getSysType(fits ? TypeKind.Int32 : TypeKind.Int64);
+}
+
 function accumulate(into: Symbol, term: Symbol, side: string, loc: SourceLocation): Node {
-	const i64 = getSysType(TypeKind.Int64);
-	const keep = typed(makeBinary(makeIdentResolved(term, loc), side, int64(0, loc), loc), booleanType());
-	const part = typed(makeConditional(keep, makeIdentResolved(term, loc), int64(0, loc), loc), i64);
-	return makeExprStmt(makeAssign(makeIdentResolved(into, loc), typed(makeBinary(makeIdentResolved(into, loc), "+", part, loc), i64), loc), loc);
+	const t = into.symbolType!;
+	let part = makeIdentResolved(term, loc);
+	if (side != "") {
+		const keep = typed(makeBinary(makeIdentResolved(term, loc), side, zero(t, loc), loc), booleanType());
+		part = typed(makeConditional(keep, part, zero(t, loc), loc), t);
+	}
+	return makeExprStmt(makeAssign(makeIdentResolved(into, loc), typed(makeBinary(makeIdentResolved(into, loc), "+", part, loc), t), loc), loc);
 }
 
 // ===== Helpers =====
+
+function markBad(bad: Symbol, outside: Node, loc: SourceLocation): Node {
+	return makeExprStmt(makeAssign(makeIdentResolved(bad, loc), typed(makeBinary(makeIdentResolved(bad, loc), "||", outside, loc), booleanType()), loc), loc);
+}
 
 function declareLocal(out: Node[], ctx: TransformContext, name: string, t: Type, init: Node, kind: DeclKind, loc: SourceLocation): Symbol {
 	const sym = freshTempSym(ctx, name, t);
@@ -346,8 +528,18 @@ function makeUnaryNot(operand: Node, loc: SourceLocation): Node {
 }
 
 function wide(n: Node, loc: SourceLocation): Node {
+	return convert(n, getSysType(TypeKind.Int64), loc);
+}
+
+function convert(n: Node, t: Type, loc: SourceLocation): Node {
 	const r = peelToRepr(n.nodeType);
-	return r != null && r.kind == TypeKind.Int64 ? n : makeHiddenStdConv(n, getSysType(TypeKind.Int64), loc);
+	return r != null && r.kind == peelToRepr(t)!.kind ? n : makeHiddenStdConv(n, t, loc);
+}
+
+function zero(t: Type, loc: SourceLocation): Node {
+	const n = makeIntNumber(0, loc);
+	n.nodeType = t;
+	return n;
 }
 
 function narrow(n: Node, t: Type, loc: SourceLocation): Node {
@@ -427,20 +619,4 @@ function arrayValue(a: Node, loc: SourceLocation): Node {
 	const c = clonePlace(a, loc);
 	if (c.nodeType != null && c.nodeType.kind == TypeKind.Ref) return makeHiddenDeref(c, loc);
 	return c;
-}
-
-function minOf(k: TypeKind): int64 {
-	return match (k) {
-		TypeKind.Int8 => -128 as int64,
-		TypeKind.Int16 => -32768 as int64,
-		_ => -2147483648 as int64,
-	};
-}
-
-function maxOf(k: TypeKind): int64 {
-	return match (k) {
-		TypeKind.Int8 => 127 as int64,
-		TypeKind.Int16 => 32767 as int64,
-		_ => 2147483647 as int64,
-	};
 }
