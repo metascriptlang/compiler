@@ -170,6 +170,29 @@ record("a step's make runs with host rights after configure", "stamped", stamp.o
 record("a step that throws fails the build with its message", "bad: unhandled exception: gate failed: 2 tests red", errorLine(run(graph, ["build", "--colors=off", "bad"])));
 record("a missing node names the exported ones", "build.ms exports no node 'nope'; it exports app, run, upper, stamp, bad", errorLine(run(graph, ["build", "--colors=off", "nope"])));
 
+const optioned = `${root}/optioned`;
+ensureDir(optioned);
+const OPTIONED_BUILD = [
+	"import { step, option, standardOptimizeOption } from \"std/build\";",
+	"console.log(\"configured\");",
+	"const greeting = option(\"greeting\", \"what the step prints\") ?? \"hello\";",
+	"const optimize = standardOptimizeOption();",
+	"export const say = step({ description: \"say\", inputs: [], make: (): void => { console.log(`${greeting} ${optimize}`); } });",
+	"export default say;",
+	"",
+].join("\n");
+put(`${optioned}/build.ms`, OPTIONED_BUILD);
+record("-Dname=value reaches option()", "hi Debug", lastLine(run(optioned, ["build", "--colors=off", "-Dgreeting=hi", "say"])));
+record("--release is the standard optimize option", "hello ReleaseSafe", lastLine(run(optioned, ["build", "--colors=off", "--release", "say"])));
+record("an option build.ms does not declare stops the build", "the command line gives the option 'nope', which build.ms does not declare; it declares greeting, optimize",
+	errorLine(run(optioned, ["build", "--colors=off", "-Dnope=1", "say"])).split("build.ms: ").pop());
+const evaluated = (out: string): string => out.includes("configured") ? "evaluated" : "cached";
+const listings = [run(optioned, ["build", "--colors=off", "--list"]), run(optioned, ["build", "--colors=off", "--list"])];
+put(`${optioned}/build.ms`, `${OPTIONED_BUILD}// edited\n`);
+listings.push(run(optioned, ["build", "--colors=off", "--list"]));
+record("configure is cached until build.ms changes", "evaluated|cached|evaluated", listings.map(evaluated).join("|"));
+record("a step runs from a cached graph", "hello Debug", lastLine(run(optioned, ["build", "--colors=off", "say"])));
+
 const hostile = `${root}/hostile`;
 ensureDir(`${hostile}/src`);
 put(`${hostile}/src/main.ms`, "console.log(1);\n");
