@@ -1,6 +1,6 @@
 import { BuildGraph, GraphNode, GraphPath, ArgKind, nodeById, sourcePath } from "./configure";
 import { CliOptions } from "../options";
-import { hashFile } from "../cache";
+import { hashFile, loadFileHashes, saveFileHashes } from "../cache";
 import { hashContent } from "../../utils/contentHash";
 import { stepStoreRoot, storedOutput, storeScratch, storePublish } from "./store";
 import { atomicCopyFile } from "../io";
@@ -25,10 +25,11 @@ export interface Execution {
 	passArgs: string[];
 	jobs: int32;
 	seed: int32;   // nonzero: start ready nodes in an order shuffled by this seed
+	hashed: string[];
 }
 
 export function newExecution(graph: BuildGraph, opts: CliOptions, projectRoot: string, dryRun: boolean, passArgs: string[], jobs: int32): Execution {
-	return { graph, opts, projectRoot, outputs: new HashMap<int32, string>(), digests: new HashMap<int32, string>(), dryRun, ran: [], reused: [], passArgs, jobs, seed: opts.graphSeed };
+	return { graph, opts, projectRoot, outputs: new HashMap<int32, string>(), digests: new HashMap<int32, string>(), dryRun, ran: [], reused: [], passArgs, jobs, seed: opts.graphSeed, hashed: [] };
 }
 
 function shuffle(plan: GraphNode[], seed: int32): void {
@@ -83,12 +84,15 @@ function pathOf(x: Execution, p: GraphPath): string {
 	return out;
 }
 
-function treeHash(path: string): string {
+function treeHash(path: string, hashed: string[]): string {
 	if (!exists(path)) return "absent";
-	if (!isDir(path)) return `f:${hashFile(path)}`;
+	if (!isDir(path)) {
+		hashed.push(path);
+		return `f:${hashFile(path)}`;
+	}
 	const names = readDir(path).map((e: string): string => e.endsWith("/") ? e.slice(0, e.length - 1) : e).sort();
 	let acc = "";
-	for (const name of names) acc = `${acc}${name}\n${treeHash(join(path, name))}\n`;
+	for (const name of names) acc = `${acc}${name}\n${treeHash(join(path, name), hashed)}\n`;
 	return `d:${hashContent(acc)}`;
 }
 
@@ -106,7 +110,7 @@ function inputHash(x: Execution, p: GraphPath): string {
 		return `${p.producer}:${p.sub}:${d ?? ""}`;
 	}
 	const path = sourcePath(p);
-	return `${keyPath(x, path)}\n${treeHash(path)}`;
+	return `${keyPath(x, path)}\n${treeHash(path, x.hashed)}`;
 }
 
 function toolIdentity(program: string): string {
@@ -178,7 +182,10 @@ function runCommand(x: Execution, n: GraphNode): Job | null {
 	for (const p of n.inputs) key = `${key}in:${inputHash(x, p)}\n`;
 	key = `${key}stdout:${n.stdout}\n`;
 	const store = storeDir(x);
-	const known = storedOutput(store, key, (path: string): string => hashFile(rootedPath(x, path)));
+	const known = storedOutput(store, key, (path: string): string => {
+		x.hashed.push(rootedPath(x, path));
+		return hashFile(rootedPath(x, path));
+	});
 	if (known != "") {
 		x.outputs.set(n.id, known);
 		x.digests.set(n.id, basename(known));
@@ -228,7 +235,7 @@ function runCommand(x: Execution, n: GraphNode): Job | null {
 				if (!input.startsWith(`${tmp}/`)) found.push(`${keyPath(x, input)}\t${hashFile(input)}`);
 			}
 		}
-		const digest = treeHash(tmp).slice(2);
+		const digest = treeHash(tmp, []).slice(2);
 		const placed = storePublish(store, key, tmp, digest, found);
 		if (placed == "") throw new Error(`${label(n)}: cannot place its output in ${store}/o`);
 		x.outputs.set(n.id, placed);
@@ -357,6 +364,16 @@ function settle(j: Job): string {
 }
 
 export function executeNode(x: Execution, id: int32): string {
+	const subject = `graph:${x.projectRoot}`;
+	const writes = loadFileHashes(subject);
+	try {
+		return executePlan(x, id);
+	} finally {
+		saveFileHashes(subject, x.hashed, writes);
+	}
+}
+
+function executePlan(x: Execution, id: int32): string {
 	const plan: GraphNode[] = [];
 	order(x.graph, id, new HashSet<int32>(), new HashSet<int32>(), plan);
 	if (x.seed != 0) shuffle(plan, x.seed);

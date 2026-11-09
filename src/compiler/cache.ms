@@ -137,6 +137,16 @@ function saveHashMemo(path: string, files: string[]): void {
 	writeSealed(path, body);
 }
 
+// The file hashes remembered for `subject` by change stamp; the returned count goes back to saveFileHashes.
+export function loadFileHashes(subject: string): number {
+	loadHashMemo(hashMemoPath(subject, "files"));
+	return _hashMemoWrites;
+}
+
+export function saveFileHashes(subject: string, files: string[], writesAtLoad: number): void {
+	if (_hashMemoWrites != writesAtLoad) saveHashMemo(hashMemoPath(subject, "files"), files);
+}
+
 // Memoized; initCache computes it once on the main thread so parallel compile
 // workers only ever read the settled value.
 export function compilerStamp(): string {
