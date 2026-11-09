@@ -149,20 +149,16 @@ export function main(): int32 {
 		},
 		"build" => {
 			// argv path overrides build.ms root
-			if (opts.inputFile == "" && cfg.valid && cfg.entry.length > 0) {
-				opts.inputFile = cfg.entry;
-			}
-			requireFile(opts);
-			if (cfg.valid && opts.verbose) {
-				verboseLog(`build.ms: root=${cfg.entry} target=${cfg.build.target}`);
-			}
-			// Apply cc section from build.ms: resolve per-target config, CLI flags override
 			if (cfg.valid) {
 				const resolved = resolveCcForTarget(cfg.cc, opts.targetOs, opts.cpuTarget, opts.abi);
-				if (resolved.entry != "" && opts.inputFile == "") opts.inputFile = resolved.entry;
+				if (opts.inputFile == "") opts.inputFile = resolved.entry != "" ? resolved.entry : cfg.entry;
 				if (opts.ccBinary == "" && resolved.compiler != "") opts.ccBinary = resolved.compiler;
 				if (opts.passC == "" && resolved.flags.length > 0) opts.passC = resolved.flags.join(" ");
 				if (opts.passL == "" && resolved.linkFlags.length > 0) opts.passL = resolved.linkFlags.join(" ");
+			}
+			requireFile(opts);
+			if (cfg.valid && opts.verbose) {
+				verboseLog(`build.ms: root=${opts.inputFile} target=${cfg.build.target}`);
 			}
 			if (opts.target == Target.JS) {
 				const outDir = (cfg.valid && cfg.build.outDir != "") ? cfg.build.outDir : opts.outputPath;
