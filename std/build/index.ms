@@ -1,3 +1,5 @@
+export * from "./graph";
+
 export interface FmtConfig {
 	printWidth?: int32;
 	tabWidth?: int32;
@@ -81,6 +83,10 @@ export interface BuildConfig {
 	package?: PackageMeta;                      // project metadata for `msc publish`
 	deps?: { [key: string]: string };           // runtime dependencies
 	devDeps?: { [key: string]: string };        // dev-only dependencies (tests, tooling)
+}
+
+export function project(settings: BuildConfig): BuildConfig {
+	return settings;
 }
 
 test "public build cache configuration supports omission and explicit sharing policy" {
