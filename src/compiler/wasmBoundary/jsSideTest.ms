@@ -2,7 +2,7 @@ import { ExtensionRegistry, buildExportInfo, ExportedSymInfo, CheckerContext } f
 import { lookupSymbol } from "../../checker/symbol";
 import { checkSource } from "../../test/handoff/helpers";
 import { BoundaryKind } from "./boundaryKinds";
-import { BoundaryCallback, BoundaryFunction, BoundaryMode, Manifest, copiesArgsIn, manifestFor } from "./manifest";
+import { BoundaryCallback, BoundaryFunction, BoundaryMode, Manifest, MemberAccess, copiesArgsIn, manifestFor } from "./manifest";
 import { jsBindings } from "./jsSide";
 import { wasmEntrySource } from "./wasmSide";
 import { ensureDir, writeFile } from "std/fs";
@@ -73,6 +73,7 @@ export struct Handle<T> { ptr: Ptr<void>; }
 export class Counter { n: int32 = 0; }
 export function open(start: int32): Handle<Counter> { return null as unknown as Handle<Counter>; }
 export function bump(h: Handle<Counter>, by: int32): int32 { return by; }
+export function peek(h: Handle<Counter>): int32 { return 0; }
 `;
 
 function manifestFrom(source: string, names: string[], also: string[] = []): Manifest {
@@ -745,6 +746,32 @@ test "js side: a Handle parameter is lent inside try and unlent in finally behin
 	assert code.includes("function bundled_bump(a0, a1) {\n\t__msb.enter();\n\tlet l0 = null;\n\ttry {\n\t\tconst p0 = __msb.lend(a0.ptr); l0 = a0.ptr;");
 	assert code.includes("_msb_calc_bump(p0, a1)");
 	assert code.includes("} finally {\n\t\tif (l0 !== null) __msb.unlend(l0);\n\t}");
+}
+
+test "js side: a member the JS half reaches is a method of the class's proxy, which a Handle result of that class builds" {
+	const m = manifestFrom(HANDLES, ["open", "bump"], ["Counter"]);
+	m.functions[0].resultClass = "calc$Counter";
+	m.functions[1].member = { classKey: "calc$Counter", property: "bump", jsName: "bump_u1", access: MemberAccess.Call };
+	const b = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: (name) => false, dev: false });
+	assert b.prelude.includes("class __msbRef$calc$Counter {\n\tconstructor(r) { this[__msbSelf] = r; }\n"
+		+ "\tbump_u1(a1) { return bundled_bump({ ptr: this[__msbSelf] }, a1); }\n}\n");
+	assert b.modules[0].code.includes("return { ptr: __msb.own(v, \"Handle<Counter>\", \"\", null, __msbRef$calc$Counter) };");
+	const entry = wasmEntrySource(m.functions, (path) => path).source;
+	assert entry.includes("Handle.at<msbm0_Counter>(h as uint64 as Ptr<void>).value().bump(by)");
+	assert !entry.includes("bump as msbm0_bump");
+}
+
+test "js side: a field read and write are a getter and a setter of the proxy" {
+	const m = manifestFrom(HANDLES, ["open", "bump", "peek"], ["Counter"]);
+	m.functions[1].member = { classKey: "calc$Counter", property: "n", jsName: "n", access: MemberAccess.Set };
+	m.functions[1].result = BoundaryKind.Void;
+	m.functions[2].member = { classKey: "calc$Counter", property: "n", jsName: "n", access: MemberAccess.Get };
+	const b = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: (name) => false, dev: false });
+	assert b.prelude.includes("\tset n(a1) { bundled_bump({ ptr: this[__msbSelf] }, a1); }\n"
+		+ "\tget n() { return bundled_peek({ ptr: this[__msbSelf] }); }\n");
+	const entry = wasmEntrySource(m.functions, (path) => path).source;
+	assert entry.includes("Handle.at<msbm0_Counter>(h as uint64 as Ptr<void>).value().n = by;");
+	assert entry.includes("return Handle.at<msbm0_Counter>(h as uint64 as Ptr<void>).value().n;");
 }
 
 test "js side: a Handle result is owned with its declaration label in a dev bundle and an empty one in a release bundle" {
