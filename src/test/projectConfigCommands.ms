@@ -281,6 +281,52 @@ record("a dependency's build function called twice with the same arguments build
 put(`${initialised}/build.ms`,"import { executable, systemCommand, path } from \"std/build\";\nexport default executable({ entry: path(\"src/index.ms\") });\nexport const noop = systemCommand([\"true\"]);\n");
 record("an export after export default is a node too", "noop  command|default  executable", run(initialised, ["build", "--colors=off", "--list"]).split("\n").join("|"));
 
+const checks = `${root}/checks`;
+ensureDir(`${checks}/src`);
+put(`${checks}/src/main.ms`, "import { argv } from \"std/process\";\nconsole.log(`app ${argv.slice(1).join(\",\")}`);\n");
+put(`${checks}/build.ms`, [
+	"import { executable, runArtifact, systemCommand, path } from \"std/build\";",
+	"export const app = executable({ entry: path(\"src/main.ms\") });",
+	"export const touch = systemCommand([\"sh\", \"-c\", \"echo x >> runs.txt\"]);",
+	"export const checked = systemCommand([\"sh\", \"-c\", \"echo x >> checked.txt\"]);",
+	"checked.expectExitCode(0);",
+	"export const failing = systemCommand([\"sh\", \"-c\", \"echo x >> failed.txt; exit 3\"]);",
+	"failing.expectExitCode(0);",
+	"export const three = systemCommand([\"sh\", \"-c\", \"exit 3\"]);",
+	"three.expectExitCode(3);",
+	"export const shown = runArtifact(app, [\"second\"]);",
+	"shown.captureStdOut();",
+	"export const named = systemCommand([\"echo\"]);",
+	"named.addPrefixedArtifactArg(\"--msc=\", app);",
+	"named.captureStdOut();",
+	"export const echoed = systemCommand([\"echo\", \"args\"]);",
+	"",
+].join("\n"));
+
+function lines(path: string): string {
+	const text = readFile(path);
+	return text.ok ? `${text.value.trim().split("\n").length}` : "0";
+}
+
+function storedStdout(out: string): string {
+	const text = readFile(`${out.split(" → ").pop()}/stdout`);
+	return text.ok ? text.value.trim() : `unreadable ${out}`;
+}
+
+run(checks, ["build", "--colors=off", "touch"]);
+run(checks, ["build", "--colors=off", "touch"]);
+record("a command with no output and no check runs every time", "2", lines(`${checks}/runs.txt`));
+run(checks, ["build", "--colors=off", "checked"]);
+const checkedAgain = run(checks, ["build", "--colors=off", "checked"]);
+record("a checked command that passed is reused", "1|reused: checked", `${lines(`${checks}/checked.txt`)}|${checkedAgain.split("\n")[0]}`);
+const failedOnce = run(checks, ["build", "--colors=off", "failing"]);
+run(checks, ["build", "--colors=off", "failing"]);
+record("a checked command that failed runs again", "2|exited with 3, expected 0", `${lines(`${checks}/failed.txt`)}|${failedOnce.includes("exited with 3, expected 0") ? "exited with 3, expected 0" : failedOnce}`);
+record("expectExitCode accepts the code it names", "passed", passes(run(checks, ["build", "--colors=off", "three"])));
+record("runArtifact runs the built executable and can capture its stdout", "app second", storedStdout(run(checks, ["build", "--colors=off", "shown"])));
+record("addPrefixedArtifactArg passes the built executable's path", `--msc=${checks}/out/app`, storedStdout(run(checks, ["build", "--colors=off", "named"])));
+record("arguments after -- reach the command node msc build names", "args a b", lastLine(run(checks, ["build", "--colors=off", "echoed", "--", "a", "b"])));
+
 const hostile = `${root}/hostile`;
 ensureDir(`${hostile}/src`);
 put(`${hostile}/src/main.ms`, "console.log(1);\n");
