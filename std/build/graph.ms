@@ -5,6 +5,8 @@ export enum Optimize { Debug, ReleaseSafe, ReleaseFast }
 
 export enum Linkage { Static, Dynamic }
 
+export enum LtoMode { None, Full, Thin }
+
 export interface Target {
 	os: string;
 	cpu: string;
@@ -112,16 +114,21 @@ export class Executable extends BuildNode {
 	target: Target;
 	optimize: Optimize;
 	link: Library[];
-	constructor(entry: LazyPath, target: Target, optimize: Optimize, link: Library[]) {
+	lto: LtoMode | null;
+	compiler: Executable | null;
+	constructor(entry: LazyPath, target: Target, optimize: Optimize, link: Library[], lto: LtoMode | null, compiler: Executable | null) {
 		super("executable", "");
 		this.entry = entry;
 		this.target = target;
 		this.optimize = optimize;
 		this.link = link;
+		this.lto = lto;
+		this.compiler = compiler;
 		dependOn(this, entry);
 		for (const lib of link) {
 			if (!this.deps.includes(lib)) this.deps.push(lib);
 		}
+		if (compiler != null) this.deps.push(compiler);
 	}
 }
 
@@ -201,10 +208,12 @@ export interface ExecutableOptions {
 	target?: Target;
 	optimize?: Optimize;
 	link?: Library[];
+	lto?: LtoMode;
+	compiler?: Executable;
 }
 
 export function executable(o: ExecutableOptions): Executable {
-	return new Executable(o.entry, o.target ?? host(), o.optimize ?? Optimize.Debug, o.link ?? []);
+	return new Executable(o.entry, o.target ?? host(), o.optimize ?? Optimize.Debug, o.link ?? [], o.lto ?? null, o.compiler ?? null);
 }
 
 export interface LibraryOptions {
