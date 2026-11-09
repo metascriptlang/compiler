@@ -52,15 +52,28 @@ export interface BuildOptions {
 	cacheDir?: string;
 	globalCacheDir?: string;
 	globalCache?: boolean;
+	trimpath?: boolean;
+}
+
+export interface LspConfig {
+	os?: string;
+	mm?: string;
+}
+
+export interface GlobalImport {
+	from: string;
+	modulePass?: string;
 }
 
 export interface BuildConfig {
 	build?: BuildOptions;
 	entry?: string;
-	root?: string;              // project root for non-relative imports (default: ".")
 	resolve?: ResolveConfig;    // module resolution config
 	fmt?: FmtConfig;
+	lsp?: LspConfig;
 	cc?: CcConfig;
+	defines?: { [key: string]: string | number | boolean };
+	globalImports?: (string | GlobalImport)[];
 
 	// Package manager fields — see docs/PACKAGE.md for the full spec.
 	// Registry dep: { "foo": "1.2.3" }  — exact minimum version (no ranges)
