@@ -3895,7 +3895,8 @@ as a plain `T`; nullability stays explicit.
 | `const xs: Unowned<N>[]`, a parameter, a return, `Unowned<N>[] \| null`, `Unowned<N>[][]`, `filter`/`slice`/`sort`/`concat` | accepted: an array of Unowned elements counts its own elements wherever it is held |
 | `const p: Unowned<N> = n`, a parameter or return `Unowned<N>` | error `Unowned<T> is the type of a class or struct field` |
 | `h.ups = xs` with `xs: N[]`, or `f(h.ups)` with `f(a: N[])` | error `an array of N holds its elements strongly and an array of Unowned<N> on their Unowned count, so one array cannot stand for the other` |
-| `Map<string, Unowned<N>>`, `(Unowned<N> \| string)[]` | error `inside a union member, a tuple, a function type or a type argument it is not built yet`; a struct `{ at: Unowned<N> }` holds one in a container |
+| `Map<string, Unowned<N>>`, `Set<Unowned<N>>`, `(Unowned<N> \| string)[]`, `[Unowned<N>, int32] \| null` | error `a union member, a tuple, a function type or a type argument cannot hold one — store the back edge in a struct field and hold the struct, as in 'struct Up { at: Unowned<N> }' and 'Map<string, Up>'` |
+| `struct Up { at: Unowned<N>; }` held as `Map<string, Up>` or `Up \| null` | accepted: the struct field counts the edge and reads it checked, as Swift holds an `unowned` reference in a container |
 
 On JS every edge is a plain reference, so a read never stops (the programs that pin the stop skip JS). A 32-bit target (wasm32, i386, arm) counts as a 64-bit
 one does: the reference count is 64 bits everywhere and the object header 24 bytes. A read costs a compare and a
@@ -3908,8 +3909,9 @@ Measured on candidates of `wt/unified-drc` (rtx, 2026-11-09, C, danger and Raise
 `unownedLocalArrayReadAfterTargetDies` (the stop through a returned array), `unownedArrayHeldAnywhere`,
 `unownedEdgeGlobalTargetDeclaredAfterHolder` (a global target destroyed before its holder exits cleanly),
 `unownedEdgeInsideCollectedCycle`, `unownedHuskFreedByLastEdge` (a million husks in 2.2 MB; 95 MB with the husk
-free disabled); `src/test/c/unownedEdge.ms`; guard `bareWasmUnownedEdges` (wasm32: the dead read traps, 16 384 husks
-fit 1 MiB). Not measured: threads, HCR.
+free disabled); `src/test/c/unownedEdge.ms` (18 tests, the refusals and the struct that holds an edge in a `Map`
+included); guard `bareWasmUnownedEdges` (wasm32: the dead read traps, 16 384 husks fit 1 MiB). Not measured: threads,
+HCR.
 
 ### 5b. Owned edges (`Owned<T>`)
 
@@ -3931,8 +3933,11 @@ stays out of the cycle collector: no root registration, no collection. This hold
 `Owned<T>[]` and `Vec<Owned<T>>` (a shared array too: a cycle through an array cell continues through one of its
 elements), nested arrays, nullable elements, an array of value structs whose references are owned, `Owned<A | B>` over
 records, a class extended in the program (classified over every subclass, so a subclass with a plain back edge makes
-the base cyclic), and an `Owned` container (`Owned<Map<string, Owned<N>>>`). A plain `Map<string, Owned<N>>` field is a
-plain edge into the map, so `N` stays cyclic.
+the base cyclic), a `Map` or `Set` of owned values (`Map<string, Owned<N>>`, `Set<Owned<N>>`, nested, nullable, holding
+arrays or structs of owned references: a `Map` or `Set` cell is part of its holder, as an array cell is, the way a value
+table is in the design this follows), and an `Owned` container (`Owned<Map<string, Owned<N>>>`). A class of your own is
+a node: a plain field `Box<Owned<N>>` is a plain edge into the box, so `N` stays cyclic unless the field is
+`Owned<Box<Owned<N>>>`.
 
 An owned closure, `Owned<(t: Texture) => void>`, is a leaf: its environment cannot take part in a cycle. A slot of it
 takes a function expression, another owned closure or `null`; a closure formed elsewhere is refused
@@ -3954,8 +3959,9 @@ Cost, `udrcp/step6bench` (a scene graph of 5.85 million nodes over 60 rounds, `-
 | `kids: Node[]`, the same `parent` (collector) | 10 220 797 954 | 620 ms |
 | `kids: Node[]`, `parent: Node \| null` (plain TypeScript) | 15 832 640 853 | 1 070 ms |
 
-Measured on candidates of `wt/unified-drc` (rtx, 2026-11-09): `src/test/c/ownedEdge.ms` (74 tests), corpus
-`1167-ownedTreeDrop`, `1168-ownedTreeSum`, `ownedStructElementsDropWithTheirHolder`,
+Measured on candidates of `wt/unified-drc` (rtx, 2026-11-09): `src/test/c/ownedEdge.ms` (77 tests), corpus
+`1167-ownedTreeDrop`, `1168-ownedTreeSum`, `ownedStructElementsDropWithTheirHolder`, `ownedMapValuesDropWithTheirHolder`
+(C, danger, Raiser and SAN),
 `ownedUnionOfRecordsThatOwnTheirHolder`, `ownedTreeWithSubclassesDrops`, `ownedClosureFieldLeavesTheCollector` and the
 other `owned*` programs (C, danger, Raiser), guard `ownedCycleStopsDebugBuild`. Not measured: threads, HCR.
 
