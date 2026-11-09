@@ -43,7 +43,11 @@ when (c) {
 
 function drawBytes(size: int32): uint8[] | null {
 	when (js) {
-		return randomOctets(size);
+		try {
+			return randomOctets(size);
+		} catch (e) {
+			return null;
+		}
 	} else {
 		const out = new Array<uint8>(size);
 		if (size == 0) return out;
