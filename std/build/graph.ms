@@ -177,6 +177,12 @@ export function host(): Target {
 	return { os: "", cpu: "", abi: "" };
 }
 
+extern function msBuildMscExe(): string;
+
+export function mscExe(): string {
+	return msBuildMscExe();
+}
+
 extern function msBuildOption(name: string, description: string): string;
 
 // `msc build -Dname=value`; a bare `-Dname` gives "true". Null when the command line does not name it.
