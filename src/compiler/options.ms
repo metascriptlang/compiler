@@ -98,6 +98,8 @@ export interface CliOptions {
 	autoYes: boolean;          // --yes: auto-accept managed toolchain install (also MSC_AUTO_INSTALL_CC=1)
 	defines: DefineTable;      // -d:name[=value] conditional symbols (Nim condsyms.nim)
 	showDefines: boolean;      // --help-defines: list every define, then exit
+	listNodes: boolean;        // build --list: print the nodes build.ms exports, then exit
+	dryRun: boolean;           // build --dry-run: print every command the build graph would run, run none
 	projectRoot: string;       // set by CLI main from findProjectRoot() — dir containing build.ms
 	resolve: ResolveSection;   // build.ms resolve section of projectRoot, set by applyProjectConfig
 	extraArgs: string[];       // remaining args passed through for package manager commands (add, remove, etc.)
@@ -221,6 +223,8 @@ export function newCliOptions(): CliOptions {
 		autoYes: false,
 		defines: createDefineTable(),
 		showDefines: false,
+		listNodes: false,
+		dryRun: false,
 		projectRoot: "",
 		resolve: defaultResolveSection(),
 		extraArgs: [],
@@ -574,6 +578,10 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 			applyDefineSwitch(opts.defines, arg);
 		} else if (arg == "--help-defines") {
 			opts.showDefines = true;
+		} else if (arg == "--list") {
+			opts.listNodes = true;
+		} else if (arg == "--dry-run") {
+			opts.dryRun = true;
 		} else if (arg == "--colors=on") {
 			setColorEnabled(true);
 		} else if (arg == "--colors=off" || arg == "--no-color") {

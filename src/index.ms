@@ -25,6 +25,7 @@ import { cmdX, syncShims, projectShimDir, cmdInstallGlobal, globalManifestRoot, 
 import { maybeShowUpdateNotice, cmdUpgrade, sweepUpgradeBackups } from "./compiler/upgrade";
 import { collectGlobalCache } from "./compiler/cache";
 import { configureCachePaths } from "./utils/cachePaths";
+import { cmdBuildGraph, namesGraphNode } from "./compiler/build/command";
 
 function requireFile(opts: CliOptions): void {
 	if (opts.inputFile == "") {
@@ -125,6 +126,7 @@ export function main(): int32 {
 		"pipeline" => { requireFile(opts); cmdPipeline(opts.inputFile); },
 		"fmt" => { requireFile(opts); cmdFmt(opts.inputFile, opts, cfg.fmt); },
 		"run" => {
+			if (cfg.graph && opts.inputFile != "" && namesGraphNode(opts.inputFile)) process.exit(cmdBuildGraph(`${projectRoot}/build.ms`, projectRoot, opts, opts.inputFile, true));
 			// argv path overrides build.ms root; fallback to build.ms when no argv
 			if (opts.inputFile == "" && cfg.valid && cfg.entry.length > 0) { opts.inputFile = cfg.entry; }
 			requireFile(opts);
@@ -148,6 +150,7 @@ export function main(): int32 {
 			}
 		},
 		"build" => {
+			if (cfg.graph && namesGraphNode(opts.inputFile)) process.exit(cmdBuildGraph(`${projectRoot}/build.ms`, projectRoot, opts, opts.inputFile, false));
 			// argv path overrides build.ms root
 			if (cfg.valid) {
 				const resolved = resolveCcForTarget(cfg.cc, opts.targetOs, opts.cpuTarget, opts.abi);

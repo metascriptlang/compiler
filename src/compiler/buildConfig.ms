@@ -9,7 +9,7 @@ import { parseSource } from "../parser/statements/validation";
 import { resolveImportWithConfig, createDefaultConfig, Backend } from "../module/resolver";
 import {
 	Node, NodeKind, NodeFlag, ProgramData, VariableDeclData, ExportDeclData,
-	ExprStmtData, IdentifierData,
+	ExprStmtData, IdentifierData, CallExprData,
 	ObjectLiteralData, ArrayLiteralData, NumberLiteralData, StringLiteralData, BooleanLiteralData,
 } from "../ast/node";
 
@@ -192,6 +192,7 @@ export interface BuildConfig {
 	modulePassFrom: string[];
 	modulePassMacro: string[];
 	valid: boolean;
+	graph: boolean;         // build.ms exports build nodes, which `msc build` evaluates; settings come from `project({...})`
 }
 
 // --- Public API ---
@@ -264,6 +265,43 @@ function nodeStringArray(node: Node): string[] {
 function nodeBool(node: Node): int32 {
 	if (node == null || node.kind != NodeKind.BooleanLiteral) return -1;
 	return (node.data as BooleanLiteralData).boolValue ? 1 : 0;
+}
+
+function projectSettings(program: Node): Node | null {
+	const pd = program.data as ProgramData;
+	for (let stmt of pd.programStmts) {
+		if (stmt.kind == NodeKind.ExportDecl) stmt = (stmt.data as ExportDeclData).exportedDecl;
+		let call: Node | null = null;
+		if (stmt.kind == NodeKind.VariableDecl) call = (stmt.data as VariableDeclData).initializer;
+		else if (stmt.kind == NodeKind.ExprStmt) call = (stmt.data as ExprStmtData).expr;
+		if (call == null || call.kind != NodeKind.CallExpr) continue;
+		const cd = call.data as CallExprData;
+		if (cd.callee.kind != NodeKind.Identifier || (cd.callee.data as IdentifierData).name != "project") continue;
+		if (cd.arguments.length == 1 && cd.arguments[0].kind == NodeKind.ObjectLiteral) return cd.arguments[0];
+	}
+	return null;
+}
+
+function buildsNode(expr: Node | null): boolean {
+	return expr != null && (expr.kind == NodeKind.CallExpr || expr.kind == NodeKind.NewExpr);
+}
+
+function exportsNodes(program: Node): boolean {
+	const pd = program.data as ProgramData;
+	for (const stmt of pd.programStmts) {
+		if (stmt.kind != NodeKind.ExportDecl) continue;
+		const decl = (stmt.data as ExportDeclData).exportedDecl;
+		if (decl.kind == NodeKind.ExprStmt && buildsNode((decl.data as ExprStmtData).expr)) return true;
+		if (decl.kind == NodeKind.VariableDecl && buildsNode((decl.data as VariableDeclData).initializer)) return true;
+	}
+	return false;
+}
+
+function settingsObject(program: Node): Node | null {
+	if (program == null || program.kind != NodeKind.Program) return null;
+	const settings = projectSettings(program);
+	if (settings != null) return settings;
+	return exportsNodes(program) ? null : findConfigObject(program);
 }
 
 function findConfigObject(program: Node): Node | null {
@@ -693,7 +731,7 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 	const defDeps = defaultDepsSection();
 	const defDevDeps = defaultDepsSection();
 	const defGi: string[] = [];
-	const defCfg: BuildConfig = { entry: "", build: defBs, resolve: defRs, fmt: defFmt, lsp: defLsp, cc: defCc, package: defPkg, deps: defDeps, devDeps: defDevDeps, globalImports: defGi, defines: defaultDefinesSection(), modulePassFrom: [], modulePassMacro: [], valid: false };
+	const defCfg: BuildConfig = { entry: "", build: defBs, resolve: defRs, fmt: defFmt, lsp: defLsp, cc: defCc, package: defPkg, deps: defDeps, devDeps: defDevDeps, globalImports: defGi, defines: defaultDefinesSection(), modulePassFrom: [], modulePassMacro: [], valid: false, graph: false };
 
 	if (!exists(filePath)) return defCfg;
 
@@ -718,8 +756,14 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 		return defCfg;
 	}
 
-	const configObj = findConfigObject(parseResult.value);
+	const graph = parseResult.value.kind == NodeKind.Program && exportsNodes(parseResult.value);
+	const configObj = settingsObject(parseResult.value);
 	if (configObj == null) {
+		if (graph) {
+			defCfg.valid = true;
+			defCfg.graph = true;
+			return defCfg;
+		}
 		defBs.cacheError = "build: configuration must contain an object literal";
 		return defCfg;
 	}
@@ -743,7 +787,7 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 	const modulePassMacro: string[] = [];
 	extractModulePasses(giNode, modulePassFrom, modulePassMacro);
 
-	return { entry, build: bs, resolve: rs, fmt, lsp, cc, package: pkg, deps, devDeps, globalImports, defines, modulePassFrom, modulePassMacro, valid: true };
+	return { entry, build: bs, resolve: rs, fmt, lsp, cc, package: pkg, deps, devDeps, globalImports, defines, modulePassFrom, modulePassMacro, valid: true, graph };
 }
 
 // Validate build.ms and return LSP-style warnings.
@@ -762,7 +806,7 @@ function parseBuildSource(source: string): Node | null {
 	}
 	const parseResult = parseSource(source);
 	if (!parseResult.ok) return null;
-	return findConfigObject(parseResult.value);
+	return settingsObject(parseResult.value);
 }
 
 export function validateBuildConfig(dir: string, source: string): BuildWarning[] {
@@ -848,7 +892,7 @@ function testExtractFromSource(source: string): BuildConfig {
 			entry: "", build: defaultBuildSection(),
 			resolve: defaultResolveSection(), fmt: defaultFmtSection(), lsp: defaultLspSection(), cc: defaultCcSection(),
 			package: defaultPackageSection(), deps: defaultDepsSection(), devDeps: defaultDepsSection(),
-			globalImports: [], defines: defaultDefinesSection(), modulePassFrom: [], modulePassMacro: [], valid: false,
+			globalImports: [], defines: defaultDefinesSection(), modulePassFrom: [], modulePassMacro: [], valid: false, graph: false,
 		};
 	}
 	const entry = nodeString(findObjField(configObj, "entry"));
@@ -868,7 +912,7 @@ function testExtractFromSource(source: string): BuildConfig {
 		globalImports: extractGlobalImports(findObjField(configObj, "globalImports")),
 		defines: extractDefines(findObjField(configObj, "defines")),
 		modulePassFrom: passFrom, modulePassMacro: passMacro,
-		valid: true,
+		valid: true, graph: false,
 	};
 }
 

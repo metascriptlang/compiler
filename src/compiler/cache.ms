@@ -51,7 +51,7 @@ function changedSinceBuild(path: string, startedSeconds: number): boolean {
 	return changed < 0 || changed >= Math.floor(startedSeconds);
 }
 
-function hashFile(path: string): string {
+export function hashFile(path: string): string {
 	const stamp = changeStamp(path);
 	if (stamp == "") return hashFileContent(path);
 	const known = _hashByStamp.get(path);
