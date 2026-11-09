@@ -47,6 +47,8 @@ _Atomic(int) msActorsWithTimeout = 0;
 /* Stop-pending fast path — when 0, msActorPollLocal skips the reap scan. */
 _Atomic(int) msActorsStopPending = 0;
 
+_Atomic(int) msActorsRetirePending = 0;
+
 /* I19: pid table + hazard registry (see actor.h "Pid Table + Hazard Pins"). */
 _Atomic(msPidSlot*) msPidSegs[MS_PID_SEG_COUNT] = {0};
 _Atomic(uint64_t) msPidFreeHead = 0;

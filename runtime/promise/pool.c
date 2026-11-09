@@ -198,6 +198,9 @@ typedef bool (*msPoolActorPollHook)(void);
 static _Atomic(msPoolActorPollHook) msPoolActorPollFn = NULL;
 
 MS_TLS_EXTERN(int, msMySchedulerID);  /* actor.c */
+/* A pid pin lasts one runtime call, so a worker whose actor's state waits on one looks again soon. */
+extern _Atomic(int) msActorsRetirePending;  /* actor.c */
+enum { MS_POOL_RETIRE_RETRY_MS = 1 };
 
 
 /* Per-worker actor wake flag: set by msPoolWakeWorker, checked in sleep predicate.
@@ -427,6 +430,8 @@ static void* msPoolWorkerLoop(void* arg) {
 #if MS_HEAP_THREADS
 			timerMs = msHeapIdleWaitMs(timerMs);
 #endif
+			if (atomic_load_explicit(&msActorsRetirePending, memory_order_acquire) > 0 && (timerMs < 0 || timerMs > MS_POOL_RETIRE_RETRY_MS))
+				timerMs = MS_POOL_RETIRE_RETRY_MS;
 			if (timerMs >= 0) MS_WAIT_MS(pool->workerConds[myWorkerIdx], pool, timerMs);
 			else MS_WAIT(pool->workerConds[myWorkerIdx], pool);
 			if (!retired) msPoolIdleClear(pool, myWorkerIdx);

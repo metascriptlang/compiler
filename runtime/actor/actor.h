@@ -575,6 +575,8 @@ static inline msActor* msSchedRunPop(msSchedActors* sched) {
 extern _Atomic(int) msActorsWithTimeout;
 /* Global counter: stop-flagged actors not yet reaped. Reap scan skipped when 0. */
 extern _Atomic(int) msActorsStopPending;
+/* Retired actors whose state waits for a pid pin to clear; exit has not settled while any wait. */
+extern _Atomic(int) msActorsRetirePending;
 
 /* Forward declarations for wake routing */
 extern void msActorWakeEventLoop(void);  /* dispatch.c */
@@ -1352,6 +1354,7 @@ static inline void msActorSetSystemMsgHandler(void* actor, void* fn) {
  * so the state's destruction, not only the shell's free, waits for every pin. A deferred
  * actor with its state set still owes the state's teardown; with the state NULL only its shell. */
 static inline void msActorDeferRetire(msActor* a) {
+    if (a->state != NULL) atomic_fetch_add_explicit(&msActorsRetirePending, 1, memory_order_relaxed);
     int sidD = (a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) ? a->schedulerID : 0;
     atomic_store_explicit(&a->runNext, msSchedulers[sidD].deferredFree, memory_order_relaxed);
     msSchedulers[sidD].deferredFree = a;
@@ -2041,6 +2044,8 @@ static inline bool msActorPollLocal(void) {
             if (d->state != NULL && !msHazardScan(d)) {
                 msActorRetireState(d);
                 didWork = true;
+                if (atomic_fetch_sub_explicit(&msActorsRetirePending, 1, memory_order_acq_rel) == 1 && sched != &msSchedulers[0])
+                    msActorWakeEventLoop();
             }
             if (d->state != NULL || msHazardScan(d)) {
                 atomic_store_explicit(&d->runNext, sched->deferredFree, memory_order_relaxed);
@@ -2080,6 +2085,7 @@ static inline bool msActorParked(msActor* a) {
  * awaited future is. Called by msPoolQuiescentWith with every worker parked, so no
  * registry changes under the scan. */
 static inline bool msActorSystemIdle(void) {
+    if (atomic_load_explicit(&msActorsRetirePending, memory_order_acquire) != 0) return false;
     int timeouts = atomic_load_explicit(&msActorsWithTimeout, memory_order_acquire);
     int stops = atomic_load_explicit(&msActorsStopPending, memory_order_acquire);
     for (int s = 0; s < msSchedulerCount; s++) {
