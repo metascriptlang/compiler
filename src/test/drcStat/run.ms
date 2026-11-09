@@ -3,7 +3,8 @@
 // Run from the repo root: msc run src/test/drcStat/run.ms   (MSC=<path> names the subject; default ./msc)
 // Pin: the same program with N and 2N objects gives exactly the counter deltas the program causes, a
 // collection allocates each of its buffers at most once, and a ledger-only build of the runtime still
-// compiles and runs.
+// compiles and runs, and a for-of element of an object-type array handed to a routine that writes nothing
+// is borrowed, not counted.
 import { execFileResult, ExecFileResult, exit, env, cwd } from "std/process";
 import { readFile, remove, ensureDir, exists } from "std/fs";
 
@@ -67,7 +68,7 @@ function expect(program: string, small: Map<string, int64>, big: Map<string, int
 }
 
 ensureDir(OUT);
-for (const program of ["collectGraph", "collectRing", "cycleRegister", "closureVisit"]) {
+for (const program of ["collectGraph", "collectRing", "cycleRegister", "closureVisit", "forOfObjectElement"]) {
 	const exe = `${OUT}/${program}`;
 	const b = execFileResult(MSC, ["build", `${ROOT}/src/test/drcStat/programs/${program}.ms`, `--passC=${DEFINE}`, `--output=${exe}`], OUT);
 	if (!ok(b)) {
@@ -78,6 +79,10 @@ for (const program of ["collectGraph", "collectRing", "cycleRegister", "closureV
 	const small = runWith(exe, SMALL, `${OUT}/${program}.small`);
 	const big = runWith(exe, BIG, `${OUT}/${program}.big`);
 	const n = BIG - SMALL;
+	if (program == "forOfObjectElement") {
+		expect(program, small, big, "rc.inc.count", 0);
+		continue;
+	}
 	if (program == "closureVisit") {
 		expect(program, small, big, "alloc.count", n);
 		expect(program, small, big, "cycle.register.count", 0);
