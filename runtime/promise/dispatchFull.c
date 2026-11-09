@@ -1080,6 +1080,13 @@ static bool msRunOnceIn(int timeoutMs) {
 	}
 	/* A turn that ran work polls without waiting, so only a turn about to sleep asks (and drops the wake token). */
 	int adj = didWork ? 0 : msAdjustTimeout(d, timeoutMs, nextTimer);
+#if MS_HEAP_THREADS
+	if (didWork) msHeapIdleBusy();
+	else {
+		if (msHeapIdleDue()) msHeapReturnIdle();
+		adj = msHeapIdleWaitMs(adj);
+	}
+#endif
 #ifdef _WIN32
 	/* Windows: IOCP — drain thread-pool completions (and future I/O engine completions).
 	 * Worker already set value + finished (Step 1, see thread.h:99-103); main thread

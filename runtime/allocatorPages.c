@@ -23,6 +23,36 @@ void msHeapDeallocPages(void* p, size_t bytes) {
 	if (!VirtualFree(p, 0, MEM_RELEASE)) __builtin_trap();
 }
 
+/* Chunks from two reservations can coalesce, and VirtualFree and VirtualAlloc refuse a range
+ * that crosses a reservation, so both walk the range one reservation at a time. A failed
+ * decommit leaves pages committed, which reuse commits again harmlessly. */
+void msHeapDiscardPages(void* p, size_t bytes) {
+	unsigned char* at = p;
+	unsigned char* end = at + bytes;
+	while (at < end) {
+		MEMORY_BASIC_INFORMATION info;
+		if (!VirtualQuery(at, &info, sizeof info)) return;
+		unsigned char* stop = (unsigned char*)info.BaseAddress + info.RegionSize;
+		if (stop > end) stop = end;
+		if (info.State == MEM_COMMIT) VirtualFree(at, (size_t)(stop - at), MEM_DECOMMIT);
+		at = stop;
+	}
+}
+
+int msHeapReusePages(void* p, size_t bytes) {
+	unsigned char* at = p;
+	unsigned char* end = at + bytes;
+	while (at < end) {
+		MEMORY_BASIC_INFORMATION info;
+		if (!VirtualQuery(at, &info, sizeof info)) return 0;
+		unsigned char* stop = (unsigned char*)info.BaseAddress + info.RegionSize;
+		if (stop > end) stop = end;
+		if (info.State != MEM_COMMIT && !VirtualAlloc(at, (size_t)(stop - at), MEM_COMMIT, PAGE_READWRITE)) return 0;
+		at = stop;
+	}
+	return 1;
+}
+
 void msHeapResetPages(void) {}
 
 #elif MS_HEAP_THREADS
@@ -37,6 +67,57 @@ void* msHeapTryAllocPages(size_t bytes) {
 void msHeapDeallocPages(void* p, size_t bytes) {
 	if (munmap(p, bytes) != 0) __builtin_trap();
 }
+
+#include <unistd.h>
+
+/* The OS page can be larger than the heap's (16 KiB on Apple silicon), and madvise and mprotect
+ * refuse a range that is not aligned to it, so a discard covers only the whole OS pages inside. */
+static int msHeapOsPages(void** p, size_t* bytes) {
+	static uintptr_t cached;
+	uintptr_t osPage = __atomic_load_n(&cached, __ATOMIC_RELAXED);
+	if (!osPage) __atomic_store_n(&cached, osPage = (uintptr_t)sysconf(_SC_PAGESIZE), __ATOMIC_RELAXED);
+	uintptr_t start = ((uintptr_t)*p + osPage - 1) & ~(osPage - 1);
+	uintptr_t end = ((uintptr_t)*p + *bytes) & ~(osPage - 1);
+	if (end <= start) return 0;
+	*p = (void*)start;
+	*bytes = end - start;
+	return 1;
+}
+
+#if MS_HEAP_DISCARD_STRICT
+#include <string.h>
+/* The strictest page source a discard can meet: discarded pages fault on any access until
+ * reused, and come back holding bytes nobody wrote. */
+void msHeapDiscardPages(void* p, size_t bytes) {
+	memset(p, 0xa5, bytes);
+	if (msHeapOsPages(&p, &bytes) && mprotect(p, bytes, PROT_NONE) != 0) __builtin_trap();
+}
+
+int msHeapReusePages(void* p, size_t bytes) {
+	return !msHeapOsPages(&p, &bytes) || mprotect(p, bytes, PROT_READ | PROT_WRITE) == 0;
+}
+#elif defined(__APPLE__)
+/* Only MADV_FREE_REUSABLE lowers a macOS task's footprint; MADV_FREE_REUSE accounts the pages
+ * again before they are written, as libmalloc does. The contents are not cleared. */
+void msHeapDiscardPages(void* p, size_t bytes) {
+	if (msHeapOsPages(&p, &bytes)) (void)madvise(p, bytes, MADV_FREE_REUSABLE);
+}
+
+int msHeapReusePages(void* p, size_t bytes) {
+	if (msHeapOsPages(&p, &bytes)) (void)madvise(p, bytes, MADV_FREE_REUSE);
+	return 1;
+}
+#else
+void msHeapDiscardPages(void* p, size_t bytes) {
+	if (msHeapOsPages(&p, &bytes)) (void)madvise(p, bytes, MADV_DONTNEED);
+}
+
+int msHeapReusePages(void* p, size_t bytes) {
+	(void)p;
+	(void)bytes;
+	return 1;
+}
+#endif
 
 void msHeapResetPages(void) {}
 

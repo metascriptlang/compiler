@@ -403,6 +403,9 @@ static void* msPoolWorkerLoop(void* arg) {
 	extern bool msWorkerLoopPending(void);
 	while (1) {
 		int timerMs = msWorkerTimerDelayMs();
+#if MS_HEAP_THREADS
+		if (msHeapIdleDue()) msHeapReturnIdle();
+#endif
 		MS_LOCK(pool);
 		if (spare && msPoolThreadState[myWorkerIdx] == MS_THREAD_SPARE && msPoolSparesActive > msPoolSparesWanted) {
 			msPoolThreadState[myWorkerIdx] = MS_THREAD_RETIRED;
@@ -421,10 +424,17 @@ static void* msPoolWorkerLoop(void* arg) {
 #if MS_HEAP_ENABLED
 			msHeapThreadFlush();
 #endif
+#if MS_HEAP_THREADS
+			timerMs = msHeapIdleWaitMs(timerMs);
+#endif
 			if (timerMs >= 0) MS_WAIT_MS(pool->workerConds[myWorkerIdx], pool, timerMs);
 			else MS_WAIT(pool->workerConds[myWorkerIdx], pool);
 			if (!retired) msPoolIdleClear(pool, myWorkerIdx);
 		}
+#if MS_HEAP_THREADS
+		if (pool->head != pool->tail || atomic_load_explicit(&msPoolActorWake[myWorkerIdx], memory_order_relaxed) || pool->shutdown)
+			msHeapIdleBusy();
+#endif
 		/* Clear actor wake flag after waking (inside lock, before poll) */
 		atomic_store_explicit(&msPoolActorWake[myWorkerIdx], false, memory_order_relaxed);
 		retired = spare && msPoolThreadState[myWorkerIdx] == MS_THREAD_RETIRED;

@@ -15,6 +15,13 @@
 #define msHeapResetPages msHeapThreadProbeResetPages
 #define msHeapOutOfMemory msHeapThreadProbeOutOfMemory
 #define msThreadAttach msHeapThreadProbeAttach
+#define msHeapReturnIdle msHeapThreadProbeReturnIdle
+#define msHeapIdlePending msHeapThreadProbeIdlePending
+#define msHeapIdleWaitMs msHeapThreadProbeIdleWaitMs
+#define msHeapIdleDue msHeapThreadProbeIdleDue
+#define msHeapIdleBusy msHeapThreadProbeIdleBusy
+#define msHeapDiscardPages msHeapThreadProbeDiscardPages
+#define msHeapReusePages msHeapThreadProbeReusePages
 #include "../../../../runtime/allocator.c"
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,6 +63,8 @@ static void probeJoin(probeThread t) { pthread_join(t, NULL); }
 #endif
 void msHeapResetPages(void) {}
 _Noreturn void msHeapOutOfMemory(void) { fprintf(stderr, "GUARD-FAIL allocator threads: out of memory\n"); abort(); }
+void msHeapDiscardPages(void* p, size_t bytes) { (void)p; (void)bytes; }
+int msHeapReusePages(void* p, size_t bytes) { (void)p; (void)bytes; return 1; }
 static int attachCalls;
 void msThreadAttach(void) { __atomic_add_fetch(&attachCalls, 1, __ATOMIC_RELAXED); }
 
