@@ -212,15 +212,25 @@ const globListings = [run(globbed, ["build", "--colors=off", "--list"]), run(glo
 put(`${globbed}/src/c.txt`, "x\n");
 globListings.push(run(globbed, ["build", "--colors=off", "--list"]));
 record("a new file matching a glob invalidates the cached configure", "cached|cached|evaluated", globListings.map(evaluated).join("|"));
-function copiedText(): string {
-	const out = run(globbed, ["build", "--colors=off", "reader"]);
+function copiedText(dir: string = globbed): string {
+	const out = run(dir, ["build", "--colors=off", "reader"]);
 	const copy = readFile(`${out.split(" → ").pop()}/copy.txt`);
-	return `${out.startsWith("reused") ? "reused" : "ran"}:${copy.ok ? copy.value.trim() : "missing"}`;
+	return `${out.includes("reused: ") ? "reused" : "ran"}:${copy.ok ? copy.value.trim() : "missing"}`;
 }
 const depRuns = [copiedText(), copiedText()];
 put(`${globbed}/hidden.txt`, "two\n");
 depRuns.push(copiedText());
 record("an input a depfile names reruns its command when it changes", "ran:one|reused:one|ran:two", depRuns.join("|"));
+const copied = `${root}/copied`;
+ensureDir(copied);
+for (const name of ["build.ms", "hidden.txt"]) {
+	const text = readFile(`${globbed}/${name}`);
+	put(`${copied}/${name}`, text.ok ? text.value : "");
+}
+const copiedRuns = [copiedText(copied)];
+put(`${copied}/hidden.txt`, "three\n");
+copiedRuns.push(copiedText(copied));
+record("a copy of the project reuses a command's output and checks its depfile inputs in its own directory", "reused:two|ran:three", copiedRuns.join("|"));
 record("--seed keeps the build's result", "src/a.txt,src/b.txt,src/c.txt", lastLine(run(globbed, ["build", "--colors=off", "--seed=7", "found"])));
 
 const initialised = `${root}/initialised`;
