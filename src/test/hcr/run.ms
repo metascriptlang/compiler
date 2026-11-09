@@ -1184,7 +1184,7 @@ function stdFirstUse(): void {
 		need(tag, !both(ran).contains(`implementation changed (${untouched})`), `a first use of a native standard-library module relinked and reloaded the untouched image '${untouched}'`);
 	}
 	if (platform == "darwin") {
-		const providers = ["_crypto_blake2b_init", "_mz_deflateInit", "_tdefl_compress_buffer", "_tinfl_decompress", "_msGetIoEngine", "_msGetIoEngineIfExists", "_msIoEngineCreate", "_msIoEngineDestroy", "_msIoEnginePoll", "_msIoEngineWake", "_msIoEngineAddWakeFd", "_msIoEngineCancelFd"];
+		const providers = ["_mz_deflateInit", "_tdefl_compress_buffer", "_tinfl_decompress", "_msGetIoEngine", "_msGetIoEngineIfExists", "_msIoEngineCreate", "_msIoEngineDestroy", "_msIoEnginePoll", "_msIoEngineWake", "_msIoEngineAddWakeFd", "_msIoEngineCancelFd"];
 		const images = `${dir}/out/hcr`;
 		for (const image of readDir(images)) {
 			if (!image.endsWith(".dylib")) continue;
@@ -1206,7 +1206,7 @@ function stdFirstUse(): void {
 function sharedNativeFlags(): void {
 	const tag = "hcrSharedNativeFlags";
 	let index = 0;
-	for (const source of ["vendor/monocypher/src/monocypher.c", "vendor/miniz/miniz.c", "runtime/io/engineSelect.c"]) {
+	for (const source of ["vendor/miniz/miniz_tinfl.c", "vendor/miniz/miniz.c", "runtime/io/engineSelect.c"]) {
 		const dir = freshDir(`${TMP}/nativeFlags${index}`);
 		index = index + 1;
 		put(`${dir}/providerConfig.h`, "#if HCR_PROVIDER_CONFIG != 1\n#error missing provider configuration\n#endif\n");

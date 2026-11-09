@@ -2204,37 +2204,14 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 }
 
 const HCR_SHARED_NATIVE_SOURCES: string[] = [
-	"runtime/crypto/hash.c",
-	"runtime/crypto/psaMdStubs.c",
 	"runtime/io/engineSelect.c",
-	"vendor/mbedtls/tf-psa-crypto/core/psa_crypto.c",
-	"vendor/mbedtls/tf-psa-crypto/core/psa_crypto_slot_management.c",
-	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aes.c",
-	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/asn1parse.c",
-	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/asn1write.c",
-	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/base64.c",
 	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/bignum.c",
 	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/bignum_core.c",
-	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ctr_drbg.c",
-	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecdh.c",
-	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecdsa.c",
-	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecp.c",
-	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecp_curves.c",
-	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/entropy.c",
-	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/md.c",
-	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/oid.c",
-	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pem.c",
-	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pk.c",
-	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pk_wrap.c",
 	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform.c",
 	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform_util.c",
-	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_hash.c",
-	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/rsa.c",
-	"vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha1.c",
 	"vendor/miniz/miniz.c",
 	"vendor/miniz/miniz_tdef.c",
 	"vendor/miniz/miniz_tinfl.c",
-	"vendor/monocypher/src/monocypher.c",
 ];
 
 // Platform-specific runtime compile — dispatch + selectors + pool + fs.
