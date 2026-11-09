@@ -110,6 +110,32 @@ test "a closure formed elsewhere does not enter an Owned closure slot" {
 	assert refused(head + "h.cb = (): void => { console.log(1); };\nconst g = h.cb;\nconst k = new H();\nk.cb = g;\nh.cb = null;\n") == "compiled";
 }
 
+test "a Map or Set of owned values is acyclic like an array of them, nested, nullable or as struct data" {
+	assert verdict("class N { m: Map<string, Owned<N>> = new Map<string, Owned<N>>(); }\nconst n = new N();", "N") == "acyclic";
+	assert verdict("class N { s: Set<Owned<N>> = new Set<Owned<N>>(); }\nconst n = new N();", "N") == "acyclic";
+	assert verdict("class N { m: Map<string, Owned<N>> | null = null; }\nconst n = new N();", "N") == "acyclic";
+	assert verdict("class N { m: Map<string, Owned<N> | null> = new Map<string, Owned<N> | null>(); }\nconst n = new N();", "N") == "acyclic";
+	assert verdict("class N { m: Map<string, Map<string, Owned<N>>> = new Map<string, Map<string, Owned<N>>>(); }\nconst n = new N();", "N") == "acyclic";
+	assert verdict("class N { m: Map<string, Owned<N>[]> = new Map<string, Owned<N>[]>(); }\nconst n = new N();", "N") == "acyclic";
+	assert verdict("struct P { v: Owned<N> | null; w: int32; }\nclass N { m: Map<string, P> = new Map<string, P>(); }\nconst n = new N();", "N") == "acyclic";
+	assert verdict("struct Back { at: Unowned<N>; }\nclass N { kids: Map<string, Owned<N>> = new Map<string, Owned<N>>(); ups: Map<string, Back> = new Map<string, Back>(); }\nconst n = new N();", "N") == "acyclic";
+}
+
+test "a Map or Set reaching a plain edge back is cyclic, and a user generic class is a node like any class" {
+	assert verdict("class N { m: Map<string, N> = new Map<string, N>(); }\nconst n = new N();", "N") == "cyclic";
+	assert verdict("class N { s: Set<N> = new Set<N>(); }\nconst n = new N();", "N") == "cyclic";
+	assert verdict("class N { m: Map<string, Owned<N>> = new Map<string, Owned<N>>(); up: N | null = null; }\nconst n = new N();", "N") == "cyclic";
+	assert verdict("struct P { v: Owned<N> | null; back: N | null; }\nclass N { m: Map<string, P> = new Map<string, P>(); }\nconst n = new N();", "N") == "cyclic";
+	assert verdict("class Box<T> { item: T; constructor(t: T) { this.item = t; } }\nclass N { b: Box<Owned<N>> | null = null; }\nconst n = new N();", "N") == "cyclic";
+}
+
+test "a debug build keeps a class whose only cycles pass a Map of owned values under the collector and flags it" {
+	const r = compileToC("class N { m: Map<string, Owned<N>> = new Map<string, Owned<N>>(); }\nconst n = new N();\nconsole.log(\"ok\");\n");
+	assert r.ok, r.ok ? "" : r.error;
+	const line = typeInfoOf(r.value, "N");
+	assert line.contains(".isCyclic = MS_TRUE") && line.contains("MS_TYPE_FLAG_OWNED_CYCLE"), line;
+}
+
 test "an owned Map or generic class of owned values is acyclic" {
 	assert verdict("class N { m: Owned<Map<string, Owned<N>>> = new Map<string, Owned<N>>(); }\nconst n = new N();", "N") == "acyclic";
 	assert verdict("class Box<T> { item: T; constructor(t: T) { this.item = t; } }\nclass N { b: Owned<Box<Owned<N>>> | null = null; }\nconst n = new N();", "N") == "acyclic";
