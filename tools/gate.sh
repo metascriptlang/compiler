@@ -915,6 +915,10 @@ self_host_boot() {
     rm -rf "$dir/boot$n"; mkdir -p "$dir/boot$n"
     env -u NO_COLOR -u FORCE_COLOR "$cand" build src/index.ms --danger $ccflag --output="$gen"; rc=$?
     if [ "$rc" -ne 0 ]; then rm -rf "$dir/boot$n"; say "FAIL self-host: gen$n build failed (exit $rc)"; return 1; fi
+    if cmp -s "$cand" "$gen"; then
+      say "gate: self-host gen$n = gen$((n - 1)) (byte-identical fixed point)"
+      rm -rf "$dir/boot$n"; return 0
+    fi
     if [ ! -f "${gen}_link.rsp" ]; then rm -rf "$dir/boot$n"; say "FAIL self-host: gen$n wrote no link response file"; return 1; fi
     diffs=$(rsp_diff "${cand}_link.rsp" "${gen}_link.rsp")
     if [ "$diffs" -eq 0 ]; then
