@@ -264,6 +264,14 @@ void msUint8ArraySplice3(msUint8Array* arr, int64_t start, int64_t deleteCount, 
 	(arr_ptr)->p->data[(arr_ptr)->len]; \
 })
 
+#define msGenericArrayTake(arr_ptr, idx) ({ \
+	int64_t msTakeIdx_ = (idx); \
+	if ((uint64_t)msTakeIdx_ >= (uint64_t)(arr_ptr)->len) msRaiseIndexError(msTakeIdx_, (arr_ptr)->len); \
+	__typeof__((arr_ptr)->p->data[0]) msTakeHeld_ = (arr_ptr)->p->data[msTakeIdx_]; \
+	memset(&(arr_ptr)->p->data[msTakeIdx_], 0, sizeof((arr_ptr)->p->data[0])); \
+	msTakeHeld_; \
+})
+
 /* Set length. Grows with zero-fill if needed. */
 #define msGenericArraySetLen(arr_ptr, newLen) do { \
 	int64_t _nl = (newLen); \
