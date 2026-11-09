@@ -2,6 +2,7 @@
 // @skip-js: C-only by design: the check runs when an edge is read after the DRC destroyed its target; JS frees nothing
 // @stdout: kept 1, destroyed 2
 // @stdout: Error: an Unowned<N> edge was read after its N was destroyed
+// @ledger-slack(msRefArrayRefCell) 1
 // note: an array of Unowned<T> returned from a function outlives the targets its elements point at; reading such an element stops the program instead of reading the destroyed object.
 class N { id: int32; constructor(id: int32) { this.id = id; } }
 let destroyed = 0;
