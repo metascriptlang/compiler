@@ -834,6 +834,7 @@ export const SYMBOL_FIELD_ROLES: { [K in keyof Symbol]-?: FieldRole } = {
 	ctorRoutine: encoded("S ctorRoutineIdx"),
 	ctorOwner: encoded("S ctorOwnerIdx"),
 	borrowedFrom: encoded("S borrowedFromIdx"),
+	subclasses: encoded("S subclassesCsv"),
 	staticOwner: encoded("S ownerIdx"),
 	typeParamOwner: encoded("S paramOwnerIdx"),
 	typeParams: encoded("S typeParamsCsv"),
@@ -892,7 +893,7 @@ export const NODE_FIELD_ROLES: { [K in keyof Node]-?: FieldRole } = {
 //     typeIdx overloadsCsv staticCsv declIdx dpCsv disamb exportName
 //     ownerIdx typeParamsCsv originIdx paramOwnerIdx instArgsCsv instParamsCsv
 //     fieldDecoratorNamesCsv fieldDecoratorRows metaKeysCsv metaValuesCsv nonisolatedCsv
-//     itemModule item ctorRoutineIdx ctorOwnerIdx borrowedFromIdx
+//     itemModule item ctorRoutineIdx ctorOwnerIdx borrowedFromIdx subclassesCsv
 //
 // A *Csv column, and a payload list, is "-" for null, otherwise `<count>:`
 // and the items joined by ',' (an escaped string holds no raw ','), so null,
@@ -1018,6 +1019,7 @@ export function closeOver(this w: RowWriter): void {
 			for (const tp of s.typeParams) w.enqType(tp);
 			for (const t of s.instanceArgs ?? []) w.enqType(t);
 			for (const t of s.instanceParams ?? []) w.enqType(t);
+			for (const t of s.subclasses ?? []) w.enqType(t);
 			if (s.overloads != null) {
 				for (const ov of s.overloads) w.enqSym(ov, false);
 			}
@@ -1113,7 +1115,7 @@ export function emitObjectRows(this w: RowWriter, lines: string[]): void {
 		const nullList = symbolNullList(s);
 		if (nullList != "") throw nullListError(`symbol ${i} (${s.name})`, nullList);
 		const loc = s.location;
-		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint64}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${w.roots.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(builtinKindName(s.builtinKind))}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${w.idxType(s.symbolType)}\t${w.symIdxs(s.overloads)}\t${w.symIdxs(s.staticFields)}\t${w.idxNode(s.declNode)}\t${w.idxs(s.defaultParams)}\t${s.disamb}\t${escapeP(s.exportName)}\t${w.idxSym(s.staticOwner)}\t${w.typeIdxs(s.typeParams)}\t${w.idxSym(s.instantiatedFrom)}\t${w.idxSym(s.typeParamOwner)}\t${w.typeIdxs(s.instanceArgs)}\t${w.typeIdxs(s.instanceParams)}\t${strListText(s.fieldDecoratorNames)}\t${nestedIdxsP(s.fieldDecorators)}\t${strListText(s.metaKeys)}\t${w.idxs(s.metaValues)}\t${strListText(s.nonisolatedFields)}\t${s.itemModule}\t${s.item}\t${w.idxSym(s.ctorRoutine)}\t${w.idxSym(s.ctorOwner)}\t${w.idxSym(s.borrowedFrom)}`);
+		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint64}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${w.roots.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(builtinKindName(s.builtinKind))}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${w.idxType(s.symbolType)}\t${w.symIdxs(s.overloads)}\t${w.symIdxs(s.staticFields)}\t${w.idxNode(s.declNode)}\t${w.idxs(s.defaultParams)}\t${s.disamb}\t${escapeP(s.exportName)}\t${w.idxSym(s.staticOwner)}\t${w.typeIdxs(s.typeParams)}\t${w.idxSym(s.instantiatedFrom)}\t${w.idxSym(s.typeParamOwner)}\t${w.typeIdxs(s.instanceArgs)}\t${w.typeIdxs(s.instanceParams)}\t${strListText(s.fieldDecoratorNames)}\t${nestedIdxsP(s.fieldDecorators)}\t${strListText(s.metaKeys)}\t${w.idxs(s.metaValues)}\t${strListText(s.nonisolatedFields)}\t${s.itemModule}\t${s.item}\t${w.idxSym(s.ctorRoutine)}\t${w.idxSym(s.ctorOwner)}\t${w.idxSym(s.borrowedFrom)}\t${w.typeIdxs(s.subclasses)}`);
 	}
 }
 
@@ -1173,6 +1175,7 @@ export class RowReader {
 	symCtorRoutineIdx: int32[] = [];
 	symCtorOwnerIdx: int32[] = [];
 	symBorrowedFromIdx: int32[] = [];
+	symSubclassesIdx: (int32[] | null)[] = [];
 	nodeTypeRef: int32[] = [];
 	nodeSymRef: int32[] = [];
 	nodeTeRef: int32[] = [];
@@ -1292,6 +1295,7 @@ export function readObjectRow(this a: RowReader, tag: int32, rd: PackReader): bo
 		a.symCtorRoutineIdx.push(rd.int() as int32);
 		a.symCtorOwnerIdx.push(rd.int() as int32);
 		a.symBorrowedFromIdx.push(rd.int() as int32);
+		a.symSubclassesIdx.push(rd.nullableInts());
 		a.syms.push(s);
 		rd.endRow();
 		return true;
@@ -1330,9 +1334,10 @@ export function linkTypesAndSymbols(this a: RowReader): boolean {
 		s.symbolType = a.symTypeIdx[i] >= 0 && a.symTypeIdx[i] < types.length ? types[a.symTypeIdx[i]] : null as unknown as Type;
 		const args = a.symInstanceArgsIdx[i];
 		const params = a.symInstanceParamsIdx[i];
+		const subs = a.symSubclassesIdx[i];
 		if (!refsFit(a.symOverloadIdx[i], syms.length, false) || !refsFit(a.symStaticIdx[i], syms.length, false)
 			|| !refsFit(a.symTypeParamsIdx[i], types.length, false) || !refsFit(args, types.length, false)
-			|| !refsFit(params, types.length, false) || !refsFit(a.symDpIdx[i], nodes.length, true)
+			|| !refsFit(params, types.length, false) || !refsFit(subs, types.length, false) || !refsFit(a.symDpIdx[i], nodes.length, true)
 			|| !refsFit(a.symMetaValuesIdx[i], nodes.length, true)) return false;
 		for (const row of a.symFieldDecoratorsIdx[i]) {
 			if (!refsFit(row, nodes.length, true)) return false;
@@ -1342,6 +1347,7 @@ export function linkTypesAndSymbols(this a: RowReader): boolean {
 		s.typeParams = typesAt(a.symTypeParamsIdx[i], types);
 		s.instanceArgs = args == null ? null : typesAt(args, types);
 		s.instanceParams = params == null ? null : typesAt(params, types);
+		s.subclasses = subs == null ? null : typesAt(subs, types);
 		s.staticOwner = a.symOwnerIdx[i] >= 0 && a.symOwnerIdx[i] < syms.length ? syms[a.symOwnerIdx[i]] : null;
 		s.instantiatedFrom = a.symOriginIdx[i] >= 0 && a.symOriginIdx[i] < syms.length ? syms[a.symOriginIdx[i]] : null;
 		s.typeParamOwner = a.symParamOwnerIdx[i] >= 0 && a.symParamOwnerIdx[i] < syms.length ? syms[a.symParamOwnerIdx[i]] : null;
@@ -1644,6 +1650,15 @@ function instanceRoundtrip(args: Type[] | null, params: Type[] | null): boolean 
 	return sameTypes(got.instanceArgs, args) && sameTypes(got.instanceParams, params);
 }
 
+function subclassesRoundtrip(subs: Type[] | null): boolean {
+	const s = makeSymbolState("Base", SymbolKind.Class, null, false, SymbolState.Checked);
+	s.subclasses = subs;
+	const w = new RowWriter();
+	w.enqSym(s, true);
+	const r = roundtripRows(w);
+	return r != null && sameTypes(r.syms[w.idxSym(s)].subclasses, subs);
+}
+
 test "rowCodec: a symbol keeps instanceArgs and instanceParams apart, null and empty included" {
 	const i32 = getSysType(TypeKind.Int32);
 	const str = getSysType(TypeKind.String);
@@ -1653,6 +1668,12 @@ test "rowCodec: a symbol keeps instanceArgs and instanceParams apart, null and e
 	assert instanceRoundtrip(null, []);
 	assert instanceRoundtrip(null, null);
 	assert instanceRoundtrip([i32], [str]);
+}
+
+test "rowCodec: a symbol keeps its noted subclasses, none noted apart from an empty list" {
+	assert subclassesRoundtrip([getSysType(TypeKind.Int32), getSysType(TypeKind.String)]);
+	assert subclassesRoundtrip([]);
+	assert subclassesRoundtrip(null);
 }
 
 test "rowCodec: a node's header lists keep null, the empty list and null entries" {
