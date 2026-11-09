@@ -360,6 +360,9 @@ const INITIAL_CAPACITY: int32 = 32;
 const MIN_EMPTY_SLOTS: int32 = 4;
 const COMPACT_MIN_TOMBSTONES: int32 = 8;
 
+/** Moves the element at i out and leaves its slot all-zero, with no allocation; the zero slot is a valid T only to a table that reads it as empty. */
+extern function takeAt<T>(this arr: T[], i: int64): T from "&msGenericArrayTake";
+
 // ===== HashMap<K, V> — unordered open-addressing hash table =====
 
 export struct HashMapEntry<K, V> {
@@ -476,7 +479,7 @@ export function delete<K, V>(this m: HashMap<K, V>, key: Readonly<K>): boolean {
 	m.size = m.size - 1;
 	// Back-shift deletion (Knuth V3 Algo 6.4R)
 	while (true) {
-		m.data[i].hcode = 0;
+		m.data.takeAt(i);
 		const j = i;
 		while (true) {
 			i = (i + 1) & mask;
@@ -487,9 +490,7 @@ export function delete<K, V>(this m: HashMap<K, V>, key: Readonly<K>): boolean {
 			}
 			break;
 		}
-		m.data[j].hcode = m.data[i].hcode;
-		m.data[j].key = m.data[i].key;
-		m.data[j].value = m.data[i].value;
+		m.data[j] = m.data.takeAt(i);
 	}
 	return true;
 }
@@ -499,7 +500,7 @@ export function clear<K, V>(this m: HashMap<K, V>): void {
 	m.writing = true;
 	defer hashMapEndWrite(m);
 	let i: int32 = 0;
-	while (i < m.data.length) { m.data[i].hcode = 0; i = i + 1; }
+	while (i < m.data.length) { m.data.takeAt(i); i = i + 1; }
 	m.size = 0;
 }
 
@@ -665,7 +666,7 @@ export function delete<T>(this s: HashSet<T>, value: Readonly<T>): boolean {
 	const mask: int32 = s.data.length - 1;
 	s.size = s.size - 1;
 	while (true) {
-		s.data[i].hcode = 0;
+		s.data.takeAt(i);
 		const j = i;
 		while (true) {
 			i = (i + 1) & mask;
@@ -674,8 +675,7 @@ export function delete<T>(this s: HashSet<T>, value: Readonly<T>): boolean {
 			if ((i >= r && r > j) || (r > j && j > i) || (j > i && i >= r)) continue;
 			break;
 		}
-		s.data[j].hcode = s.data[i].hcode;
-		s.data[j].key = s.data[i].key;
+		s.data[j] = s.data.takeAt(i);
 	}
 	return true;
 }
@@ -685,7 +685,7 @@ export function clear<T>(this s: HashSet<T>): void {
 	s.writing = true;
 	defer hashSetEndWrite(s);
 	let i: int32 = 0;
-	while (i < s.data.length) { s.data[i].hcode = 0; i = i + 1; }
+	while (i < s.data.length) { s.data.takeAt(i); i = i + 1; }
 	s.size = 0;
 }
 
@@ -893,7 +893,7 @@ export function delete<K, V>(this m: Map<K, V>, key: Readonly<K>): boolean {
 	const slot = orderedMapRawGet(m, key, hc);
 	if (slot < 0) return false;
 	const entryIdx = m.indices[slot];
-	m.entries[entryIdx].hcode = 0;
+	m.entries.takeAt(entryIdx);
 	m.indices[slot] = -2;
 	m.size = m.size - 1;
 	m.tombstones = m.tombstones + 1;
@@ -1174,7 +1174,7 @@ export function delete<T>(this s: Set<T>, value: Readonly<T>): boolean {
 	const slot = orderedSetRawGet(s, value, hc);
 	if (slot < 0) return false;
 	const entryIdx = s.indices[slot];
-	s.entries[entryIdx].hcode = 0;
+	s.entries.takeAt(entryIdx);
 	s.indices[slot] = -2;
 	s.size = s.size - 1;
 	s.tombstones = s.tombstones + 1;

@@ -2173,6 +2173,7 @@ test "rms extern closure: declared externs are bridged, intercepted, or listed d
 		join(stdPath, "process/child.rms"),
 		join(stdPath, "core/buffer/index.rms"),
 		join(stdPath, "core/date/index.rms"),
+		join(stdPath, "core/struct.ms"),
 	];
 	// Names the Raiser codegen intercepts to opcodes before CallHost.
 	const intercepted: string[] = [
@@ -2180,6 +2181,7 @@ test "rms extern closure: declared externs are bridged, intercepted, or listed d
 		"msStringCharAt", "msStringSlice",                // StrCharAt / StrSlice
 		"&msGenericArrayPush",                            // ArrayPush
 		"&msGenericArraySetLen",                          // ArraySetLen
+		"&msGenericArrayTake",                            // LoadIndex + StoreIndex of the typed zero
 	];
 	// Deliberately dead — each needs work before it can come off this list.
 	const knownDead: string[] = [
