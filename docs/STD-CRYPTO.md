@@ -83,7 +83,7 @@ Cost of the pin on rtx, tree `0d21c5c1438e` plus the renamed test: 77 ms on C an
 
 ## 6. Speed against the vendored C
 
-`std/crypto/pure/apiParityBench.ms --measure` (built `--danger`) times each operation through the public Sync API on the port and on the vendored oracle (`std/crypto/oracle/**`), after checking that both give the same bytes. Each row is port ns / vendored ns, three rounds in a `run-remote.sh --quiet` window, tree `a105ca92a26d`, 2026-11-08. Rounds agreed within 2%.
+`src/bench/crypto/vendor/apiParityBench.ms --measure` (built `--danger`) times each operation through the public Sync API on the port and on the vendored oracle (`src/test/crypto/oracle/**`), after checking that both give the same bytes. Each row is port ns / vendored ns, three rounds in a `run-remote.sh --quiet` window, tree `a105ca92a26d`, 2026-11-08. Rounds agreed within 2%.
 
 | operation | ARM m1m | x86 rtx |
 |---|---|---|
