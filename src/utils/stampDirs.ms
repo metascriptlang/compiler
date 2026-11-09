@@ -74,6 +74,34 @@ function collectStaleFiles(dir: string, now: float64, suffixesRecordFirst: strin
 	}
 }
 
+function insideRoot(real: string, root: string, name: string): boolean {
+	return realpath(`${root}/${name}`).replaceAll("\\", "/") == `${real}/${name}`;
+}
+
+// `<name>/` is an output tree and `<name>.u` its use stamp; scratch trees are removed after an hour.
+export function collectStaleTrees(root: string, scratchRoot: string, now: float64, staleSeconds: float64 = STALE_ENTRY_SECONDS): void {
+	const real = collectionDue(root, now);
+	if (real == "") return;
+	for (const e of readDir(root)) {
+		const name = e.endsWith("/") ? e.slice(0, e.length - 1) : (e.endsWith(".u") ? e.slice(0, e.length - 2) : "");
+		if (name == "" || (e.endsWith("/") && exists(`${root}/${name}.u`))) continue;
+		const stamp = e.endsWith("/") ? `${root}/${name}` : `${root}/${e}`;
+		if (now - modifiedTime(stamp) <= staleSeconds) continue;
+		if (exists(`${root}/${name}`)) {
+			if (!insideRoot(real, root, name)) continue;
+			removeAll(`${root}/${name}`);
+		}
+		if (!e.endsWith("/")) drop(stamp);
+	}
+	if (!exists(scratchRoot)) return;
+	const realScratch = realpath(scratchRoot).replaceAll("\\", "/");
+	for (const e of readDir(scratchRoot)) {
+		if (!e.endsWith("/")) continue;
+		const name = e.slice(0, e.length - 1);
+		if (now - modifiedTime(`${scratchRoot}/${name}`) > STALE_TMP_SECONDS && insideRoot(realScratch, scratchRoot, name)) removeAll(`${scratchRoot}/${name}`);
+	}
+}
+
 export function markUsed(entry: string, now: float64, everySeconds: float64 = COLLECT_EVERY_SECONDS): void {
 	const modified = modifiedTime(entry);
 	if (modified < 0 || now - modified < everySeconds) return;
@@ -187,5 +215,41 @@ test "an entry whose mtime cannot be read is collected" {
 	collectStaleEntries(root, nowSeconds(), PK);
 	assert !readDir(`${root}/stampA`).includes("dangling.pk");
 	assert exists(`${root}/stampA/entry.pk`);
+	removeAll(root);
+}
+
+function storeRoot(label: string): string {
+	const root = `${tmpDir()}/msc-${label}-${performance.now()}`;
+	ensureDir(`${root}/o/kept/sub`);
+	ensureDir(`${root}/o/old/sub`);
+	ensureDir(`${root}/tmp/scratch`);
+	writeFile(`${root}/o/kept.u`, "u");
+	writeFile(`${root}/o/old.u`, "u");
+	writeFile(`${root}/o/kept/sub/f`, "kept");
+	writeFile(`${root}/o/old/sub/f`, "old");
+	return root;
+}
+
+test "stale output trees go with their stamps; a foreign file and a linked tree stay" {
+	const root = storeRoot("trees-stale");
+	ensureDir(`${root}/outside`);
+	writeFile(`${root}/outside/f`, "outside");
+	symlink(`${root}/outside`, `${root}/o/linked`);
+	writeFile(`${root}/o/linked.u`, "u");
+	writeFile(`${root}/o/notes.txt`, "foreign");
+	collectStaleTrees(`${root}/o`, `${root}/tmp`, nowSeconds() + STALE_ENTRY_SECONDS + 60);
+	assert !exists(`${root}/o/kept`) && !exists(`${root}/o/kept.u`);
+	assert !exists(`${root}/o/old`) && !exists(`${root}/o/old.u`);
+	assert !exists(`${root}/tmp/scratch`);
+	assert text(`${root}/o/notes.txt`) == "foreign";
+	assert text(`${root}/outside/f`) == "outside";
+	removeAll(root);
+}
+
+test "an output tree whose stamp is fresh survives collection" {
+	const root = storeRoot("trees-fresh");
+	collectStaleTrees(`${root}/o`, `${root}/tmp`, nowSeconds());
+	assert text(`${root}/o/old/sub/f`) == "old";
+	assert exists(`${root}/tmp/scratch`);
 	removeAll(root);
 }
