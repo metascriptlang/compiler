@@ -669,6 +669,8 @@ export function generateRaiserProject(modules: RaiserModuleInput[], dispatchRegi
 		s.funcMap = globalFuncMap;
 		s.globals = globals;
 		collectLegacyRoots(s, modules[mi].program);
+		s.defaultResult = allocDyn(s);
+		emitLoadConst(s, s.defaultResult, raiserNil());
 		const deinit = createCompState();
 		deinit.funcMap = globalFuncMap;
 		deinit.globals = globals;
@@ -676,7 +678,8 @@ export function generateRaiserProject(modules: RaiserModuleInput[], dispatchRegi
 		for (let i = 0; i < pd.programStmts.length; i += 1) {
 			const atExit = pd.programStmts[i].flags.has(NodeFlag.GlobalDestroys);
 			compileStmt(atExit ? deinit : s, pd.programStmts[i]);
-			resetTemps(atExit ? deinit : s);
+			if (atExit) resetTemps(deinit);
+			else resetTemps(s, s.defaultResult + 1);
 		}
 		if (deinit.code.length > 0 && !hostKeepsGlobals) {
 			const deinitNil = allocDyn(deinit);
@@ -696,9 +699,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], dispatchRegi
 			}
 		}
 
-		const nilReg = allocDyn(s);
-		emitLoadConst(s, nilReg, raiserNil());
-		emitRet(s, nilReg);
+		emitRet(s, s.defaultResult);
 
 		const initFunc = createRaiserFunction("__init_" + mi, s.code, s.constants, 0, 0, s.regClasses.length, s.regClasses, s.inlineSites);
 		initFunc.copyPlans = s.copyPlans;
@@ -1528,6 +1529,12 @@ test "export default object" {
 	assert ctx.lastResult.kind == RaiserValueKind.Object;
 	const root = heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root");
 	assert root == "src/main.ms";
+}
+
+test "the statements after export default run, and the module still yields the default" {
+	const ctx = evalRaiser("class Config { root: string = \"src/main.ms\"; }\nconst config = new Config();\nexport default config;\nconfig.root = \"src/app.ms\";");
+	assert ctx.lastResult.kind == RaiserValueKind.Object;
+	assert heapObjectGetString(ctx.arrayHeap, ctx.objectHeap, ctx.lastResult.intVal, "root") == "src/app.ms";
 }
 
 test "export default nested object" {

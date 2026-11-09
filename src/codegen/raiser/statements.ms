@@ -97,7 +97,11 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 			if (d.exportedDecl.kind == NodeKind.ExprStmt) {
 				const ed = d.exportedDecl.data as ExprStmtData;
 				const reg = compileExpr(s, ed.expr);
-				emitInst(s, raiserABC(RaiserOpcode.Halt, reg, 0, 0));
+				if (s.defaultResult < 0) emitInst(s, raiserABC(RaiserOpcode.Halt, reg, 0, 0));
+				else {
+					if (classOfReg(s, reg) == RaiserRegClass.Ref) emitInst(s, raiserABC(RaiserOpcode.RcInc, reg, 0, 0));
+					emitInst(s, raiserABC(RaiserOpcode.Move, s.defaultResult, reg, 0));
+				}
 			} else {
 				compileStmt(s, d.exportedDecl);
 			}
