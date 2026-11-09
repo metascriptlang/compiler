@@ -117,3 +117,50 @@ Commit `2c3a0e48024`, tree `184c43ae6c1`, 2026-11-04, load 14.7 before, 6.5 afte
 
 The rows behind node are sha512 at 1 MB (half of node's speed; on m1m it ties), the three 25519 rows, and, within
 3%, sha256 at 1 MB.
+
+## rtx — the MetaScript port on JS against noble, one round
+
+`js-port` is `bench.ms` built `--target=js` and run by node 24.1.0 with `crypto.subtle` removed, so every row, async
+included, runs the port in `std/crypto/pure`; `noble` is `bench.noble.mjs` on @noble/hashes, curves and ciphers
+2.4.0. One round only (`src/bench/run.sh crypto 1` with arms `js-port noble`, a smoke run), tree of 2fe17f02cfa plus
+the two arms, 2026-11-09, load 1.20 before, 1.95 after. noble has no RSA.
+
+| row | unit | js-port | noble |
+|---|---|---|---|
+| sha256 digest 32 B | us/op | 1.606 | 0.665 |
+| sha256 digest 1 KB | MB/s | 111.696 | 292.878 |
+| sha256 digest 64 KB | MB/s | 111.582 | 350.115 |
+| sha256 digest 1 MB | MB/s | 107.375 | 346.227 |
+| sha512 digest 64 B | us/op | 8.863 | 1.259 |
+| sha512 digest 1 MB | MB/s | 9.507 | 182.545 |
+| sha256 digest 1 MB async | MB/s | 81.561 | 345.382 |
+| sha1 digest 1 MB | MB/s | 122.403 | 451.859 |
+| md5 digest 1 MB | MB/s | 202.673 | 137.433 |
+| blake2b-512 digest 1 MB | MB/s | 25.225 | 79.825 |
+| hmac-sha256 32 B | us/op | 4.116 | 2.625 |
+| pbkdf2-sha256 100k | us/op | 128828.585 | 58535.765 |
+| hkdf-sha256 32 B | us/op | 13.227 | 4.72 |
+| randomBytes 32 B | us/op | 1.715 | 1.216 |
+| argon2id t3 m4M p1 | us/op | 96912.941 | 29561.97 |
+| ed25519 sign 64 B | us/op | 248.77 | 273.287 |
+| ed25519 signSync 64 B | us/op | 247.21 | 270.093 |
+| ed25519 verify 64 B | us/op | 568.175 | 631.803 |
+| x25519 shared | us/op | 495.032 | 557.945 |
+| aes-256-gcm seal 1 MB | MB/s | 17.788 | 100.684 |
+| aes-256-gcm open 1 MB | MB/s | 17.866 | 103.331 |
+| aes-256-gcm sealSync 1 MB | MB/s | 17.757 | 104.39 |
+| aes-256-cbc encrypt 1 MB | MB/s | 11.986 | 187.233 |
+| chacha20-poly1305 seal 1 MB | MB/s | 32.943 | 346.333 |
+| chacha20-poly1305 open 1 MB | MB/s | 32.977 | 350.89 |
+| rsa-2048 sign pkcs1 64 B | us/op | 2061.343 | - |
+| rsa-2048 verify pkcs1 64 B | us/op | 105.303 | - |
+| rsa-2048 oaep decrypt 32 B | us/op | 2091.025 | - |
+| ecdsa-p256 sign 64 B | us/op | 585.689 | 255.057 |
+| ecdsa-p256 verify 64 B | us/op | 1087.594 | 1167.18 |
+| ecdh-p256 shared | us/op | 525.712 | 1468.931 |
+| sha256 stream 16x64 KB | MB/s | 110.359 | 349.984 |
+
+Read: the curves run as fast as noble (Ed25519, X25519, ECDSA verify within 12%; ECDH 2.8 times faster, ECDSA sign 2.3
+times slower). The 32-bit hashes are 3 to 4 times slower (SHA-256 107 against 346 MB/s), the 64-bit ones far slower
+(SHA-512 9.5 against 183 MB/s, BLAKE2b 25 against 80), and the ciphers 6 to 15 times slower (AES-256-GCM 18 against 101
+MB/s, ChaCha 33 against 346). MD5 is faster.
