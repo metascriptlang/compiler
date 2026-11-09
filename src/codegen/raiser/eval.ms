@@ -3114,7 +3114,7 @@ function gapFunc(code: string, name: string): RaiserFunction {
 }
 
 const tdzReaders = "class P { x: int64 = 0; constructor(x: int64) { this.x = x; } } function make(): int64 { return 1; } const k = make();"
-	+ " const origin = new P(3); let counter: int64 = 2;"
+	+ " const readers = [readObj, readInt]; const origin = new P(3); let counter: int64 = 2;"
 	+ " function readObj(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 3; i = i + 1) s = s + origin.x; return s; }"
 	+ " function readInt(): int64 { let s: int64 = 0; for (let i: int64 = 0; i < 3; i = i + 1) { s = s + counter; s = s + counter; } return s; }";
 
@@ -3667,7 +3667,7 @@ test "engine: a task returning a view of a module const returns it counted, beca
 		+ " const EMPTY: Readonly<Node> = chain();"
 		+ " const next = spawn((): Readonly<Node> | null => EMPTY.next);"
 		+ " console.log((await next) === EMPTY.next);";
-	const thunks = compileLowered(code).functions.map((f) => disasmFunc(f)).filter((d) => d.contains("$fn_anon") && d.contains("; EMPTY"));
+	const thunks = compileLowered(code).functions.map((f) => disasmFunc(f)).filter((d) => d.contains("$fn_anon") && d.contains("LoadGlobal"));
 	assert thunks.length == 1, thunks.join("\n");
 	const body = thunks[0];
 	assert body.contains("RcInc") && body.indexOf("RcInc") < body.indexOf("Ret "), body;
