@@ -17,7 +17,15 @@ directory is the project root, and every manifest operation (`msc.lock`, `.msc/b
 `file:` deps) is relative to it (`findProjectRoot`, `src/utils/path.ms`).
 
 **Accepted forms** (`findConfigObject`): `const config: BuildConfig = { … }; export default config;`
-(the idiomatic form), `export default { … };`, and `defineConfig({ … })`.
+(the idiomatic form) and `export default { … };`. A call such as `defineConfig({ … })` stops every
+command with `build: configuration must contain an object literal`.
+
+**Every field is read or refused** (`checkConfigShape`): a field msc does not read, or a value it
+cannot read as a literal of its kind, stops every command and names the field and line, and the
+editor reports the same on `build.ms`. Measured 2026-11-09 on a candidate built from `wt/build-graph`:
+`scripts: { gate: "x" }` → `scripts: msc does not read this field; it reads entry, build, resolve,
+fmt, lsp, cc, package, deps, devDeps, defines, globalImports (line 1)`; `fmt: { printwidth: 40 }` →
+`fmt.printwidth: msc does not read this field`. Before, both built with exit 0.
 
 ```ms
 import { BuildConfig } from "std/build";
@@ -73,16 +81,19 @@ package manager's and do not move with these settings.
 (`linux-amd64`, `windows-arm64`, …) override them when cross-compiling that target, and each
 target may carry its own `entry`. Resolution order: per-target config > `cc.*` defaults >
 well-known cross-compiler (`resolveCcForTarget`, `src/compiler/buildConfig.ms`). CLI `--cc=`,
-`--passC=`, `--passL=` override all of it.
+`--passC=`, `--passL=` override all of it. A target's `entry` wins over the top-level `entry`, and a
+file argument wins over both: measured 2026-11-09 (candidate from `wt/build-graph`), `entry:
+"src/main.ms"` with `targets: { "linux-arm64": { entry: "src/cross.ms" } }` builds `src/cross.ms`
+under `msc build --cpu=arm64` (the installed `c1e2de84172` built `src/main.ms`).
 
 ### `globalImports`
 
 Module paths whose exports land in scope of every source file, injected before command dispatch
 (`src/index.ms`). `std/`-prefixed specifiers pass through; absolute paths are normalized; anything
 else is joined to the project root. Entries are extension-less. Precedence: a local declaration
-wins over an explicit import, an explicit import wins over the injection. The object-entry forms
-(`{ from, names }`, …) are accepted but only `from` and `modulePass` are read — an entry always
-injects the module's full export surface.
+wins over an explicit import, an explicit import wins over the injection. An object entry is
+`{ from, modulePass? }`; any other field (`names`, …) is refused, because an entry always injects
+the module's full export surface.
 
 #### `modulePass` — a build-wide module transform
 
@@ -133,8 +144,8 @@ effect: when the effective mode is `manual` and the open file is not under `std/
 site gets FREESTANDING E01 as a *warning* — measured (2026-09-06, real stdio LSP, when the key was
 `gc`): `lsp = { os: "bare" }` → 3 warnings on a 3-async-site file; no `lsp` section, or
 `gc: "drc"` → 0. A project that declares nothing keeps exactly the diagnostics it had. Unknown
-`os`/`mm` values, and the old `gc` key ("lsp.gc is gone: write lsp.mm (drc, manual or none)"),
-are reported when the editor opens `build.ms` itself (`validateBuildConfig`, LSP-only).
+`os`/`mm` values are reported when the editor opens `build.ms` itself (`validateBuildConfig`,
+LSP-only); the old `gc` key is a field msc does not read and stops every command.
 
 ### Declared but not wired — do not rely on these yet
 
@@ -151,14 +162,13 @@ Measured 2026-09-22, card `~/metascript/.inbox/compiler/2026-09-22-build-ms-decl
   resolve `@lib/util`; that is a historical observation, not a current target restriction.
   A target-specific alias claim needs its exact importer/manifest consumer rechecked.
   Not reverified here: Windows paths, an alias target outside the project or all run targets.
-- `root` — declared in `std/build`'s `BuildConfig` as the base for non-relative imports, and read
-  by nothing. Measured 2026-10-15 on a candidate built from `7e7c0dd02`: with `root: "src"` or
-  `root: "."`, `import … from "lib/util"` and `from "src/lib/util"` both stop with `Cannot resolve
-  module`, exactly as without the field; only `./lib/util` resolves.
+- `root` was declared in `std/build`'s `BuildConfig` and read by nothing (measured 2026-10-15 on
+  `7e7c0dd02`: `root: "src"` changed no resolution). It is gone from `BuildConfig` and refused as
+  a field msc does not read.
 - Importing a dep by its bare root (`import { greeting } from "greeter"`) fails; the subpath form
   `from "greeter/src/index"` works (see below).
 
-`resolve.searchPaths` / `resolve.extensions` are not extracted at all.
+`resolve.searchPaths` / `resolve.extensions` are not read and are refused.
 
 ## Packages
 
@@ -269,8 +279,9 @@ operation to save you from a side effect you were just told about.
 
 ### Running one — `msc x`
 
-`msc x <command> [args…]` resolves the command against every dependency the project can see
-(`file:` deps, `msc.lock`, then the global manifest) and runs the entry on Raiser from source.
+`msc x <command> [args…]` resolves the command against the project's own `package.bin`, then
+every dependency the project can see (`file:` deps, `msc.lock`, then the global manifest), and
+runs the entry on Raiser from source. The project's own commands get no shim in `.msc/bin`.
 **Everything after the command name belongs to the command**, including flags — `msc x greet
 --release` passes `--release` to `greet`. The command's `argv` is `[<command name as declared>, …args]`
 and its exit status is the exit status of `msc x`.
