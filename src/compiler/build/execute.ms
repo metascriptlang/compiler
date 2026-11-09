@@ -1,4 +1,4 @@
-import { BuildGraph, GraphNode, GraphPath, ArgKind, nodeById, sourcePath } from "./configure";
+import { BuildGraph, GraphNode, GraphPath, GraphArg, ArgKind, nodeById, sourcePath } from "./configure";
 import { CliOptions } from "../options";
 import { hashFile, loadFileHashes, saveFileHashes } from "../cache";
 import { hashContent } from "../../utils/contentHash";
@@ -6,8 +6,9 @@ import { stepStoreRoot, storedOutput, storeScratch, storePublish } from "./store
 import { atomicCopyFile, atomicWriteFile } from "../io";
 import { exists, isDir, readDir, readFile, writeFile, ensureDir, removeAll } from "std/fs";
 import { join, dirname, basename, isAbsolute } from "std/fs/path";
-import { execFile, execPath, platform, findOnPath } from "std/process";
+import { execPath, platform, findOnPath } from "std/process";
 import { spawn, ChildProcess, ChildStream } from "std/process/child";
+import { writeStdout, writeStderr } from "std/io";
 import { vmCallFunction } from "../../raiser/vm";
 import { field } from "../../raiser/marshal";
 
@@ -23,13 +24,14 @@ export interface Execution {
 	ran: string[];
 	reused: string[];
 	passArgs: string[];
+	target: int32;
 	jobs: int32;
 	seed: int32;   // nonzero: start ready nodes in an order shuffled by this seed
 	hashed: string[];
 }
 
-export function newExecution(graph: BuildGraph, opts: CliOptions, projectRoot: string, dryRun: boolean, passArgs: string[], jobs: int32): Execution {
-	return { graph, opts, projectRoot, outputs: new HashMap<int32, string>(), digests: new HashMap<int32, string>(), dryRun, ran: [], reused: [], passArgs, jobs, seed: opts.graphSeed, hashed: [] };
+export function newExecution(graph: BuildGraph, opts: CliOptions, projectRoot: string, dryRun: boolean, passArgs: string[], target: int32, jobs: int32): Execution {
+	return { graph, opts, projectRoot, outputs: new HashMap<int32, string>(), digests: new HashMap<int32, string>(), dryRun, ran: [], reused: [], passArgs, target, jobs, seed: opts.graphSeed, hashed: [] };
 }
 
 function shuffle(plan: GraphNode[], seed: int32): void {
@@ -56,12 +58,14 @@ interface Job {
 	err: string;
 	outEnded: boolean;
 	errEnded: boolean;
+	live: boolean;
+	expectExit: int32;
 	finish: (j: Job) => void;
 	abandon: () => void;
 }
 
 function job(node: GraphNode, exe: string, args: string[], cwd: string, shown: string, finish: (j: Job) => void, abandon: () => void): Job {
-	return { node, exe, args, cwd, shown, child: null, out: "", err: "", outEnded: false, errEnded: false, finish, abandon };
+	return { node, exe, args, cwd, shown, child: null, out: "", err: "", outEnded: false, errEnded: false, live: false, expectExit: -1, finish, abandon };
 }
 
 function storeDir(x: Execution): string {
@@ -174,15 +178,23 @@ function depFileInputs(depFile: string, cwd: string): string[] {
 	return inputs;
 }
 
+function writesOutput(n: GraphNode): boolean {
+	return n.stdout || n.argv.some((a: GraphArg): boolean => a.kind == ArgKind.OutputFile || a.kind == ArgKind.OutputDir || a.kind == ArgKind.DepFile);
+}
+
 function runCommand(x: Execution, n: GraphNode): Job | null {
-	let key = `${STORE_FORMAT}\ncommand\n${platform}\n${toolIdentity(n.argv[0].text)}\n`;
+	const extra = n.id == x.target ? x.passArgs : [];
+	const live = n.expectExit < 0 && !writesOutput(n);
+	const program = n.argv[0];
+	let key = `${STORE_FORMAT}\ncommand\n${platform}\n${program.kind == ArgKind.Text ? toolIdentity(program.text) : "artifact"}\n`;
 	for (const a of n.argv) key = `${key}${a.kind}:${a.text}:${a.path == null ? "" : inputHash(x, a.path)}\n`;
+	for (const a of extra) key = `${key}arg:${a}\n`;
 	if (n.cwd != null) key = `${key}cwd:${keyPath(x, pathOf(x, n.cwd))}\n`;
 	for (const e of n.env) key = `${key}env:${e}\n`;
 	for (const p of n.inputs) key = `${key}in:${inputHash(x, p)}\n`;
-	key = `${key}stdout:${n.stdout}\n`;
+	key = `${key}stdout:${n.stdout}\nexpect:${n.expectExit}\n`;
 	const store = storeDir(x);
-	const known = storedOutput(store, key, (path: string): string => {
+	const known = n.sideEffects || live ? "" : storedOutput(store, key, (path: string): string => {
 		x.hashed.push(rootedPath(x, path));
 		return hashFile(rootedPath(x, path));
 	});
@@ -192,12 +204,12 @@ function runCommand(x: Execution, n: GraphNode): Job | null {
 		x.reused.push(label(n));
 		return null;
 	}
-	const tmp = x.dryRun ? `${store}/tmp/dry-run` : storeScratch(store, key);
+	const tmp = x.dryRun ? `${store}/tmp/dry-run` : live ? "" : storeScratch(store, key);
 	const argv: string[] = [];
 	const depFiles: string[] = [];
 	for (const a of n.argv) {
 		if (a.kind == ArgKind.Text) argv.push(a.text);
-		else if (a.kind == ArgKind.File) argv.push(pathOf(x, a.path!));
+		else if (a.kind == ArgKind.File) argv.push(`${a.text}${pathOf(x, a.path!)}`);
 		else if (a.kind == ArgKind.OutputFile || a.kind == ArgKind.DepFile) {
 			const target = join(tmp, a.path!.sub);
 			if (!x.dryRun) ensureDir(dirname(target));
@@ -209,12 +221,13 @@ function runCommand(x: Execution, n: GraphNode): Job | null {
 			argv.push(`${a.text}${target}`);
 		}
 	}
-	const program = isAbsolute(argv[0]) ? argv[0] : findOnPath(argv[0]);
+	for (const a of extra) argv.push(a);
+	const found = isAbsolute(argv[0]) ? argv[0] : findOnPath(argv[0]);
 	let args = argv.slice(1, argv.length);
-	let exe = program;
+	let exe = found;
 	if (n.env.length > 0) {
 		if (platform == "windows") throw new Error(`${label(n)}: setEnvironmentVariable is not supported on Windows yet`);
-		args = n.env.concat([program]).concat(args);
+		args = n.env.concat([found]).concat(args);
 		exe = "/usr/bin/env";
 	}
 	const dir = n.cwd == null ? x.projectRoot : pathOf(x, n.cwd);
@@ -224,24 +237,32 @@ function runCommand(x: Execution, n: GraphNode): Job | null {
 		x.digests.set(n.id, `dry:${n.id}`);
 		return null;
 	}
-	return job(n, exe, args, dir, argv.join(" "), (j: Job): void => {
+	const started = job(n, exe, args, dir, argv.join(" "), (j: Job): void => {
+		x.ran.push(label(n));
+		if (live) {
+			x.outputs.set(n.id, "");
+			x.digests.set(n.id, `ran:${n.id}`);
+			return;
+		}
 		if (n.stdout) {
 			writeFile(join(tmp, "stdout"), j.out);
 			j.out = "";
 		}
-		const found: string[] = [];
+		const read: string[] = [];
 		for (const depFile of depFiles) {
 			for (const input of depFileInputs(depFile, dir)) {
-				if (!input.startsWith(`${tmp}/`)) found.push(`${keyPath(x, input)}\t${hashFile(input)}`);
+				if (!input.startsWith(`${tmp}/`)) read.push(`${keyPath(x, input)}\t${hashFile(input)}`);
 			}
 		}
 		const digest = treeHash(tmp, []).slice(2);
-		const placed = storePublish(store, key, tmp, digest, found);
+		const placed = storePublish(store, key, tmp, digest, read);
 		if (placed == "") throw new Error(`${label(n)}: cannot place its output in ${store}/o`);
 		x.outputs.set(n.id, placed);
 		x.digests.set(n.id, digest);
-		x.ran.push(label(n));
-	}, (): void => { removeAll(tmp); });
+	}, (): void => { if (tmp != "") removeAll(tmp); });
+	started.live = live;
+	started.expectExit = n.expectExit;
+	return started;
 }
 
 function runWriteFiles(x: Execution, n: GraphNode): void {
@@ -309,17 +330,6 @@ function runLibrary(x: Execution, n: GraphNode): Job | null {
 	return runCompile(x, n, true);
 }
 
-function runArtifactNode(x: Execution, n: GraphNode): void {
-	const exe = x.outputs.get(n.artifact)!;
-	const args = n.args.concat(x.passArgs);
-	if (x.dryRun) {
-		console.log(`${exe} ${args.join(" ")}`);
-		return;
-	}
-	const code = execFile(exe, args);
-	if (code != 0) throw new Error(`${label(n)}: ${exe} exited with ${code}`);
-}
-
 function installNode(x: Execution, n: GraphNode): void {
 	const from = x.outputs.get(n.artifact)!;
 	const artifact = nodeById(x.graph, n.artifact);
@@ -358,8 +368,7 @@ function startNode(x: Execution, n: GraphNode): Job | null {
 	if (n.kind == "executable") return runCompile(x, n, false);
 	if (n.kind == "library") return runLibrary(x, n);
 	if (n.kind == "command") return runCommand(x, n);
-	if (n.kind == "run") runArtifactNode(x, n);
-	else if (n.kind == "install") installNode(x, n);
+	if (n.kind == "install") installNode(x, n);
 	else if (n.kind == "step") runStep(x, n);
 	else if (n.kind == "writeFiles") runWriteFiles(x, n);
 	else if (n.kind == "updateSourceFiles") updateSources(x, n);
@@ -382,10 +391,12 @@ function drain(j: Job, stream: ChildStream, timeoutMs: int32): boolean {
 	const got = j.child!.read(stream, timeoutMs);
 	if (!got.ok) return false;
 	if (stream == ChildStream.Stdout) {
-		j.out = `${j.out}${got.value.data}`;
+		if (j.live) writeStdout(got.value.data);
+		else j.out = `${j.out}${got.value.data}`;
 		if (got.value.ended) j.outEnded = true;
 	} else {
-		j.err = `${j.err}${got.value.data}`;
+		if (j.live) writeStderr(got.value.data);
+		else j.err = `${j.err}${got.value.data}`;
 		if (got.value.ended) j.errEnded = true;
 	}
 	return true;
@@ -403,11 +414,11 @@ function settle(j: Job): string {
 	const status = j.child!.wait(60000);
 	j.child!.close();
 	const code = status.ok ? status.value.code : -1;
-	if (code != 0) {
+	if (code != Math.max(j.expectExit, 0)) {
 		if (j.out != "") console.log(j.out.trimEnd());
 		if (j.err != "") console.log(j.err.trimEnd());
 		j.abandon();
-		return `${label(j.node)}: ${j.shown} exited with ${code}`;
+		return `${label(j.node)}: ${j.shown} exited with ${code}${j.expectExit >= 0 ? `, expected ${j.expectExit}` : ""}`;
 	}
 	try {
 		j.finish(j);
@@ -457,6 +468,7 @@ function executePlan(x: Execution, id: int32): string {
 					continue;
 				}
 				j.child = child.value;
+				j.child!.closeStdin();
 				running.push(j);
 			} catch (e) {
 				failure = e.message;

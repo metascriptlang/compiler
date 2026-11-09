@@ -62,14 +62,14 @@ export function cmdBuildGraph(buildFile: string, projectRoot: string, opts: CliO
 		}
 		const id = selectNode(g, name);
 		const target = nodeById(g, id);
-		if (run && target.kind != "executable" && target.kind != "run") throw new Error(`msc run takes an executable node; '${name}' is a ${target.kind}`);
-		const passArgs = run ? programArgs(opts.extraArgs) : [];
-		const x = newExecution(g, opts, projectRoot, opts.dryRun, passArgs, opts.graphJobs > 0 ? opts.graphJobs : Math.max(1, cpuCount()) as int32);
+		if (run && target.kind != "executable" && target.kind != "command") throw new Error(`msc run takes an executable or command node; '${name}' is a ${target.kind}`);
+		const passArgs = programArgs(opts.extraArgs);
+		const x = newExecution(g, opts, projectRoot, opts.dryRun, passArgs, id, opts.graphJobs > 0 ? opts.graphJobs : Math.max(1, cpuCount()) as int32);
 		const out = executeNode(x, id);
 		if (x.reused.length > 0) console.log(dim(`reused: ${x.reused.join(", ")}`));
 		if (x.dryRun) return 0;
 		if (run && target.kind == "executable") return execFile(out, passArgs) as int32;
-		if (out != "" && target.kind != "run" && target.kind != "step") console.log(success(`Built ${bold(target.name != "" ? target.name : "default")} → ${out}`));
+		if (out != "" && target.kind != "step") console.log(success(`Built ${bold(target.name != "" ? target.name : "default")} → ${out}`));
 		return 0;
 	} catch (e) {
 		console.log(`${error("error")}: ${e.message}`);
