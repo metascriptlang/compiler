@@ -1427,11 +1427,13 @@ export function dbRestoreCheck(db: TransAmDb, filePath: string, ctx: CheckerCont
 	registerModuleProgram(filePath, program);
 	const key = createQueryKey(TaQueryKind.TypeCheck, fileId);
 	pushFrame(db.depStack, key);
+	const inputs = new HashSet<string>();
 	for (let i = 0; i < record.kinds.length; i += 1) {
-		const kind = record.kinds[i];
-		const id = kind == TaQueryKind.FileText ? getInputId(db.fileInput, record.paths[i], db.revision.value) : getFileId(db.fileInput, record.paths[i]);
-		if (id < 0) throw new Error(`internal: the std unit restores ${filePath} with a dependency on ${record.paths[i]}, which this db does not hold`);
-		recordDependency(db.depStack, createQueryKey(kind, id));
+		const path = record.paths[i];
+		if (record.kinds[i] != TaQueryKind.FileText && getFileId(db.fileInput, path) < 0) throw new Error(`internal: the std unit restores ${filePath} with a dependency on ${path}, which this db does not hold`);
+		if (inputs.has(path)) continue;
+		inputs.add(path);
+		recordDependency(db.depStack, createQueryKey(TaQueryKind.FileText, getInputId(db.fileInput, path, db.revision.value)));
 	}
 	recordDurability(db.depStack, record.durability);
 	db.contexts.set(checkCtxKey(fileId), ctx);
