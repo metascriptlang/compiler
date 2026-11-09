@@ -1,7 +1,7 @@
 // @stdout: main exits
 // @stdout: task done 15000000
 // @serial
-// @ledger-slack(msStringArrayRefCell) 2
+// @ledger-slack(msStringArrayRefCell) 1
 // @ledger-slack(Cell) 1
 // @ledger-slack(Child) 1
 // @ledger-slack(msRefArrayRefCell) 1
