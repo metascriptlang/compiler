@@ -3338,6 +3338,8 @@ run();
 | a typed array result (`Float32Array`, `Int32Array`, … the nine TS classes), nullable | a new array of the same class over a copy of the whole buffer, `byteOffset` and `length` kept |
 | `Span<T>` parameter (a `Vec<T>`, a slice `xs[1..3]` or a typed array passes to it) | lent for the call; a writable Span's writes are copied back; two views of one array share one copy |
 | a callback parameter | lent for the call, re-entrant (a callback may call wasm again, except while it holds a `Span` it was handed: a `Span<T>` of numbers is a typed array over wasm memory for the call, written in place, and a `Span<boolean>` a copy written back); one the wasm side keeps (stores it, captures it, or passes it on to anything but a direct call of it) stays callable until the wasm side drops its last reference, and a dev build names at exit each one never dropped: `msb leak: callback 'visit' kept by listen at core.ms:4 never released` |
+| a `ref` or `out` parameter of a number, `boolean`, an exported enum, `string` or a struct of those, nullable too | a copy of the caller's variable (a local, a module variable, a field or an element), written back to it after the call and also when the call throws, so a write before a `throw` reaches the caller as in the all-C program; an unassigned `out` variable crosses as its zero value |
+| a `sink` parameter (`string`, a struct, `Vec<T>`) | the copy, moved into the parameter, so a callee that stores or returns it makes no second copy |
 | `Handle<C>` of an exported class `C` (`std/ffi`) | wasm owns the object, JS holds a counted reference: `release()`, `retain()`, `[Symbol.dispose]` |
 | `Handle<VecBox<T>>` with `h.view(f)` | a `Span<T>` over wasm memory inside `f` only, with no copy |
 
@@ -3345,7 +3347,10 @@ run();
 object; a wasm throw reaches it as an `Error` with its message. A trap cannot be unwound: it ends
 the wasm instance, and every later call to it throws saying so. A kept callback called while a
 `Span` parameter's copy is live throws `a kept callback was called while 'bump' holds a copy of its
-Span, so a JS write to the array would be lost`, because the copy back would overwrite the write.
+Span, so a JS write to the array would be lost`, because the copy back would overwrite the write;
+called during a call with a `ref` or `out` parameter it throws `a kept callback was called while
+'bump' holds a copy of its ref parameter 'total', so JS would see the variable as it was before the
+call and a write to it would be lost`, for the same reason.
 
 **Refused at compile time, with the reason and the fix in the message:**
 
@@ -3359,7 +3364,16 @@ Span, so a JS write to the array would be lost`, because the copy back would ove
   values as `Vec` parameters), an enum the module does not export (`Color must be exported by this
   module to cross`), an enum member type such as `Color.Red` (`declare it as Color`), a union (a tag integer and the payload, or one `@wasm` function per variant), a function
   as a result or a struct field (a function crosses only as a parameter), and a callback that
-  returns a nullable value.
+  returns a nullable value;
+- a parameter mode with no copy form, each message naming the mode: a `ref` or `out` `Vec`
+  (`parameter 'xs' is 'ref Vec<int32>', and a Vec crosses the boundary only as a copy for the
+  call: take a Span to write its elements in place, or return the new Vec`), a `Span`, `Handle` or
+  callback with any mode, a `ref` or `out` struct the module does not export, and a callback's own
+  `ref`, `out` or `sink` parameter (`parameter 1 of parameter 'visit' is 'ref int32', and a callback
+  crossing the boundary cannot write a variable of its wasm caller`);
+- a `ref` or `out` parameter beside a callback parameter, because the callback would run JS while
+  wasm holds the variable's copy: `it takes the ref parameter 'n' and a callback, and the callback
+  runs JS while wasm holds the copy of 'n'`.
 
 **Refused at the call, as a thrown `Error`:**
 
@@ -3372,10 +3386,16 @@ Span, so a JS write to the array would be lost`, because the copy back would ove
   could grow wasm memory`;
 - a `Handle` used or released after its last release: `use of Handle<Counter> created at
   handleMisuseWasm.ms:8 after release`. A release while a call lends the handle waits for that call
-  to end.
+  to end;
+- two `ref` or `out` arguments that reach the same variable, one inside the other included, or one
+  that names an element a `Span` argument views, because wasm writes a separate copy of each where
+  the all-C program writes one variable: `both: parameter 'a' and parameter 'b' reach the same
+  variable, and wasm works on a separate copy of each, so a write through one would be lost to the
+  other: pass separate variables`.
 
 **Default (dev) builds check more.** They check argument types on the functions the entry
-re-exports, name the creation site in handle messages, and at exit print `msb leak: Handle<Counter>
+re-exports (a foreign JS caller passes a `ref` or `out` argument as the pair `[object, key]` the JS
+backend passes, holding a value of its type), name the creation site in handle messages, and at exit print `msb leak: Handle<Counter>
 created at handleLeakWasm.ms:8 never released` for each handle still held; `MSB_LEAKS=error` makes
 that exit 1, and an exit code the program set is kept. `--release` and `--danger` keep the three
 handle checks and drop the site.
@@ -3386,7 +3406,10 @@ wasmmix program under `src/test/wasmmix/programs/` (the example's parts `typedAr
 `callback`, the refusals `refused*`, `typedArrayMisuse`, `handleMisuse`, `handleViewOpen`,
 `handleLeak`, the errors `callbackThrow*` and `trapPoison`). `src/test/wasmmix/check.sh` runs them
 on C, JS, mixed JS + wasm and headless Chrome 149: the same day and tree, all 80 programs pass (the
-units, 174/174, last ran on main `5e2b893c5bc`, before a docs and bench-only change). Not run:
+units, 174/174, last ran on main `5e2b893c5bc`, before a docs and bench-only change). The `ref`, `out` and `sink`
+rows and their refusals are `refOutScalars`, `refOutStructs`, `sinkCopies`, `refusedModes`,
+`refAliased`, `keptCallbackDuringRef` and `refForeign`, all 91 programs and 187 units passing on
+m1m 2026-11-09 (tip `044a13c5cc0`). Not run:
 Windows and Linux hosts, other browsers. Design, rejected paths and
 measurements, including the bench against wasm-bindgen: [`WASM.md`](WASM.md).
 

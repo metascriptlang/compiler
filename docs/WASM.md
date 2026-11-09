@@ -33,6 +33,7 @@ unless its `@columns` says otherwise.
 | `Span<T>` | lent for the call; a writable Span is copied back; two views of one array share one copy | `spans`, `spanOverlap`, `spanLendResize`, `scratchArena` |
 | Callbacks | lent for the call; one the wasm side keeps (any use but a direct call of it, through helpers too) stays callable until the wasm side drops its last reference, which frees its JS slot; called while a `Span` copy is live it throws | `callback*`, `keptCallback*`, `closureEnvDestroy` |
 | A callback's `Span<T>` parameter | a typed array over wasm memory for the call, so a write lands in place, also one made before a throw, and two Spans of one Vec see each other's writes; a `Span<boolean>` is a copy written back after the call, two of them sharing one copy; a boundary call while it is open throws | `spanCallback`, `callbackSpanViews`, `spanOverlap`, `spanReentry`, `exportsHeap`, `typedSet` |
+| `ref`, `out` and `sink` parameters | `ref`/`out` of a number, bool, exported enum, string or struct of those (nullable too): copied in from the caller's variable and written back after the call and when it throws; refused beside a callback, and at the call when two arguments reach one variable or one names an element a `Span` argument views; a kept callback called during the call throws. `sink` of a string, struct or `Vec`: the adopted copy is moved into the parameter. A `ref`/`out` `Vec`, `Span`, `Handle` or callback and a callback's own mode are refused naming the mode | `refOutScalars`, `refOutStructs`, `sinkCopies`, `refAliased`, `keptCallbackDuringRef`, `refForeign`, `refusedModes` |
 | Errors | a JS throw in a callback reaches the JS caller as the same object; a wasm throw reaches it as an Error; a trap ends the instance and every later call says so | `callbackThrow*`, `spanThrow`, `handleTrap` |
 | Owner `Handle<T>` of an exported class | wasm owns it, JS holds a counted reference: `release`, `retain`, `[Symbol.dispose]`; a release while a call lends it waits for that call | `handleBasic`, `handleRetain`, `handleMisuse`, `handleDestroy` |
 | `Handle<VecBox<T>>.view(f)` | a Span over wasm memory, no copy, only inside `f`; a boundary call while it is open throws (it could grow memory) | `handleView*`, `refusedKeptView*` |
@@ -48,6 +49,16 @@ The kept callback row was measured 2026-11-09 on m1m with a candidate of `wt/js-
 compiler cc97a2f5818 (refused). 70000 kept callbacks replaced one by one stay within the 65536-slot
 table, directly and through an owning object; a handler that drops itself mid-call returns cleanly.
 Not measured: a kept callback in `--danger`, one held only by a JS-to-wasm cycle (reported as a leak).
+
+The `ref`/`out`/`sink` row was measured 2026-11-09 on m1m with a candidate of `wt/js-wasm-one-program`
+(base 9904cc564d4, tip 044a13c5cc0): `WASMMIX_BROWSER=1 check.sh` passed 91 of the 91 programs in the
+tree on C, JS, mixed, the tree build and Chrome (its other 3 FAILs are deleted programs m1m still holds),
+units 187/187; the seven new programs are red on the installed compiler cc97a2f5818 (`wasmmix: 0/7
+pass`, refused as having no boundary form). A write before a `throw` reaches the caller on every
+column (`caught boom after the writes: 5 2 text written`), an `out` parameter whose callee throws
+before writing leaves the caller's value (`caught boom before the write: 3`), and the adopted copy of
+a `sink` string is moved into the parameter with no incref in the wasm entry's C. Not measured:
+`--release`/`--danger`, a `ref` of a generic struct, a Node host other than m1m's.
 
 Dev builds (default mode) add: argument type checks on the functions the entry re-exports, and
 the site in handle messages (`use of Handle<Counter> created at core.ms:8 after release`); at exit
@@ -121,6 +132,16 @@ three handle checks and drop the site.
   missed would fail at run time while a lent callback taken as kept only costs one allocation.
 - **A release while a call lends the handle is deferred to the end of that call**, a deliberate
   divergence recorded as `paper/NIM-REF.md` RT-48.
+- **A `ref` or `out` parameter is a copy written back, through the result takers.** Wasm cannot
+  address the caller's JS variable, so the wasm export copies the value into a local passed by
+  reference and hands it back through the same `msb_rs_*` import a struct result uses, after the
+  call and in its `catch`, before the result; the JS glue writes it to the `[object, key]` pair the
+  JS backend passes for a `ref` argument. Two arguments that reach one variable are refused at the
+  call rather than shared, because the all-C program writes one variable through both (`f(x, x)`
+  prints `2` on C and JS where two copies print `1`); a struct or `Vec` argument beside a `ref` of
+  its field needs no check, because the JS callee copies it on entry as the wasm side does. A
+  `ref`/`out` `Vec` is refused although `let b = a` before the call copies on C and JS alike
+  (probe 2026-11-09: `7,2,9 | 1,2 | 1,2` on both), because no program needed its copy-back yet.
 
 - **Glue changes measured and rejected** (m1m, real bench, 3 interleaved runs, 2026-11-07/08):
   caching heap views, `malloc` and exports in locals (no row faster, strLen 8% slower); a string

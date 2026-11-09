@@ -2030,7 +2030,9 @@ summed in wasm about 1 us. Contract and refusals: [LANG §JS and wasm](LANG.md#j
 | an array the call makes | a typed array result (`Float32Array`, …) written through a `Span` of it; return it only when nothing on the wasm side keeps it, or return `Float32Array.from(x)` |
 | data wasm keeps between calls | an exported class behind `Handle<C>`, or `Handle<VecBox<T>>` read and written in place through `h.view(f)`; release it with `defer h.release()` |
 | work JS must do in the middle | a callback parameter, lent for the call |
-| a JS handler wasm calls later (an event, a timer) | a callback parameter the wasm side stores; store another function in its place when done, so its JS slot is freed; call it from functions that take no `Span` |
+| a JS handler wasm calls later (an event, a timer) | a callback parameter the wasm side stores; store another function in its place when done, so its JS slot is freed; call it from functions that take no `Span` and no `ref` or `out` parameter |
+| a value the call updates in the caller (a counter, a cursor, a struct it fills) | a `ref` or `out` parameter of a number, an enum, a string or a struct of those; it is written back after the call, also when the call throws; pass a separate variable to each, and take no callback beside it |
+| a string, struct or `Vec` the call keeps | a `sink` parameter, so the copy that crossed is the one wasm keeps |
 | state both halves read | none: pass it as a parameter and return what changed, or move every reader into wasm |
 
 Typed array writes go through a `Span` view (`const xs: Span<float32> = out; xs[i] = v`) rather
