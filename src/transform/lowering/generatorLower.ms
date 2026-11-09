@@ -1084,7 +1084,7 @@ function touchLocals(n: Node | null, locals: SymSet, touched: SymSet, declared: 
 	forEachChild(n, (c: Node): void => { touchLocals(c, locals, touched, declared); });
 }
 
-export function localsSpanningStates(sc: StateCollector, locals: SymSet): SymSet {
+export function localsSpanningStates(sc: StateCollector, locals: SymSet, resumeDeclaresYieldVar: boolean): SymSet {
 	const touched: SymSet[] = [];
 	const declared: Symbol[] = [];
 	for (const st of sc.items) {
@@ -1095,6 +1095,7 @@ export function localsSpanningStates(sc: StateCollector, locals: SymSet): SymSet
 	for (const st of sc.items) {
 		if (st.isYield && st.yieldVarSym != null && st.nextState >= 0 && st.nextState < touched.length) {
 			symSetAdd(touched[st.nextState], st.yieldVarSym);
+			if (resumeDeclaresYieldVar) declared.push(st.yieldVarSym);
 		}
 	}
 	const lifted = createSymSet();
@@ -1381,7 +1382,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	optimizeStates(sc);
 
 	// 5. Convert the declarations of the locals that outlive a state to assignments
-	const spanning = localsSpanningStates(sc, locals);
+	const spanning = localsSpanningStates(sc, locals, false);
 	for (const sym of lifetimeLifted.items) symSetAdd(spanning, sym);
 	const lifted = spanning;
 	for (const st of sc.items) {

@@ -30,7 +30,7 @@ import {
 	makeAssign, makeBinary, makeTryCatch, makeCatchSym, syntheticToken, extractBodyStmts, runtimeRef,
 	isSoleFutureRead, makeFutureCopyRead, makeOwnsValueCheck,
 } from "../util";
-import { createSymSet, symSetAdd } from "../context";
+import { SymSet, createSymSet, symSetAdd, symSetContains } from "../context";
 import { createPromise, createClosureType, createPtr, createPrimitive, voidType, booleanType, numberType, isAwaitable, awaitedType } from "../../checker/types";
 import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, localsSpanningStates, localsOutlivingSuspension, collectStateLocals, makeStateAssign, hasExcLanding, wrapExcRouting, makeCurExcDecl, containsYield, stdErrorType, spillAssignedYields, holdClosureEnv, refuseUnliftedClosure } from "./generatorLower";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
@@ -382,7 +382,7 @@ function storeYieldedFuture(yfs: YieldFuture[], state: number, yfType: Type, yie
 	return [decl, makeExprStmt(assign, loc)];
 }
 
-function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promiseType: Type, closureType: Type, loc: SourceLocation, ctx: TransformContext): Node {
+function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], lifted: SymSet, promiseType: Type, closureType: Type, loc: SourceLocation, ctx: TransformContext): Node {
 	// Default (terminal) state: return null (stepper done)
 	let current: Node = makeBlock([makeReturn(makeNull(loc), loc)], loc);
 
@@ -447,6 +447,12 @@ function buildAsyncStateDispatch(sc: StateCollector, yfs: YieldFuture[], promise
 					readExpr = rawRead;
 					if (ctx.raiserBackend) rawRead.nodeType = varType;
 				}
+			}
+			if (!symSetContains(lifted, varSym)) {
+				const resumeDecl = makeVarDecl(varSym.name, makeDefaultValue(varType!, loc), DeclKind.Let, loc);
+				resumeDecl.nodeType = varType;
+				resumeDecl.resolvedSym = varSym;
+				stateStmts.push(resumeDecl);
 			}
 			const takeStmt = makeExprStmt(makeAssign(makeTypedIdentResolved(varSym, varType, loc), readExpr, loc), loc);
 			if (soleRead[prevIdx] || !ownedInFuture(varType, ctx.raiserBackend)) {
@@ -606,7 +612,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 	}
 
 	// 6. Convert the declarations of the locals that outlive a state to assignments
-	const spanning = localsSpanningStates(sc, locals);
+	const spanning = localsSpanningStates(sc, locals, true);
 	for (const sym of lifetimeLifted.items) symSetAdd(spanning, sym);
 	const lifted = spanning;
 	// Also add yielded-future locals ($yf0, $yf1, ...) to the hoisted set
@@ -629,7 +635,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type | null, ctx: Tran
 	}
 
 	// 6. Build async state dispatch (stepper pattern instead of iterator pattern)
-	const dispatch = buildAsyncStateDispatch(sc, yfs, promiseVoidType, closureType, loc, ctx);
+	const dispatch = buildAsyncStateDispatch(sc, yfs, lifted, promiseVoidType, closureType, loc, ctx);
 
 	// 6b. Inner exceptionTable routing (closureiters tầng 1): route a raised state
 	// to its landing; the terminal re-raises `$curExc` out to the outer
