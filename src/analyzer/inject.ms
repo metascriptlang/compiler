@@ -3035,11 +3035,12 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	}
 	const baked: Symbol[] = [];
 	const staticData: Symbol[] = [];
+	const emitsStaticData = !dctx.ctx.raiserBackend;
 	for (const s of d.programStmts) {
 		const decl = s.kind == NodeKind.ExportDecl ? (s.data as ExportDeclData).exportedDecl : s;
 		if (decl.kind != NodeKind.VariableDecl || decl.resolvedSym == null) continue;
-		if (bakesIntoStaticCell(decl)) (isReadonlyBinding(decl) ? staticData : baked).push(decl.resolvedSym);
-		if (staticDataConstBinding(decl)) staticData.push(decl.resolvedSym);
+		if (bakesIntoStaticCell(decl)) (emitsStaticData && isReadonlyBinding(decl) ? staticData : baked).push(decl.resolvedSym);
+		if (emitsStaticData && staticDataConstBinding(decl)) staticData.push(decl.resolvedSym);
 	}
 	pushScope(dctx, false, false);
 	const fPrep = flowStart();
