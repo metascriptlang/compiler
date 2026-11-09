@@ -18,7 +18,8 @@ directory is the project root, and every manifest operation (`msc.lock`, `.msc/b
 
 **Accepted forms** (`findConfigObject`): `const config: BuildConfig = { … }; export default config;`
 (the idiomatic form) and `export default { … };`. A call such as `defineConfig({ … })` stops every
-command with `build: configuration must contain an object literal`.
+command with `build: configuration must contain an object literal`. A `build.ms` that exports build nodes is the
+other form ("`build.ms` as a build graph" below).
 
 **Every field is read or refused** (`checkConfigShape`): a field msc does not read, or a value it
 cannot read as a literal of its kind, stops every command and names the field and line, and the
@@ -169,6 +170,76 @@ Measured 2026-09-22, card `~/metascript/.inbox/compiler/2026-09-22-build-ms-decl
   `from "greeter/src/index"` works (see below).
 
 `resolve.searchPaths` / `resolve.extensions` are not read and are refused.
+
+## `build.ms` as a build graph
+
+A `build.ms` whose exports are build nodes is a program, not a literal. Each exported node is a
+command-line name (`msc build app`), and `export default` is what a bare `msc build` / `msc run`
+take. The vocabulary is Zig's `std.Build` without the `add` prefix (`executable`, `library`,
+`systemCommand`, `runArtifact`, `installArtifact`, `step`, `writeFiles`, `updateSourceFiles`,
+`option`, `standardOptimizeOption`, `standardTargetOptions`), and a command keeps Zig's `add…Arg`
+methods. The types are in `std/build/graph.ms`; the design and its decisions are in
+`~/metascript/.inbox/compiler/2026-11-09-design-build-ms-typed-graph.md`. `msc init` writes the
+two-line form:
+
+```ms
+import { executable, path } from "std/build";
+export default executable({ entry: path("src/index.ms") });
+```
+
+Measured on 2026-11-10, a candidate of tree `97f6320958bf`, in a fresh `msc init` directory:
+`msc build` printed `Built index → /tmp/bgdoc/out/index`, a second one `Up to date`, and `msc run`
+printed `hello, metascript!`.
+
+**Two phases.** Configure runs `build.ms` on Raiser and records the graph; it runs nothing. Every
+host call that writes, spawns or reads the environment fails there, and `msc check`, `msc test`
+and the editor configure only, so opening a project never runs its commands (a `systemCommand`
+that touches a marker left no marker after `check`, `test` and `--list`). `msc build <node>` then
+runs the nodes it needs with the user's full rights, `-j<n>` at once (one per cpu by default);
+`--dry-run` prints every command line and runs none.
+
+**Paths.** `path("x")` resolves like Node's `path.resolve` against the directory of the file that
+calls it, so a library's build function in another package names its own files. `glob("src/*.ms")`
+lists the files under that directory, sorted, never entering a dot-directory.
+
+**Options.** `option(name, description)` reads `-Dname=value` (a bare `-Dname` is `"true"`);
+`--release`/`--danger` give `standardOptimizeOption()` ReleaseSafe/ReleaseFast, and `--os`,
+`--cpu`, `--abi` give `standardTargetOptions()`. An option the command line gives and `build.ms`
+never asks for stops the build: `the command line gives the option 'nope', which build.ms does
+not declare; it declares greeting, optimize`. `msc build --list` names each export and option:
+
+```
+app (default)  executable
+table  command
+-Dgreeting=…  the word the table starts with
+-Doptimize=…  Debug, ReleaseSafe or ReleaseFast; --release and --danger name the last two
+```
+
+**Dependencies.** `import { lib } from "lib/build"` imports a dependency's build functions
+through the same `deps` alias as source imports. A build function should take the consumer's
+choices (`lib({ optimize })`), so one dependency can be built two ways in one graph. Two nodes
+of the same shape (kind, inputs, arguments, dependencies) are one node, so calling `lib` twice with
+the same arguments builds it once; the approved design memoised the call by its arguments, and
+merging by shape gives that result without intercepting calls (`keepOne`,
+`src/compiler/build/configure.ms`). An executable or library no export names is written to
+`out/.graph/<entry>-<shape hash>`, so two configurations never share a file.
+
+**Reuse.**
+- The graph is cached in `out/.configure.json`, keyed by the compiler and the `-D` options, and
+  reused while every file the evaluation loaded hashes the same and every `glob` lists the same
+  files. Measured 2026-11-09 on a candidate of `01744ec89`, host load 60–150:
+  configure 1.57 s, cached 0.008 s. A graph whose plan runs a `step` configures again, because
+  the step's closure lives in the VM.
+- A command or `writeFiles` output lives in the global store under `build/o/<digest>` and is
+  reused while its tool, arguments and input content are the same ([BUILD-CACHE.md](BUILD-CACHE.md)
+  "What a worktree reuses from another"); `--dry-run` prints `reused:` for each. Input hashes are
+  remembered by change stamp, so an unchanged input tree is not read again: a command over 400
+  files of 256 KB took 0.96 s to find its output before and 0.006 s after (tree `7d6a63e19c01`,
+  host load 16–18, three runs each).
+- An executable node runs `msc build`, whose own project cache answers `Up to date` when nothing
+  changed (40–54 ms for a one-file program on the same tree); the design's second read-set layer
+  over it was not built, because this one answers the same question.
+- `updateSourceFiles` writes a generated file into the source tree only when its content changed.
 
 ## Packages
 
@@ -359,7 +430,7 @@ cache directory without hashing it again (see Verified below). Checked once is n
 
 | Command | Behavior |
 |---|---|
-| `msc init <name>` | Scaffold `build.ms` with `entry: "src/index.ms"` + `src/index.ms` ending in a bare `main();`, so `msc build` / `msc run` take the project without a file argument. Measured 2026-10-15: inside a fresh scaffold, `msc build` printed `Built 1 module(s) → out/debug/index` on a candidate built from `7e7c0dd02`, where v0.3.4 (`15b93cbba`) stopped with `error: build requires an input file` because it wrote `root:`. |
+| `msc init <name>` | Scaffold the two-line graph `build.ms` (`export default executable({ entry: path("src/index.ms") })`) and `src/index.ms` ending in a bare `main();`, so `msc build` / `msc run` take the project without a file argument. Measured 2026-11-10 on a candidate of tree `97f6320958bf`: `msc build` printed `Built index → <dir>/out/index`, `msc run` printed `hello, metascript!`. |
 | `msc add <spec> [-D]` | Add a dep to `deps` (or `devDeps` with `-D`) in `build.ms`, then install commands. Spec: `name` (registry latest), `name@1.2.3`, `name@file:path`; a `git:` source is refused. Also rewrites `msc.lock` for registry. |
 | `msc remove <name>` | Remove the dep from `build.ms` + `msc.lock`, then prune its shims from `.msc/bin/`. `-g <name>` removes a global install (manifest + `~/.metascript/bin/` shim). |
 | `msc install` | Verify locked deps are present, install commands into `.msc/bin/`; refuses git entries, transitive registry deps, a missing `msc.lock` and a registry/git dep it has no entry for. `-g <spec>` = global (see shims). |
