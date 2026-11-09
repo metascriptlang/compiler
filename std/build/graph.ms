@@ -131,6 +131,8 @@ export class Command extends BuildNode {
 	inputs: LazyPath[];
 	env: EnvVar[];
 	stdout: boolean;
+	hasSideEffects: boolean;
+	expectedExit: int32;
 	constructor(argv: string[]) {
 		super("command", "");
 		this.argv = [];
@@ -139,17 +141,8 @@ export class Command extends BuildNode {
 		this.inputs = [];
 		this.env = [];
 		this.stdout = false;
-	}
-}
-
-export class RunArtifact extends BuildNode {
-	artifact: Executable;
-	args: string[];
-	constructor(artifact: Executable, args: string[]) {
-		super("run", "");
-		this.artifact = artifact;
-		this.args = args;
-		this.deps.push(artifact);
+		this.hasSideEffects = false;
+		this.expectedExit = -1;
 	}
 }
 
@@ -239,8 +232,28 @@ export function addArgs(this c: Command, args: string[]): void {
 }
 
 export function addFileArg(this c: Command, p: LazyPath): void {
-	c.argv.push({ kind: ArgKind.File, text: "", path: p });
+	c.addPrefixedFileArg("", p);
+}
+
+export function addPrefixedFileArg(this c: Command, prefix: string, p: LazyPath): void {
+	c.argv.push({ kind: ArgKind.File, text: prefix, path: p });
 	dependOn(c, p);
+}
+
+export function getEmittedBin(this a: Executable): LazyPath {
+	return generated(a, "");
+}
+
+export function addArtifactArg(this c: Command, a: Executable): void {
+	c.addPrefixedFileArg("", a.getEmittedBin());
+}
+
+export function addPrefixedArtifactArg(this c: Command, prefix: string, a: Executable): void {
+	c.addPrefixedFileArg(prefix, a.getEmittedBin());
+}
+
+export function expectExitCode(this c: Command, code: int32): void {
+	c.expectedExit = code;
 }
 
 export function addFileInput(this c: Command, p: LazyPath): void {
@@ -285,8 +298,11 @@ export function setEnvironmentVariable(this c: Command, name: string, value: str
 	c.env.push({ name, value });
 }
 
-export function runArtifact(artifact: Executable, args: string[] = []): RunArtifact {
-	return new RunArtifact(artifact, args);
+export function runArtifact(artifact: Executable, args: string[] = []): Command {
+	const c = new Command([]);
+	c.addArtifactArg(artifact);
+	c.addArgs(args);
+	return c;
 }
 
 export function installArtifact(artifact: BuildNode): Install {
