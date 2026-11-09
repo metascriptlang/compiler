@@ -160,6 +160,7 @@ import "./raiserSourceNamespace";
 import "./raiserPackedPlaces";
 import "./raiserPackedCalls";
 import "./raiserPackedLegacy";
+import "./raiserModuleTdzEntry";
 import "./raiserRequiredField";
 import "./raiserRuntimeLayout";
 import "./raiserValueUnionCopy";
