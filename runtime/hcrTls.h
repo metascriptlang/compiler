@@ -22,7 +22,6 @@ static inline __attribute__((always_inline, no_sanitize("undefined"))) char* msH
 #define msCurrentActor MS_HCR_TLS_REF(msActor*, msCurrentActor)
 #define msMySchedulerID MS_HCR_TLS_REF(int, msMySchedulerID)
 #define msMyHazard MS_HCR_TLS_REF(msHazardRec*, msMyHazard)
-#define msMsgPools MS_HCR_TLS_ARRAY(msMsgPool, msMsgPools)
 #define _msEvtBuf MS_HCR_TLS_ARRAY(msReadyEvent, _msEvtBuf)
 #define msErr MS_HCR_TLS_REF(bool, msErr)
 #define msCurrException MS_HCR_TLS_REF(msException*, msCurrException)

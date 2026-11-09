@@ -4,7 +4,7 @@
  * actor.h / mailbox.h / selector.h are header-only with `static inline`
  * functions. Their globals MUST live in a single TU — `static` in a header
  * gives each .ms→.c TU its own private copy, breaking multi-module programs
- * (scheduler fragmentation, pool ID handoff, msg-pool / evt-buffer split).
+ * (scheduler fragmentation, pool ID handoff, evt-buffer split).
  *
  * The `static inline` accessors compile per-TU but read/write the single
  * extern set defined below.
@@ -13,7 +13,7 @@
 
 #include "runtime/core/system.h"  /* pulls in DRC + futures + msString (needed by actor.h) */
 #include "runtime/actor/actor.h"
-#include "runtime/actor/mailbox.h"   /* msMsgPools extern definition */
+#include "runtime/actor/mailbox.h"
 #include "runtime/actor/selector.h"  /* _msEvtBuf extern definition */
 
 /* Per-thread current actor — set inside msActorProcess. */
@@ -68,55 +68,6 @@ pthread_once_t msNameRegistryOnce = PTHREAD_ONCE_INIT;
 
 /* Cycle detector actor (pinned to scheduler 0, created by msCDInit). */
 msActor* msCycleDetectorActor = NULL;
-
-/* Mailbox per-thread message pool (mailbox.h). One pool per size class per
- * thread. Single TU-shared TLS slot — see mailbox.h comment for the
- * cross-TU duplication hazard. */
-MS_THREAD_LOCAL msMsgPool msMsgPools[MS_MSG_POOL_CLASSES];
-MS_TLS_PUBLISH(msMsgPools)
-
-static msMessage* msMsgOrphans[MS_MSG_POOL_CLASSES];
-static pthread_mutex_t msMsgOrphansLock = PTHREAD_MUTEX_INITIALIZER;
-int32_t msMsgOrphansPending[MS_MSG_POOL_CLASSES];
-
-static void msMsgOrphansAcquire(void) {
-    pthread_mutex_lock(&msMsgOrphansLock);
-}
-
-static void msMsgOrphansRelease(void) {
-    pthread_mutex_unlock(&msMsgOrphansLock);
-}
-
-__attribute__((noinline)) msMessage* msMsgOrphansTake(uint8_t cls) {
-    msMsgOrphansAcquire();
-    msMessage* spilled = msMsgOrphans[cls];
-    msMsgOrphans[cls] = NULL;
-    __atomic_store_n(&msMsgOrphansPending[cls], 0, __ATOMIC_RELAXED);
-    msMsgOrphansRelease();
-    return spilled;
-}
-
-void msMsgPoolsThreadTeardown(void) {
-    msMessage* last[MS_MSG_POOL_CLASSES];
-    for (int cls = 0; cls < MS_MSG_POOL_CLASSES; cls++) {
-        last[cls] = msMsgPools[cls].free_list;
-        if (last[cls] == NULL) continue;
-        msMessage* next;
-        while ((next = atomic_load_explicit(&last[cls]->next, memory_order_relaxed)) != NULL) last[cls] = next;
-    }
-    msMsgOrphansAcquire();
-    for (int cls = 0; cls < MS_MSG_POOL_CLASSES; cls++) {
-        if (last[cls] == NULL) continue;
-        atomic_store_explicit(&last[cls]->next, msMsgOrphans[cls], memory_order_relaxed);
-        msMsgOrphans[cls] = msMsgPools[cls].free_list;
-        __atomic_store_n(&msMsgOrphansPending[cls], 1, __ATOMIC_RELAXED);
-    }
-    msMsgOrphansRelease();
-    for (int cls = 0; cls < MS_MSG_POOL_CLASSES; cls++) {
-        msMsgPools[cls].free_list = NULL;
-        msMsgPools[cls].count = 0;
-    }
-}
 
 /* Selector per-thread poll result buffer (selector.h). Single TU-shared
  * TLS slot so msSelectorWait/EventFd/EventFlags called across TUs on the

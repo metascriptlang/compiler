@@ -1436,8 +1436,8 @@ static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
     }
     /* Step 4: drain remaining messages. Do NOT free the popped message — pop
      * already made it the new tail stub (freed by the next pop, or by
-     * msMpscDestroy below). Freeing it here threads the live tail into the
-     * msg-pool free list and the drain chases pool nodes forever.
+     * msMpscDestroy below). Freeing it here frees the live tail, and the
+     * next pop reads freed memory.
      * I20: fail each pending CALL's reply future (BEAM {noproc}) so callers
      * awaiting a now-reaped actor unblock instead of hanging. */
     {

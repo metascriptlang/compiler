@@ -369,8 +369,7 @@ static _Thread_local int32_t msSlotPoolIdx = 0;
  * here (not static in the header) so all TUs share the same per-thread state —
  * a static _Thread_local in a header gives each TU its own copy, breaking
  * the cross-TU "test program msDecref → pool.c msFutureReleaseFlush at exit"
- * flow. Pony parity: msMsgPools uses the same extern-in-header + define-in-.c
- * pattern (mailbox.h:76, defined in actor.c). */
+ * flow. */
 #if MS_FUTURE_SUBMIT_REF
 _Thread_local void* msFutureReleaseBuf[MS_FUTURE_RELEASE_CAP];
 MS_TLS_PUBLISH(msFutureReleaseBuf)

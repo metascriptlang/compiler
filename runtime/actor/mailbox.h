@@ -17,121 +17,38 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <stdbool.h>
-#include "runtime/hcrTls.h"
 #include "runtime/drc.h"
 #include "runtime/core/stringRep.h"
 #include <string.h>
 
-/* ===== Message (Pony parity: size-class allocation, exact-fit per method) ===== */
+/* ===== Message ===== */
 
 typedef struct msMessage {
     _Atomic(struct msMessage*) next;  /* intrusive linked list */
     int32_t kind;                     /* dispatch index (method vtable ID) */
-    uint8_t sizeClass;                /* pool bucket index (Pony's pony_msg_t.index) */
     void* replyFuture;                /* msFuture* for call() semantics, NULL for send() */
-    char data[];                      /* flexible array member — exact-fit per method */
+    char data[];                      /* argCount 8-byte slots */
 } msMessage;
 
-/* ===== Size-Class Pool (Pony-style: exact-fit allocation, thread-local) =====
- *
- * 3 size classes (Pony uses 16; we need 3 for actor messages):
- *   Class 0: 32B — header only or 1 arg  (0-1 args)
- *   Class 1: 64B — small methods          (2-4 args)
- *   Class 2: 128B — large methods         (5-13 args)
- *
- * Header = next(8) + kind(4) + sizeClass(1) + padding(3) + replyFuture(8) = 24B
- * Data capacity per class: 32-24=8B (1 slot), 64-24=40B (5 slots), 128-24=104B (13 slots)
- */
-
-/* Verify header layout assumption — data capacities depend on this */
-_Static_assert(offsetof(msMessage, data) == 24, "msMessage header must be 24 bytes");
-
-#define MS_MSG_POOL_CLASSES 3
-#define MS_MSG_POOL_SLAB 64
-
-static const int MS_MSG_CLASS_SIZE[MS_MSG_POOL_CLASSES] = { 32, 64, 128 };
-
-/* Compute size class from arg count (each arg = 8 bytes = 1 slot) */
-static inline uint8_t msMsgSizeClass(int argCount) {
-    int dataBytes = argCount * 8;
-    if (dataBytes <= 8)  return 0;  /* 32B: 0-1 args */
-    if (dataBytes <= 40) return 1;  /* 64B: 2-5 args */
-    return 2;                        /* 128B: 6-13 args */
-}
-
-typedef struct msMsgPool {
-    msMessage* free_list;
-    int count;
-} msMsgPool;
-
-#ifndef MS_THREAD_LOCAL
-#ifdef _WIN32
-#define MS_THREAD_LOCAL __declspec(thread)
-#else
-#define MS_THREAD_LOCAL _Thread_local
-#endif
-#endif
-
-/* Per-thread pool, one per size class. Extern (definition in actor.c) so all
- * TUs share the same TLS slot — `static` here would give each TU its own
- * pool, and cross-TU msMsgAlloc/msMsgFree on the same thread would touch
- * different freelists. */
-MS_TLS_EXTERN_ARRAY(msMsgPool, msMsgPools, MS_MSG_POOL_CLASSES);
-
-extern int32_t msMsgOrphansPending[MS_MSG_POOL_CLASSES];
-msMessage* msMsgOrphansTake(uint8_t cls);
-void msMsgPoolsThreadTeardown(void);
-
-static inline void msMsgPoolGrow(msMsgPool* pool, uint8_t cls) {
-    if (__atomic_load_n(&msMsgOrphansPending[cls], __ATOMIC_RELAXED) != 0) {
-        pool->free_list = msMsgOrphansTake(cls);
-        if (pool->free_list != NULL) return;
-    }
-    int msgSize = MS_MSG_CLASS_SIZE[cls];
-    /* Allocate slab as raw bytes — messages are msgSize apart */
-    char* slab = (char*)msMemAllocN0((size_t)MS_MSG_POOL_SLAB, msgSize);
-    for (int i = 0; i < MS_MSG_POOL_SLAB - 1; i++) {
-        msMessage* cur = (msMessage*)(slab + i * msgSize);
-        msMessage* nxt = (msMessage*)(slab + (i + 1) * msgSize);
-        atomic_store_explicit(&cur->next, nxt, memory_order_relaxed);
-    }
-    msMessage* last = (msMessage*)(slab + (MS_MSG_POOL_SLAB - 1) * msgSize);
-    atomic_store_explicit(&last->next, pool->free_list, memory_order_relaxed);
-    pool->free_list = (msMessage*)slab;
-    pool->count += MS_MSG_POOL_SLAB;
-}
-
+/* An envelope is allocated on the sender's thread and freed by the receiver's
+ * pop, usually on another thread; the region heap returns a block freed on a
+ * foreign thread to its owner, so envelopes cost no memory per message sent.
+ * One slot at least: completion messages are sent with no argument and still
+ * carry an error pointer in slot 0. */
 static inline msMessage* msMsgAllocSized(int32_t kind, void* replyFut, int argCount) {
-    uint8_t cls = msMsgSizeClass(argCount);
-    msMsgPool* pool = &msMsgPools[cls];
-    if (pool->free_list == NULL) {
-        msMsgPoolGrow(pool, cls);
-    }
-    msMessage* m = pool->free_list;
-    pool->free_list = (msMessage*)atomic_load_explicit(&m->next, memory_order_relaxed);
-    pool->count--;
+    size_t slots = argCount > 1 ? (size_t)argCount : 1;
+    msMessage* m = (msMessage*)msMemAlloc0(offsetof(msMessage, data) + slots * sizeof(uint64_t));
     m->kind = kind;
-    m->sizeClass = cls;
     m->replyFuture = replyFut;
-    atomic_store_explicit(&m->next, NULL, memory_order_relaxed);
-    /* Zero data region only (header already set) */
-    int dataSize = MS_MSG_CLASS_SIZE[cls] - (int)offsetof(msMessage, data);
-    if (dataSize > 0) memset(m->data, 0, dataSize);
     return m;
 }
 
-/* Backward-compat wrapper: allocates class 0 (32B) for 0-arg methods */
 static inline msMessage* msMsgAlloc(int32_t kind, void* replyFut) {
     return msMsgAllocSized(kind, replyFut, 0);
 }
 
 static inline void msMsgFree(msMessage* m) {
-    uint8_t cls = m->sizeClass;
-    if (cls >= MS_MSG_POOL_CLASSES) cls = 0;
-    msMsgPool* pool = &msMsgPools[cls];
-    atomic_store_explicit(&m->next, pool->free_list, memory_order_relaxed);
-    pool->free_list = m;
-    if (pool->count < INT32_MAX) pool->count++;
+    msMemFree(m);
 }
 
 /* ===== Arg packing/unpacking (type-erased via void* slots in data[]) ===== */
@@ -205,7 +122,7 @@ typedef struct msMpscQueue {
     msMessage* tail;            /* consumer reads from here (no atomics) */
 } msMpscQueue;
 
-/* Initialize with stub node from pool. Head tagged with LSB=1 (empty). */
+/* Initialize with a stub node. Head tagged with LSB=1 (empty). */
 static inline void msMpscInit(msMpscQueue* q) {
     msMessage* stub = msMsgAlloc(0, NULL);
     atomic_store_explicit(&stub->next, NULL, memory_order_relaxed);
@@ -215,7 +132,7 @@ static inline void msMpscInit(msMpscQueue* q) {
     q->tail = stub;
 }
 
-/* Destroy queue. Returns stub to pool. Queue must be empty. */
+/* Destroy queue. Frees the stub. Queue must be empty. */
 static inline void msMpscDestroy(msMpscQueue* q) {
     if (q->tail != NULL) {
         msMsgFree(q->tail);
@@ -282,7 +199,7 @@ static inline msMessage* msMpscPop(msMpscQueue* q) {
     if (next != NULL) {
         q->tail = next;
         atomic_thread_fence(memory_order_acquire);
-        /* Return old stub to pool (tail was the sentinel) */
+        /* Free the old stub (tail was the sentinel) */
         msMsgFree(tail);
         return next;
     }
