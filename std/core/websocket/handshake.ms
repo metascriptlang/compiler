@@ -1,25 +1,12 @@
 // WebSocket Handshake — RFC 6455 §4.
 //
 // Pure string work: build the HTTP/1.1 upgrade request, parse the 101 response,
-// derive the expected Sec-WebSocket-Accept key. The actual SHA-1 + Base64
-// primitives come from std/crypto via local extern bindings — the C linker
-// resolves the symbols at compile time through the .cms wrapper that pulls
-// in std/crypto separately.
-//
-// Inline tests cover the pure-string paths (request building, response parsing,
-// header validation, base64 key generation). The cryptographic accept-key
-// derivation is exercised in src/test/c/websocket.ms via the C compile
-// path — the inline harness cannot run sha1 (the extern stub throws).
-
-@include("runtime/crypto/hash.h");
+// derive the expected Sec-WebSocket-Accept key with the MetaScript crypto port's SHA-1.
 
 import { WsError, wsHandshakeFailed, wsInvalidUrl } from "./errors";
-
-// Local externs into std/crypto's runtime — the C link resolves these via
-// the .cms wrapper that imports std/crypto.
-extern function msCryptoHashString(algorithm: string, data: string, encoding: string): string;
-extern function msCryptoToBase64(data: string): string;
-extern function msCryptoRandomBytes(size: number): string;
+import { encodeBase64 } from "../encoding";
+import { encodedHash } from "../../crypto/pure/coreNative";
+import { randomOctets } from "../../crypto/pure/random";
 
 // ===== Constants =====
 
@@ -218,20 +205,16 @@ function parseIntStrict(s: string): int32 {
 // Sec-WebSocket-Key. RFC 6455 §4.1 says it must be a fresh 16-byte random
 // value, base64-encoded — server echoes it transformed in Sec-WebSocket-Accept.
 //
-// Native-only — runs sha1/randomBytes externs.
 export function makeClientKey(): string {
-	const raw = msCryptoRandomBytes(16);
-	return msCryptoToBase64(raw);
+	return randomOctets(16).encodeBase64();
 }
 
 // ===== Sec-WebSocket-Accept derivation =====
 
 // Compute the expected Sec-WebSocket-Accept value for a given client key.
 // Server should send back exactly base64(sha1(clientKey + WS_MAGIC_GUID)).
-//
-// Native-only — runs sha1 + toBase64 externs.
 export function deriveAcceptKey(clientKey: string): string {
-	return msCryptoHashString("sha1", clientKey + WS_MAGIC_GUID, "base64");
+	return encodedHash("sha1", clientKey + WS_MAGIC_GUID, "base64");
 }
 
 // ===== Upgrade request builder =====

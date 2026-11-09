@@ -24,10 +24,6 @@ void msCryptoCleanup(void);
 
 /* ===== Hashing ===== */
 
-/* Hash a string, return encoded result (hex or base64).
- * Returns empty string on error. */
-msString msCryptoHashString(msString algorithm, msString data, msString encoding);
-
 /* Hash raw binary data, return raw hash bytes as msString buffer.
  * Returns empty string on error. */
 msString msCryptoHashBuffer(msString algorithm, msString data);
@@ -150,10 +146,6 @@ double msCryptoIsHashSupported(msString algorithm);
 
 /* Digest size in bytes of a supported algorithm, 0 when unsupported. */
 double msCryptoHashSize(msString algorithm);
-
-/* ===== Encoding ===== */
-
-msString msCryptoToBase64(msString data);
 
 /* ===== Key Derivation ===== */
 

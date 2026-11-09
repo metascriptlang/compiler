@@ -84,7 +84,7 @@ import { registerCompileTimeRead, registerCompileTimeEnv, registerCompileTimePro
 import { IoError, IoErrorKind } from "std/io/errors";
 import { ProcessErrorKind } from "std/process/errors";
 import "std/compress/zip";
-import "std/crypto/encodingNative";
+import { HashAlgorithm, init as cryptoInit, cleanup as cryptoCleanup, encodedHash, digestSync, isHashSupported } from "std/crypto/pure/coreNative";
 
 // --- Errno-poll state ---
 // The C runtime sets a thread-local errno after each fallible operation and
@@ -852,37 +852,35 @@ function _bridgeMsZipWriterClose(args: RaiserValue[]): RaiserValue {
 
 // --- std/crypto bridges (hash family) ---
 
-@include("runtime/crypto/hash.h");
-
-extern function msCryptoInit(): boolean;
-extern function msCryptoCleanup(): void;
-extern function msCryptoHashString(algorithm: string, data: string, encoding: string): string;
-
 function _bridgeMsCryptoInit(args: RaiserValue[]): RaiserValue {
-	return boxBool(msCryptoInit());
+	return boxBool(cryptoInit());
 }
 
 function _bridgeMsCryptoCleanup(args: RaiserValue[]): RaiserValue {
-	msCryptoCleanup();
+	cryptoCleanup();
 	return raiserNil();
 }
 
 function _bridgeMsCryptoHashString(args: RaiserValue[]): RaiserValue {
-	return boxString(msCryptoHashString(unboxString(args[0]), unboxString(args[1]), unboxString(args[2])));
+	return boxString(encodedHash(unboxString(args[0]), unboxString(args[1]), unboxString(args[2])));
 }
-
-extern function msCryptoHashSize(algorithm: string): number;
-extern function msCryptoHashSpanInto(algorithm: string, data: Readonly<Span<uint8>>, output: Ptr<uint8>, capacity: int64): int64;
 
 function _bridgeMsCryptoDigest(vm: RaiserVM): void {
 	const algorithm = hostArgString(vm, 0);
 	const data = hostArg(vm, 1).kind == RaiserValueKind.String ? hostArgText(vm, 1) : hostArgBytes(vm, 1);
-	const size = msCryptoHashSize(algorithm) as int64;
-	const out = hostReturnBytesToFill(vm, size) as Ptr<uint8>;
-	const view = (data.at as Readonly<Ptr<uint8>>)[0..data.len];
-	if (size > 0 && msCryptoHashSpanInto(algorithm, view, out, size) != size) {
-		raiseFromHost(`internal: the ${algorithm} digest failed on ${data.len} bytes`, true);
+	if (!isHashSupported(algorithm)) {
+		hostReturnBytesToFill(vm, 0);
+		return;
 	}
+	const view = (data.at as Readonly<Ptr<uint8>>)[0..data.len];
+	const digest = digestSync(algorithm as HashAlgorithm, view);
+	if (!digest.ok) {
+		raiseFromHost(`internal: the ${algorithm} digest failed on ${data.len} bytes`, true);
+		return;
+	}
+	const size = digest.value.length as int64;
+	const out = hostReturnBytesToFill(vm, size) as Ptr<uint8>;
+	for (let i: int64 = 0; i < size; i++) out[i] = digest.value[i];
 }
 
 // --- Macro Node child accessors ---
