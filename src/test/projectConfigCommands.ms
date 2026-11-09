@@ -237,6 +237,8 @@ const initialised = `${root}/initialised`;
 ensureDir(initialised);
 run(initialised, ["init"]);
 record("init writes a two-line graph that run builds and runs", "hello, metascript!", lastLine(run(initialised, ["run", "--colors=off"])));
+run(initialised, ["build", "--colors=off"]);
+record("build of an unnamed default executable writes out/<entry name>", "out/index", exists(`${initialised}/out/index`) || exists(`${initialised}/out/index.exe`) ? "out/index" : "missing");
 const depLib = `${root}/deplib`;
 const depApp = `${root}/depapp`;
 ensureDir(`${depLib}/src`);
