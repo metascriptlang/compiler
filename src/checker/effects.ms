@@ -988,10 +988,14 @@ function isStdNativeMethod(call: Node, sym: Symbol): boolean {
 	return receiverOf(call) != null && stdModuleName(sym.modulePath) != "";
 }
 
+function isLentValueView(slot: Type): boolean {
+	return slot.kind == TypeKind.Span && isReadonlyView(slot) && elementsValueOnly(slot, null);
+}
+
 function externSignatureHoldsPointer(sym: Symbol): boolean {
 	const t = sym.symbolType;
 	if (t == null || t.kind != TypeKind.Function) return true;
-	return holdsPointerByValue(t.typeReturn, 0) || t.typeChildren.some((p: Type): boolean => holdsPointerByValue(p, 0));
+	return holdsPointerByValue(t.typeReturn, 0) || t.typeChildren.some((p: Type): boolean => holdsPointerByValue(p, 0) && !isLentValueView(p));
 }
 
 function isExternalRoutine(sym: Symbol): boolean {
