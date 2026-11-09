@@ -114,10 +114,11 @@ instructions, `msAllocTyped` with a constant size 15 (a call and three stores), 
 14 and `msArrayAccess` 10 (the check inline, a call only on the error), `msIncref` 6. None carries a
 slow path inline any more, so none was split further.
 
-Rejected: a release site leaves a last ref's cycle-root unregister to `msDestroyAndDisposeDyn`,
-which does it before the destroy (Nim's acyclic `nimDecRefIsLast` unregisters nothing; its cyclic
-`rememberCycle` unregisters before the destroy and its dispose does not repeat it). It is smaller and
-runs fewer instructions, and it is slower in wall time:
+Rejected on 2026-11-09, then shipped on 2026-11-10 (next section): a release site leaves a last
+ref's cycle-root unregister to `msDestroyAndDisposeDyn`, which does it before the destroy (Nim's
+acyclic `nimDecRefIsLast` unregisters nothing; its cyclic `rememberCycle` unregisters before the
+destroy and its dispose does not repeat it). In one code layout it is smaller, runs fewer
+instructions, and is slower in wall time:
 
 | | d0 | d1 | d1 / d0 |
 |---|---|---|---|
@@ -133,8 +134,7 @@ A 15-minute quiet window at load 0.6 to 1.1; rows are the median of the 5 per-ro
 d0 in the same round, the range in brackets. `check` at `--danger` was 1.001. The slower rows include
 string parse, stringify and join loops that release no reference, and the json bench binary grew by
 1.3 KB while its release sites shrank, which points to code placement rather than the moved
-unregister; that reading is not measured. The step is
-`~/metascript/.wt/handoff/runtime-dce-keeproot-rejected.patch`.
+unregister; the next section measures that reading.
 
 Parked: a function's last `return` parks its value and falls into the finally that releases its
 locals, instead of emitting a second copy of that finally (Nim emits the copy too:
@@ -146,6 +146,37 @@ carrying it aborts `msc build src/index.ms` with an M1 owner violation in 5 of 1
 declaration on several workers. Compiler card
 `2026-11-09-parallel-emit-of-an-inline-copy-frees-a-shared-decl-node-on-a-worker.md`; the step lands
 after its fix.
+
+## Measured 2026-11-10 — the root unregister leaves the release site, over randomized layouts
+
+The 2026-11-09 slowdown is code placement. In a `perf record` of `check` on rtx, `msStringConcatArr`,
+the same source and size in both arms, took 0.56–0.77% of cycles in d0 and 1.65–2.55% in d1, only
+its address different; with `-falign-loops=32` it was 0.70% in both. `Map set/get int 10k`'s
+`Map_set` is byte-identical in both arms (1,609 B) and its row still moved 8%. So each arm is now
+built in several link orders and an arm is slower only when it is slower than every layout of the
+other.
+
+| host, layouts | d1 / d0 |
+|---|---|
+| rtx, 4 per arm (`lld --shuffle-sections`, clang, `-ffunction-sections`, `--lto=off`), load 2.0–2.4, arms of main `155b7f913a1` | `check` cycles 0.998, wall 1.001; 30 bench rows geomean 1.005; `json parse large 1 MB` 1.042, beyond every d0 layout, the rest overlap |
+| m1m (M1 Pro), 8 per arm (ld64 `-order_file` of the shuffled text symbols, globals and statics), 2 rounds, load median 1.54, arms of main `155b7f913a1` | `check` round 2 cycles 0.993; 28 bench rows geomean 0.999, every row overlaps; `json parse large 1 MB` 0.999 |
+| m1m, the same recipe, arms of main `60ecbc206ed`, load median 1.52 | `check` round 2 cycles 0.990 and wall 0.989, d1 below every d0 layout; instructions 1.0005; 28 bench rows geomean 1.000, every row overlaps; `json parse large 1 MB` 0.995 |
+
+m1m `__TEXT` of msc `--danger --lto=off`: 18,530,304 → 17,498,112 B (−5.6%); the bench binaries
+keep their page-rounded size. Round 1 of `check` is left out: the first run of each binary did more
+work (73.7G against 71.0G instructions, both arms), so only round 2 is warm.
+
+`array slice 10k` and `array spread 10k` (each copies and frees an 80 KB array) are bimodal per run,
+whatever the layout: fast 1.45 / 0.90 µs, slow 4.6 / 3.1 µs. Over 10 rounds of 4 layouts per arm
+the slow mode came up in the same share of runs (`spread` 24/40 d0, 23/40 d1; `slice` 11/40, 8/40),
+with the same fast-mode medians and the same page reclaims per run in both modes, so the two rows
+are left out of the geomean above; their cause is not measured.
+
+Pinned by the unregister rows of `src/test/guard/releaseDisposeOutOfLine.ms`: red on the d0 runtime
+of `60ecbc206ed` (`msDecref`, `msDecrefAny`, `msDecrefCyclic` reference `msUnregisterCycle`), green
+on d1, macOS arm64. Not measured: Linux x86-64 over 8 layouts (rtx stayed loaded), Windows, and
+fixed loop alignment for every program, which would make single-layout runs comparable for +1.1%
+`.text` at `--lto=off`.
 
 ## Measured 2026-11-08 — what a hello world links
 
