@@ -27,7 +27,7 @@ function heldBehindHolder(session: CheckSession): string {
 
 test "a module checked once keeps the types it accepted behind an interface for the next build" {
 	resetBuildState();
-	const session = createCheckSession();
+	const session = createCheckSession(true);
 	check(session, LINK, 1);
 	assert heldBehindHolder(session) == "Box", heldBehindHolder(session);
 	check(session, LINK, 2);
@@ -38,7 +38,7 @@ test "a module checked once keeps the types it accepted behind an interface for 
 
 test "a module checked again that accepts other types behind an interface marks the session's lowering stale" {
 	resetBuildState();
-	const session = createCheckSession();
+	const session = createCheckSession(true);
 	check(session, LINK, 1);
 	check(session, LINK.replace("\tb.other = a;\n", ""), 1);
 	assert session.heldChanged == "", session.heldChanged;
