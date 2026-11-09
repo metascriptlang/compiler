@@ -55,7 +55,7 @@ function isDeclaredValueStorage(t: Type | null): boolean {
 function holdsInlineValue(t: Type | null): boolean {
 	if (t == null) return false;
 	return match (t.kind) {
-		TypeKind.Struct => t.sym != null && t.sym.symbolKind == SymbolKind.Struct,
+		TypeKind.Struct => (t.sym != null && t.sym.symbolKind == SymbolKind.Struct) || isMaybeType(t),
 		TypeKind.GenericInstance => t.typeExtra != null && holdsInlineValue(t.typeExtra),
 		TypeKind.SizedArray => true,
 		TypeKind.Alias | TypeKind.Distinct => holdsInlineValue(t.typeReturn),
