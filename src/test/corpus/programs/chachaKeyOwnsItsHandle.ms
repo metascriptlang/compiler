@@ -11,12 +11,12 @@
 // @stdout: bad length refused true live 0
 // @exit: 0
 // @skip-js: the program counts native key state through msChacha20KeysLive, which only the C backend has; a JS key holds plain words and nothing to free (cryptoJsChacha pins the JS tier)
-// @skip-raiser: std/crypto/oracle/chacha20 has only a C backend (index.cms over Monocypher); there is no chacha20.rms
+// @skip-raiser: src/test/crypto/oracle/chacha20 has only a C backend (index.cms over Monocypher); there is no chacha20.rms
 
 @include("runtime/crypto/ciphers/chacha20.h");
 
 import { Buffer } from "std/core/buffer";
-import { ChaChaKey, seal, open } from "std/crypto/oracle/chacha20";
+import { ChaChaKey, seal, open } from "../../crypto/oracle/chacha20";
 
 extern function msChacha20KeysLive(): int64;
 

@@ -1,0 +1,148 @@
+// std/crypto/argon2 — Argon2id password hashing (PHC winner, OWASP #1 recommendation)
+// import { argon2Hash, argon2Verify } from "std/crypto/argon2"
+//
+// Only compiled when imported — no cost if not used.
+// Uses vendor/argon2 (PHC reference implementation).
+
+@include("runtime/crypto/kdf/argon2.h");
+@compile("runtime/crypto/kdf/argon2.c");
+
+// Argon2 reference implementation sources
+@compile("vendor/argon2/src/argon2.c");
+@compile("vendor/argon2/src/core.c");
+@compile("vendor/argon2/src/encoding.c");
+@compile("vendor/argon2/src/ref.c");
+@compile("vendor/argon2/src/thread.c");
+@compile("vendor/argon2/src/blake2/blake2b.c");
+
+// Include paths
+@passC("-Ivendor/argon2/include");
+@passC("-Ivendor/argon2/src");
+
+import { Buffer } from "std/core/buffer";
+import { ByteInput, rawBuffer } from "std/core/buffer/bytes";
+import { CryptoError, CryptoErrorKind, cryptoError } from "std/crypto/errors";
+export { CryptoError, CryptoErrorKind } from "std/crypto/errors";
+
+// C bindings
+extern function msCryptoArgon2Hash(password: Readonly<Span<uint8>>, salt: Readonly<Span<uint8>>, timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): string;
+extern function msCryptoArgon2Verify(encoded: string, password: Readonly<Span<uint8>>): boolean;
+extern function msCryptoArgon2HashRaw(password: Readonly<Span<uint8>>, salt: Readonly<Span<uint8>>, timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): string;
+
+extern function msCryptoArgon2Check(timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32, saltLen: int64): string;
+
+// ===== Parameters =====
+
+const DEFAULT_TIME_COST: int32 = 3;
+const DEFAULT_MEMORY_COST: int32 = 65536;
+const DEFAULT_PARALLELISM: int32 = 4;
+
+/**
+ * The most an untrusted encoded hash may ask of argon2Verify: its m, t and p are read from the
+ * string, so without a bound a forged hash makes the verifier allocate gigabytes. The default is
+ * four times this module's own hashing defaults: 262144 KiB (256 MiB), 12 passes, 16 lanes.
+ */
+export interface Argon2Limits {
+	memoryCost: int32;
+	timeCost: int32;
+	parallelism: int32;
+}
+
+function freshDefaultLimits(): Argon2Limits {
+	return { memoryCost: DEFAULT_MEMORY_COST * 4, timeCost: DEFAULT_TIME_COST * 4, parallelism: DEFAULT_PARALLELISM * 4 };
+}
+
+export const defaultArgon2Limits: Argon2Limits = freshDefaultLimits();
+
+// ===== Argon2id Password Hashing =====
+// Every function completes inline on C: the hash runs on the calling thread for its full cost
+// (tens of milliseconds at the defaults), so a caller serving requests spawns it itself until
+// the io engine offers a worker to hand it to.
+
+/**
+ * Hash a password with Argon2id (OWASP recommended defaults).
+ * Returns encoded string: $argon2id$v=19$m=65536,t=3,p=4$salt$hash
+ *
+ * timeCost: iterations (default 3)
+ * memoryCost: memory in KiB (default 65536 = 64MB)
+ * parallelism: threads (default 4)
+ * hashLen: output bytes (default 32)
+ */
+export function argon2HashSync<P extends ByteInput, S extends ByteInput>(password: P, saltBytes: S, timeCost: int32 = DEFAULT_TIME_COST, memoryCost: int32 = DEFAULT_MEMORY_COST, parallelism: int32 = DEFAULT_PARALLELISM, hashLen: int32 = 32): Result<string, CryptoError> {
+	return argon2HashSpan(typeof password == "string" ? password.asBytes() : password, typeof saltBytes == "string" ? saltBytes.asBytes() : saltBytes, timeCost, memoryCost, parallelism, hashLen);
+}
+
+function argon2HashSpan(password: Readonly<Span<uint8>>, salt: Readonly<Span<uint8>>, timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): Result<string, CryptoError> {
+	const invalid = msCryptoArgon2Check(timeCost, memoryCost, parallelism, hashLen, salt.length as int64);
+	if (invalid != "") {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "argon2Hash", invalid));
+	}
+	const result = msCryptoArgon2Hash(password, salt, timeCost, memoryCost, parallelism, hashLen);
+	if (result == "") {
+		return Result.err(cryptoError(CryptoErrorKind.HashFailed, "argon2Hash", "Argon2id hashing failed"));
+	}
+	return Result.ok(result);
+}
+
+export function argon2Hash<P extends ByteInput, S extends ByteInput>(password: P, saltBytes: S, timeCost: int32 = DEFAULT_TIME_COST, memoryCost: int32 = DEFAULT_MEMORY_COST, parallelism: int32 = DEFAULT_PARALLELISM, hashLen: int32 = 32): Promise<Result<string, CryptoError>> { return Promise.resolve(argon2HashSync(password, saltBytes, timeCost, memoryCost, parallelism, hashLen)); }
+
+/**
+ * Hash with raw binary output (not encoded).
+ * Use when you need the hash bytes directly (e.g., for key derivation).
+ */
+export function argon2HashRawSync<P extends ByteInput, S extends ByteInput>(password: P, saltBytes: S, timeCost: int32 = DEFAULT_TIME_COST, memoryCost: int32 = DEFAULT_MEMORY_COST, parallelism: int32 = DEFAULT_PARALLELISM, hashLen: int32 = 32): Result<Buffer, CryptoError> {
+	return argon2HashRawSpan(typeof password == "string" ? password.asBytes() : password, typeof saltBytes == "string" ? saltBytes.asBytes() : saltBytes, timeCost, memoryCost, parallelism, hashLen);
+}
+
+function argon2HashRawSpan(password: Readonly<Span<uint8>>, salt: Readonly<Span<uint8>>, timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): Result<Buffer, CryptoError> {
+	const invalid = msCryptoArgon2Check(timeCost, memoryCost, parallelism, hashLen, salt.length as int64);
+	if (invalid != "") {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "argon2HashRaw", invalid));
+	}
+	const result = msCryptoArgon2HashRaw(password, salt, timeCost, memoryCost, parallelism, hashLen);
+	if (result == "") {
+		return Result.err(cryptoError(CryptoErrorKind.HashFailed, "argon2HashRaw", "Argon2id raw hashing failed"));
+	}
+	return Result.ok(rawBuffer(result));
+}
+
+export function argon2HashRaw<P extends ByteInput, S extends ByteInput>(password: P, saltBytes: S, timeCost: int32 = DEFAULT_TIME_COST, memoryCost: int32 = DEFAULT_MEMORY_COST, parallelism: int32 = DEFAULT_PARALLELISM, hashLen: int32 = 32): Promise<Result<Buffer, CryptoError>> { return Promise.resolve(argon2HashRawSync(password, saltBytes, timeCost, memoryCost, parallelism, hashLen)); }
+
+// ===== Verification =====
+
+function decimal(text: string): int64 {
+	if (text.length == 0 || text.length > 10) return -1;
+	let value: int64 = 0;
+	for (let i = 0; i < text.length; i++) {
+		const digit = text.charCodeAt(i) - 48;
+		if (digit < 0 || digit > 9) return -1;
+		value = value * 10 + digit;
+	}
+	return value;
+}
+
+/** True only for an argon2id encoding whose m, t and p are decimal numbers within the limits. */
+function withinLimits(encoded: string, limits: Argon2Limits): boolean {
+	const parts = encoded.split("$");
+	const shape = (parts.length == 6 && parts[2].startsWith("v=")) || parts.length == 5;
+	if (!shape || parts[0] != "" || parts[1] != "argon2id") return false;
+	const params = parts[parts.length - 3].split(",");
+	if (params.length != 3 || !params[0].startsWith("m=") || !params[1].startsWith("t=") || !params[2].startsWith("p=")) return false;
+	const memoryCost = decimal(params[0].substring(2));
+	const timeCost = decimal(params[1].substring(2));
+	const parallelism = decimal(params[2].substring(2));
+	return memoryCost >= 0 && timeCost >= 0 && parallelism >= 0
+		&& memoryCost <= limits.memoryCost && timeCost <= limits.timeCost && parallelism <= limits.parallelism;
+}
+
+/**
+ * True only when the password matches the Argon2id encoded hash, which carries every parameter.
+ * False for a wrong password and for every hash it did not check: one that is not argon2id, is
+ * malformed, or asks for more than `limits` allows. A plain boolean, so `if (await argon2Verify(...))`
+ * can never accept a hash that was refused.
+ */
+export function argon2VerifySync<P extends ByteInput>(encoded: string, password: P, limits: Argon2Limits = freshDefaultLimits()): boolean {
+	return withinLimits(encoded, limits) && msCryptoArgon2Verify(encoded, typeof password == "string" ? password.asBytes() : password);
+}
+
+export function argon2Verify<P extends ByteInput>(encoded: string, password: P, limits: Argon2Limits = freshDefaultLimits()): Promise<boolean> { return Promise.resolve(argon2VerifySync(encoded, password, limits)); }

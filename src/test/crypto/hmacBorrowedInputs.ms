@@ -1,5 +1,5 @@
 import { Buffer } from "std/core/buffer";
-import { HashAlgorithm, hmacSync } from "std/crypto/oracle";
+import { HashAlgorithm, hmacSync } from "./oracle";
 import { hmacOf } from "../../../std/crypto/pure/hmac";
 import {
 	kindSha256, kindSha512, kindMd5,

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The crypto assurance suite: every test of the native MetaScript port (std/crypto/pure) on C and JavaScript, Wycheproof
-# and the differential checks against the vendored C included; --slow adds the owners too slow for every run. The public
-# API vectors (src/test/crypto/index.ms) stay in the land gate's tests lane, which runs them whenever std/crypto changes.
+# and the differential checks against the vendored C (src/test/crypto/port over src/test/crypto/oracle) included;
+# --slow adds the owners too slow for every run. The public API vectors (src/test/crypto/index.ms) stay in the land
+# gate's tests lane, which runs them whenever std/crypto changes.
 # Off by default in every gate; a heavy job, so run it through run-remote.sh from the repository root.
 #
 #   src/test/crypto/suite.sh [--slow]
@@ -44,6 +45,9 @@ cells=(
 	"c $pure/portTests.ms"
 	"js $pure/portTests.ms"
 	"c $pure/portDiffTests.cms"
+	"c src/test/crypto/port/diffTests.ms"
+	"js src/test/crypto/port/diffTests.ms"
+	"c src/test/crypto/port/cDiffTests.cms"
 )
 if [ "$slow" -eq 1 ]; then
 	cells+=(

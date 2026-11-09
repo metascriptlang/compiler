@@ -11,7 +11,7 @@ when (c) {
 	import {
 		RsaPrivateKey as NativePrivateKey,
 		verifySync as nativeVerify,
-	} from "std/crypto/oracle/rsa";
+	} from "./oracle/rsa";
 }
 
 function must<T>(sink result: Result<T, CryptoError>): T {

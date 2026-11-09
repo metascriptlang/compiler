@@ -8,7 +8,7 @@ when (c) {
 		argon2HashSync as nativeHash,
 		argon2HashRawSync as nativeRaw,
 		argon2VerifySync as nativeVerify,
-	} from "std/crypto/oracle/argon2";
+	} from "./oracle/argon2";
 }
 import { CryptoError, CryptoErrorKind } from "std/crypto/errors";
 import { encodeHex } from "std/core/encoding";

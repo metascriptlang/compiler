@@ -6,7 +6,7 @@ import { argv } from "std/process";
 when (cryptoImport == "pure") {
 	import { tlsConnect, close } from "std/crypto/tls";
 } else when (cryptoImport == "native") {
-	import { tlsConnect, close } from "std/crypto/oracle/tls";
+	import { tlsConnect, close } from "../oracle/tls";
 }
 
 const args = argv.slice(1);

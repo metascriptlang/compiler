@@ -9,7 +9,7 @@ import {
 } from "std/crypto/pure/asn1";
 
 when (c) {
-	import { RsaPrivateKey as NativePrivateKey } from "std/crypto/oracle/rsa";
+	import { RsaPrivateKey as NativePrivateKey } from "./oracle/rsa";
 }
 
 function integersOf(pem: string): uint8[][] {

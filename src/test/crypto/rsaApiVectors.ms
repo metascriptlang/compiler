@@ -26,7 +26,7 @@ when (c) {
 		RsaPublicKey as NativePublicKey,
 		signSync as nativeSign, verifySync as nativeVerify,
 		encryptSync as nativeEncrypt, decryptSync as nativeDecrypt,
-	} from "std/crypto/oracle/rsa";
+	} from "./oracle/rsa";
 }
 
 function must<T>(sink result: Result<T, CryptoError>): T {

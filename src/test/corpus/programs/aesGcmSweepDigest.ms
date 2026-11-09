@@ -7,14 +7,14 @@
 // @stdout: aes256 d7251f32bcb2d82b93b198fc5b9240359c5fec4c9dee66d071290548ce7ca9c0 opened true
 // @exit: 0
 // @skip-js: the fixed-nonce seal is the C test seam msCryptoAesSealWithNonceInto; cryptoJsAesSweep pins the same digests through the portable seal
-// @skip-raiser: std/crypto/oracle/aes has only a C backend (index.cms over mbedTLS); there is no aes.rms
+// @skip-raiser: src/test/crypto/oracle/aes has only a C backend (index.cms over mbedTLS); there is no aes.rms
 
 @include("runtime/crypto/ciphers/aes.h");
 
 import { Buffer } from "std/core/buffer";
 import { rawString } from "std/core/buffer/bytes";
 import { sha256 } from "std/crypto/sha256";
-import { AesKey, open } from "std/crypto/oracle/aes";
+import { AesKey, open } from "../../crypto/oracle/aes";
 import { newUninitOutputBuffer, outputBytes } from "std/crypto/outputBuffer";
 
 extern function msCryptoAesSealWithNonceInto(key: int64, nonce: string, plainText: string, aad: string, out: Ptr<uint8>): int64;

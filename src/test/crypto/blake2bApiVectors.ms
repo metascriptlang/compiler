@@ -11,7 +11,7 @@ when (c) {
 		blake2bSync as nativeHash,
 		blake2bKeyedSync as nativeKeyed,
 		createBlake2b as nativeCreate,
-	} from "std/crypto/oracle/blake2b";
+	} from "./oracle/blake2b";
 }
 
 function pattern(length: int32): uint8[] {

@@ -1,0 +1,41 @@
+import { kindSha1, kindMd5 } from "std/crypto/pure/state";
+import { hashOf } from "std/crypto/pure/hash";
+import { sha1Sync, md5Sync } from "../../../test/crypto/oracle";
+import { performance } from "std/core/performance";
+
+function nsPerByte(start: number, size: int32, reps: int32): number {
+	return (performance.now() - start) * 1000000 / (size * reps);
+}
+
+function median(values: number[]): number {
+	const sorted = values.slice(0).sort((a, b) => a - b);
+	return sorted[sorted.length >> 1];
+}
+
+const sizes: int32[] = [64, 1024, 65536];
+const kinds: int32[] = [kindSha1, kindMd5];
+let sink = 0;
+for (const kind of kinds) {
+	for (const size of sizes) {
+		const data = new Array<uint8>(size);
+		for (let i = 0; i < size; i++) data[i] = (i * 31) as uint8;
+		const reps = (4194304 / size) as int32;
+		const pure: number[] = [];
+		const vendor: number[] = [];
+		for (let round = 0; round < 5; round++) {
+			let t = performance.now();
+			for (let r = 0; r < reps; r++) sink += hashOf(kind, data)[0];
+			pure.push(nsPerByte(t, size, reps));
+			t = performance.now();
+			for (let r = 0; r < reps; r++) {
+				const out = kind == kindSha1 ? sha1Sync(data) : md5Sync(data);
+				if (out.ok) sink += 1;
+			}
+			vendor.push(nsPerByte(t, size, reps));
+		}
+		const p = median(pure);
+		const v = median(vendor);
+		console.log(`${kind == kindSha1 ? "sha1" : "md5"} ${size}B pure=${p.toFixed(2)} vendor=${v.toFixed(2)} ns/B ratio=${(p / v).toFixed(2)}`);
+	}
+}
+console.log(`sink ${sink}`);

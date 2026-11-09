@@ -1,0 +1,219 @@
+// std/crypto/rsa — RSA signatures (PKCS#1 v1.5, PSS) and OAEP encryption
+// import { RsaPrivateKey, RsaPublicKey, sign, verify, encrypt, decrypt } from "std/crypto/rsa"
+//
+// Heavy: compiles the PSA core and the PK layer. Only import when asymmetric crypto is needed.
+// Keys of at least 2048 bits only. ECDSA and ECDH are in std/crypto/ec.
+
+@include("runtime/crypto/rsa/rsa.h");
+@compile("runtime/crypto/rsa/rsa.c");
+
+// The PSA core and the PK layer, the same set std/crypto/tls lists. A path is compiled once per
+// build however many modules list it, so a program importing both links one copy of each.
+@compile("vendor/mbedtls/tf-psa-crypto/core/psa_crypto.c");
+@compile("vendor/mbedtls/tf-psa-crypto/core/psa_crypto_client.c");
+@compile("vendor/mbedtls/tf-psa-crypto/core/psa_crypto_slot_management.c");
+@compile("vendor/mbedtls/tf-psa-crypto/core/psa_crypto_storage.c");
+@compile("vendor/mbedtls/tf-psa-crypto/core/psa_crypto_driver_wrappers_no_static.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_hash.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_cipher.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_mac.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_aead.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_ecp.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_rsa.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_ffdh.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_pake.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_util.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/asn1parse.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/asn1write.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pk.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pk_wrap.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pk_ecc.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pk_rsa.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pkparse.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pkwrite.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pem.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/bignum.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/bignum_core.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/rsa.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/rsa_alt_helpers.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecdsa.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecdh.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecp.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecp_curves.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecjpake.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pkcs5.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/base64.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/oid.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/entropy.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/entropy_poll.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ctr_drbg.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/hmac_drbg.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/constant_time.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/block_cipher.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aes.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aesni.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aesce.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/gcm.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/cipher.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/cipher_wrap.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ccm.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/cmac.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aria.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/camellia.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/chacha20.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/chachapoly.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/poly1305.c");
+@compile("runtime/crypto/tls/psaTlsStubs.c");
+@compile("runtime/crypto/psaOnce.c");
+
+@passC("-Ivendor/mbedtls/include");
+@passC("-Ivendor/mbedtls/library");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/include");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/include");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/src");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/core");
+@passC("-Iruntime/crypto");
+@passC("-DMBEDTLS_CONFIG_FILE=\"<mbedtls/mbedtlsConfig.h>\"");
+@passC("-DMBEDTLS_PLATFORM_MEMORY");
+@passC("-Wno-deprecated-declarations");
+
+import { Buffer } from "std/core/buffer";
+import { ByteInput, rawBuffer } from "std/core/buffer/bytes";
+import { CryptoError, CryptoErrorKind, cryptoError } from "std/crypto/errors";
+export { CryptoError, CryptoErrorKind } from "std/crypto/errors";
+
+// C bindings
+extern function msCryptoRsaGenerate(bits: int32): int64;
+extern function msCryptoRsaImportPrivatePem(pem: string): int64;
+extern function msCryptoRsaImportPublicPem(pem: string): int64;
+extern function msCryptoRsaExportPrivatePem(key: int64): string;
+extern function msCryptoRsaExportPublicPem(key: int64): string;
+extern function msCryptoRsaPublicOf(key: int64): int64;
+extern function msCryptoRsaSign(key: int64, algorithm: string, pss: int32, data: Readonly<Span<uint8>>): string;
+extern function msCryptoRsaVerify(key: int64, algorithm: string, pss: int32, data: Readonly<Span<uint8>>, signature: Readonly<Span<uint8>>): boolean;
+extern function msCryptoRsaEncrypt(key: int64, data: Readonly<Span<uint8>>): string;
+extern function msCryptoRsaDecrypt(key: int64, data: Readonly<Span<uint8>>): string;
+extern function msCryptoRsaFree(key: int64): void;
+
+export type RsaPadding = "pkcs1v15" | "pss";
+
+export class RsaPublicKey {
+	_h: int64;
+
+	static importPemSync(pem: string): Result<RsaPublicKey, CryptoError> {
+		const h = msCryptoRsaImportPublicPem(pem);
+		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "RsaPublicKey.importPem", "failed to parse an RSA public key PEM of at least 2048 bits"));
+		return Result.ok({ _h: h });
+	}
+
+	static async importPem(pem: string): Promise<Result<RsaPublicKey, CryptoError>> { return RsaPublicKey.importPemSync(pem); }
+
+	exportPemSync(): Result<string, CryptoError> {
+		const pem = msCryptoRsaExportPublicPem(this._h);
+		if (pem == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "RsaPublicKey.exportPem", "failed to export public key"));
+		return Result.ok(pem);
+	}
+
+	async exportPem(): Promise<Result<string, CryptoError>> { return this.exportPemSync(); }
+
+	onDestroy(): void {
+		if (this._h != 0) {
+			msCryptoRsaFree(this._h);
+			this._h = 0;
+		}
+	}
+}
+
+export class RsaPrivateKey {
+	_h: int64;
+
+	static generateSync(bits: int32): Result<RsaPrivateKey, CryptoError> {
+		if (bits != 2048 && bits != 3072 && bits != 4096) {
+			return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "RsaPrivateKey.generate", "bits must be 2048, 3072, or 4096"));
+		}
+		const h = msCryptoRsaGenerate(bits);
+		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "RsaPrivateKey.generate", "RSA key generation failed"));
+		return Result.ok({ _h: h });
+	}
+
+	static async generate(bits: int32): Promise<Result<RsaPrivateKey, CryptoError>> { return RsaPrivateKey.generateSync(bits); }
+
+	static importPemSync(pem: string): Result<RsaPrivateKey, CryptoError> {
+		const h = msCryptoRsaImportPrivatePem(pem);
+		if (h == 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "RsaPrivateKey.importPem", "failed to parse an RSA private key PEM of at least 2048 bits"));
+		return Result.ok({ _h: h });
+	}
+
+	static async importPem(pem: string): Promise<Result<RsaPrivateKey, CryptoError>> { return RsaPrivateKey.importPemSync(pem); }
+
+	exportPemSync(): Result<string, CryptoError> {
+		const pem = msCryptoRsaExportPrivatePem(this._h);
+		if (pem == "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "RsaPrivateKey.exportPem", "failed to export private key"));
+		return Result.ok(pem);
+	}
+
+	async exportPem(): Promise<Result<string, CryptoError>> { return this.exportPemSync(); }
+
+	publicKey(): RsaPublicKey {
+		const h = msCryptoRsaPublicOf(this._h);
+		if (h == 0) throw new Error("RsaPrivateKey.publicKey: the public half could not be copied");
+		return { _h: h };
+	}
+
+	onDestroy(): void {
+		if (this._h != 0) {
+			msCryptoRsaFree(this._h);
+			this._h = 0;
+		}
+	}
+}
+
+// hash is sha256, sha384 or sha512; sha1 signatures are refused.
+export function signSync<D extends ByteInput>(key: RsaPrivateKey, data: D, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Result<Buffer, CryptoError> {
+	return signSpan(key, typeof data == "string" ? data.asBytes() : data, hash, padding);
+}
+
+function signSpan(key: RsaPrivateKey, data: Readonly<Span<uint8>>, hash: string, padding: RsaPadding): Result<Buffer, CryptoError> {
+	const sig = msCryptoRsaSign(key._h, hash, padding == "pss" ? 1 : 0, data);
+	if (sig == "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "rsa.sign", `signing failed (hash ${hash}, ${padding}; sha1 is refused)`));
+	return Result.ok(rawBuffer(sig));
+}
+
+export function sign<D extends ByteInput>(key: RsaPrivateKey, data: D, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Promise<Result<Buffer, CryptoError>> { return Promise.resolve(signSync(key, data, hash, padding)); }
+
+// False on any failure: a bad signature, a malformed input or an unknown hash.
+export function verifySync<D extends ByteInput, S extends ByteInput>(key: RsaPublicKey, data: D, signature: S, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): boolean {
+	return verifySpan(key, typeof data == "string" ? data.asBytes() : data, typeof signature == "string" ? signature.asBytes() : signature, hash, padding);
+}
+
+function verifySpan(key: RsaPublicKey, data: Readonly<Span<uint8>>, signature: Readonly<Span<uint8>>, hash: string, padding: RsaPadding): boolean {
+	return msCryptoRsaVerify(key._h, hash, padding == "pss" ? 1 : 0, data, signature);
+}
+
+export function verify<D extends ByteInput, S extends ByteInput>(key: RsaPublicKey, data: D, signature: S, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Promise<boolean> { return Promise.resolve(verifySync(key, data, signature, hash, padding)); }
+
+// RSA-OAEP with SHA-256.
+export function encryptSync<D extends ByteInput>(key: RsaPublicKey, data: D): Result<Buffer, CryptoError> {
+	return encryptSpan(key, typeof data == "string" ? data.asBytes() : data);
+}
+
+function encryptSpan(key: RsaPublicKey, data: Readonly<Span<uint8>>): Result<Buffer, CryptoError> {
+	const encrypted = msCryptoRsaEncrypt(key._h, data);
+	if (encrypted == "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "rsa.encrypt", "RSA-OAEP encryption failed"));
+	return Result.ok(rawBuffer(encrypted));
+}
+
+export function encrypt<D extends ByteInput>(key: RsaPublicKey, data: D): Promise<Result<Buffer, CryptoError>> { return Promise.resolve(encryptSync(key, data)); }
+
+export function decryptSync<D extends ByteInput>(key: RsaPrivateKey, data: D): Result<Buffer, CryptoError> {
+	return decryptSpan(key, typeof data == "string" ? data.asBytes() : data);
+}
+
+function decryptSpan(key: RsaPrivateKey, data: Readonly<Span<uint8>>): Result<Buffer, CryptoError> {
+	const decrypted = msCryptoRsaDecrypt(key._h, data);
+	if (decrypted == "") return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "rsa.decrypt", "RSA-OAEP decryption failed"));
+	return Result.ok(rawBuffer(decrypted));
+}
+
+export function decrypt<D extends ByteInput>(key: RsaPrivateKey, data: D): Promise<Result<Buffer, CryptoError>> { return Promise.resolve(decryptSync(key, data)); }

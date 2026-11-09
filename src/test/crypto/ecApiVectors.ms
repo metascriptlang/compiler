@@ -280,7 +280,7 @@ when (c) {
 		ecdsaSignSync as nativeSign,
 		ecdsaVerifySync as nativeVerify,
 		ecdhSync as nativeEcdh,
-	} from "std/crypto/oracle/ec";
+	} from "./oracle/ec";
 
 	test "private EC PEM signatures and agreement interoperate with native API" {
 		for (const curve of ["p256", "p384"] as EcCurve[]) {

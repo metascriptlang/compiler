@@ -10,7 +10,7 @@ when (c) {
 		sealSync as nativeSeal, openSync as nativeOpen,
 		cbcEncryptSync as nativeCbcEncrypt,
 		cbcDecryptSync as nativeCbcDecrypt,
-	} from "std/crypto/oracle/aes";
+	} from "./oracle/aes";
 }
 import { encodeHex, decodeHex } from "std/core/encoding";
 import { readFile } from "std/fs";

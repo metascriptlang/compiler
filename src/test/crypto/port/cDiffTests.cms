@@ -1,0 +1,8 @@
+// The port against the vendored C whose oracle has no JS form (Argon2, BLAKE2b, legacy hashes, RIPEMD-160, SHA-3):
+// `msc test src/test/crypto/port/cDiffTests.cms --target=c --tests-in-dir` from the repository root.
+
+import "./argon2DiffTest";
+import "./blake2bDiffTest";
+import "./legacyHashDiffTest";
+import "./ripemd160Native";
+import "./sha3Differential";

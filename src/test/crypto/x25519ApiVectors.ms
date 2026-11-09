@@ -9,7 +9,7 @@ when (c) {
 		X25519PrivateKey as NativePrivateKey,
 		X25519PublicKey as NativePublicKey,
 		sharedSecretSync as nativeShared,
-	} from "std/crypto/oracle/x25519";
+	} from "./oracle/x25519";
 }
 
 function must<T>(sink result: Result<T, CryptoError>): T {

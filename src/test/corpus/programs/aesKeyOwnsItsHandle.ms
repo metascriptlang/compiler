@@ -10,11 +10,11 @@
 // @stdout: export copy 16 kept true live 0
 // @exit: 0
 // @skip-js: the C key handle count msCryptoAesKeysLive has no JS counterpart; an AesKey there is garbage collected
-// @skip-raiser: std/crypto/oracle/aes has only a C backend (index.cms over mbedTLS); there is no aes.rms
+// @skip-raiser: src/test/crypto/oracle/aes has only a C backend (index.cms over mbedTLS); there is no aes.rms
 
 @include("runtime/crypto/ciphers/aes.h");
 
-import { AesKey, seal, open } from "std/crypto/oracle/aes";
+import { AesKey, seal, open } from "../../crypto/oracle/aes";
 
 extern function msCryptoAesKeysLive(): int64;
 
