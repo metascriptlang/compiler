@@ -577,3 +577,53 @@ export function sub(n: int32): Tagged { return null as unknown as Tagged; }
 	assert errorFor(m.errors, "fieldF32").includes("a struct field cannot hold a typed array: return it from its own @wasm function");
 	assert errorFor(m.errors, "sub").includes("only the TS typed array classes cross as a result, not a class that extends one: return a copy made with the class it extends, as in Float32Array.from(x)");
 }
+
+const MODES = `
+export enum Level { Low = 1, High = 2 }
+export struct Pin { at: int32; label: string; }
+struct Hidden { n: int32; }
+export function scalars(ref b: boolean, out n: int64, ref f: float32 | null): void { n = 0; }
+export function texts(ref s: string, out l: Level, ref p: Pin, out q: Pin | null): void { l = Level.Low; q = null; }
+export function sinks(sink s: string, sink xs: Vec<int32>, sink p: Pin, sink n: int32): void {}
+export function vecRef(ref xs: Vec<int32>): void {}
+export function vecOut(out xs: Vec<int32>): void { xs = []; }
+export function spanRef(ref xs: Span<int32>): void {}
+export function hidden(ref h: Hidden): void {}
+export function cbParamRef(cb: (ref x: int32) => void): void {}
+export function cbParamOut(cb: (out x: int32) => void): void {}
+export function cbParamSink(cb: (sink s: string) => void): void {}
+export function refAndCb(ref n: int32, cb: (x: int32) => void): void {}
+`;
+
+test "manifest: a ref or out parameter of a copied kind crosses as that kind written back, and a sink parameter as the plain copy" {
+	const names = ["scalars", "texts", "sinks"];
+	const m = manifestFor(MODULE, ENTRY, exportsOf(MODES, [...names, "Level", "Pin"]), names);
+	assert m.errors.length == 0, m.errors.map((e) => e.message).join("; ");
+	const sc = m.functions[0].params;
+	assert sc[0].kind == BoundaryKind.Bool && sc[0].mode == BoundaryMode.Ref;
+	assert sc[1].kind == BoundaryKind.I64 && sc[1].mode == BoundaryMode.Out;
+	assert sc[2].kind == BoundaryKind.F32 && sc[2].nullable && sc[2].mode == BoundaryMode.Ref;
+	const tx = m.functions[1].params;
+	assert tx[0].kind == BoundaryKind.String && tx[0].mode == BoundaryMode.Ref;
+	assert tx[1].enumOf!.name == "Level" && tx[1].mode == BoundaryMode.Out;
+	assert tx[2].kind == BoundaryKind.Struct && tx[2].structName == "Pin" && tx[2].leaves.length == 2;
+	assert tx[3].kind == BoundaryKind.Struct && tx[3].nullable && tx[3].mode == BoundaryMode.Out;
+	for (const p of m.functions[2].params) assert p.mode == BoundaryMode.Copied && p.structName == null;
+	assert m.functions[2].params[0].kind == BoundaryKind.String && m.functions[2].params[1].kind == BoundaryKind.Vec;
+}
+
+test "manifest: a mode with no boundary form, a callback's own mode and a ref beside a callback are refused naming the mode" {
+	const names = ["vecRef", "vecOut", "spanRef", "hidden", "cbParamRef", "cbParamOut", "cbParamSink", "refAndCb"];
+	const m = manifestFor(MODULE, ENTRY, exportsOf(MODES, names), names);
+	assert m.functions.length == 0;
+	assert m.errors.length == names.length, m.errors.map((e) => e.message).join("; ");
+	assert errorFor(m.errors, "vecRef").includes("parameter 'xs' is 'ref Vec<int32>', and a Vec crosses the boundary only as a copy for the call: take a Span to write its elements in place, or return the new Vec");
+	assert errorFor(m.errors, "vecOut").includes("parameter 'xs' is 'out Vec<int32>', and a Vec crosses");
+	assert errorFor(m.errors, "spanRef").includes("parameter 'xs' is 'ref Span<int32>', and a Span is lent for the call, a writable one written back after it: drop 'ref'");
+	assert errorFor(m.errors, "hidden").includes("parameter 'h' is 'ref Hidden': Hidden must be exported by this module to be written back across the boundary: export it, or re-export it with export { Hidden }");
+	assert errorFor(m.errors, "cbParamRef").includes("parameter 1 of parameter 'cb' is 'ref int32', and a callback crossing the boundary cannot write a variable of its wasm caller: drop 'ref' and return the value from the callback");
+	assert errorFor(m.errors, "cbParamOut").includes("parameter 1 of parameter 'cb' is 'out int32', and a callback crossing");
+	assert errorFor(m.errors, "cbParamSink").includes("parameter 1 of parameter 'cb' is 'sink string', and a callback crossing the boundary takes its parameters as copies, so it has nothing to take ownership of: drop 'sink'");
+	assert errorFor(m.errors, "refAndCb").includes("it takes the ref parameter 'n' and a callback, and the callback runs JS while wasm holds the copy of 'n'");
+	for (const e of m.errors) assert !e.message.includes("which has no JS/wasm boundary form"), e.message;
+}

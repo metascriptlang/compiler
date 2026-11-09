@@ -802,3 +802,77 @@ test "js side: a typed array result is rebuilt as a new array of its class over 
 	const maybe = nullableBindings(["maybeBytes"]).modules[0].code;
 	assert maybe.includes("\tlet r = null;\n\tconst d = __msb.takes.push((p, n, o, k) => { r = new globalThis.Uint8ClampedArray("), maybe;
 }
+
+const MODES = `
+export enum Level { Low = 1, High = 2 }
+export struct Pin { at: int32; label: string; }
+let saved: (x: int32) => void = (x: int32): void => {};
+export function listen(cb: (x: int32) => void): void { saved = cb; }
+export function bump(ref n: int32): void { n = n + 1; }
+export function fill(out lvl: Level, out s: string): void { lvl = Level.Low; s = ""; }
+export function grow(ref p: Pin, k: int32): string { p.at = k; return p.label; }
+export function both(ref a: int32, ref b: int32): void {}
+export function poke(ref n: int32, xs: Span<int32>): void {}
+export function maybe(ref n: int32 | null): void { n = null; }
+`;
+
+function modeBindings(names: string[], checked: boolean = false) {
+	return jsBindings(manifestFrom(MODES, names, ["Level", "Pin"]), "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: (name) => checked });
+}
+
+test "js side: a ref or out parameter is copied in from its cell and written back from its taker right after the call, before an escaped error is thrown" {
+	const code = modeBindings(["bump"]).modules[0].code;
+	assert code.includes("function bundled_bump(a0) {\n\t__msb.enter();\n\tconst v0 = a0[0][a0[1]];\n\tlet w0;\n\tconst d = __msb.takes.push((x0) => { w0 = x0; }) - 1;\n\ttry {\n\t\ttry { __msbMod._msb_calc_bump(v0); } catch (e) { throw __msb.die(e); }\n\t\ta0[0][a0[1]] = w0;\n\t\tif (__msb.dirty) __msb.leave();\n\t} finally {\n\t\tif (__msb.takes.length > d) __msb.takes.length = d;\n\t}\n}"), code;
+	const fill = modeBindings(["fill"]).modules[0].code;
+	assert fill.includes("e1 = __msbEncOwned(v1); e1n = __msbLen;");
+	assert fill.includes("__msbMod._msb_calc_fill(v0, e1, e1n);");
+	assert fill.includes("\t\ta0[0][a0[1]] = w0;\n\t\ta1[0][a1[1]] = w1;\n\t\tif (__msb.dirty) __msb.leave();");
+	const maybe = modeBindings(["maybe"]).modules[0].code;
+	assert maybe.includes("const d = __msb.takes.push((x0, x1) => { w0 = x0 !== 0 ? x1 : null; }) - 1;");
+	assert maybe.includes("__msbMod._msb_calc_maybe(v0 == null ? 0 : 1, v0 == null ? 0 : v0);");
+}
+
+test "js side: copy-back takers sit above the result taker, the first parameter's on top, because wasm pops them before the result and skips the result when it throws" {
+	const fill = modeBindings(["fill"]).modules[0].code;
+	assert fill.includes("const d = __msb.takes.push((x0, x1) => { w1 = __msbDec(x0, x1); }, (x0) => { w0 = x0 & 255; }) - 2;"), fill;
+	const grow = modeBindings(["grow"]).modules[0].code;
+	assert grow.includes("const d = __msb.takes.push((p, n) => { r = __msbDec(p >>> 0, n); }, (x0, x1, x2) => { w0 = { at: x0, label: __msbDec(x1, x2) }; }) - 2;"), grow;
+	assert grow.includes("e0_1 = __msbEncOwned(v0.label); e0_1n = __msbLen;");
+	assert grow.includes("\t\ta0[0][a0[1]] = w0;\n\t\tif (__msb.dirty) __msb.leave();\n\t\treturn r;");
+}
+
+test "js side: two cells, or a cell and a Span, are checked for one variable before anything is copied; a lone cell is not" {
+	const both = modeBindings(["both"]);
+	assert both.modules[0].code.includes("\t__msb.enter();\n\t__msbAliased([[a0, \"parameter 'a'\"], [a1, \"parameter 'b'\"]], [], \"both\");\n\tconst v0 = a0[0][a0[1]];");
+	assert both.prelude.includes("function __msbAliased(cs, vs, f) {");
+	assert both.prelude.includes("if (c[0] === d[0] && c[1] === d[1] || __msbHolds(v, d[0]) || __msbHolds(d[0][d[1]], c[0])) throw __msbShared(f, m, n);");
+	assert both.prelude.includes("\" reach the same variable, and \" + \"wasm works on a separate copy of each, so a write through one would be \" + \"lost to the other: pass separate variables\"");
+	const poke = modeBindings(["poke"]).modules[0].code;
+	assert poke.includes("__msbAliased([[a0, \"parameter 'n'\"]], [[a1.base, a1.off, a1.len, \"parameter 'xs'\"]], \"poke\");");
+	const lone = modeBindings(["bump", "grow", "maybe"]);
+	assert !lone.modules[0].code.includes("__msbAliased(") && !lone.prelude.includes("__msbAliased");
+}
+
+test "js side: a kept callback called during a ref or out call throws naming the parameter, and only a program that keeps one carries the guard" {
+	const kept = modeBindings(["listen", "bump", "fill"]);
+	const code = kept.modules[0].code;
+	assert code.includes("\tconst cell = __msb.cell; __msb.cell = \"a kept callback was called while 'bump' holds a copy of its ref parameter 'n', so JS would see the variable as it was before the call and a write to it would be lost: call the callback from a function without ref or out parameters\";");
+	assert code.includes("holds a copy of its out parameter 'lvl'");
+	assert code.includes("\t\t__msb.cell = cell;\n");
+	assert kept.prelude.includes("\t\t\tif (this.cell !== null) throw new Error(this.cell);");
+	assert kept.prelude.includes("\t\tcell: null,");
+	const lent = modeBindings(["bump"]);
+	assert !lent.modules[0].code.includes("__msb.cell") && !lent.prelude.includes("this.cell");
+	const noCells = modeBindings(["listen"]);
+	assert !noCells.prelude.includes("this.cell");
+}
+
+test "js side: a checked ref or out parameter is tested as a cell, then by its value, and an out enum by its storage range, because an unassigned one holds 0" {
+	const code = modeBindings(["bump", "fill", "maybe"], true).modules[0].code;
+	assert code.includes("function bundled_bump(a0) {\n\t__msbCell(a0, \"ref int32 as [object, key]\", \"bump\", \"parameter 'n'\");\n\t__msbInt(a0[0][a0[1]], \"number\", -2147483648, 2147483647, \"int32\", \"bump\", \"parameter 'n'\");\n\t__msb.enter();"), code;
+	assert code.includes("\t__msbCell(a0, \"out Level as [object, key]\", \"fill\", \"parameter 'lvl'\");\n\t__msbInt(a0[0][a0[1]], \"number\", 0, 255, \"uint8\", \"fill\", \"parameter 'lvl'\");\n");
+	assert code.includes("\t__msbCell(a1, \"out string as [object, key]\", \"fill\", \"parameter 's'\");\n\t__msbType(a1[0][a1[1]], \"string\", \"string\", \"fill\", \"parameter 's'\");\n");
+	assert code.includes("\t__msbCell(a0, \"ref int32 | null as [object, key]\", \"maybe\", \"parameter 'n'\");\n\tif (a0[0][a0[1]] != null) __msbInt(a0[0][a0[1]], ");
+	const p = modeBindings(["bump"], true).prelude;
+	assert checkGlueBody(p, "__msbCell").startsWith("function __msbCell(v, t, f, p) {\n\tif (!Array.isArray(v) || v.length !== 2 || typeof v[0] !== \"object\" || v[0] === null) throw __msbBad(f, p, t, v);\n");
+}

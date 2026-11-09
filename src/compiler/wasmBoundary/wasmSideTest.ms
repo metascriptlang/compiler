@@ -474,3 +474,47 @@ test "wasm entry: a nullable typed array result is handed over only when it is n
 	assert s.includes("\t\tconst r = msbm0_maybeF(n);\n\t\tif (r != null) {\n\t\t\tmsbTypedFloat32Array(r, \"maybeF\");\n\t\t}"), s;
 	assert !s.includes("msb_ret_some");
 }
+
+const MODES = `
+export enum Level { Low = 1, High = 3 }
+export struct Pin { at: int32; label: string; }
+export function bump(ref n: int32): int32 { n = n + 1; return n; }
+export function fill(out lvl: Level, out s: string): void { lvl = Level.Low; s = ""; }
+export function grow(ref p: Pin, k: int32): string { p.at = k; return p.label; }
+export function maybe(ref p: Pin | null): void { p = null; }
+export function keep(sink s: string, sink p: Pin, sink xs: Vec<int32>): int32 { return 0; }
+`;
+
+function modesEntryFor(names: string[]) {
+	return wasmEntrySource(manifestFrom(MODES, names, ["Level", "Pin"]).functions, (p: string) => "./calc");
+}
+
+test "wasm entry: a ref parameter is copied into a local passed by reference and copied back before the result, after the call and in the catch unless it already was" {
+	const s = modesEntryFor(["bump"]).source;
+	assert s.includes("export function msb_calc_bump(n: int32): int32 {\n\tlet msbRef0: int32 = n;\n\tlet msbBack = true;\n\ttry {\n\t\tconst msbRet = msbm0_bump(msbRef0);\n\t\tmsbBack = false;\n\t\tmsb_rs_i(msbRef0);\n\t\treturn msbRet;\n\t} catch (e) {\n\t\tif (msbBack) {\n\t\t\tmsb_rs_i(msbRef0);\n\t\t}\n\t\tmsbEscape(e.message);\n\t\treturn 0;\n\t}\n}"), s;
+	assert s.split("extern function msb_rs_i(").length == 2;
+	assert modesEntryFor(["bump"]).jsLibrary.includes("\tmsb_rs_i: (a0) => Module['msb'].takes.pop()(a0),");
+}
+
+test "wasm entry: an out enum is clamped into its range on the way in, because an unassigned one arrives as 0, and a ref struct is a local of the imported struct type" {
+	const fill = modesEntryFor(["fill"]).source;
+	assert fill.includes("\tlet msbRef0: msbm0_Level = ((lvl < 1 || lvl > 3 ? 1 : lvl) as msbm0_Level);\n\tlet msbRef1: string = msbStrAdopt(sPtr, sLen);\n");
+	assert fill.includes("\t\tmsb_rs_i(((msbRef0 as uint8) as int32));\n\t\tmsb_rs_s(msbStrPtr(msbRef1), msbRef1.asBytes().length);\n");
+	assert fill.includes("Level as msbm0_Level");
+	const grow = modesEntryFor(["grow"]).source;
+	assert grow.includes("import { grow as msbm0_grow, Pin as msbm0_Pin } from \"./calc\";"), grow;
+	assert grow.includes("\tlet msbRef0: msbm0_Pin = { at: p_0, label: msbStrAdopt(p_1Ptr, p_1Len) };\n");
+	assert grow.includes("\t\tconst r = msbm0_grow(msbRef0, k);\n\t\tmsbBack = false;\n\t\tmsb_rs_is(msbRef0.at, msbStrPtr(msbRef0.label), msbRef0.label.asBytes().length);\n\t\tmsb_rs_s(msbStrPtr(r), r.asBytes().length);\n");
+}
+
+test "wasm entry: a nullable ref struct copies back a presence flag and the fields of a zero struct when it is null" {
+	const s = modesEntryFor(["maybe"]).source;
+	assert s.includes("\tlet msbRef0: msbm0_Pin | null = (pSome != 0 ? { at: p_0, label: msbStrAdopt(p_1Ptr, p_1Len) } : null);\n");
+	assert s.includes("{ const msbRef0Back: msbm0_Pin = msbRef0 ?? { at: 0, label: \"\" }; msb_rs_iis((msbRef0 != null ? 1 : 0), msbRef0Back.at, msbStrPtr(msbRef0Back.label), msbRef0Back.label.asBytes().length); }");
+}
+
+test "wasm entry: a sink parameter takes the adopted copy as the plain parameter does, a temporary the call moves" {
+	const s = modesEntryFor(["keep"]).source;
+	assert s.includes("\t\treturn msbm0_keep(msbStrAdopt(sPtr, sLen), { at: p_0, label: msbStrAdopt(p_1Ptr, p_1Len) }, msbVecFrom_int32(xsPtr, xsLen));");
+	assert !s.includes("msbRef") && !s.includes("msbBack");
+}

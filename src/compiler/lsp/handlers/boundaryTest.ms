@@ -21,6 +21,8 @@ const SOURCE = [
 	"@wasm",
 	"export function fill(xs: Span<int32>): void {}",
 	"@wasm",
+	"export function step(ref n: int32, out s: string): void { s = \"\"; }",
+	"@wasm",
 	"export function twice<T>(x: T): T { return x; }",
 	"@wasm",
 	"export function inner(v: Vec<float32>): int64 { return sum(v, \"a\"); }",
@@ -100,6 +102,13 @@ test "hover on a call of a placed function carries the same section" {
 test "hover on a writable Span parameter says it is lent and written back" {
 	const r = hoverOn("function fill(", "fill");
 	assert r.indexOf("`xs: Span<int32>`: lent for the call, written back") >= 0;
+}
+
+test "hover on a ref or out parameter says it is written back, also when the call throws" {
+	const r = hoverOn("function step(", "step");
+	const back = "and written back to the caller's variable after the call, also when it throws";
+	assert r.indexOf("`n: ref int32`: by value, " + back) >= 0, r;
+	assert r.indexOf("`s: out string`: encoded (WTF-8) into wasm memory, " + back) >= 0, r;
 }
 
 test "hover on a refused declaration gives the manifest's reason" {
