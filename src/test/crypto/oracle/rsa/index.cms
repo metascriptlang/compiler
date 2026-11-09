@@ -78,6 +78,8 @@
 @passC("-DMBEDTLS_PLATFORM_MEMORY");
 @passC("-Wno-deprecated-declarations");
 
+// The oracle core carries the hash objects (md.c, sha*.c, platform*.c) the PSA drivers here call into.
+import "../index";
 import { Buffer } from "std/core/buffer";
 import { ByteInput, rawBuffer } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "std/crypto/errors";
