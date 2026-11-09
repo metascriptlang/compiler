@@ -33,5 +33,5 @@ const box = new Box();
 fillBox(box, items);
 for (let i = 0; i < items.length; i++) keepBoxed(box, items[i]);
 const f = holdThenStore(box, make(7), 3);
-const spawned = await sumAcross(items, 1);
+const spawned = await sumAcross([make(1), make(2)], 1);
 console.log(`boundaries ${seen.size} ${into.length} ${box.items.length - 1} ${items[0].id + items[1].id + 1} ${f() + 4} ${spawned}`);

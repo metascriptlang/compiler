@@ -37,7 +37,7 @@ function pause(ms: number): void {
 	while (Date.now() < until) {}
 }
 
-function leaveSaturated(s: Locked<Count>, p: Pace): int32 {
+function leaveSaturated(s: Locked<Count>, p: Readonly<Pace>): int32 {
 	const hs: Promise<int32>[] = [];
 	for (let k = 0; k < queued; k += 1) hs.push(spawn(() => busy(s, p)));
 	while (entered(s) < 1) {}
@@ -47,7 +47,7 @@ function leaveSaturated(s: Locked<Count>, p: Pace): int32 {
 	return t;
 }
 
-async function leaveSaturatedAsync(s: Locked<Count>, p: Pace): Promise<int32> {
+async function leaveSaturatedAsync(s: Locked<Count>, p: Readonly<Pace>): Promise<int32> {
 	const hs: Promise<int32>[] = [];
 	for (let k = 0; k < queued; k += 1) hs.push(spawn(() => busy(s, p)));
 	while (entered(s) < 1) {}
@@ -79,7 +79,7 @@ function churn(): int32 {
 
 let total: int32 = 0;
 const s1 = fresh();
-const pace = new Pace();
+const pace: Readonly<Pace> = new Pace();
 try { total = leaveSaturated(s1, pace); } catch (e) { report("", s1); }
 total = total + churn();
 const s2 = fresh();

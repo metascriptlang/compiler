@@ -36,6 +36,9 @@ t.set("x", x);
 t.set("y", new Tally());
 const before = tallies(t);
 t.get("y")!.n = 3;
-const c = new Map<string, number>();
-c.set("c", 7);
-console.log([nums(m), before, tallies(t), await spawned(c)].join("|"));
+function sevens(): Map<string, number> {
+	const c = new Map<string, number>();
+	c.set("c", 7);
+	return c;
+}
+console.log([nums(m), before, tallies(t), await spawned(sevens())].join("|"));
