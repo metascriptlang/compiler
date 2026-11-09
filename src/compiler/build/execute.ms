@@ -145,15 +145,17 @@ function runCompile(x: Execution, n: GraphNode, staticLib: boolean): Job | null 
 	const mode = modeFlag(n.optimize);
 	if (mode != "") args.push(mode);
 	for (const flag of targetFlags(n)) args.push(flag);
+	if (n.lto >= 0) args.push(`--lto=${["off", "full", "thin"][n.lto]}`);
 	if (staticLib) args.push("--app=staticlib");
 	for (const libId of n.link) args.push(`--passL=${x.outputs.get(libId)!}`);
+	const compiler = n.compiler >= 0 ? x.outputs.get(n.compiler)! : execPath;
 	if (x.dryRun) {
-		console.log(`${execPath} ${args.join(" ")}`);
+		console.log(`${compiler} ${args.join(" ")}`);
 		x.outputs.set(n.id, out);
 		x.digests.set(n.id, `dry:${n.id}`);
 		return null;
 	}
-	return job(n, execPath, args, x.projectRoot, `msc build ${entry}`, (j: Job): void => {
+	return job(n, compiler, args, x.projectRoot, `${n.compiler >= 0 ? compiler : "msc"} build ${entry}`, (j: Job): void => {
 		x.outputs.set(n.id, out);
 		x.digests.set(n.id, hashFile(out));
 		x.ran.push(label(n));

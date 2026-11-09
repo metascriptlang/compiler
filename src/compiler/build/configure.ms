@@ -55,6 +55,8 @@ export interface GraphNode {
 	optimize: int32;
 	linkage: int32;
 	link: int32[];
+	lto: int32;
+	compiler: int32;
 	argv: GraphArg[];
 	cwd: GraphPath | null;
 	inputs: GraphPath[];
@@ -97,7 +99,7 @@ interface GlobListing {
 	listing: string;
 }
 
-const CONFIGURE_FORMAT = "cfg4";
+const CONFIGURE_FORMAT = "cfg5";
 
 export interface GraphOption {
 	name: string;
@@ -222,7 +224,7 @@ function pathShape(p: GraphPath | null, self: int32): string {
 
 // Everything a node does, without its id: two nodes with one shape do the same work.
 function shapeOf(n: GraphNode): string {
-	let s = `${n.kind}|${n.description}|${n.deps.join(",")}|${pathShape(n.entry, n.id)}|${pathShape(n.from, n.id)}|${n.os}|${n.cpu}|${n.abi}|${n.optimize}|${n.linkage}|${n.link.join(",")}`;
+	let s = `${n.kind}|${n.description}|${n.deps.join(",")}|${pathShape(n.entry, n.id)}|${pathShape(n.from, n.id)}|${n.os}|${n.cpu}|${n.abi}|${n.optimize}|${n.linkage}|${n.link.join(",")}|${n.lto}|${n.compiler}`;
 	for (const a of n.argv) s = `${s}|${a.kind}:${a.text}:${pathShape(a.path, n.id)}`;
 	s = `${s}|${pathShape(n.cwd, n.id)}`;
 	for (const p of n.inputs) s = `${s}|in:${pathShape(p, n.id)}`;
@@ -275,7 +277,7 @@ function readNode(r: Reader, v: RaiserHostValue): int32 {
 	r.seen.push(id);
 	const node: GraphNode = {
 		id, kind: v.field("kind").text(), name: "", description: v.field("description").text(), deps: [],
-		entry: null, from: null, os: "", cpu: "", abi: "", optimize: 0, linkage: 0, link: [],
+		entry: null, from: null, os: "", cpu: "", abi: "", optimize: 0, linkage: 0, link: [], lto: -1, compiler: -1,
 		argv: [], cwd: null, inputs: [], env: [], stdout: false, sideEffects: false, expectExit: -1, artifact: -1, files: [],
 	};
 	r.nodes.push(node);
@@ -300,6 +302,10 @@ function readNode(r: Reader, v: RaiserHostValue): int32 {
 			const lib = readNode(r, link.at(i));
 			if (!node.link.includes(lib)) node.link.push(lib);
 		}
+		const lto = optionalField(v, "lto");
+		if (lto != null) node.lto = intOf(lto);
+		const compiler = optionalField(v, "compiler");
+		if (compiler != null) node.compiler = readNode(r, compiler);
 	}
 	if (node.kind == "library") {
 		node.linkage = intOf(v.field("linkage"));
