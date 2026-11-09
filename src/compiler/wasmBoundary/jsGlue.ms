@@ -387,7 +387,7 @@ const HANDLE_STATE = [
 ];
 
 const HANDLE_METHODS = [
-	"\t\town(p, type, label, vec) {",
+	"\t\town(p, type, label, vec, cls) {",
 	"\t\t\tlet i = hf.pop();",
 	"\t\t\tif (i === undefined) {",
 	`\t\t\t\tif (hk.length >= ${SLOT_LIMIT}) throw new RangeError("boundary slot table full");`,
@@ -396,7 +396,7 @@ const HANDLE_METHODS = [
 	"\t\t\t}",
 	"\t\t\thk[i] = 2; hv[i] = p; hl[i] = 0; hr[i] = 1; hu[i] = hUid++;",
 	"\t\t\thn[i] = label || type; hc[i] = vec || null;",
-	"\t\t\treturn new __msbRef(i, hu[i], hn[i]);",
+	"\t\t\treturn new __msbRef(i, hu[i], hn[i], cls || null);",
 	"\t\t},",
 	"\t\tlive(r) { return hLive(r); },",
 	"\t\thandleLeaks(out) {",
@@ -445,8 +445,13 @@ const HANDLE_METHODS = [
 ];
 
 const HANDLE_GLUE = [
+	"const __msbSelf = Symbol(\"msb.self\");",
 	"class __msbRef {",
-	"\tconstructor(i, u, name) { this.i = i; this.u = u; this.name = name; }",
+	"\tconstructor(i, u, name, c) { this.i = i; this.u = u; this.name = name; this.c = c; this.o = null; }",
+	"\tobject() {",
+	"\t\tif (this.c === null) throw new Error(\"Handle.value() on a wasm-owned handle: pass it to a @wasm function\");",
+	"\t\treturn this.o ??= new this.c(this);",
+	"\t}",
 	"\trelease() { __msb.release(this); }",
 	"\tretain() { __msb.retain(this); return this; }",
 	"\tview(f) { __msb.view(this, f); }",

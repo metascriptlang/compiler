@@ -14,7 +14,7 @@ export function at<T extends object>(this typeof Handle, p: Ptr<void>): Handle<T
 }
 
 export function value<T extends object>(this h: Handle<T>): T {
-	@emit(`if (typeof ${h}.ptr === "object" && ${h}.ptr !== null && ${h}.ptr[Symbol.for("msb.ref")] === true) throw new Error("Handle.value() on a wasm-owned handle: pass it to a @wasm function");`);
+	@emit(`if (typeof ${h}.ptr === "object" && ${h}.ptr !== null && ${h}.ptr[Symbol.for("msb.ref")] === true) return ${h}.ptr.object();`);
 	return h.ptr as T;
 }
 

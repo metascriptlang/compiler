@@ -12,6 +12,7 @@ import {
 	BoundaryMode,
 	BoundaryParam,
 	Manifest,
+	MemberAccess,
 	copiesArgsIn,
 	leafLiteral,
 	writesBack,
@@ -475,6 +476,7 @@ function wrapperLines(
 	checked: boolean,
 	dev: boolean,
 	keeps: boolean,
+	proxies: string[],
 ): string[] {
 	const cleanup: string[] = [];
 	const copyBacks: string[] = [];
@@ -668,7 +670,10 @@ function wrapperLines(
 				const element = f.resultElement;
 				const vec = element == BoundaryKind.Void ? "" : `, `
 					+ `[${quoted(msTypeOf(element))}, ${typedArrayOf(element)}]`;
-				keep.push(`return { ptr: __msb.own(v, ${type}, ${label}${vec}) };`);
+				const cls = proxies.includes(f.resultClass)
+					? `, null, ${proxyName(f.resultClass)}`
+					: "";
+				keep.push(`return { ptr: __msb.own(v, ${type}, ${label}${vec}${cls}) };`);
 			} else if (f.resultNullable) {
 				keep.push(
 					"return __msbMod._msb_ret_some() !== 0 ? "
@@ -741,6 +746,34 @@ function wrapperLines(
 	return out;
 }
 
+function proxyName(classKey: string): string {
+	return `__msbRef$${classKey}`;
+}
+
+function proxyClassLines(
+	classKey: string,
+	fns: BoundaryFunction[],
+	bundleNameOf: (f: BoundaryFunction) => string,
+): string[] {
+	const name = proxyName(classKey);
+	const out = [`class ${name} {`, "\tconstructor(r) { this[__msbSelf] = r; }"];
+	for (const f of fns) {
+		if (f.member == null || f.member!.classKey != classKey) continue;
+		const m = f.member!;
+		const args: string[] = [];
+		for (let i = 1; i < f.params.length; i += 1) args.push(`a${i}`);
+		const call = `${bundleNameOf(f)}(${["{ ptr: this[__msbSelf] }", ...args].join(", ")})`;
+		const line = match (m.access) {
+			MemberAccess.Call => `\t${m.jsName}(${args.join(", ")}) { return ${call}; }`,
+			MemberAccess.Get => `\tget ${m.jsName}() { return ${call}; }`,
+			MemberAccess.Set => `\tset ${m.jsName}(a1) { ${call}; }`,
+		};
+		out.push(line);
+	}
+	out.push("}");
+	return out;
+}
+
 export function jsBindings(
 	m: Manifest,
 	wasmModuleUrl: string,
@@ -758,6 +791,10 @@ export function jsBindings(
 	const keeps = m.functions.some((f) => f.params.some((p) => p.mode == BoundaryMode.Kept));
 	const cells = keeps && m.functions.some((f) => f.params.some(writesBack));
 	const aliasing = m.functions.some((f) => aliasGuard(f) != null);
+	const proxies: string[] = [];
+	for (const f of m.functions) {
+		if (f.member != null && !proxies.includes(f.member!.classKey)) proxies.push(f.member!.classKey);
+	}
 	for (const f of m.functions) {
 		if (f.result == BoundaryKind.Handle) handles = true;
 		for (const p of f.params) if (p.kind == BoundaryKind.Handle) handles = true;
@@ -780,7 +817,7 @@ export function jsBindings(
 		const bundleName = bundleNameOf(f);
 		const checked = options.checked(bundleName);
 		if (checked) anyChecked = true;
-		for (const l of wrapperLines(f, bundleName, checked, dev, keeps)) {
+		for (const l of wrapperLines(f, bundleName, checked, dev, keeps, proxies)) {
 			lines[at].push(l);
 		}
 	}
@@ -799,5 +836,6 @@ export function jsBindings(
 		cells,
 		aliasing,
 	);
-	return { prelude, modules };
+	const members = proxies.map((key) => proxyClassLines(key, m.functions, bundleNameOf));
+	return { prelude: prelude + members.map((l) => l.join("\n") + "\n").join(""), modules };
 }

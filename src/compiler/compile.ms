@@ -87,10 +87,10 @@ import { CliOptions, Target, MODE_DANGER, MODE_RELEASE, MODE_DEBUG } from "./opt
 import { emitDeclarations, DeclarationModule } from "./declarations";
 import { wasmFunctionNames, withoutWasmFunctions } from "./wasmBoundary/placement";
 import { buildWasmHalf } from "./wasmBoundary/placementBuild";
-import { manifestFor, BoundaryFunction, BoundaryRefusal } from "./wasmBoundary/manifest";
+import { manifestFor, memberFunctions, BoundaryFunction, BoundaryRefusal, MemberUse } from "./wasmBoundary/manifest";
 import { wasmEntrySource } from "./wasmBoundary/wasmSide";
 import { jsBindings, JsBindings } from "./wasmBoundary/jsSide";
-import { placedModuleErrors, placedImportErrors, placedHandleReadErrors } from "./wasmBoundary/refusals";
+import { placedModuleErrors, placedImportErrors, placedMemberUses } from "./wasmBoundary/refusals";
 import { wasmReachedRoutines } from "../checker/sendable";
 import { flowStart, flowStop, flowAddMs, flowsEnabled, flowsWrite } from "./flows";
 import { atomicWriteFile, writeOutput, printTiming, verboseLog, replaceExt, ensureDir, exeSuffix, soSuffix, outDirForMode, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
@@ -1928,14 +1928,27 @@ function placeWasmModules(
 		for (const f of manifest.functions) functions.push(f);
 		for (const h of manifest.handles) handles.push(h);
 	}
+	const uses: MemberUse[] = [];
 	for (const path of importerPaths) {
 		const program = lookupModuleProgram(path);
 		const ctx = lookupModuleCtx(path);
 		if (program == null || ctx == null) continue;
 		if (!isOutsideResolvedStd(ctx, path)) continue;
 		const inWasm = wasmReachedRoutines(ctx, program);
-		for (const e of placedHandleReadErrors(handles, path, program, inWasm)) {
+		for (const e of placedMemberUses(handles, path, program, inWasm, uses)) {
 			errors.push(e);
+		}
+	}
+	for (const cls of handles) {
+		const used = uses.filter((u) => u.classSym == cls);
+		if (used.length == 0) continue;
+		for (const path of placed.paths) {
+			const exported = exportsOf(path).find((e) => e.sym == cls);
+			if (exported == null) continue;
+			const members = memberFunctions(path, entryPath, exportsOf(path), exported!.name, used);
+			for (const e of members.errors) errors.push(e);
+			for (const f of members.functions) functions.push(f);
+			break;
 		}
 	}
 	if (errors.length > 0) {
@@ -1954,7 +1967,7 @@ function placeWasmModules(
 		}
 		throw new Error(`internal: boundary function '${f.name}' has no export in '${f.modulePath}'`);
 	};
-	return jsBindings({ functions, errors: [], handles: [] }, `./${basename(outStem)}.wasm.mjs`, (f: BoundaryFunction): string => nameOf(f, symOf(f)), { checked: (bundleName: string): boolean => opts.mode != MODE_DANGER && reachableFromForeignJs(bundleName), dev: opts.mode == MODE_DEBUG });
+	return jsBindings({ functions, errors: [], handles: [] }, `./${basename(outStem)}.wasm.mjs`, (f: BoundaryFunction): string => f.member != null ? f.exportSymbol : nameOf(f, symOf(f)), { checked: (bundleName: string): boolean => opts.mode != MODE_DANGER && reachableFromForeignJs(bundleName), dev: opts.mode == MODE_DEBUG });
 }
 
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {

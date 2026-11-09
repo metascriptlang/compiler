@@ -94,6 +94,19 @@ export interface BoundaryParam {
 	structName: string | null;
 }
 
+export enum MemberAccess {
+	Call,
+	Get,
+	Set,
+}
+
+export interface BoundaryMember {
+	classKey: string;
+	property: string;
+	jsName: string;
+	access: MemberAccess;
+}
+
 export interface BoundaryFunction {
 	modulePath: string;
 	moduleKey: string;
@@ -109,6 +122,7 @@ export interface BoundaryFunction {
 	resultLabel: string;
 	resultClass: string;
 	resultEnum: BoundaryEnum | null;
+	member?: BoundaryMember | null;
 }
 
 export interface BoundaryRefusal {
@@ -1028,6 +1042,8 @@ function resultOf(c: Collector, type: Type | null): ValueShape | null {
 		const shape = plainShape(BoundaryKind.Handle, false);
 		shape.handle = target;
 		shape.element = handleElementOf(t);
+		const owner = handleTarget(t)!;
+		if (!isVecBox(owner)) shape.className = classKeyOf(owner.sym!, c.entryPath);
 		return shape;
 	}
 	const heldTyped = t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : null;
@@ -1177,6 +1193,22 @@ function boundaryFunction(
 	c.at = resultExpr != null ? resultExpr.location : nameAt;
 	const result = resultOf(c, ft.typeReturn);
 	if (!ok || result == null) return null;
+	const exportSymbol = inSet
+		? `msb_${key}_${name}_u${overloadIndex}`
+		: `msb_${key}_${name}`;
+	return assembled(c, key, name, overloadIndex, exportSymbol, params, result!, nameAt);
+}
+
+function assembled(
+	c: Collector,
+	key: string,
+	name: string,
+	overloadIndex: int32,
+	exportSymbol: string,
+	params: BoundaryParam[],
+	result: ValueShape,
+	nameAt: SourceLocation,
+): BoundaryFunction | null {
 	const clash = wireNameClash(params);
 	if (clash != null) {
 		c.at = nameAt;
@@ -1216,9 +1248,6 @@ function boundaryFunction(
 		);
 		return null;
 	}
-	const exportSymbol = inSet
-		? `msb_${key}_${name}_u${overloadIndex}`
-		: `msb_${key}_${name}`;
 	return {
 		modulePath: c.modulePath,
 		moduleKey: key,
@@ -1380,6 +1409,118 @@ export function manifestFor(
 					+ `'${functions[i].exportSymbol}': rename one of them`,
 			);
 		}
+	}
+	return { functions, errors: c.errors, handles: c.handles };
+}
+
+export interface MemberUse {
+	classSym: Symbol;
+	property: string;
+	jsName: string;
+	access: MemberAccess;
+	method: Symbol | null;
+	valueType: Type | null;
+	file: string;
+	at: SourceLocation;
+}
+
+export function classKeyOf(cls: Symbol, entryPath: string): string {
+	return `${moduleKeyOf(cls.modulePath, entryPath)}$${cls.name}`;
+}
+
+function receiverParam(className: string): BoundaryParam {
+	const param = plainParam("msbSelf", BoundaryKind.Handle, false, BoundaryMode.Borrowed);
+	param.handle = className;
+	return param;
+}
+
+function memberSignature(
+	c: Collector,
+	use: MemberUse,
+	params: BoundaryParam[],
+): ValueShape | null {
+	if (use.access == MemberAccess.Get) return resultOf(c, use.valueType);
+	if (use.access == MemberAccess.Set) {
+		const p = paramOf(c, "value", use.valueType!);
+		if (p == null) return null;
+		params.push(p);
+		return plainShape(BoundaryKind.Void, false);
+	}
+	const method = use.method!;
+	if (isGenericFn(fnFlagsOf(method)) || hasGenericParams(method.symbolType)) {
+		cannotCross(
+			c,
+			"generic",
+			"it is generic, and a boundary function has one concrete signature; "
+				+ "call it from a @wasm function",
+		);
+		return null;
+	}
+	const ft = peeled(method.symbolType);
+	let ok = true;
+	for (let i = 0; i < ft.typeChildren.length; i += 1) {
+		if (ft.typeNames[i] == "this") continue;
+		const p = paramOf(c, ft.typeNames[i], ft.typeChildren[i]);
+		if (p == null) {
+			ok = false;
+		} else {
+			if (p.kind == BoundaryKind.Callback) {
+				p.mode = BoundaryMode.Kept;
+				p.keptLabel = keptLabel(c, p.name, c.fnName, use.at);
+			}
+			params.push(p);
+		}
+	}
+	const result = resultOf(c, ft.typeReturn);
+	return ok ? result : null;
+}
+
+function accessTag(access: MemberAccess): string {
+	return match (access) {
+		MemberAccess.Call => "m",
+		MemberAccess.Get => "g",
+		MemberAccess.Set => "s",
+	};
+}
+
+export function memberFunctions(
+	modulePath: string,
+	entryPath: string,
+	exports: ExportedSymInfo[],
+	className: string,
+	uses: MemberUse[],
+): Manifest {
+	const key = moduleKeyOf(modulePath, entryPath);
+	const c: Collector = {
+		errors: [],
+		fnName: "",
+		modulePath,
+		entryPath,
+		at: makeLoc(0, 0),
+		exports,
+		handles: [],
+	};
+	const functions: BoundaryFunction[] = [];
+	for (const use of uses) {
+		const tag = accessTag(use.access);
+		const exportSymbol = `msb_${key}_${className}_${tag}_${use.jsName}`;
+		if (functions.some((f) => f.exportSymbol == exportSymbol)) continue;
+		c.fnName = `${className}.${use.property}`;
+		c.modulePath = use.file;
+		c.at = use.at;
+		const params = [receiverParam(className)];
+		const result = memberSignature(c, use, params);
+		if (result == null) continue;
+		const f = assembled(c, key, c.fnName, 0, exportSymbol, params, result!, use.at);
+		if (f == null) continue;
+		f.modulePath = modulePath;
+		f.member = {
+			classKey: classKeyOf(use.classSym, entryPath),
+			property: use.property,
+			jsName: use.jsName,
+			access: use.access,
+		};
+		functions.push(f);
 	}
 	return { functions, errors: c.errors, handles: c.handles };
 }

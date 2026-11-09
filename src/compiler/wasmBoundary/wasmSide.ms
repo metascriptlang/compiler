@@ -9,8 +9,10 @@ import {
 	BoundaryEnum,
 	BoundaryFunction,
 	BoundaryLeaf,
+	BoundaryMember,
 	BoundaryMode,
 	BoundaryParam,
+	MemberAccess,
 	leafLiteral,
 	writesBack,
 } from "./manifest";
@@ -526,7 +528,7 @@ function wrapperLines(
 		}
 	}
 	const sig = sigs.join(", ");
-	const call = `${alias}(${argList.join(", ")})`;
+	const call = f.member != null ? memberCall(f.member!, argList) : `${alias}(${argList.join(", ")})`;
 	return match (f.result) {
 		BoundaryKind.Struct => {
 			const wires: string[] = [];
@@ -581,6 +583,15 @@ function wrapperLines(
 				guardedExport(f, sig, keeps, type, [`return ${stored(call)};`], zero, cells, backs)
 			}
 		},
+	};
+}
+
+function memberCall(m: BoundaryMember, args: string[]): string {
+	const target = `${args[0]}.value().${m.property}`;
+	return match (m.access) {
+		MemberAccess.Call => `${target}(${args.slice(1).join(", ")})`,
+		MemberAccess.Get => target,
+		MemberAccess.Set => `${target} = ${args[1]}`,
 	};
 }
 
@@ -793,7 +804,7 @@ function moduleImportLines(
 		const names: string[] = [];
 		const imported: string[] = [];
 		for (const f of fns) {
-			if (f.modulePath != modulePath || imported.includes(f.name)) continue;
+			if (f.modulePath != modulePath || f.member != null || imported.includes(f.name)) continue;
 			imported.push(f.name);
 			names.push(`${f.name} as ${aliasOf(f, modules)}`);
 		}
