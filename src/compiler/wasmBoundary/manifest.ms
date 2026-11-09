@@ -30,6 +30,7 @@ import {
 	isAtomicRef,
 	isLockedRef,
 	isMaybeType,
+	isOutParam,
 	isReadonlyView,
 	isStdCollection,
 	isStructType,
@@ -64,6 +65,8 @@ export enum BoundaryMode {
 	Shared,
 	Borrowed,
 	Kept,
+	Ref,
+	Out,
 }
 
 export interface BoundaryCallback {
@@ -88,6 +91,7 @@ export interface BoundaryParam {
 	handle: string | null;
 	enumOf: BoundaryEnum | null;
 	keptLabel: string | null;
+	structName: string | null;
 }
 
 export interface BoundaryFunction {
@@ -131,6 +135,10 @@ interface Collector {
 	at: SourceLocation;
 	exports: ExportedSymInfo[];
 	handles: Symbol[];
+}
+
+export function writesBack(p: BoundaryParam): boolean {
+	return p.mode == BoundaryMode.Ref || p.mode == BoundaryMode.Out;
 }
 
 export function copiesArgsIn(f: BoundaryFunction): boolean {
@@ -369,6 +377,18 @@ function callbackOf(
 	const enums: (BoundaryEnum | null)[] = [];
 	for (let i = 0; i < t.typeChildren.length; i += 1) {
 		const declared = peeled(t.typeChildren[i]);
+		if (isModeWrapper(declared)) {
+			const mode = modeWord(declared);
+			const shown = describe(peeled(declared.typeReturn!));
+			const why = mode == "sink"
+				? "and a callback crossing the boundary takes its parameters as "
+					+ "copies, so it has nothing to take ownership of: drop 'sink'"
+				: "and a callback crossing the boundary cannot write a variable of its "
+					+ `wasm caller: drop '${mode}' and return the value from the callback`;
+			cannotCross(c, "callback-param-mode", `parameter ${i + 1} of ${what} is '${mode} ${shown}', ${why}`);
+			ok = false;
+			continue;
+		}
 		const nullable = isMaybeType(declared);
 		const pt = payloadOf(declared);
 		if (pt.kind == TypeKind.Enum) {
@@ -800,7 +820,68 @@ function plainParam(
 		handle: null,
 		enumOf: null,
 		keptLabel: null,
+		structName: null,
 	};
+}
+
+function isModeWrapper(t: Type): boolean {
+	return t.kind == TypeKind.Var || t.kind == TypeKind.Sink;
+}
+
+function modeWord(t: Type): string {
+	if (t.kind == TypeKind.Sink) return "sink";
+	return isOutParam(t) ? "out" : "ref";
+}
+
+function modeWhy(mode: string, kind: BoundaryKind): string | null {
+	const drop = `drop '${mode}'`;
+	return match (kind) {
+		BoundaryKind.Callback => "and a callback crosses the boundary only as a plain "
+			+ `parameter, borrowed for the call: ${drop}`,
+		BoundaryKind.Span => "and a Span is lent for the call, a writable one "
+			+ `written back after it: ${drop}`,
+		BoundaryKind.Handle => "and a Handle crosses only lent for the call, while "
+			+ `the wasm side keeps the object: ${drop}`,
+		BoundaryKind.Vec => mode == "sink"
+			? null
+			: "and a Vec crosses the boundary only as a copy for the call: take a "
+				+ "Span to write its elements in place, or return the new Vec",
+		_ => null,
+	};
+}
+
+function modeParamOf(
+	c: Collector,
+	name: string,
+	wrapper: Type,
+): BoundaryParam | null {
+	const mode = modeWord(wrapper);
+	const inner = peeled(wrapper.typeReturn!);
+	const p = paramOf(c, name, inner);
+	if (p == null) return null;
+	const why = modeWhy(mode, p.kind);
+	if (why != null) {
+		cannotCross(c, "param-mode", `parameter '${name}' is '${mode} ${describe(inner)}', ${why}`);
+		return null;
+	}
+	if (mode == "sink") return p;
+	if (p.kind == BoundaryKind.Struct) {
+		const t = payloadOf(inner);
+		if (!isExportedTarget(c, t)) {
+			const shown = describe(t);
+			cannotCross(
+				c,
+				"struct-unexported",
+				`parameter '${name}' is '${mode} ${describe(inner)}': ${shown} must be `
+					+ `exported by this module to be written back across the boundary: `
+					+ `export it, or re-export it with export { ${shown} }`,
+			);
+			return null;
+		}
+		p.structName = t.sym!.name;
+	}
+	p.mode = mode == "out" ? BoundaryMode.Out : BoundaryMode.Ref;
+	return p;
 }
 
 function paramOf(
@@ -808,6 +889,7 @@ function paramOf(
 	name: string,
 	type: Type,
 ): BoundaryParam | null {
+	if (isModeWrapper(peeled(type))) return modeParamOf(c, name, peeled(type));
 	const declared = peeled(type);
 	const nullable = isMaybeType(declared);
 	const t = payloadOf(declared);
@@ -1116,6 +1198,21 @@ function boundaryFunction(
 				+ "the Span's copy is live, so a write on either side would be lost; "
 				+ "pass a Vec, which is copied for the call, or take the callback in "
 				+ "a second function",
+		);
+		return null;
+	}
+	const cell = params.find(writesBack);
+	if (cell != null && hasKind(params, BoundaryKind.Callback)) {
+		const mode = cell.mode == BoundaryMode.Out ? "out" : "ref";
+		c.at = nameAt;
+		cannotCross(
+			c,
+			"ref-and-callback",
+			`it takes the ${mode} parameter '${cell.name}' and a callback, and the `
+				+ `callback runs JS while wasm holds the copy of '${cell.name}', so JS `
+				+ "would see the variable as it was before the call and a write to it "
+				+ "would be lost; return the value instead, or take the callback in a "
+				+ "second function",
 		);
 		return null;
 	}

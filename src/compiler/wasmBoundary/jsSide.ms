@@ -14,6 +14,7 @@ import {
 	Manifest,
 	copiesArgsIn,
 	leafLiteral,
+	writesBack,
 } from "./manifest";
 
 export interface JsModuleBindings {
@@ -137,7 +138,13 @@ function paramChecks(f: BoundaryFunction): string[] {
 		const p: BoundaryParam = f.params[i];
 		const label = `parameter '${p.name}'`;
 		const at = (what: string): string => `${quoted(f.name)}, ${quoted(what)}`;
-		const x = `a${i}`;
+		const cell = writesBack(p);
+		const x = cell ? `a${i}[0][a${i}[1]]` : `a${i}`;
+		if (cell) {
+			const shape = quoted(`${modeOf(p)} ${typeLabelOf(p)} as [object, key]`);
+			out.push(`__msbCell(a${i}, ${shape}, ${at(label)});`);
+		}
+		const ranged = p.mode != BoundaryMode.Out;
 		const mark = out.length;
 		match (p.kind) {
 			BoundaryKind.String => {
@@ -165,7 +172,8 @@ function paramChecks(f: BoundaryFunction): string[] {
 						const check = `__msbType(${value}, "string", "string", ${where});`;
 						out.push(skip + check);
 					} else {
-						const check = valueCheck(leaf.kind, leaf.enumOf, `${x}.${path}`, where);
+						const e = ranged ? leaf.enumOf : null;
+						const check = valueCheck(leaf.kind, e, `${x}.${path}`, where);
 						out.push(skip + check + ";");
 					}
 				}
@@ -186,7 +194,8 @@ function paramChecks(f: BoundaryFunction): string[] {
 				out.push(`__msbType(${x}, "object", ${type}, ${at(label)});`);
 			}
 			_ => {
-				out.push(valueCheck(p.kind, p.enumOf, x, at(label)) + ";");
+				const e = ranged ? p.enumOf : null;
+				out.push(valueCheck(p.kind, e, x, at(label)) + ";");
 			}
 		}
 		if (p.nullable) {
@@ -196,6 +205,21 @@ function paramChecks(f: BoundaryFunction): string[] {
 		}
 	}
 	return out;
+}
+
+function modeOf(p: BoundaryParam): string {
+	return p.mode == BoundaryMode.Out ? "out" : "ref";
+}
+
+function typeLabelOf(p: BoundaryParam): string {
+	const t = p.structName != null
+		? p.structName!
+		: p.enumOf != null
+		? p.enumOf!.name
+		: p.kind == BoundaryKind.String
+		? "string"
+		: msTypeOf(p.kind);
+	return p.nullable ? `${t} | null` : t;
 }
 
 function guarded(flag: string, expr: string): string {
@@ -367,6 +391,49 @@ function takerOf(f: BoundaryFunction): string {
 	return `(${names.join(", ")}) => { r = ${literal}; }`;
 }
 
+function cellTaker(p: BoundaryParam, i: int32): string {
+	if (p.kind != BoundaryKind.Struct) {
+		const read = wireRead(p.kind, p.nullable, 0);
+		return `(${read.names}) => { w${i} = ${read.value}; }`;
+	}
+	const names: string[] = p.nullable ? ["x0"] : [];
+	const values: string[] = [];
+	let w = p.nullable ? 1 : 0;
+	for (const leaf of p.leaves) {
+		const read = wireRead(leaf.kind, leaf.nullable, w);
+		names.push(read.names);
+		values.push(read.value);
+		w += read.width;
+	}
+	const literal = leafLiteral(p.leaves, values, 0);
+	const value = p.nullable ? `x0 !== 0 ? ${literal} : null` : literal;
+	return `(${names.join(", ")}) => { w${i} = ${value}; }`;
+}
+
+function aliasGuard(f: BoundaryFunction): string | null {
+	const cells: string[] = [];
+	const views: string[] = [];
+	for (let i = 0; i < f.params.length; i += 1) {
+		const p = f.params[i];
+		const label = quoted(`parameter '${p.name}'`);
+		if (writesBack(p)) cells.push(`[a${i}, ${label}]`);
+		if (p.kind == BoundaryKind.Span) {
+			views.push(`[a${i}.base, a${i}.off, a${i}.len, ${label}]`);
+		}
+	}
+	if (cells.length == 0 || cells.length + views.length < 2) return null;
+	return `__msbAliased([${cells.join(", ")}], [${views.join(", ")}], ${quoted(f.name)});`;
+}
+
+function heldMessage(f: BoundaryFunction): string | null {
+	const p = f.params.find(writesBack);
+	if (p == null) return null;
+	return `a kept callback was called while '${f.name}' holds a copy of its `
+		+ `${modeOf(p)} parameter '${p.name}', so JS would see the variable as it `
+		+ "was before the call and a write to it would be lost: call the callback "
+		+ "from a function without ref or out parameters";
+}
+
 function afterCall(body: string[], afters: string[]): string[] {
 	const n = afters.length;
 	const out: string[] = [];
@@ -465,14 +532,25 @@ function wrapperLines(
 			argList.push(`${name} ? ${name}[0] : 0, ${name} ? ${name}[1] : 0`);
 		}
 	};
+	const cellTakers: string[] = [];
+	const writes: string[] = [];
+	const aliased = aliasGuard(f);
+	if (aliased != null) lines.push(`\t${aliased}`);
 	for (let i = 0; i < f.params.length; i += 1) {
 		const p: BoundaryParam = f.params[i];
 		sigs.push(`a${i}`);
-		const own = p.nullable ? `a${i} == null` : "";
+		const x = writesBack(p) ? `v${i}` : `a${i}`;
+		if (writesBack(p)) {
+			lines.push(`\tconst v${i} = a${i}[0][a${i}[1]];`);
+			lines.push(`\tlet w${i};`);
+			cellTakers.push(cellTaker(p, i));
+			writes.push(`a${i}[0][a${i}[1]] = w${i};`);
+		}
+		const own = p.nullable ? `${x} == null` : "";
 		if (p.nullable) argList.push(`${own} ? 0 : 1`);
 		match (p.kind) {
 			BoundaryKind.String => {
-				encode(`e${i}`, `a${i}`, "__msbEncOwned", true, own);
+				encode(`e${i}`, x, "__msbEncOwned", true, own);
 			}
 			BoundaryKind.Callback => {
 				let resultAt: string | null = null;
@@ -499,7 +577,7 @@ function wrapperLines(
 			BoundaryKind.Struct => {
 				for (let j = 0; j < p.leaves.length; j += 1) {
 					const leaf = p.leaves[j];
-					const expr = `a${i}.${leaf.path.join(".")}`;
+					const expr = `${x}.${leaf.path.join(".")}`;
 					const absent = anyOf(own, leaf.nullable ? `${expr} == null` : "");
 					if (leaf.nullable) argList.push(`${absent} ? 0 : 1`);
 					if (leaf.kind == BoundaryKind.String) {
@@ -539,7 +617,7 @@ function wrapperLines(
 				argList.push(`p${i}`);
 			}
 			_ => {
-				argList.push(scalarArg(p.kind, `a${i}`, own));
+				argList.push(scalarArg(p.kind, x, own));
 			}
 		}
 	}
@@ -556,24 +634,34 @@ function wrapperLines(
 		lines.push(`\tconst span = __msb.span; __msb.span = ${quoted(f.name)};`);
 		cleanup.push("__msb.span = span;");
 	}
+	const held = keeps ? heldMessage(f) : null;
+	if (held != null) {
+		lines.push(`\tconst cell = __msb.cell; __msb.cell = ${quoted(held!)};`);
+		cleanup.push("__msb.cell = cell;");
+	}
 	const sig = sigs.join(", ");
 	const call = `__msbMod._${f.exportSymbol}(${argList.join(", ")})`;
 	const guardedCall = (target: string): string => {
 		return `try { ${target}${call}; } catch (e) { throw __msb.die(e); }`;
 	};
+	const takers: string[] = [];
 	const body: string[] = match (f.result) {
-		BoundaryKind.Void => [guardedCall(""), "if (__msb.dirty) __msb.leave();"],
+		BoundaryKind.Void => [guardedCall(""), ...writes, "if (__msb.dirty) __msb.leave();"],
 		BoundaryKind.String
 			| BoundaryKind.Struct
 			| BoundaryKind.Vec
 			| BoundaryKind.Typed => {
 			lines.push(f.resultNullable ? "	let r = null;" : "	let r;");
-			lines.push(`	const d = __msb.takes.push(${takerOf(f)}) - 1;`);
-			cleanup.push("if (__msb.takes.length > d) __msb.takes.length = d;");
-			[guardedCall(""), "if (__msb.dirty) __msb.leave();", "return r;"]
+			takers.push(takerOf(f));
+			[guardedCall(""), ...writes, "if (__msb.dirty) __msb.leave();", "return r;"]
 		},
 		_ => {
-			const keep = ["let v;", guardedCall("v = "), "if (__msb.dirty) __msb.leave();"];
+			const keep = [
+				"let v;",
+				guardedCall("v = "),
+				...writes,
+				"if (__msb.dirty) __msb.leave();",
+			];
 			if (f.result == BoundaryKind.Handle) {
 				const type = quoted(`Handle<${f.resultHandle!}>`);
 				const label = quoted(dev ? f.resultLabel : "");
@@ -592,6 +680,11 @@ function wrapperLines(
 			keep
 		},
 	};
+	for (let k = cellTakers.length - 1; k >= 0; k -= 1) takers.push(cellTakers[k]);
+	if (takers.length > 0) {
+		lines.push(`	const d = __msb.takes.push(${takers.join(", ")}) - ${takers.length};`);
+		cleanup.push("if (__msb.takes.length > d) __msb.takes.length = d;");
+	}
 	const out = [`function ${bundleName}(${sig}) {`];
 	if (checked) {
 		for (const c of paramChecks(f)) out.push(`	${c}`);
@@ -663,6 +756,8 @@ export function jsBindings(
 	let handles = false;
 	const dev = options.dev ?? true;
 	const keeps = m.functions.some((f) => f.params.some((p) => p.mode == BoundaryMode.Kept));
+	const cells = keeps && m.functions.some((f) => f.params.some(writesBack));
+	const aliasing = m.functions.some((f) => aliasGuard(f) != null);
 	for (const f of m.functions) {
 		if (f.result == BoundaryKind.Handle) handles = true;
 		for (const p of f.params) if (p.kind == BoundaryKind.Handle) handles = true;
@@ -701,6 +796,8 @@ export function jsBindings(
 		handles,
 		keeps,
 		dev,
+		cells,
+		aliasing,
 	);
 	return { prelude, modules };
 }

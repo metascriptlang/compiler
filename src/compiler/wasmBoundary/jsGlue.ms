@@ -301,6 +301,11 @@ const CHECK_GLUE = [
 		+ "RangeError(f + \": \" + p + \" expected \" + t + \", got \" + v);",
 	"\treturn v;",
 	"}",
+	"function __msbCell(v, t, f, p) {",
+	"\tif (!Array.isArray(v) || v.length !== 2 || typeof v[0] !== \"object\" || v[0] === null) "
+		+ "throw __msbBad(f, p, t, v);",
+	"\treturn v;",
+	"}",
 	"function __msbList(v, t, f, p) {",
 	"\tif (typeof v !== \"object\" || v === null || !Number.isInteger(v.length) "
 		+ "|| v.length < 0) throw __msbBad(f, p, t, v);",
@@ -327,6 +332,34 @@ const CHECK_GLUE = [
 	"\t\t__msbInt(x, k, lo, hi, t, f, p + \" element \" + (i - off));",
 	"\t}",
 	"\treturn v;",
+	"}",
+];
+
+const ALIAS_GLUE = [
+	"function __msbHolds(v, o) {",
+	"\tif (v === o) return true;",
+	"\tif (typeof v !== \"object\" || v === null || Array.isArray(v)) return false;",
+	"\tfor (const k in v) if (__msbHolds(v[k], o)) return true;",
+	"\treturn false;",
+	"}",
+	"function __msbShared(f, p, q) {",
+	"\treturn new Error(f + \": \" + p + \" and \" + q + \" reach the same variable, and \" "
+		+ "+ \"wasm works on a separate copy of each, so a write through one would be \" "
+		+ "+ \"lost to the other: pass separate variables\");",
+	"}",
+	"function __msbAliased(cs, vs, f) {",
+	"\tfor (let i = 0; i < cs.length; i++) {",
+	"\t\tconst [c, n] = cs[i];",
+	"\t\tconst v = c[0][c[1]];",
+	"\t\tfor (let j = 0; j < i; j++) {",
+	"\t\t\tconst [d, m] = cs[j];",
+	"\t\t\tif (c[0] === d[0] && c[1] === d[1] || __msbHolds(v, d[0]) "
+		+ "|| __msbHolds(d[0][d[1]], c[0])) throw __msbShared(f, m, n);",
+	"\t\t}",
+	"\t\tfor (const [b, off, len, m] of vs) {",
+	"\t\t\tif (c[0] === b && c[1] >= off && c[1] < off + len) throw __msbShared(f, n, m);",
+	"\t\t}",
+	"\t}",
 	"}",
 ];
 
@@ -473,6 +506,8 @@ export function preludeFor(
 	handles: boolean,
 	keeps: boolean,
 	dev: boolean,
+	cells: boolean = false,
+	aliasing: boolean = false,
 ): string {
 	const tagged = keeps && dev;
 	const tableFull = `boundary table full: ${SLOT_CAP} live entries`;
@@ -495,7 +530,8 @@ export function preludeFor(
 	const base = checked
 		? GLUE.concat(views).concat(CHECK_GLUE)
 		: GLUE.concat(views);
-	const glue = handles ? base.concat(HANDLE_GLUE) : base;
+	const held = aliasing ? base.concat(ALIAS_GLUE) : base;
+	const glue = handles ? held.concat(HANDLE_GLUE) : held;
 	const factory = `(await import(${quoted(wasmModuleUrl)})).default`;
 	return [
 		"const __msb = (() => {",
@@ -537,9 +573,11 @@ export function preludeFor(
 		`\t\t\tconst s = id & ${SLOT_MASK};`,
 		rejectStale("callback used after its call returned"),
 		...(keeps ? [`\t\t\tif (this.span !== null) throw new Error(${spanHeld});`] : []),
+		...(cells ? ["\t\t\tif (this.cell !== null) throw new Error(this.cell);"] : []),
 		"\t\t\treturn vals[s];",
 		"\t\t},",
 		...(keeps ? ["\t\tspan: null,"] : []),
+		...(cells ? ["\t\tcell: null,"] : []),
 		...(handles || tagged ? reportLines(handles, tagged) : []),
 		`\t\tenter() {`,
 		`\t\t\tif (dead) throw new Error("${deadGlue}", { cause });`,

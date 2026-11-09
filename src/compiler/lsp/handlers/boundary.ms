@@ -12,7 +12,7 @@ import { hasFlag } from "../../../checker/symbol";
 import { typeDisplayName } from "../../../checker/types";
 import { BoundaryKind } from "../../wasmBoundary/boundaryKinds";
 import {
-	BoundaryFunction, BoundaryMode, BoundaryParam, Manifest, manifestFor,
+	BoundaryFunction, BoundaryMode, BoundaryParam, Manifest, manifestFor, writesBack,
 } from "../../wasmBoundary/manifest";
 
 export interface BoundaryHint {
@@ -75,9 +75,15 @@ function nullableNote(nullable: boolean): string {
 	return nullable ? ", nullable" : "";
 }
 
+function writtenBackNote(p: BoundaryParam): string {
+	return writesBack(p)
+		? ", and written back to the caller's variable after the call, also when it throws"
+		: "";
+}
+
 function paramLine(p: BoundaryParam, typeText: string): string {
 	const how = crossing(p.kind, p.mode, false);
-	return `- \`${p.name}: ${typeText}\`: ${how}${nullableNote(p.nullable)}`;
+	return `- \`${p.name}: ${typeText}\`: ${how}${nullableNote(p.nullable)}${writtenBackNote(p)}`;
 }
 
 function functionLines(f: BoundaryFunction, sym: Symbol): string[] {

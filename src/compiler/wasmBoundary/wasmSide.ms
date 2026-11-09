@@ -12,6 +12,7 @@ import {
 	BoundaryMode,
 	BoundaryParam,
 	leafLiteral,
+	writesBack,
 } from "./manifest";
 
 const REGISTRY = "Module['msb']";
@@ -278,6 +279,7 @@ function wireArgsIn(
 	kind: BoundaryKind,
 	nullable: boolean,
 	enumAlias: string,
+	unset: BoundaryEnum | null,
 ): string {
 	const some = `${name}Some`;
 	if (nullable) sigs.push(`${some}: int32`);
@@ -287,9 +289,56 @@ function wireArgsIn(
 		value = `msbStrAdopt(${name}Ptr, ${name}Len)`;
 	} else {
 		sigs.push(`${name}: ${valueTypeOf(kind)}`);
-		if (enumAlias != "") value = `(${name} as ${enumAlias})`;
+		const stored = unset == null
+			? name
+			: `(${name} < ${unset.low} || ${name} > ${unset.high} ? ${unset.low} : ${name})`;
+		if (enumAlias != "") value = `(${stored} as ${enumAlias})`;
 	}
 	return nullable ? orMaybe(some, value) : value;
+}
+
+function cellTypeOf(p: BoundaryParam, prefix: string): string {
+	const t = p.kind == BoundaryKind.Struct
+		? prefix + p.structName!
+		: p.enumOf != null
+		? prefix + p.enumOf!.name
+		: p.kind == BoundaryKind.String
+		? "string"
+		: valueTypeOf(p.kind);
+	return p.nullable ? `${t} | null` : t;
+}
+
+function leafZero(leaf: BoundaryLeaf, prefix: string): string {
+	if (leaf.nullable) return "null";
+	if (leaf.enumOf != null) return enumZeroOf(prefix, leaf.enumOf);
+	return leaf.kind == BoundaryKind.String ? '""' : zeroOf(leaf.kind);
+}
+
+function cellLettersOf(p: BoundaryParam): string {
+	const flag = p.nullable ? "i" : "";
+	if (p.kind == BoundaryKind.Struct) return flag + leafLetters(p.leaves);
+	return flag + signatureLetter(p.kind);
+}
+
+function cellBackOf(p: BoundaryParam, local: string, prefix: string): string {
+	const take = `msb_rs_${cellLettersOf(p)}`;
+	if (p.kind != BoundaryKind.Struct) {
+		const zero = enumZeroOf(prefix, p.enumOf);
+		return `${take}(${wireArgsOut(p.kind, p.nullable, local, zero)});`;
+	}
+	const source = p.nullable ? `${local}Back` : local;
+	const wires: string[] = p.nullable ? [`(${local} != null ? 1 : 0)`] : [];
+	for (const leaf of p.leaves) {
+		const value = `${source}.${leaf.path.join(".")}`;
+		const zero = enumZeroOf(prefix, leaf.enumOf);
+		wires.push(wireArgsOut(leaf.kind, leaf.nullable, value, zero));
+	}
+	const call = `${take}(${wires.join(", ")});`;
+	if (!p.nullable) return call;
+	const zeros = p.leaves.map((leaf) => leafZero(leaf, prefix));
+	const empty = leafLiteral(p.leaves, zeros, 0);
+	const type = prefix + p.structName!;
+	return `{ const ${source}: ${type} = ${local} ?? ${empty}; ${call} }`;
 }
 
 function stringHelperLines(): string[] {
@@ -327,17 +376,29 @@ function guardedExport(
 	sig: string,
 	keeps: string[],
 	type: string,
-	body: string[],
+	called: string[],
 	zero: string,
+	cells: string[],
+	backs: string[],
 ): string[] {
 	const lines = [
 		`@exportName("${f.exportSymbol}")`,
 		`export function ${f.exportSymbol}(${sig}): ${type} {`,
-		"\ttry {",
 	];
+	for (const l of cells) lines.push("\t" + l);
+	const body = backs.length == 0
+		? called
+		: [called[0], "msbBack = false;", ...backs, ...called.slice(1)];
+	if (backs.length > 0) lines.push("\tlet msbBack = true;");
+	lines.push("\ttry {");
 	for (const l of keeps) lines.push("\t\t" + l);
 	for (const l of body) lines.push("\t\t" + l);
 	lines.push("\t} catch (e) {");
+	if (backs.length > 0) {
+		lines.push("\t\tif (msbBack) {");
+		for (const l of backs) lines.push("\t\t\t" + l);
+		lines.push("\t\t}");
+	}
 	lines.push("\t\tmsbEscape(e.message);");
 	if (zero != "") lines.push(`\t\treturn ${zero};`);
 	lines.push("\t}");
@@ -397,12 +458,25 @@ function wrapperLines(
 	const sigs: string[] = [];
 	const argList: string[] = [];
 	const keeps: string[] = [];
+	const cells: string[] = [];
+	const backs: string[] = [];
 	const prefix = `msbm${modules.indexOf(f.modulePath)}_`;
 	for (let i = 0; i < f.params.length; i += 1) {
 		const p: BoundaryParam = f.params[i];
 		const some = `${p.name}Some`;
 		const present = (value: string): string => {
 			return p.nullable ? orMaybe(some, value) : value;
+		};
+		const unset = p.mode == BoundaryMode.Out ? p.enumOf : null;
+		const pass = (value: string): void => {
+			if (!writesBack(p)) {
+				argList.push(value);
+				return;
+			}
+			const local = `msbRef${i}`;
+			cells.push(`let ${local}: ${cellTypeOf(p, prefix)} = ${value};`);
+			backs.push(cellBackOf(p, local, prefix));
+			argList.push(local);
 		};
 		match (p.kind) {
 			BoundaryKind.Callback => {
@@ -428,9 +502,10 @@ function wrapperLines(
 					const leaf = p.leaves[j];
 					const name = `${p.name}_${j}`;
 					const alias = enumAliasOf(prefix, leaf.enumOf);
-					values.push(wireArgsIn(sigs, name, leaf.kind, leaf.nullable, alias));
+					const leafUnset = p.mode == BoundaryMode.Out ? leaf.enumOf : null;
+					values.push(wireArgsIn(sigs, name, leaf.kind, leaf.nullable, alias, leafUnset));
 				}
-				argList.push(present(leafLiteral(p.leaves, values, 0)));
+				pass(present(leafLiteral(p.leaves, values, 0)));
 			}
 			BoundaryKind.Vec => {
 				if (p.nullable) sigs.push(`${some}: int32`);
@@ -446,7 +521,7 @@ function wrapperLines(
 			}
 			_ => {
 				const alias = enumAliasOf(prefix, p.enumOf);
-				argList.push(wireArgsIn(sigs, p.name, p.kind, p.nullable, alias));
+				pass(wireArgsIn(sigs, p.name, p.kind, p.nullable, alias, unset));
 			}
 		}
 	}
@@ -462,26 +537,26 @@ function wrapperLines(
 			}
 			const letters = leafLetters(f.resultLeaves);
 			const take = `msb_rs_${letters}(${wires.join(", ")});`;
-			guardedExport(f, sig, keeps, "void", takenBody(f, call, take), "")
+			guardedExport(f, sig, keeps, "void", takenBody(f, call, take), "", cells, backs)
 		},
 		BoundaryKind.Vec => {
 			const t = valueTypeOf(f.resultElement);
 			const base = `(r as Span<${t}>) as Ptr<void> as uint64 as int32`;
 			const take = `msb_rv(${base}, r.length as int32);`;
-			guardedExport(f, sig, keeps, "void", takenBody(f, call, take), "")
+			guardedExport(f, sig, keeps, "void", takenBody(f, call, take), "", cells, backs)
 		},
 		BoundaryKind.Typed => {
 			const take = `msbTyped${f.resultClass}(r, "${f.name}");`;
-			guardedExport(f, sig, keeps, "void", takenBody(f, call, take), "")
+			guardedExport(f, sig, keeps, "void", takenBody(f, call, take), "", cells, backs)
 		},
 		BoundaryKind.Handle => {
 			const ret = "return r.ptr as uint64 as uint32;";
 			const body = [`const r = ${call};`, ret];
-			guardedExport(f, sig, keeps, "uint32", body, "0")
+			guardedExport(f, sig, keeps, "uint32", body, "0", cells, backs)
 		},
 		BoundaryKind.String => {
 			const take = "msb_rs_s(msbStrPtr(r), r.asBytes().length);";
-			guardedExport(f, sig, keeps, "void", takenBody(f, call, take), "")
+			guardedExport(f, sig, keeps, "void", takenBody(f, call, take), "", cells, backs)
 		},
 		_ => {
 			const type = f.result == BoundaryKind.Void ? "void" : msTypeOf(f.result);
@@ -496,12 +571,14 @@ function wrapperLines(
 					`const r = ${call};`,
 					"msbRetSome = r != null ? 1 : 0;",
 					`return ${stored(`r ?? ${absent}`)};`,
-				], zero)
+				], zero, cells, backs)
+			} else if (f.result == BoundaryKind.Void) {
+				guardedExport(f, sig, keeps, type, [`${call};`], zero, cells, backs)
+			} else if (backs.length > 0) {
+				const body = [`const msbRet = ${call};`, `return ${stored("msbRet")};`];
+				guardedExport(f, sig, keeps, type, body, zero, cells, backs)
 			} else {
-				const body = f.result == BoundaryKind.Void
-					? `${call};`
-					: `return ${stored(call)};`;
-				guardedExport(f, sig, keeps, type, [body], zero)
+				guardedExport(f, sig, keeps, type, [`return ${stored(call)};`], zero, cells, backs)
 			}
 		},
 	};
@@ -571,7 +648,7 @@ interface EntryUsage {
 	callbacks: BoundaryCallback[];
 	keeps: boolean;
 	handles: string[];
-	enums: string[];
+	types: string[];
 	viewElements: BoundaryKind[];
 }
 
@@ -588,10 +665,13 @@ function addHandle(
 	}
 }
 
+function addType(usage: EntryUsage, f: BoundaryFunction, name: string): void {
+	const key = `${f.modulePath}\n${name}`;
+	if (!usage.types.includes(key)) usage.types.push(key);
+}
+
 function addEnum(usage: EntryUsage, f: BoundaryFunction, e: BoundaryEnum | null): void {
-	if (e == null) return;
-	const key = `${f.modulePath}\n${e.name}`;
-	if (!usage.enums.includes(key)) usage.enums.push(key);
+	if (e != null) addType(usage, f, e.name);
 }
 
 function usageOf(fns: BoundaryFunction[]): EntryUsage {
@@ -608,7 +688,7 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 		callbacks: [],
 		keeps: false,
 		handles: [],
-		enums: [],
+		types: [],
 		viewElements: [],
 	};
 	let hasVecResult = false;
@@ -651,6 +731,8 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 		}
 		for (const p of f.params) {
 			if (p.handle != null) addHandle(usage, f, p.handle!, p.element);
+			if (p.structName != null) addType(usage, f, p.structName!);
+			if (writesBack(p)) addResultImport("msb_rs_" + cellLettersOf(p));
 			addEnum(usage, f, p.enumOf);
 			for (const leaf of p.leaves) addEnum(usage, f, leaf.enumOf);
 			if (p.kind == BoundaryKind.String) {
@@ -772,7 +854,7 @@ function entryLines(
 	importPathOf: (modulePath: string) => string,
 ): string[] {
 	const { modules, handles } = usage;
-	const types = handles.concat(usage.enums);
+	const types = handles.concat(usage.types);
 	const lines = moduleImportLines(fns, modules, types, importPathOf);
 	if (handles.length > 0) {
 		const box = usage.viewElements.length > 0 ? ", VecBox" : "";
