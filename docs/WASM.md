@@ -35,7 +35,7 @@ unless its `@columns` says otherwise.
 | A callback's `Span<T>` parameter | a typed array over wasm memory for the call, so a write lands in place, also one made before a throw, and two Spans of one Vec see each other's writes; a `Span<boolean>` is a copy written back after the call, two of them sharing one copy; a boundary call while it is open throws | `spanCallback`, `callbackSpanViews`, `spanOverlap`, `spanReentry`, `exportsHeap`, `typedSet` |
 | `ref`, `out` and `sink` parameters | `ref`/`out` of a number, bool, exported enum, string or struct of those (nullable too): copied in from the caller's variable and written back after the call and when it throws; refused beside a callback, and at the call when two arguments reach one variable or one names an element a `Span` argument views; a kept callback called during the call throws. `sink` of a string, struct or `Vec`: the adopted copy is moved into the parameter. A `ref`/`out` `Vec`, `Span`, `Handle` or callback and a callback's own mode are refused naming the mode | `refOutScalars`, `refOutStructs`, `sinkCopies`, `refAliased`, `keptCallbackDuringRef`, `refForeign`, `refusedModes` |
 | Errors | a JS throw in a callback reaches the JS caller as the same object; a wasm throw reaches it as an Error; a trap ends the instance and every later call says so | `callbackThrow*`, `spanThrow`, `handleTrap` |
-| Owner `Handle<T>` of an exported class | wasm owns it, JS holds a counted reference: `release`, `retain`, `[Symbol.dispose]`; a release while a call lends it waits for that call | `handleBasic`, `handleRetain`, `handleMisuse`, `handleDestroy` |
+| Owner `Handle<T>` of an exported class | wasm owns it, JS holds a counted reference: `release`, `retain`, `[Symbol.dispose]`; a release while a call lends it waits for that call. The JS side reaches the object as `h.value().member`: a method call, a getter or setter, a field read or write each run in wasm on the lent handle; `h.value()` used any other way, and a write or method call through a copied struct or `Vec` field, are refused | `handleBasic`, `handleRetain`, `handleMisuse`, `handleDestroy`, `handleMembers`, `refusedHandleRead`, `refusedHandleCopyWrite` |
 | `Handle<VecBox<T>>.view(f)` | a Span over wasm memory, no copy, only inside `f`; a boundary call while it is open throws (it could grow memory) | `handleView*`, `refusedKeptView*` |
 | Classes, unions, arrays, functions, module state shared by both halves | refused with a named reason at the declaration | `refused*` |
 
@@ -64,6 +64,16 @@ column (`caught boom after the writes: 5 2 text written`), an `out` parameter wh
 before writing leaves the caller's value (`caught boom before the write: 3`), and the adopted copy of
 a `sink` string is moved into the parameter with no incref in the wasm entry's C. Not measured:
 `--release`/`--danger`, a `ref` of a generic struct, a Node host other than m1m's.
+
+The member row was measured 2026-11-10 on m1m with a candidate of `wt/js-wasm-one-program` (base
+dcdd70aad13): `WASMMIX_BROWSER=1 check.sh` passed all 95 programs of the tree on C, JS, mixed, the
+tree build and Chrome (its other 3 FAILs are deleted programs m1m still holds), units 190/190; the
+three member programs are red on the installed compiler 60ecbc206ed (`wasmmix: 0/3 pass`, refused as
+reading a wasm-owned handle). `handleMembers` runs a method, a getter and setter, field reads and
+writes (`=`, `+=`, `++`, a struct field), a callback parameter, and a method named `release`, which
+stays the class's method and not the handle's. Not measured: an overloaded or inherited method, a
+member of a class two placed modules export, `--release`/`--danger`, and members for a foreign JS
+caller, which still gets only `release`, `retain` and `[Symbol.dispose]`.
 
 Dev builds (default mode) add: argument type checks on the functions the entry re-exports, and
 the site in handle messages (`use of Handle<Counter> created at core.ms:8 after release`); at exit
