@@ -587,7 +587,13 @@ function dbParsed(db: TransAmDb, filePath: string): ParsedModule | null {
 	if (fileId < 0) return null;
 	const key = createQueryKey(TaQueryKind.Parse, fileId);
 
-	if (dbMarkGreen(db, key)) return db.parses.get(fileId) ?? null;
+	if (dbMarkGreen(db, key)) {
+		const held = db.parses.get(fileId);
+		if (held != null || (db.handedToCheck != null && db.handedToCheck.has(fileId))) return held ?? null;
+		const reparsed = adoptLoaderParse(db, filePath, db.preprocessCache.get(fileId) ?? getFileText(db.fileInput, fileId));
+		if (reparsed != null) db.parses.set(fileId, reparsed);
+		return reparsed;
+	}
 
 	// Compute — get preprocessed source via the Preprocess query. This records
 	// deps on the file's own FileText AND any .h files it imports, so parse
@@ -1414,6 +1420,21 @@ export function dbCheckRecordMissing(db: TransAmDb, record: TaCheckRecord): stri
 	return "";
 }
 
+function restoreSourceQueries(db: TransAmDb, fileId: int32, source: string): void {
+	const durability = getFileDurability(db.fileInput, fileId);
+	const preprocessKey = createQueryKey(TaQueryKind.Preprocess, fileId);
+	db.preprocessCache.set(fileId, source);
+	pushFrame(db.depStack, preprocessKey);
+	recordDependency(db.depStack, createQueryKey(TaQueryKind.FileText, fileId));
+	recordDurability(db.depStack, durability);
+	executeQueryWith(db.cache, db.fileInput, db.depStack, preprocessKey, db.revision.value, db.revision.value, true);
+	const parseKey = createQueryKey(TaQueryKind.Parse, fileId);
+	pushFrame(db.depStack, parseKey);
+	recordDependency(db.depStack, preprocessKey);
+	recordDurability(db.depStack, durability);
+	executeQueryWith(db.cache, db.fileInput, db.depStack, parseKey, db.revision.value, db.revision.value, true);
+}
+
 export function dbRestoreCheck(db: TransAmDb, filePath: string, ctx: CheckerContext, program: Node, record: TaCheckRecord): void {
 	const fileId = getFileId(db.fileInput, filePath);
 	if (fileId < 0 || db.handedToCheck == null) throw new Error(`internal: the std unit restores ${filePath} into a db that does not hold it or is kept`);
@@ -1422,8 +1443,10 @@ export function dbRestoreCheck(db: TransAmDb, filePath: string, ctx: CheckerCont
 		const parsed = dbParsed(db, filePath);
 		if (parsed == null) throw new Error(`internal: the std unit restores ${filePath}, whose loader parse the db did not take`);
 		parsed.consumedBy = "dbTypeCheck";
+		db.handedToCheck.add(fileId);
+	} else {
+		restoreSourceQueries(db, fileId, graphMod != null && graphMod.source != "" ? graphMod.source : getFileText(db.fileInput, fileId));
 	}
-	db.handedToCheck.add(fileId);
 	registerModuleProgram(filePath, program);
 	const key = createQueryKey(TaQueryKind.TypeCheck, fileId);
 	pushFrame(db.depStack, key);
