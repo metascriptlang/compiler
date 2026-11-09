@@ -379,6 +379,7 @@ export function configure(buildFile: string, opts: CliOptions, loaded: string[] 
 		if (n.name == "") n.name = graph.exportNames[i];
 	}
 	for (const n of graph.nodes) {
+		if (n.name == "" && n.entry != null && n.id == graph.defaultId) n.name = basename(n.entry!.sub).replace(".ms", "");
 		if (n.name == "" && n.entry != null) n.name = `.graph/${basename(n.entry!.sub).replace(".ms", "")}-${hashContent(shapeOf(n)).slice(0, 8)}`;
 	}
 	return Result.ok(graph);
