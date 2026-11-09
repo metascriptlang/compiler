@@ -4050,12 +4050,14 @@ let _speculationDepth: int32 = 0;
 export class HeldBeyondState {
 	bySym: HashMap<Symbol, HeldBeyond>;
 	byFieldNames: HashMap<string, HashMap<Type, HeldBeyond>>;
+	log: HeldNote[];
 }
 
 export function swapHeldBeyond(next: HeldBeyondState | null): HeldBeyondState {
-	const prev: HeldBeyondState = { bySym: _heldBySym, byFieldNames: _heldByFieldNames };
+	const prev: HeldBeyondState = { bySym: _heldBySym, byFieldNames: _heldByFieldNames, log: _heldLog };
 	_heldBySym = next != null ? next.bySym : new HashMap<Symbol, HeldBeyond>();
 	_heldByFieldNames = next != null ? next.byFieldNames : new HashMap<string, HashMap<Type, HeldBeyond>>();
+	_heldLog = next != null ? next.log : [];
 	return prev;
 }
 

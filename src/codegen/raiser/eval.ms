@@ -107,9 +107,9 @@ function transformForEngine(program: Node, lifted: LiftedOpsState, dispatchRegis
 	const prevEngineMode = setEngineCheckMode(true);
 	let transformed = program;
 	try {
-		const checkerCtx = hasFullOuterCtx
+		const checkerCtx = underLiftedOps(lifted, (): CheckerContext => hasFullOuterCtx
 			? checkProgramWithRegistry(program, outer.registry, outer.graph, outer.module, raiserPreludeCtx())
-			: checkProgram(program, dispatchRegistry);
+			: checkProgram(program, dispatchRegistry));
 		if (checkerCtx.dispatchRegistry != dispatchRegistry) throw new Error("internal: engine checker and emitter have different dispatch owners");
 		_lastEngineCheckErrors = checkerCtx.errors;
 		keepEngineInstances(checkerCtx);
