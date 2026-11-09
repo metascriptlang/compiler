@@ -105,6 +105,48 @@ Pinned by `src/test/guard/releaseDisposeOutOfLine.ms`. Not measured: macOS and W
 hosts' wall time, and Nim's static split for final types (a direct `=destroy` plus a raw dispose, two
 calls and an alignment argument per site, so larger than one call; not built).
 
+## Rejected and parked 2026-11-09 — what remained after one out-of-line release call
+
+rtx, Linux x86-64; arm d0 is main `155b7f913a1`, d1 adds the step; one g1 of main built both.
+
+What a site of each remaining op costs, `-O3` arm64, in a `noinline` wrapper: `msDecrefCyclic` 33
+instructions, `msAllocTyped` with a constant size 15 (a call and three stores), `msVariantAccess`
+14 and `msArrayAccess` 10 (the check inline, a call only on the error), `msIncref` 6. None carries a
+slow path inline any more, so none was split further.
+
+Rejected: a release site leaves a last ref's cycle-root unregister to `msDestroyAndDisposeDyn`,
+which does it before the destroy (Nim's acyclic `nimDecRefIsLast` unregisters nothing; its cyclic
+`rememberCycle` unregisters before the destroy and its dispose does not repeat it). It is smaller and
+runs fewer instructions, and it is slower in wall time:
+
+| | d0 | d1 | d1 / d0 |
+|---|---|---|---|
+| msc `.text` `--danger` | 22,666,018 | 21,569,676 | −4.8% |
+| msc `.text` `--lto=off` | 20,732,503 | 19,652,659 | −5.2% |
+| `check src/index.ms` instructions `--danger` / `--lto=off` | 62.24G / 77.13G | 62.05G / 76.81G | −0.31% / −0.42% |
+| `check` wall, `--lto=off`, 5 rounds | 6,845–6,897 ms | 6,952–6,995 ms | +1.5%, every round |
+| `Set add/has 10k` | | | 1.048 (1.025 to 1.110) |
+| `json stringify strings 64 KB` | | | 1.030 (1.011 to 1.050) |
+| `join 10k strings` | | | 1.029 (1.017 to 1.044) |
+
+A 15-minute quiet window at load 0.6 to 1.1; rows are the median of the 5 per-round ratios against
+d0 in the same round, the range in brackets. `check` at `--danger` was 1.001. The slower rows include
+string parse, stringify and join loops that release no reference, and the json bench binary grew by
+1.3 KB while its release sites shrank, which points to code placement rather than the moved
+unregister; that reading is not measured. The step is
+`~/metascript/.wt/handoff/runtime-dce-keeproot-rejected.patch`.
+
+Parked: a function's last `return` parks its value and falls into the finally that releases its
+locals, instead of emitting a second copy of that finally (Nim emits the copy too:
+`blockLeaveActions` at every return; `easyResultAsgn` handles only a first-statement return). msc
+`.text` 21,569,676 → 21,265,448 B at `--danger` and 19,652,659 → 19,382,075 B at `--lto=off`
+(−1.4%), corpus programs with a finally 290 pass on c/danger/js/raiser and 51 under SAN. A compiler
+carrying it aborts `msc build src/index.ms` with an M1 owner violation in 5 of 10 runs (0 of 5 with
+`--emit-jobs=1`; the control 0 of 8): parallel emission of inline copies counts a shared
+declaration on several workers. Compiler card
+`2026-11-09-parallel-emit-of-an-inline-copy-frees-a-shared-decl-node-on-a-worker.md`; the step lands
+after its fix.
+
 ## Measured 2026-11-08 — what a hello world links
 
 `console.log("hello world")`, `msc build --danger --strip`. Before = tree `3acc0d784e76`, after =
