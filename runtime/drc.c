@@ -871,9 +871,9 @@ static void refuseOwnedCycle(msGcEnv* j) {
 	msCellSeq* set = &j->toFree;
 	int32_t n = set->len;
 	for (int32_t i = 0; i < n; i++) msHeader(set->data[i].ptr)->rootIdx = i;
-	int32_t* start = (int32_t*)malloc(((size_t)n + 1) * sizeof(int32_t));
+	int32_t* start = (int32_t*)msMemAlloc(((size_t)n + 1) * sizeof(int32_t));
 	int32_t adjCap = n > 0 ? n : 1, adjLen = 0;
-	int32_t* adj = (int32_t*)malloc((size_t)adjCap * sizeof(int32_t));
+	int32_t* adj = (int32_t*)msMemAlloc((size_t)adjCap * sizeof(int32_t));
 	for (int32_t i = 0; i < n; i++) {
 		start[i] = adjLen;
 		msTrace(set->data[i].ptr, set->data[i].type, j);
@@ -888,7 +888,7 @@ static void refuseOwnedCycle(msGcEnv* j) {
 	start[n] = adjLen;
 	for (int32_t i = 0; i < n; i++) msHeader(set->data[i].ptr)->rootIdx = -1;
 
-	int32_t* work = (int32_t*)malloc((size_t)(n > 0 ? n : 1) * 6 * sizeof(int32_t));
+	int32_t* work = (int32_t*)msMemAlloc((size_t)(n > 0 ? n : 1) * 6 * sizeof(int32_t));
 	int32_t* order = work, * low = work + n, * stack = work + 2 * n, * onStack = work + 3 * n, * frameNode = work + 4 * n, * framePos = work + 5 * n;
 	for (int32_t i = 0; i < n; i++) { order[i] = -1; onStack[i] = 0; }
 	const msTypeInfo* types[MS_OWNED_CYCLE_NAMES];
@@ -919,9 +919,9 @@ static void refuseOwnedCycle(msGcEnv* j) {
 			sp = base;
 		}
 	}
-	free(work);
-	free(adj);
-	free(start);
+	msMemFree(work);
+	msMemFree(adj);
+	msMemFree(start);
 	if (count > 0) msRaiseOwnedCycle(types, count);
 }
 
