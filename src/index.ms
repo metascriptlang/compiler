@@ -126,7 +126,7 @@ export function main(): int32 {
 		"pipeline" => { requireFile(opts); cmdPipeline(opts.inputFile); },
 		"fmt" => { requireFile(opts); cmdFmt(opts.inputFile, opts, cfg.fmt); },
 		"run" => {
-			if (cfg.graph && opts.inputFile != "" && namesGraphNode(opts.inputFile)) process.exit(cmdBuildGraph(`${projectRoot}/build.ms`, projectRoot, opts, opts.inputFile, true));
+			if (cfg.graph && namesGraphNode(opts.inputFile)) process.exit(cmdBuildGraph(`${projectRoot}/build.ms`, projectRoot, opts, opts.inputFile, true));
 			// argv path overrides build.ms root; fallback to build.ms when no argv
 			if (opts.inputFile == "" && cfg.valid && cfg.entry.length > 0) { opts.inputFile = cfg.entry; }
 			requireFile(opts);
