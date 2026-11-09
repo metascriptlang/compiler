@@ -131,10 +131,8 @@ function targetFlags(n: GraphNode): string[] {
 
 function runCompile(x: Execution, n: GraphNode, staticLib: boolean): Job | null {
 	const entry = sourcePath(n.entry!);
-	if (n.name == "") n.name = basename(entry).replace(".ms", "");
-	const outDir = join(x.projectRoot, "out");
-	ensureDir(outDir);
-	const out = join(outDir, n.name);
+	const out = join(x.projectRoot, `out/${n.name}`);
+	ensureDir(dirname(out));
 	const args = ["build", entry, `--output=${out}`];
 	const mode = modeFlag(n.optimize);
 	if (mode != "") args.push(mode);

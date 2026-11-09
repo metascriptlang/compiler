@@ -11,12 +11,13 @@ import { RaiserValue } from "../../raiser/value";
 import { registerHostFn, HostCapability } from "../../raiser/hostRegistry";
 import { ensureHostTableLoaded } from "../meta/hostTable";
 import { MODE_RELEASE, MODE_DANGER } from "../options";
-import { resolve, join, dirname } from "std/fs/path";
+import { resolve, join, dirname, basename } from "std/fs/path";
 import { exists, readFile, readDir, realpath } from "std/fs";
 import { compileGlob, globMatch, Glob } from "std/fs/glob";
 import { raiseFromHost } from "../../raiser/hostRegistry";
 import { parseJson, jsonStringify, jsonValueOf, jsonValueToStruct } from "std/serialize/json";
 import { hashFile, compilerStamp } from "../cache";
+import { hashContent } from "../../utils/contentHash";
 import { atomicWriteFile, ensureDir } from "../io";
 
 export enum ArgKind { Text, File, OutputFile, OutputDir, DepFile }
@@ -87,7 +88,7 @@ interface GlobListing {
 	listing: string;
 }
 
-const CONFIGURE_FORMAT = "cfg1";
+const CONFIGURE_FORMAT = "cfg2";
 
 export interface GraphOption {
 	name: string;
@@ -207,6 +208,37 @@ interface Reader {
 	nodes: GraphNode[];
 	seen: int32[];
 	steps: HashMap<int32, RaiserHostValue>;
+	sameAs: HashMap<int32, int32>;
+	byShape: HashMap<string, int32>;
+}
+
+function pathShape(p: GraphPath | null, self: int32): string {
+	if (p == null) return "-";
+	return `${p.producer == self ? "self" : `${p.producer}`}:${p.producer < 0 ? p.owner : ""}:${p.sub}`;
+}
+
+// Everything a node does, without its id: two nodes with one shape do the same work.
+function shapeOf(n: GraphNode): string {
+	let s = `${n.kind}|${n.description}|${n.deps.join(",")}|${pathShape(n.entry, n.id)}|${pathShape(n.from, n.id)}|${n.os}|${n.cpu}|${n.abi}|${n.optimize}|${n.linkage}|${n.link.join(",")}`;
+	for (const a of n.argv) s = `${s}|${a.kind}:${a.text}:${pathShape(a.path, n.id)}`;
+	s = `${s}|${pathShape(n.cwd, n.id)}`;
+	for (const p of n.inputs) s = `${s}|in:${pathShape(p, n.id)}`;
+	return `${s}|${n.env.join(",")}|${n.stdout}|${n.artifact}|${n.args.join(",")}`;
+}
+
+// A node with the shape of one read before becomes that node, so a dependency's build function called
+// twice with the same arguments builds once.
+function keepOne(r: Reader, node: GraphNode): int32 {
+	if (node.kind == "step") return node.id;
+	const shape = shapeOf(node);
+	const first = r.byShape.get(shape);
+	if (first == null) {
+		r.byShape.set(shape, node.id);
+		return node.id;
+	}
+	r.sameAs.set(node.id, first);
+	r.nodes.splice(r.nodes.indexOf(node), 1);
+	return first;
 }
 
 function readPath(r: Reader, v: RaiserHostValue): GraphPath | null {
@@ -233,6 +265,8 @@ function optionalField(v: RaiserHostValue, name: string): RaiserHostValue | null
 
 function readNode(r: Reader, v: RaiserHostValue): int32 {
 	const id = intOf(v.field("id"));
+	const same = r.sameAs.get(id);
+	if (same != null) return same;
 	if (r.seen.includes(id)) return id;
 	r.seen.push(id);
 	const node: GraphNode = {
@@ -243,7 +277,10 @@ function readNode(r: Reader, v: RaiserHostValue): int32 {
 	r.nodes.push(node);
 	if (node.kind == "step") r.steps.set(id, v);
 	const deps = v.field("deps");
-	for (let i = 0; i < deps.length(); i += 1) node.deps.push(readNode(r, deps.at(i)));
+	for (let i = 0; i < deps.length(); i += 1) {
+		const dep = readNode(r, deps.at(i));
+		if (!node.deps.includes(dep)) node.deps.push(dep);
+	}
 	if (node.kind == "executable" || node.kind == "library") {
 		const entry = optionalField(v, "entry");
 		if (entry != null) node.entry = readPath(r, entry);
@@ -255,7 +292,10 @@ function readNode(r: Reader, v: RaiserHostValue): int32 {
 	}
 	if (node.kind == "executable") {
 		const link = v.field("link");
-		for (let i = 0; i < link.length(); i += 1) node.link.push(readNode(r, link.at(i)));
+		for (let i = 0; i < link.length(); i += 1) {
+			const lib = readNode(r, link.at(i));
+			if (!node.link.includes(lib)) node.link.push(lib);
+		}
 	}
 	if (node.kind == "library") {
 		node.linkage = intOf(v.field("linkage"));
@@ -276,7 +316,7 @@ function readNode(r: Reader, v: RaiserHostValue): int32 {
 	}
 	if (node.kind == "run" || node.kind == "install") node.artifact = readNode(r, v.field("artifact"));
 	if (node.kind == "run") node.args = strings(v.field("args"));
-	return id;
+	return keepOne(r, node);
 }
 
 export function nodeById(g: BuildGraph, id: int32): GraphNode {
@@ -323,7 +363,7 @@ export function configure(buildFile: string, opts: CliOptions, loaded: string[] 
 	if (run.lastError != "") return Result.err([{ file: buildFile, line: 0, message: run.lastError }]);
 	const unused = unusedOptions(buildFile);
 	if (unused.length > 0) return Result.err(unused);
-	const r: Reader = { nodes: [], seen: [], steps: new HashMap<int32, RaiserHostValue>() };
+	const r: Reader = { nodes: [], seen: [], steps: new HashMap<int32, RaiserHostValue>(), sameAs: new HashMap<int32, int32>(), byShape: new HashMap<string, int32>() };
 	const graph: BuildGraph = { buildFile, nodes: r.nodes, exportNames: [], exportIds: [], defaultId: -1, options: declaredOptions, run, steps: r.steps };
 	for (const exported of compiled.exports) {
 		if (exported.global < 0) continue;
@@ -337,6 +377,9 @@ export function configure(buildFile: string, opts: CliOptions, loaded: string[] 
 	for (let i = 0; i < graph.exportNames.length; i += 1) {
 		const n = nodeById(graph, graph.exportIds[i]);
 		if (n.name == "") n.name = graph.exportNames[i];
+	}
+	for (const n of graph.nodes) {
+		if (n.name == "" && n.entry != null) n.name = `.graph/${basename(n.entry!.sub).replace(".ms", "")}-${hashContent(shapeOf(n)).slice(0, 8)}`;
 	}
 	return Result.ok(graph);
 }
