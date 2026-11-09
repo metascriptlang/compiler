@@ -286,7 +286,7 @@ test "js side: a callback string parameter arrives as pointer and length and is 
 
 test "js side: a callback Span of numbers arrives as a view of wasm memory, a bool one as a copy that is copied back after the call even when the callback throws" {
 	const code = bindingsFor(["sumBy", "edit"]).modules[0].code;
-	assert code.includes("const id1 = __msb.push((x0, x1) => { __msb.lent += 1; try { const s0 = { base: new Float32Array(__msbMod.HEAPU8.buffer, x0 >>> 0, x1), off: 0, len: x1 }; return a1(s0); } finally { __msb.lent -= 1; } });");
+	assert code.includes("const id1 = __msb.push((x0, x1) => { __msb.lent += 1; try { const s0 = { base: new Float32Array(__msbMod.HEAPU8.buffer, x0 >>> 0, x1), off: 0, len: x1 }; const mb = __msbMod.HEAPU8.buffer; const r = a1(s0); __msb.fresh(mb); return r; } finally { __msb.lent -= 1; } });");
 	assert code.includes("const id0 = __msb.push((x0, x1, x2) => { __msb.lent += 1; try { const s0 = { base: __msbVecOut(x0 >>> 0, x1, Uint8Array, true), off: 0, len: x1 }; try { a0(s0, x2); } finally { __msbCopyTo(x0 >>> 0, s0.base, 0, x1, Uint8Array); } } finally { __msb.lent -= 1; } });");
 }
 
@@ -431,7 +431,7 @@ test "js side: a Span is copied in for the call, and a writable one is copied ba
 
 test "js side: a callback's writable Span of numbers is written in place, so nothing is copied back after it returns or throws" {
 	const b = bindingsFor(["patch"]);
-	assert b.modules[0].code.includes("const id0 = __msb.push((x0, x1) => { __msb.lent += 1; try { const s0 = { base: new Int32Array(__msbMod.HEAPU8.buffer, x0 >>> 0, x1), off: 0, len: x1 }; return a0(s0); } finally { __msb.lent -= 1; } });");
+	assert b.modules[0].code.includes("const id0 = __msb.push((x0, x1) => { __msb.lent += 1; try { const s0 = { base: new Int32Array(__msbMod.HEAPU8.buffer, x0 >>> 0, x1), off: 0, len: x1 }; const mb = __msbMod.HEAPU8.buffer; const r = a0(s0); __msb.fresh(mb); return r; } finally { __msb.lent -= 1; } });");
 	assert !b.modules[0].code.includes("__msbCopyTo");
 	assert !b.modules[0].code.includes("__msbVecOut");
 }
@@ -600,7 +600,7 @@ test "js side: a checked callback is tested before it is pushed and its result i
 	assert !bindingsFor(["evaluate"], true).modules[0].code.includes("__msb.push(a");
 	assert code.includes("const id1 = __msb.push(a1);");
 	assert code.includes("const id0 = __msb.push((x0, x1) => (__msbType(a0(x0 !== 0, x1 >>> 0), \"boolean\", \"boolean\", \"pick\", \"result of callback 'f'\") ? 1 : 0));");
-	assert code.includes("return __msbType(a1(s0), \"number\", \"float32\", \"sumBy\", \"result of callback 'cb'\"); }");
+	assert code.includes("const r = __msbType(a1(s0), \"number\", \"float32\", \"sumBy\", \"result of callback 'cb'\"); __msb.fresh(mb); return r; }");
 }
 
 test "js side: copying into wasm memory uses TypedArray.set for a typed source, and copying back uses it for a typed non-bool target" {
@@ -695,7 +695,7 @@ test "js side: without two views and a writer a call keeps one copy per argument
 	assert !p.modules[0].code.includes("const hb = []");
 	assert !p.modules[0].code.includes("__msbCopyInViews");
 	assert !p.modules[0].code.includes("__msbVecViews");
-	assert p.modules[0].code.includes("const id0 = __msb.push((x0, x1, x2, x3) => { __msb.lent += 1; try { const s0 = { base: new Int32Array(__msbMod.HEAPU8.buffer, x0 >>> 0, x1), off: 0, len: x1 }; const s1 = { base: new Int32Array(__msbMod.HEAPU8.buffer, x2 >>> 0, x3), off: 0, len: x3 }; a0(s0, s1); } finally { __msb.lent -= 1; } });");
+	assert p.modules[0].code.includes("const id0 = __msb.push((x0, x1, x2, x3) => { __msb.lent += 1; try { const s0 = { base: new Int32Array(__msbMod.HEAPU8.buffer, x0 >>> 0, x1), off: 0, len: x1 }; const s1 = { base: new Int32Array(__msbMod.HEAPU8.buffer, x2 >>> 0, x3), off: 0, len: x3 }; const mb = __msbMod.HEAPU8.buffer; a0(s0, s1); __msb.fresh(mb); } finally { __msb.lent -= 1; } });");
 	assert !p.prelude.includes("__msbGroups");
 	assert !p.prelude.includes("__msbCopyInViews");
 }
@@ -714,7 +714,7 @@ test "js side: the shared copy is range-checked and recorded before it is filled
 
 test "js side: two Spans of numbers handed to a callback of which one is written are two views of the same wasm memory, with no shared copy" {
 	const p = bindingsFor(["smearBy"]);
-	assert p.modules[0].code.includes("const id0 = __msb.push((x0, x1, x2, x3) => { __msb.lent += 1; try { const s0 = { base: new Float64Array(__msbMod.HEAPU8.buffer, x0 >>> 0, x1), off: 0, len: x1 }; const s1 = { base: new Float64Array(__msbMod.HEAPU8.buffer, x2 >>> 0, x3), off: 0, len: x3 }; a0(s0, s1); } finally { __msb.lent -= 1; } });");
+	assert p.modules[0].code.includes("const id0 = __msb.push((x0, x1, x2, x3) => { __msb.lent += 1; try { const s0 = { base: new Float64Array(__msbMod.HEAPU8.buffer, x0 >>> 0, x1), off: 0, len: x1 }; const s1 = { base: new Float64Array(__msbMod.HEAPU8.buffer, x2 >>> 0, x3), off: 0, len: x3 }; const mb = __msbMod.HEAPU8.buffer; a0(s0, s1); __msb.fresh(mb); } finally { __msb.lent -= 1; } });");
 	assert !p.prelude.includes("__msbVecViews");
 	assert !p.prelude.includes("__msbGroups");
 }
@@ -722,7 +722,7 @@ test "js side: two Spans of numbers handed to a callback of which one is written
 test "js side: two bool Spans handed to a callback of which one is written share one copy and are written back by range, beside a view of numbers" {
 	const p = bindingsFor(["flipBy", "mixBy"]);
 	assert p.modules[0].code.includes("const id0 = __msb.push((x0, x1, x2, x3) => { __msb.lent += 1; try { const vs = __msbVecViews([[x0 >>> 0, x1, Uint8Array, true], [x2 >>> 0, x3, Uint8Array, true]]); try { return a0(vs[0], vs[1]); } finally { __msbCopyTo(x2 >>> 0, vs[1].base, vs[1].off, x3, Uint8Array); } } finally { __msb.lent -= 1; } });");
-	assert p.modules[0].code.includes("const id0 = __msb.push((x0, x1, x2, x3, x4, x5) => { __msb.lent += 1; try { const vs = __msbVecViews([[x0 >>> 0, x1, Uint8Array, true], [x4 >>> 0, x5, Uint8Array, true]]); const s1 = { base: new Float32Array(__msbMod.HEAPU8.buffer, x2 >>> 0, x3), off: 0, len: x3 }; try { a0(vs[0], s1, vs[1]); } finally { __msbCopyTo(x0 >>> 0, vs[0].base, vs[0].off, x1, Uint8Array); } } finally { __msb.lent -= 1; } });");
+	assert p.modules[0].code.includes("const id0 = __msb.push((x0, x1, x2, x3, x4, x5) => { __msb.lent += 1; try { const vs = __msbVecViews([[x0 >>> 0, x1, Uint8Array, true], [x4 >>> 0, x5, Uint8Array, true]]); const s1 = { base: new Float32Array(__msbMod.HEAPU8.buffer, x2 >>> 0, x3), off: 0, len: x3 }; const mb = __msbMod.HEAPU8.buffer; try { a0(vs[0], s1, vs[1]); __msb.fresh(mb); } finally { __msbCopyTo(x0 >>> 0, vs[0].base, vs[0].off, x1, Uint8Array); } } finally { __msb.lent -= 1; } });");
 	assert p.prelude.includes("function __msbVecViews(rs) {");
 	assert p.prelude.includes("function __msbGroups(vs) {");
 	assert !p.prelude.includes("__msbCopyInViews");
@@ -758,7 +758,8 @@ test "js side: the prelude holds handle kinds 2 and 3, and release defers instea
 	const p = handleBindings(true).prelude;
 	assert p.includes("hk[i] = 2;") && p.includes("hk[r.i] = 3;");
 	const release = p.slice(p.indexOf("release(r) {"), p.indexOf("release(r) {") + 400);
-	assert !release.includes("lent"), release;
+	assert release.includes("if (hl[r.i] > 0) { hk[r.i] = 3; return; }"), release;
+	assert release.includes("hFinish(r.i);\n\t\t\tif (this.lent > 0) this.fresh(mb);"), release;
 	assert p.includes("__msb.release(this)") && p.includes("Symbol.for(\"msb.ref\")");
 	assert !bindingsFor(["add64"]).prelude.includes("__msbRef");
 }
@@ -786,7 +787,7 @@ test "js side: a VecBox result is owned with its typed array and a view reports 
 	assert b.modules[0].code.includes("__msb.own(v, \"Handle<VecBox<float32>>\", \"Handle<VecBox<float32>> created at ");
 	assert b.modules[0].code.includes(", [\"float32\", Float32Array]) };");
 	assert b.prelude.includes("\t\tview(r, f) {");
-	assert b.prelude.includes("new T(__msbMod.HEAPU8.buffer, ptr, len)");
+	assert b.prelude.includes("const mb = __msbMod.HEAPU8.buffer;\n\t\t\t\tf({ base: new T(mb, ptr, len), off: 0, len });\n\t\t\t\tthis.fresh(mb);");
 	assert b.prelude.includes("\"boundary call while a view of \" + top[1] + \" is open: the call could grow wasm memory\"");
 	assert b.prelude.includes("if (this.lent !== 0) {");
 	const plain = bindingsFor(["add64"]);
