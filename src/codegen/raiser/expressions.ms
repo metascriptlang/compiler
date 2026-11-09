@@ -3485,6 +3485,7 @@ function isArraySetLengthCall(call: Node): boolean {
 }
 
 const ARRAY_POP_NATIVES = ["&msGenericArrayPop", "&msNumberArrayPop", "&msStringArrayPop"];
+const ARRAY_TAKE_NATIVE = "&msGenericArrayTake";
 const ARRAY_SHIFT_NATIVES = ["&msNumberArrayShift", "&msStringArrayShift"];
 const ARRAY_SPLICE_NATIVES = ["&msNumberArraySplice", "&msStringArraySplice"];
 const ARRAY_SPLICE3_NATIVES = ["&msNumberArraySplice3", "&msStringArraySplice3", "&msUint8ArraySplice3"];
@@ -3497,7 +3498,7 @@ const ARRAY_CONCAT_NATIVES = ["&msNumberArrayConcat", "&msStringArrayConcat"];
 function arrayKernelArity(native: string): int32 {
 	if (ARRAY_POP_NATIVES.includes(native) || ARRAY_SHIFT_NATIVES.includes(native)
 		|| ARRAY_REVERSE_NATIVES.includes(native) || ARRAY_SORT_NATIVES.includes(native)) return 0;
-	if (ARRAY_FILL_NATIVES.includes(native) || ARRAY_CONCAT_NATIVES.includes(native)) return 1;
+	if (ARRAY_FILL_NATIVES.includes(native) || ARRAY_CONCAT_NATIVES.includes(native) || native == ARRAY_TAKE_NATIVE) return 1;
 	if (ARRAY_SPLICE_NATIVES.includes(native) || ARRAY_SLICE_NATIVES.includes(native)) return 2;
 	if (ARRAY_SPLICE3_NATIVES.includes(native)) return 3;
 	return -1;
@@ -3523,6 +3524,14 @@ function compileArrayKernelCall(s: RaiserCompState, node: Node): int32 {
 		const dest = allocFor(s, node.nodeType);
 		if (ARRAY_POP_NATIVES.includes(native)) emitInst(s, raiserABC(RaiserOpcode.ArrayPop, dest, arrReg, 0));
 		else emitInst(s, raiserABC(RaiserOpcode.ArrayShift, dest, arrReg, native == "&msStringArrayShift" ? 1 : 0));
+		return dest;
+	}
+	if (native == ARRAY_TAKE_NATIVE) {
+		const at = allocWord(s);
+		emitInst(s, raiserABC(RaiserOpcode.Conv, at, compileExpr(s, d.arguments[0]), RaiserConvClass.I64));
+		const dest = allocFor(s, node.nodeType);
+		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, dest, arrReg, at));
+		emitInst(s, raiserABC(RaiserOpcode.StoreIndex, arrReg, at, emitZeroValue(s, node.nodeType)));
 		return dest;
 	}
 	if (ARRAY_REVERSE_NATIVES.includes(native)) {

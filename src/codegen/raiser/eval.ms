@@ -3724,3 +3724,18 @@ test "engine: a task returning a view of a module const returns it counted, beca
 	assert vm.error == "", vm.error;
 	assert vm.output == "true\n", vm.output;
 }
+
+const takeProbe = "class Tag { n: int64 = 0; constructor(n: int64) { this.n = n; } }"
+	+ " struct Slot { w: int64; tag: Tag; }"
+	+ " extern function takeAt<T>(this arr: T[], i: int64): T from \"&msGenericArrayTake\";"
+	+ " function run(): int64 { const a: Slot[] = [{ w: 5, tag: new Tag(1) }, { w: 7, tag: new Tag(2) }]; const x = a.takeAt(1); return x.w * 100 + x.tag.n * 10 + a[1].w; }"
+	+ " function keep(): int64 { const a: Slot[] = [{ w: 5, tag: new Tag(1) }, { w: 7, tag: new Tag(2) }]; const x = a[1]; return x.w * 100 + x.tag.n * 10 + a[1].w; }"
+	+ " console.log(`${run()} ${keep()}`);";
+
+test "engine: taking an element out reads it and stores the typed zero in its slot, with no host call and no array of its own" {
+	const run = gapFunc(takeProbe, "run");
+	const keep = gapFunc(takeProbe, "keep");
+	assert countNamed(run, "CallHost") == 0 && countNamed(run, "NewArray") == countNamed(keep, "NewArray"), disasmFunc(run);
+	const vm = evalVM(takeProbe);
+	assert vm.error == "" && vm.output == "720 727\n", `${vm.error} ${vm.output}`;
+}
