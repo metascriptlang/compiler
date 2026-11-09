@@ -908,7 +908,6 @@ self_host_boot() {
   local cand=$1 ccflag=$2 dir ext="" n gen diffs rc
   dir=$(dirname "$cand")
   case "$cand" in *.exe) ext=.exe ;; esac
-  [ -f "${cand}_link.rsp" ] || { say "FAIL self-host: gen1 wrote no link response file"; return 1; }
   rm -f "$dir/gen3_link.rsp"
   for n in 2 3; do
     gen="$dir/boot$n/msc$ext"
@@ -919,6 +918,7 @@ self_host_boot() {
       say "gate: self-host gen$n = gen$((n - 1)) (byte-identical fixed point)"
       rm -rf "$dir/boot$n"; return 0
     fi
+    [ -f "${cand}_link.rsp" ] || { rm -rf "$dir/boot$n"; say "FAIL self-host: gen1 wrote no link response file and gen$n differs from it"; return 1; }
     if [ ! -f "${gen}_link.rsp" ]; then rm -rf "$dir/boot$n"; say "FAIL self-host: gen$n wrote no link response file"; return 1; fi
     diffs=$(rsp_diff "${cand}_link.rsp" "${gen}_link.rsp")
     if [ "$diffs" -eq 0 ]; then
