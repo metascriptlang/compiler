@@ -126,3 +126,30 @@ Why the three slower rows are slower (pinned to one core, `perf record` and `per
 - **template literal 1k (0.93): 3% when pinned (372 against 361 ms), not traced further.** Allocation plus free cost
   the same in both arms (about 335M cycles each); the extra cycles show in `msStringConcatArr` and memmove. Moving
   the output string by 0, 8 or 64 cells does not change it, so it is not cell placement.
+
+## Memory after idle — rtx and m1m, 2026-11-10
+
+Probe `idle.ms` (kept with the runtime-allocator card's probes, not in the repo): each round allocates 1M objects
+holding 16-216 B strings, 2000 strings of 4-68 KiB and 40 of 2 MiB, frees them all, then awaits a 2 s timer, so the
+loop idles. `main` is the region heap before idle return (`~/recompiler` main `5f707391f` on rtx, installed
+`cc97a2f5818` on m1m); `idle return` is that tree with it; `libc` is the same tree built with
+`-DMS_HEAP_USE_MALLOC=1`; node runs the same shape with `--expose-gc` and a `gc()` after each free. Resident memory
+is RSS on Linux and the task footprint on macOS, which is what the OS charges. One run per column, MB:
+
+| host | column | peak | round 1 idle | round 2 idle | round 3 idle |
+|---|---|---|---|---|---|
+| rtx | main | 359.1 | 359.1 | 367.1 | 429.2 |
+| rtx | idle return | 358.3 | 255.0 | 216.3 | 243.4 |
+| rtx | libc | 414.5 | 252.9 | 258.8 | 258.8 |
+| rtx | node 24.1.0 | 449.0 | 426.1 | 429.6 | 434.1 |
+| m1m | main | 364.9 | 364.9 | 370.8 | 371.3 |
+| m1m | idle return | 358.0 | 256.9 | 218.8 | 245.7 |
+| m1m | libc | 404.4 | 132.0 | 114.6 | 207.8 |
+| m1m | node 24.1.0 | 444.1 | 421.1 | 425.7 | 426.8 |
+
+What stays after idle return is small chunks, which keep their pages (the 1M cells and their strings, about
+200 MB). The cost is paid by the first burst after an idle: rtx, best of 5 interleaved runs under load 14-47,
+churn time per round main 355 / 301 / 309 ms, idle return 359 / 339 / 336 ms (round 1 has no idle before it);
+the pages given back fault in again. m1m shows no such cost in one run (816 / 806 against 809 / 789 ms), because
+`MADV_FREE_REUSABLE` changes the footprint without unmapping. Not measured: Windows resident memory after idle
+(d87 passed `idleProgramReturnsFreedPages`, which asserts at least 100 MB returned), and a long-running server.
