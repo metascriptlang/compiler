@@ -992,7 +992,7 @@ FAKE
 # this candidate and on main's, both at once; red on main even once, or red here fewer than twice, is not the slice's.
 # On 2026-10-29..30, 66 of 93 reds were not the slice's and each one cost its owner a re-proof and a new gate; a flake now
 # lands on a slice at most ~7% of the time, while a red the diff causes every time stays the slice's.
-TRIAGE_RUNS=3 TRIAGE_MAX=12 TRIAGE_LIMIT=${GATE_TRIAGE_LIMIT:-1200}
+TRIAGE_RUNS=3 TRIAGE_LIMIT=${GATE_TRIAGE_LIMIT:-1200}
 TRIAGE_LANES=" corpus san tsan guard hcr lsp tests suite "
 
 triage_subject() {
@@ -1096,7 +1096,6 @@ triage_lane() {
   triage_eligible "$lane" <"$OUT/$lane.new" >"$OUT/$lane.triage"
   n=$(grep -c . "$OUT/$lane.triage" | tr -d ' ')
   [ "$n" -gt 0 ] || return 0
-  if [ "$n" -gt "$TRIAGE_MAX" ]; then say "  triage: $n new reds, more than $TRIAGE_MAX, stay the slice's"; return 0; fi
   d=$(triage_main 2>>"$OUT/$lane.triage.log") || { say "  triage: no candidate of main could be built here ($OUT/$lane.triage.log), so the new reds stay the slice's"; return 0; }
   LANE_LIMIT=$TRIAGE_LIMIT bounded triage_side "$lane" "$TOP" "$CAND" "$BUILDER" "$OUT/$lane.triage" "$TRIAGE_RUNS" "$OUT/$lane.tri.slice" >>"$OUT/$lane.triage.log" 2>&1 &
   slice=$!
