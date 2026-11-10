@@ -126,7 +126,10 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   thread's exit flush and a future's count drop go through hooks the facility arms on first use, as
   Nim attaches exit procs and thread-destruction handlers. Proven RED on tree `7a70426b98c4`
   (exit drain hooked only; macOS arm64: all six forbidden symbols at `--danger` and `--release`), GREEN
-  on tree `63f54c80d1bf` (macOS arm64 and Linux x86-64).
+  on tree `63f54c80d1bf` (macOS arm64 and Linux x86-64). Red again from the prepared LLVM 23 bundle
+  (2026-11-10, macOS arm64, all six at both modes): LLVM 23 turns a call through a static slot that is
+  only ever stored one function into a direct call, so every arming store hides its function with
+  `MS_HIDE_FROM_OPTIMIZER` (`runtime/promise/dispatch.h`); hello `__text` at `--danger` 26,220 → 2,856 B.
 - **`releaseDisposeOutOfLine.ms`** — every generic ref release macro (`msDecref`, `msDecrefAny`,
   `msDecrefCyclic`, `msAtomicDecref`, `msDecrefCyclicEdge`) decides inline and disposes through one
   out-of-line call, as Nim inlines only `nimDecRefIsLast` and calls `nimDestroyAndDispose`. Compiles
