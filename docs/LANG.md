@@ -3954,17 +3954,22 @@ takes a function expression, another owned closure or `null`; a closure formed e
 environment can be part of a cycle is refused where it is formed (`cannot form an Owned closure: its environment
 can be part of a cycle through the captured 'w'`). A function that forms the closure returns `Owned<…>`.
 
-When owned edges do close a cycle, a release build leaks it, like a wrong `@acyclic`, never unsafe; a debug or test
+When owned edges do close a cycle, a release build leaks it, never unsafe; a debug or test
 build keeps such classes under the collector and stops when the cycle becomes garbage:
 `Error: an owned cycle became garbage: N objects own each other only through Owned<T> edges, so a release build would
 leak them; make the edge back up the cycle Unowned<T>`. JS collects every cycle and reports nothing.
+
+`@acyclic` is not part of the language: a class leaves the cycle collector through `Owned<T>` and `Unowned<T>` edges,
+or stays with the collector. Writing it is an error at the declaration (`@acyclic is removed from the language: a class
+leaves the cycle collector when its owning edges are Owned<T> and its edges back are Unowned<T>; any other class stays
+with the collector`; `src/test/c/acyclicDecorator.ms`, NIM-REF AN-43).
 
 Cost, `udrcp/step6bench` (a scene graph of 5.85 million nodes over 60 rounds, `--release`, rtx, 2026-11-09):
 
 | Arm | Instructions | CPU median |
 |---|---|---|
 | `kids: Owned<Node>[]`, `parent: Unowned<Node> \| null` | 7 951 808 304 | 570 ms |
-| `@acyclic`, `kids: Node[]`, the same `parent` | 7 951 809 423 | 570 ms |
+| `@acyclic` (removed since), `kids: Node[]`, the same `parent` | 7 951 809 423 | 570 ms |
 | `kids: Node[]`, the same `parent` (collector) | 10 220 797 954 | 620 ms |
 | `kids: Node[]`, `parent: Node \| null` (plain TypeScript) | 15 832 640 853 | 1 070 ms |
 
