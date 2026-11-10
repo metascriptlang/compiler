@@ -46,3 +46,11 @@ export function nodePbkdf2(password: NodeInput, salt: NodeInput, iterations: int
 export function nodeHkdf(digest: string, ikm: NodeInput, salt: NodeInput, info: NodeInput, length: int32): Buffer {
 	return msHkdf(digest, ikm, salt, info, length);
 }
+
+extern function msInputLength(data: NodeInput): int32 from "(x => typeof x === \"string\" ? new TextEncoder().encode(x).length : x.length)(#)";
+extern function msInputHead(data: NodeInput, count: int32): Buffer from "((x, n) => Array.from((typeof x === \"string\" ? new TextEncoder().encode(x) : x).subarray(0, n)))(#, #)";
+
+/** The byte length of what node reads: a string's UTF-8 length. */
+export function nodeInputLength(data: NodeInput): int32 { return msInputLength(data); }
+/** The first `count` bytes, copied. */
+export function nodeInputHead(data: NodeInput, count: int32): Buffer { return msInputHead(data, count); }

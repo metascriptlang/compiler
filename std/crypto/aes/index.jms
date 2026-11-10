@@ -74,7 +74,7 @@ async function msAesCbc(key, iv, data, encrypt) {
 }`);
 
 when (nodejs) {
-	import { NodeInput, nodeInput } from "../pure/nodeCrypto";
+	import { NodeInput, nodeInput, nodeInputLength } from "../pure/nodeCrypto";
 
 	@import("node:crypto", { createCipheriv, createDecipheriv });
 
@@ -162,7 +162,6 @@ function msAesNodeCbc(raw, iv, data, encrypt) {
 		return Result.ok(out);
 	}
 
-	extern function nodeInputLength(data: NodeInput): int32 from "(x => typeof x === \"string\" ? new TextEncoder().encode(x).length : x.length)(#)";
 }
 
 interface Imported {
