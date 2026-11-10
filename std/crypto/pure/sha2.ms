@@ -756,16 +756,21 @@ when (js) {
 		h.state[7] = h.state[7] + hh;
 	}
 
-	// A 64-bit word is two uint32 halves; each helper returns the high or the low half of one operation.
-	function rotrHigh(hi: uint32, lo: uint32, n: uint32): uint32 {
-		if (n < 32) return (hi >> n) | (lo << (32 - n));
-		if (n == 32) return lo;
-		return (lo >> (n - 32)) | (hi << (64 - n));
+	// A 64-bit word is two uint32 halves; each helper returns the high (H) or the low (L) half of one rotation,
+	// by a count below 32 (S) or above 32 (B), so a call with a constant count has no branch.
+	function rotrSH(hi: uint32, lo: uint32, n: uint32): uint32 {
+		return (hi >> n) | (lo << (32 - n));
 	}
 
-	function rotrLow(hi: uint32, lo: uint32, n: uint32): uint32 {
-		if (n < 32) return (hi << (32 - n)) | (lo >> n);
-		if (n == 32) return hi;
+	function rotrSL(hi: uint32, lo: uint32, n: uint32): uint32 {
+		return (hi << (32 - n)) | (lo >> n);
+	}
+
+	function rotrBH(hi: uint32, lo: uint32, n: uint32): uint32 {
+		return (hi << (64 - n)) | (lo >> (n - 32));
+	}
+
+	function rotrBL(hi: uint32, lo: uint32, n: uint32): uint32 {
 		return (hi >> (n - 32)) | (lo << (64 - n));
 	}
 
@@ -782,12 +787,12 @@ when (js) {
 		for (let i = 16; i < 80; i++) {
 			const w15h = h.schedule[(i - 15) * 2];
 			const w15l = h.schedule[(i - 15) * 2 + 1];
-			const s0h = rotrHigh(w15h, w15l, 1) ^ rotrHigh(w15h, w15l, 8) ^ (w15h >> 7);
-			const s0l = rotrLow(w15h, w15l, 1) ^ rotrLow(w15h, w15l, 8) ^ shrLow(w15h, w15l, 7);
+			const s0h = rotrSH(w15h, w15l, 1) ^ rotrSH(w15h, w15l, 8) ^ (w15h >> 7);
+			const s0l = rotrSL(w15h, w15l, 1) ^ rotrSL(w15h, w15l, 8) ^ shrLow(w15h, w15l, 7);
 			const w2h = h.schedule[(i - 2) * 2];
 			const w2l = h.schedule[(i - 2) * 2 + 1];
-			const s1h = rotrHigh(w2h, w2l, 19) ^ rotrHigh(w2h, w2l, 61) ^ (w2h >> 6);
-			const s1l = rotrLow(w2h, w2l, 19) ^ rotrLow(w2h, w2l, 61) ^ shrLow(w2h, w2l, 6);
+			const s1h = rotrSH(w2h, w2l, 19) ^ rotrBH(w2h, w2l, 61) ^ (w2h >> 6);
+			const s1l = rotrSL(w2h, w2l, 19) ^ rotrBL(w2h, w2l, 61) ^ shrLow(w2h, w2l, 6);
 			let lo = s0l + s1l;
 			let hi = s0h + s1h + carry(lo, s0l);
 			const x7l = h.schedule[(i - 7) * 2 + 1];
@@ -817,8 +822,8 @@ when (js) {
 		let hh = h.state[14];
 		let hl = h.state[15];
 		for (let i = 0; i < 80; i++) {
-			const s1h = rotrHigh(eh, el, 14) ^ rotrHigh(eh, el, 18) ^ rotrHigh(eh, el, 41);
-			const s1l = rotrLow(eh, el, 14) ^ rotrLow(eh, el, 18) ^ rotrLow(eh, el, 41);
+			const s1h = rotrSH(eh, el, 14) ^ rotrSH(eh, el, 18) ^ rotrBH(eh, el, 41);
+			const s1l = rotrSL(eh, el, 14) ^ rotrSL(eh, el, 18) ^ rotrBL(eh, el, 41);
 			const chooseh = (eh & fh) ^ (~eh & gh);
 			const choosel = (el & fl) ^ (~el & gl);
 			// t1 = hh + s1 + choose + k + w, accumulated one 64-bit addend at a time
@@ -833,8 +838,8 @@ when (js) {
 			next = t1l + h.schedule[i * 2 + 1];
 			t1h = t1h + h.schedule[i * 2] + carry(next, t1l);
 			t1l = next;
-			const s0h = rotrHigh(ah, al, 28) ^ rotrHigh(ah, al, 34) ^ rotrHigh(ah, al, 39);
-			const s0l = rotrLow(ah, al, 28) ^ rotrLow(ah, al, 34) ^ rotrLow(ah, al, 39);
+			const s0h = rotrSH(ah, al, 28) ^ rotrBH(ah, al, 34) ^ rotrBH(ah, al, 39);
+			const s0l = rotrSL(ah, al, 28) ^ rotrBL(ah, al, 34) ^ rotrBL(ah, al, 39);
 			const majh = (ah & bh) ^ (ah & ch) ^ (bh & ch);
 			const majl = (al & bl) ^ (al & cl) ^ (bl & cl);
 			hh = gh;
