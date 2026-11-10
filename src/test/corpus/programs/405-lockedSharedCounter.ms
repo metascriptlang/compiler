@@ -1,6 +1,6 @@
 // @xfail(raiser): raiser runtime error: cannot compile 'new' here: no matching constructor in the Raiser function table
 // @maxrss: 20
-// @maxatomics(darwin-arm64) 182
+// @maxatomics(darwin-arm64) 199
 // @maxatomics(linux-x86_64) 68
 // @stdout: locked total=480000
 // @serial

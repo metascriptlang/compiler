@@ -8,7 +8,7 @@
 1	msAwaitGroupCompleteSlot
 1	msChannelDrain
 1	msGetDispatcher
-1	msHeapReturnIdle
+1	msHeapReturn
 1	msLoopCompletionQueue
 1	msPoolRunQueued
 1	msPoolSubmit
