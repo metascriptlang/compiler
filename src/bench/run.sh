@@ -22,6 +22,7 @@ build() { # <arm> <msc> <output>
 	case $1 in
 		candidate | c) "$2" build "$HERE/bench.ms" --release --output="$OUT/$3" >/dev/null ;;
 		js | js-port) "$2" build "$HERE/bench.ms" --target=js --output="$OUT/$3.mjs" >/dev/null ;;
+		js-node) "$2" build "$HERE/bench.ms" --target=js -d:nodejs --output="$OUT/$3.mjs" >/dev/null ;;
 		mixed) "$2" build "$HERE/bench.ms" --target=js --danger --output="$OUT/$3.mjs" >/dev/null ;;
 		jsonly) "$2" build "$HERE/bench.ms" --target=js --danger --wasm-placement=off --output="$OUT/$3.mjs" >/dev/null ;;
 		mixed-chrome) "$2" build "$HERE/bench.ms" --target=js --danger --output="$OUT/$3.mjs" >/dev/null ;;
@@ -53,6 +54,8 @@ runArm() { # <arm>
 			esac ;;
 		raiser) "$MSC" run --target=raiser "$HERE/bench.ms" ;;
 		js) "$NODE" "$OUT/js.mjs" ;;
+		# js-node: the js build with -d:nodejs, as `msc run --target=js` builds it, so std/crypto calls node:crypto.
+		js-node) "$NODE" "$OUT/js-node.mjs" ;;
 		# js-port: the js build with crypto.subtle removed, so every row, async included, runs the MetaScript port.
 		js-port) "$NODE" --import "data:text/javascript,Object.defineProperty(globalThis.crypto,'subtle',{value:undefined,configurable:true})" "$OUT/js-port.mjs" ;;
 		noble) MSBENCH_NOBLE="$PWD/$NOBLE" "$NODE" "$HERE/bench.noble.mjs" ;;
