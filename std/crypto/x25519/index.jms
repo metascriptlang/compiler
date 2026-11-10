@@ -93,6 +93,42 @@ extern function xNone(): unknown from "msXNone()";
 extern function xIsNone(key: unknown): boolean from "(# === null)";
 extern function xRandom(): Buffer from "msXRandom()";
 
+when (nodejs) {
+	@emit(`const msXNode = globalThis.process.getBuiltinModule("node:crypto");
+const msXPkcs8 = Uint8Array.from([0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x6e, 0x04, 0x22, 0x04, 0x20]);
+const msXSpki = Uint8Array.from([0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x6e, 0x03, 0x21, 0x00]);
+function msXNodeDer(prefix, raw) {
+	const der = new Uint8Array(prefix.length + 32);
+	der.set(prefix);
+	for (let i = 0; i < 32; i++) der[prefix.length + i] = raw[i];
+	return der;
+}
+function msXNodePrivate(secret) {
+	const key = msXNode.createPrivateKey({ key: msXNodeDer(msXPkcs8, secret), format: "der", type: "pkcs8" });
+	const pub = msXNode.createPublicKey(key);
+	const spki = pub.export({ format: "der", type: "spki" });
+	return { key, pub, raw: msXBytes(spki.subarray(spki.length - 32)), error: "" };
+}
+function msXNodePublic(raw) {
+	try {
+		return msXNode.createPublicKey({ key: msXNodeDer(msXSpki, raw), format: "der", type: "spki" });
+	} catch (e) {
+		return null;
+	}
+}
+function msXNodeDerive(privateKey, publicKey) {
+	try {
+		return msXBytes(msXNode.diffieHellman({ privateKey, publicKey }));
+	} catch (e) {
+		return null;
+	}
+}`);
+
+	extern function nodePrivate(secret: Buffer): Imported from "msXNodePrivate(#)";
+	extern function nodePublic(raw: Buffer): unknown from "msXNodePublic(#)";
+	extern function nodeDerive(privateKey: unknown, publicKey: unknown): Buffer | null from "msXNodeDerive(#, #)";
+}
+
 function invalidKey(operation: string, message: string): CryptoError {
 	return cryptoError(CryptoErrorKind.InvalidKey, operation, message);
 }
@@ -110,7 +146,11 @@ export class X25519PublicKey {
 	}
 
 	static import<R extends ByteInput>(raw: R): Promise<Result<X25519PublicKey, CryptoError>> {
-		return importX25519Public(bytesOf(raw));
+		when (nodejs) {
+			return Promise.resolve(x25519PublicOwned(bytesOf(raw)));
+		} else {
+			return importX25519Public(bytesOf(raw));
+		}
 	}
 
 	exportSync(): Result<Buffer, CryptoError> {
@@ -142,7 +182,11 @@ export class X25519PrivateKey {
 	}
 
 	static fromRaw<R extends ByteInput>(raw: R): Promise<Result<X25519PrivateKey, CryptoError>> {
-		return x25519FromRaw(bytesOf(raw));
+		when (nodejs) {
+			return Promise.resolve(x25519PrivateOwned(bytesOf(raw)));
+		} else {
+			return x25519FromRaw(bytesOf(raw));
+		}
 	}
 
 	publicKey(): X25519PublicKey {
@@ -162,12 +206,22 @@ function nonZero(value: Buffer): boolean {
 
 // Refuses a low-order public key, whose shared secret would be all zero (RFC 7748 6.1).
 export function sharedSecretSync(privateKey: X25519PrivateKey, publicKey: X25519PublicKey): Result<Buffer, CryptoError> {
+	when (nodejs) {
+		if (!xIsNone(privateKey._key) && !xIsNone(publicKey._key)) {
+			const derived = nodeDerive(privateKey._key, publicKey._key);
+			if (derived == null || !nonZero(derived)) return refused();
+			return Result.ok(derived);
+		}
+	}
 	const shared = x25519(privateKey._secret, publicKey._raw) as Buffer;
 	if (!nonZero(shared)) return refused();
 	return Result.ok(shared);
 }
 
 export async function sharedSecret(privateKey: X25519PrivateKey, publicKey: X25519PublicKey): Promise<Result<Buffer, CryptoError>> {
+	when (nodejs) {
+		return sharedSecretSync(privateKey, publicKey);
+	}
 	if (xIsNone(privateKey._key) || xIsNone(publicKey._key)) return sharedSecretSync(privateKey, publicKey);
 	const done = await xDerive(privateKey._key, publicKey._key);
 	if (done.error != "" || !nonZero(done.value)) return refused();
@@ -190,10 +244,19 @@ async function x25519FromRaw(bytes: Buffer): Promise<Result<X25519PrivateKey, Cr
 
 function x25519PublicOwned(bytes: Buffer): Result<X25519PublicKey, CryptoError> {
 	if (bytes.length != 32) return Result.err(invalidKey("X25519PublicKey.import", "public key must be 32 bytes"));
-	return Result.ok({ _raw: bytes.slice(0), _key: xNone() });
+	when (nodejs) {
+		return Result.ok({ _raw: bytes.slice(0), _key: nodePublic(bytes) });
+	} else {
+		return Result.ok({ _raw: bytes.slice(0), _key: xNone() });
+	}
 }
 
 function x25519PrivateOwned(bytes: Buffer): Result<X25519PrivateKey, CryptoError> {
 	if (bytes.length != 32) return Result.err(invalidKey("X25519PrivateKey.fromRaw", "private key must be 32 bytes"));
-	return Result.ok({ _secret: bytes.slice(0), _key: xNone(), _public: { _raw: x25519(bytes, basePointBytes()) as Buffer, _key: xNone() } });
+	when (nodejs) {
+		const made = nodePrivate(bytes);
+		return Result.ok({ _secret: bytes.slice(0), _key: made.key, _public: { _raw: made.raw, _key: made.pub } });
+	} else {
+		return Result.ok({ _secret: bytes.slice(0), _key: xNone(), _public: { _raw: x25519(bytes, basePointBytes()) as Buffer, _key: xNone() } });
+	}
 }
