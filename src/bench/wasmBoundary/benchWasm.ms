@@ -91,3 +91,21 @@ export function primes(n: int32): int32 {
 	}
 	return count;
 }
+
+export class Counter {
+	n: int32;
+
+	constructor(n: int32) {
+		this.n = n;
+	}
+
+	bump(by: int32): int32 {
+		this.n = (this.n + by) & 1023;
+		return this.n;
+	}
+}
+
+@wasm
+export function peek(h: Handle<Counter>): int32 {
+	return h.value().n;
+}

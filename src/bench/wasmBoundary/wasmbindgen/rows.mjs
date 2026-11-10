@@ -27,7 +27,12 @@ export function runRows(w) {
 	bench("scaleBox 1k held by callee", 0, () => { box.scale(1); });
 	bench("makeVec 1k", 0, () => { sink += w.makeVec(1000).length; });
 	bench("callback 1k", 0, () => { sink += w.each(1000, (k) => k & 7); });
+	const ctr = new w.Counter(0);
+	bench("method x1000", 0, () => { let s = 0; for (let i = 0; i < 1000; i++) s = ctr.bump(1); sink += s; });
+	bench("field x1000", 0, () => { let s = 0; for (let i = 0; i < 1000; i++) s += ctr.n; sink += s; });
+	bench("construct x1000", 0, () => { for (let i = 0; i < 1000; i++) { const c = new w.Counter(i & 1023); c.free(); } });
 	bench("primes 2M", 0, () => { sink += w.primes(2000000); });
 	box.free();
+	ctr.free();
 	if (sink === 0) console.log("sink unused");
 }

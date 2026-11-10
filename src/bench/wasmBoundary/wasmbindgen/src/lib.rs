@@ -113,3 +113,21 @@ pub fn primes(n: u32) -> u32 {
     }
     count
 }
+
+#[wasm_bindgen]
+pub struct Counter {
+    pub n: i32,
+}
+
+#[wasm_bindgen]
+impl Counter {
+    #[wasm_bindgen(constructor)]
+    pub fn new(n: i32) -> Counter {
+        Counter { n }
+    }
+
+    pub fn bump(&mut self, by: i32) -> i32 {
+        self.n = (self.n + by) & 1023;
+        self.n
+    }
+}

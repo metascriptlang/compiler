@@ -1,6 +1,6 @@
 import { bench } from "../harness";
 import { Handle } from "std/ffi";
-import { add, add64, strLen, echo, mid, sumVec, sumSpan, makeVec, scaleSpan, makeBox, scaleBox, each, primes } from "./benchWasm";
+import { add, add64, strLen, echo, mid, sumVec, sumSpan, makeVec, scaleSpan, makeBox, scaleBox, each, primes, Counter, peek } from "./benchWasm";
 
 let sink: number = 0;
 const s16 = "hello wasm world";
@@ -53,8 +53,27 @@ bench("makeVec 1k", 0, (): void => {
 bench("callback 1k", 0, (): void => {
 	sink += each(1000, (k: int32): int32 => k & 7);
 });
+const ctr = Handle.retain(new Counter(0));
+bench("method x1000", 0, (): void => {
+	let s = 0;
+	for (let i = 0; i < 1000; i += 1) s = ctr.value().bump(1);
+	sink += s;
+});
+bench("field x1000", 0, (): void => {
+	let s = 0;
+	for (let i = 0; i < 1000; i += 1) s += ctr.value().n;
+	sink += s;
+});
+bench("construct x1000", 0, (): void => {
+	for (let i = 0; i < 1000; i += 1) {
+		const c = Handle.retain(new Counter(i & 1023));
+		c.release();
+	}
+});
+sink += peek(ctr);
 bench("primes 2M", 0, (): void => {
 	sink += primes(2000000);
 });
 box.release();
+ctr.release();
 if (sink == 0) console.log("sink unused");
