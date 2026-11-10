@@ -108,6 +108,11 @@ int msAdjustTimeout(msDispatcher* d, int pollTimeout, int nextTimerMs);
 /* ===== Exit drain (drain.c) — Node semantics: program ends when the loop is empty ===== */
 void msDrainUntilIdle(void);
 typedef void (*msExitHookFn)(void);
+#if defined(__GNUC__) || defined(__clang__)
+  #define MS_HIDE_FROM_OPTIMIZER(v) __asm__("" : "+r"(v))
+#else
+  #define MS_HIDE_FROM_OPTIMIZER(v) ((void)0)
+#endif
 void msSetActorExitHook(msExitHookFn hook);
 void msArmExitDrain(void);
 void msDrainAtExit(void);

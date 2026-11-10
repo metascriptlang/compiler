@@ -240,7 +240,9 @@ static void msThreadReleaseFlush(void) { msFutureReleaseFlush(); }
 
 void msArmDeferredRelease(void) {
     if (atomic_load_explicit(&msThreadExitRelease, memory_order_relaxed) != NULL) return;
-    atomic_store_explicit(&msThreadExitRelease, msThreadReleaseFlush, memory_order_release);
+    msExitHookFn release = msThreadReleaseFlush;
+    MS_HIDE_FROM_OPTIMIZER(release);
+    atomic_store_explicit(&msThreadExitRelease, release, memory_order_release);
     msArmExitDrain();
 }
 

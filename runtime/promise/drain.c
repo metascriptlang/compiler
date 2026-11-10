@@ -196,8 +196,12 @@ static _Atomic(msExitReportFn) msExitReport = NULL;
  * reads: a program that never armed them exits without draining or reporting. */
 void msArmExitDrain(void) {
 	if (atomic_load_explicit(&msExitReport, memory_order_relaxed) != NULL) return;
-	atomic_store_explicit(&msExitDrain, msDrainUntilIdle, memory_order_release);
-	atomic_store_explicit(&msExitReport, msReportOrphansNow, memory_order_release);
+	msExitHookFn drain = msDrainUntilIdle;
+	msExitReportFn report = msReportOrphansNow;
+	MS_HIDE_FROM_OPTIMIZER(drain);
+	MS_HIDE_FROM_OPTIMIZER(report);
+	atomic_store_explicit(&msExitDrain, drain, memory_order_release);
+	atomic_store_explicit(&msExitReport, report, memory_order_release);
 }
 
 int msReportOrphanFailures(void) {
