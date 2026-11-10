@@ -15,13 +15,14 @@
 #define msHeapResetPages msHeapIdleProbeResetPages
 #define msHeapOutOfMemory msHeapIdleProbeOutOfMemory
 #define msHeapReturnIdle msHeapIdleProbeReturnIdle
-#define msHeapIdlePending msHeapIdleProbePending
+#define msHeapReturnUnused msHeapIdleProbeReturnUnused
 #define msHeapIdleWaitMs msHeapIdleProbeWaitMs
-#define msHeapIdleDue msHeapIdleProbeDue
-#define msHeapIdleBusy msHeapIdleProbeBusy
 #define msHeapDiscardPages msHeapIdleProbeDiscardPages
 #define msHeapReusePages msHeapIdleProbeReusePages
 #define msThreadAttach msHeapIdleProbeAttach
+#include <stdint.h>
+static int64_t probeNowMs = 1000300;
+#define MS_HEAP_NOW_MS() probeNowMs
 #include "../../../../runtime/allocator.c"
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,7 +51,6 @@ static probeThread probeSpawn(void (*fn)(void*), void* arg) {
     probeThread t = CreateThread(NULL, 0, probeTrampoline, s, 0, NULL); CHECK(t != NULL); return t;
 }
 static void probeJoin(probeThread t) { WaitForSingleObject(t, INFINITE); CloseHandle(t); }
-static void probeSleepMs(int ms) { Sleep((DWORD)ms); }
 static void reserve(void) { reserved = VirtualAlloc(NULL, RESERVED, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE); CHECK(reserved != NULL); }
 static void protectNone(void* p, size_t n) { DWORD old; CHECK(VirtualProtect(p, n, PAGE_NOACCESS, &old)); }
 static int protectRw(void* p, size_t n) { DWORD old; return VirtualProtect(p, n, PAGE_READWRITE, &old) != 0; }
@@ -65,20 +65,20 @@ static probeThread probeSpawn(void (*fn)(void*), void* arg) {
     probeThread t; CHECK(pthread_create(&t, NULL, probeTrampoline, s) == 0); return t;
 }
 static void probeJoin(probeThread t) { pthread_join(t, NULL); }
-static void probeSleepMs(int ms) { usleep((useconds_t)ms * 1000); }
 static void reserve(void) {
     reserved = mmap(NULL, RESERVED, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     CHECK(reserved != MAP_FAILED);
 }
-static int osPages(void** p, size_t* n) {
-    uintptr_t page = (uintptr_t)sysconf(_SC_PAGESIZE);
-    uintptr_t start = ((uintptr_t)*p + page - 1) & ~(page - 1), end = ((uintptr_t)*p + *n) & ~(page - 1);
+static int osPages(void** p, size_t* n, int touched) {
+    uintptr_t page = (uintptr_t)sysconf(_SC_PAGESIZE), grow = touched ? page - 1 : 0;
+    if (!*n) return 0;
+    uintptr_t start = ((uintptr_t)*p + page - 1 - grow) & ~(page - 1), end = ((uintptr_t)*p + *n + grow) & ~(page - 1);
     if (end <= start) return 0;
     *p = (void*)start; *n = end - start;
     return 1;
 }
-static void protectNone(void* p, size_t n) { if (osPages(&p, &n)) CHECK(mprotect(p, n, PROT_NONE) == 0); }
-static int protectRw(void* p, size_t n) { return !osPages(&p, &n) || mprotect(p, n, PROT_READ | PROT_WRITE) == 0; }
+static void protectNone(void* p, size_t n) { if (osPages(&p, &n, 0)) CHECK(mprotect(p, n, PROT_NONE) == 0); }
+static int protectRw(void* p, size_t n) { return !osPages(&p, &n, 1) || mprotect(p, n, PROT_READ | PROT_WRITE) == 0; }
 #endif
 
 void* msHeapTryAllocPages(size_t bytes) {
@@ -108,7 +108,8 @@ static void checkZeroWritable(unsigned char* p, size_t n) {
     memset(p, 0x5a, n);
 }
 
-enum { MIB = 1 << 20 };
+enum { MIB = 1 << 20, AGE_MS = MS_HEAP_RETURN_AFTER_MS + MS_HEAP_RETURN_STEP_MS };
+static msHeapRegion* region(void) { return MS_HEAP_REGION(msHeapCurrent); }
 
 /* A free chunk without the discarded flag must be readable on every page: a flag lost while
  * its pages were still discarded faults here. */
@@ -131,10 +132,10 @@ static void dirtyChunkGoesBack(void) {
     unsigned char* p = msHeapAlloc(MIB);
     memset(p, 0x5a, MIB);
     msHeapFree(p);
-    CHECK(msHeapIdlePending());
+    CHECK(region()->returnDue != 0);
     size_t before = discardedBytes;
     msHeapReturnIdle();
-    CHECK(!msHeapIdlePending());
+    CHECK(region()->returnDue == 0);
     CHECK(discardedBytes - before >= MIB - MS_HEAP_PAGE_SIZE);
     CHECK(fresh->zeroed == MS_HEAP_ZEROED);
     before = discardedBytes;
@@ -183,7 +184,7 @@ static void coalesceWithDiscardedNeighbour(void) {
     enum { SIDE = 200 * 1024 };
     unsigned char* left;
     unsigned char* right;
-    phase = "a chunk coalesced with a discarded left neighbour reads zero";
+    phase = "a chunk freed beside a discarded left neighbour leaves it discarded until both are";
     CHECK(adjacentPair(SIDE, SIDE, &left, &right));
     msHeapChunk* leftChunk = msHeapPage(left);
     msHeapFree(left);
@@ -201,11 +202,17 @@ static void coalesceWithDiscardedNeighbour(void) {
     CHECK((msHeapPage(right)->prevSize & ~(size_t)1) == rest->base.size);
     msHeapReturnIdle();
     CHECK(rest->zeroed & MS_HEAP_DISCARDED);
+    size_t restSize = rest->base.size, reused = reusedBytes;
     msHeapFree(right);
+    CHECK(reusedBytes == reused && (rest->zeroed & MS_HEAP_DISCARDED) && rest->base.size == restSize);
+    freeChunksReadable();
+    probeNowMs += AGE_MS;
+    msHeapReturnUnused();
+    CHECK((rest->zeroed & MS_HEAP_DISCARDED) && rest->base.size >= restSize + SIDE);
     freeChunksReadable();
     checkZeroWritable(msHeapCalloc(1, SIDE), SIDE);
     msHeapFree(fronts[front]);
-    phase = "a chunk coalesced with a discarded right neighbour reads zero";
+    phase = "a chunk freed beside a discarded right neighbour reads zero";
     CHECK(adjacentPair(SIDE, SIDE, &left, &right));
     msHeapBig* rightChunk = (msHeapBig*)msHeapPage(right);
     msHeapFree(right);
@@ -217,8 +224,8 @@ static void coalesceWithDiscardedNeighbour(void) {
 }
 
 static void growIntoDiscardedNeighbour(void) {
-    phase = "growing in place into a discarded neighbour reads zero";
-    enum { LEFT = 100 * 1024, RIGHT = 500 * 1024 };
+    phase = "growing in place into a discarded neighbour re-arms the part it takes and reads zero";
+    enum { LEFT = 100 * 1024, RIGHT = 2 * MIB, GROWN = 250 * 1024 };
     unsigned char* r;
     unsigned char* rightCell;
     CHECK(adjacentPair(LEFT, RIGHT, &r, &rightCell));
@@ -227,10 +234,14 @@ static void growIntoDiscardedNeighbour(void) {
     msHeapFree(rightCell);
     msHeapReturnIdle();
     CHECK(right->zeroed & MS_HEAP_DISCARDED);
-    unsigned char* grown = msHeapRealloc0(r, LEFT, LEFT + RIGHT / 2);
+    size_t reused = reusedBytes;
+    unsigned char* grown = msHeapRealloc0(r, LEFT, LEFT + GROWN);
     CHECK(grown == r);
+    CHECK(reusedBytes - reused <= GROWN + 2 * MS_HEAP_PAGE_SIZE);
+    msHeapBig* rest = (msHeapBig*)((uintptr_t)msHeapPage(grown) + msHeapPage(grown)->size);
+    CHECK(!(rest->base.prevSize & 1) && (rest->zeroed & MS_HEAP_DISCARDED));
     for (size_t i = 0; i < LEFT; ++i) CHECK(grown[i] == 0x77);
-    checkZeroWritable(grown + LEFT, RIGHT / 2);
+    checkZeroWritable(grown + LEFT, GROWN);
     msHeapFree(grown);
 }
 
@@ -281,19 +292,150 @@ static void releasingThreadReturnsPages(void) {
     CHECK(discardedBytes - before >= MIB - MS_HEAP_PAGE_SIZE);
 }
 
-static void idleWaitWakesForTheReturn(void) {
-    phase = "a blocking wait wakes when the idle return is due";
-    msHeapFree(msHeapAlloc(MIB));
-    CHECK(msHeapIdlePending() && !msHeapIdleDue());
-    int wait = msHeapIdleWaitMs(-1);
-    CHECK(wait >= 1 && wait <= MS_HEAP_IDLE_RETURN_MS);
-    CHECK(msHeapIdleWaitMs(0) == 0);
-    probeSleepMs(wait + 50);
-    CHECK(msHeapIdleDue());
-    msHeapIdleBusy();
-    CHECK(!msHeapIdleDue());
+static void unusedChunkWaitsItsAge(void) {
+    phase = "a free chunk goes back once it stayed unused for the return age, on a turn that never waits";
     msHeapReturnIdle();
-    CHECK(!msHeapIdlePending() && msHeapIdleWaitMs(-1) == -1);
+    unsigned char* p = msHeapAlloc(MIB);
+    memset(p, 0x5a, MIB);
+    msHeapFree(p);
+    size_t before = discardedBytes;
+    CHECK(msHeapIdleWaitMs(0) == 0);
+    int wait = msHeapIdleWaitMs(-1);
+    CHECK(wait > MS_HEAP_RETURN_AFTER_MS && wait <= AGE_MS && msHeapIdleWaitMs(wait + 1) == wait && msHeapIdleWaitMs(5) == 5);
+    probeNowMs += wait - 1;
+    msHeapReturnUnused();
+    CHECK(discardedBytes == before && msHeapIdleWaitMs(-1) == 1);
+    probeNowMs += 1;
+    msHeapReturnUnused();
+    CHECK(discardedBytes - before >= MIB - MS_HEAP_PAGE_SIZE && msHeapIdleWaitMs(-1) == -1);
+}
+
+static void splitRestKeepsItsAge(void) {
+    phase = "the rest of a split chunk goes back when the whole chunk's age is reached";
+    enum { WHOLE = 4 * MIB, TRIES = 32 };
+    msHeapReturnIdle();
+    unsigned char* p = msHeapAlloc(WHOLE);
+    memset(p, 0x5a, WHOLE);
+    msHeapFree(p);
+    probeNowMs += AGE_MS - 1000;
+    unsigned char* takes[TRIES];
+    int inside = -1;
+    for (int i = 0; i < TRIES && inside < 0; ++i) {
+        takes[i] = msHeapAlloc(MIB);
+        if (takes[i] >= p && takes[i] < p + WHOLE) inside = i;
+    }
+    CHECK(inside >= 0);
+    size_t before = discardedBytes;
+    probeNowMs += 1000;
+    msHeapReturnUnused();
+    CHECK(discardedBytes - before >= 2 * MIB);
+    for (int i = 0; i <= inside; ++i) msHeapFree(takes[i]);
+}
+
+static void joinedChunkKeepsTheOlderAge(void) {
+    phase = "a chunk joined to an older free neighbour goes back when the older one's age is reached";
+    unsigned char* left;
+    unsigned char* right;
+    CHECK(adjacentPair(MIB, MIB, &left, &right));
+    msHeapReturnIdle();
+    msHeapFree(right);
+    probeNowMs += AGE_MS - 1000;
+    msHeapFree(left);
+    size_t before = discardedBytes;
+    probeNowMs += 1000;
+    msHeapReturnUnused();
+    CHECK(discardedBytes - before >= 2 * MIB - MS_HEAP_PAGE_SIZE);
+}
+
+static void youngerChunkWaitsItsOwnAge(void) {
+    phase = "a chunk freed later stays when an older one goes back";
+    unsigned char* left;
+    unsigned char* right;
+    CHECK(adjacentPair(MIB, MIB, &left, &right));
+    msHeapBig* younger = (msHeapBig*)msHeapPage(right);
+    msHeapReturnIdle();
+    msHeapFree(left);
+    probeNowMs += 5000;
+    msHeapFree(right);
+    probeNowMs += AGE_MS - 5000;
+    size_t before = discardedBytes;
+    msHeapReturnUnused();
+    CHECK(discardedBytes - before >= MIB - MS_HEAP_PAGE_SIZE && !younger->zeroed && msHeapIdleWaitMs(-1) == 5000);
+    probeNowMs += 5000;
+    msHeapReturnUnused();
+    CHECK(discardedBytes - before >= 2 * MIB - 2 * MS_HEAP_PAGE_SIZE && msHeapIdleWaitMs(-1) == -1);
+}
+
+/* Takes the front of a free chunk as msHeapGetBig does, which forgets the size of what lies to its left. */
+static msHeapBig* takeFront(msHeapBig* chunk, size_t size) {
+    msHeapRegion* a = region();
+    msHeapRemoveBig(a, chunk);
+    msHeapInsertUnused(a, msHeapSplit(a, chunk, size), *msHeapUnusedSince(chunk));
+    chunk->base.prevSize = 1;
+    return chunk;
+}
+
+static void largeChunkKeepsItsAgeBesideAnOlderSmallOne(void) {
+    phase = "a large chunk joined to an older small one waits its own age";
+    enum { SMALL = 2 * MS_HEAP_PAGE_SIZE };
+    unsigned char* fence;
+    unsigned char* right;
+    CHECK(adjacentPair(MIB, 4 * MIB, &fence, &right));
+    msHeapBig* large = (msHeapBig*)msHeapPage(right);
+    msHeapReturnIdle();
+    msHeapFree(right);
+    takeFront(large, large->base.size - SMALL);
+    probeNowMs += AGE_MS - 1000;
+    msHeapReleaseBig(region(), large);
+    size_t before = discardedBytes;
+    probeNowMs += 1000;
+    msHeapReturnUnused();
+    CHECK(discardedBytes == before && !large->zeroed);
+    probeNowMs += AGE_MS;
+    msHeapReturnUnused();
+    CHECK(large->zeroed & MS_HEAP_DISCARDED);
+    msHeapFree(fence);
+}
+
+static void smallChunkJoinsANeighbourDiscardedInTheSameReturn(void) {
+    phase = "a small free chunk joins a neighbour that the same return discards";
+    enum { SMALL = 2 * MS_HEAP_PAGE_SIZE };
+    unsigned char* fence;
+    unsigned char* right;
+    CHECK(adjacentPair(MIB, 4 * MIB, &fence, &right));
+    msHeapBig* small = (msHeapBig*)msHeapPage(right);
+    msHeapReturnIdle();
+    msHeapFree(right);
+    takeFront(small, SMALL);
+    msHeapBig* large = takeFront((msHeapBig*)((uintptr_t)small + SMALL), 2 * MIB);
+    msHeapReleaseBig(region(), small);
+    msHeapReleaseBig(region(), large);
+    CHECK(small->base.size == SMALL && !small->zeroed && !large->zeroed && large->base.size >= 2 * MIB);
+    probeNowMs += AGE_MS;
+    msHeapReturnUnused();
+    CHECK((small->zeroed & MS_HEAP_DISCARDED) && small->base.size >= SMALL + 2 * MIB && !msHeapContains(region(), (uintptr_t)large));
+    msHeapFree(fence);
+}
+
+static void smallChunkBesideDiscardedJoinsIt(void) {
+    phase = "a free chunk too small to discard joins a discarded neighbour once its age is reached";
+    unsigned char* left;
+    unsigned char* right;
+    CHECK(adjacentPair(MIB, 2 * MIB, &left, &right));
+    msHeapBig* chunk = (msHeapBig*)msHeapPage(right);
+    msHeapFree(right);
+    msHeapReturnIdle();
+    CHECK(chunk->zeroed & MS_HEAP_DISCARDED);
+    size_t whole = chunk->base.size;
+    msHeapRemoveBig(region(), chunk);
+    msHeapRearm(region(), chunk, MS_HEAP_PAGE_SIZE);
+    msHeapReleaseBig(region(), chunk);
+    uintptr_t rest = (uintptr_t)chunk + chunk->base.size;
+    CHECK(chunk->base.size - MS_HEAP_PAGE_SIZE < MS_HEAP_DISCARD_MIN_BYTES && !chunk->zeroed && region()->returnDue != 0);
+    probeNowMs += AGE_MS;
+    msHeapReturnUnused();
+    CHECK((chunk->zeroed & MS_HEAP_DISCARDED) && chunk->base.size == whole && !msHeapContains(region(), rest));
+    msHeapFree(left);
 }
 
 int32_t msAllocatorIdleChecks(void) {
@@ -311,7 +453,19 @@ int32_t msAllocatorIdleChecks(void) {
     remoteFreesRaceIdleReturns();
     freeChunksReadable();
     releasingThreadReturnsPages();
-    idleWaitWakesForTheReturn();
+    unusedChunkWaitsItsAge();
+    freeChunksReadable();
+    splitRestKeepsItsAge();
+    freeChunksReadable();
+    joinedChunkKeepsTheOlderAge();
+    freeChunksReadable();
+    youngerChunkWaitsItsOwnAge();
+    freeChunksReadable();
+    smallChunkBesideDiscardedJoinsIt();
+    freeChunksReadable();
+    smallChunkJoinsANeighbourDiscardedInTheSameReturn();
+    freeChunksReadable();
+    largeChunkKeepsItsAgeBesideAnOlderSmallOne();
     freeChunksReadable();
     return 0;
 }

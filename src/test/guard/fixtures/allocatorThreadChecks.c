@@ -16,10 +16,8 @@
 #define msHeapOutOfMemory msHeapThreadProbeOutOfMemory
 #define msThreadAttach msHeapThreadProbeAttach
 #define msHeapReturnIdle msHeapThreadProbeReturnIdle
-#define msHeapIdlePending msHeapThreadProbeIdlePending
+#define msHeapReturnUnused msHeapThreadProbeReturnUnused
 #define msHeapIdleWaitMs msHeapThreadProbeIdleWaitMs
-#define msHeapIdleDue msHeapThreadProbeIdleDue
-#define msHeapIdleBusy msHeapThreadProbeIdleBusy
 #define msHeapDiscardPages msHeapThreadProbeDiscardPages
 #define msHeapReusePages msHeapThreadProbeReusePages
 #include "../../../../runtime/allocator.c"
