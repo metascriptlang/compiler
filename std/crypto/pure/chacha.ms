@@ -6,7 +6,7 @@ import {
 	finishPoly1305,
 } from "./poly1305";
 import { declassify, wipeBytes, wipeWords } from "./secret";
-import { load32LE } from "./endian";
+import { load32LE, store32LE } from "./endian";
 
 when (c) {
 	import { chachaHwXor, poly1305HwAead } from "./hw";
@@ -337,6 +337,28 @@ function computeTag(
 	putLengths(lengths, aad.length as int64, cipherLength as int64);
 	updatePoly1305(mac, lengths, 0, 16);
 	finishPoly1305(mac, w.tag, 0);
+}
+
+/** The XChaCha20 subkey of `key` and the first 16 bytes of `nonce`, as 32 little-endian bytes: the key IETF ChaCha20-Poly1305 seals with under the nonce 0x00000000 || nonce[16..24]. */
+export function xchachaSubkey(key: Readonly<uint32[]>, nonce: InputBytes): uint8[] {
+	const w = newWork();
+	hchacha(w, key, nonce, 0);
+	const out = new Array<uint8>(32);
+	for (let i = 0; i < 8; i++) store32LE(out, 4 * i, w.key[i]);
+	wipeWork(w);
+	return out;
+}
+
+test "xchachaSubkey is HChaCha20 of draft-irtf-cfrg-xchacha 2.2.1" {
+	const raw = new Array<uint8>(32);
+	for (let i = 0; i < 32; i++) raw[i] = i as uint8;
+	const words: uint32[] = [0, 0, 0, 0, 0, 0, 0, 0];
+	keyWords(raw, words);
+	const nonce: uint8[] = [0, 0, 0, 9, 0, 0, 0, 0x4a, 0, 0, 0, 0, 0x31, 0x41, 0x59, 0x27];
+	const sub = xchachaSubkey(words, nonce);
+	let hex = "";
+	for (const b of sub) hex = hex + (b < 16 ? "0" : "") + (b as int32).toString(16);
+	assert hex == "82413b4227b27bfed30e42508a877d73a0f9e4d58a74a853c12ec41326d3ecdc";
 }
 
 /**
