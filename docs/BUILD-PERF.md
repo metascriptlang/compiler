@@ -193,21 +193,38 @@ runs are the measurement instead.
 
 ## Measured 2026-11-10 — LTO and size flags of `--danger`, over randomized layouts
 
-m1m (M1 Pro), source main `c147fab0083` plus the analyzer fix of `fcb27e4fedd`, every arm `--danger
---cc=clang` (thin LTO unless off), 8 ld64 layouts per arm, warm `check`, load median 1.54. Rows
-against O3 with thin LTO, the `--danger` default:
+m1m (M1 Pro), 8 ld64 layouts per arm, warm `check`, against O3 with thin LTO, the `--danger`
+default. Default toolchain (no `--cc`: the prepared LLVM 23.1.4 clang and `ld64.lld`, read from each
+binary's `LC_BUILD_VERSION` tool 4 version 23.1.4), source main `f43cbfb0d731`, load median 1.69:
+
+| arm | msc `__text` | hello `__text` | `check` cycles | `check` instructions | 28 bench rows |
+|---|---|---|---|---|---|
+| O3 + thin LTO | 18,559,044 | 2,856 | 1.000 | 1.000 | 1.000 |
+| O3, `--lto=off` | 17,106,376 (−7.8%) | 4,040 | 1.111 | 1.105 | 1.110, 16 rows beyond every LTO layout, none faster |
+| `--passC=-Os` + thin LTO | 15,927,400 (−14.2%) | 2,628 | 1.058 | 1.079 | 1.074, 19 rows beyond, 2 faster |
+
+hello is measured with the arming-hook fix (`cb6aecdae040`); without it the bundle links the async
+runtime into hello (26,220 B at O3 + thin LTO).
+
+Apple clang (`--cc=clang`), source `c147fab0083` plus `fcb27e4fedd`, load median 1.54, same recipe:
 
 | arm | msc `__text` | hello `__text` | `check` cycles | 28 bench rows |
 |---|---|---|---|---|
 | O3 + thin LTO | 19,358,528 | 3,872 | 1.000 | 1.000 |
 | O3, `--lto=off` | 17,143,984 (−11.4%) | 3,984 | 1.110 | 1.119, 22 rows beyond every LTO layout |
-| `--passC=-Os` + thin LTO | 15,897,420 (−17.9%) | 3,316 | 1.056 (median; one layout 1.44) | 1.078, 20 rows beyond; `array push 10k` 3.56× |
+| `--passC=-Os` + thin LTO | 15,897,420 (−17.9%) | 3,316 | 1.056 (median; one layout 1.44) | 1.078, 20 rows beyond |
 | `--passC=-mllvm -inline-threshold=100` + thin LTO | 19,247,040 (−0.6%) | 4,048 | 1.002 | 0.999 |
 
-`-Os` and `-mllvm` reach the link line too (read through a `clang` wrapper: `-flto=thin -mllvm
--inline-threshold=100` on the link). `array push 10k` is 3.56× without LTO as well, so its fast
-path needs O3 and LTO together; why is not measured. On Mach-O thin LTO adds 12.9% to msc, against
-37–42% measured on Linux before; Linux is not re-measured here.
+Both compilers rank the arms alike: thin LTO buys about 11% of `check` for 8–13% of `__text`, and
+`-Os` costs 6% of `check`. `-Os` and `-mllvm` reach the link line too (read through a `clang`
+wrapper). `array push 10k` is 3.7× slower without O3 and LTO together, on both compilers; why is not
+measured. `Map forEach 10k` runs 3.6× faster at `-Os` than at either O3 arm on both compilers
+(bundle 9.31–9.36 µs against 34.13–34.25, Apple clang 9.49 against 34.13–35.03, every layout); why is
+not measured. Linux is not re-measured here.
+
+Decision, 2026-11-10: release builds choose flags for run speed and dev/test builds for build speed,
+size being secondary; `--danger` keeps O3 + thin LTO, `--release` keeps O2 + thin LTO, and the
+default build (`msc build`, `msc run`, `msc test`) stays `-O0 -g` without LTO.
 
 
 ## Measured 2026-11-08 — what a hello world links
