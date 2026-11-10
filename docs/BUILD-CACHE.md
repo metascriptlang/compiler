@@ -82,13 +82,16 @@ uses it. The unit is one file, `stdunit/<format>/<hash>.su` in the global store,
 checked trees, every symbol, type and context those checks made, and the process-wide tables they
 filled; the hash only names the file, and the full key text in its header is compared exactly.
 
-- **Key**: the compiler (its binary, `runtime/`, `vendor/`), the std tree, the std path, backend,
+- **Key**: the compiler binary, the source text of every module the unit checked, the std path, backend,
   resolver search paths and aliases, target, memory mode, strict null checks, app mode, the define
   table (which holds the `build.ms` directory when there is one, so such a project has its own
   unit), global imports, module passes, the compiler and package name roots, and the prelude module
   list with each module's rooted name. The project root is not in the key: it names only modules
   outside the compiler and package roots, and a prelude module there brings its rooted name and
-  source hash. Programs without a `build.ms` in any directory share one unit.
+  source hash. Programs without a `build.ms` in any directory share one unit. A file the prelude
+  does not read (a runtime C header, `vendor/`) does not change the key, so the key no longer walks
+  the support trees: on RTX, 2026-11-10, keying a hello check took 8.0 ms before and 0.3 ms after
+  (5 runs each), and 478 ms before on d87 Windows (not remeasured there).
 - **Collected** by age: a unit no build loaded or wrote for 24 hours is removed by the sweep that
   runs when a unit is written (`collectUnusedStdUnits`; a load refreshes the unit's age through
   `markUsed`). Read from the code, not measured.
@@ -108,7 +111,8 @@ corpus program in one project, 2172 builds, 2167 loading the unit, `verify-diffe
 (the 5 others stop before the check; one, `derivedClassArgumentIsOneInstance`, fails the same way
 on `main`); the compiler itself, unit written then loaded, both `verify: 507 C units and 461
 diagnostics equal a cold build`. `src/test/ic/run.ms` check `stdUnit` pins writing, loading, a torn
-file, a foreign key, two directories without a `build.ms` sharing one unit, and the off switch.
+file, a foreign key, two directories without a `build.ms` sharing one unit, a runtime file added
+beside a copied compiler (hit) and an edited prelude module (miss), and the off switch.
 RTX Linux, 2026-11-10, a candidate of `aca9dd8f231` with the project root out of the key: every
 10th single-file corpus program, each in its own directory, 220 builds wrote 1 unit and all 220
 loaded it, 219 `verify` equal; `numberTextComptime` fails its cold build whenever std is checked from
