@@ -1,9 +1,9 @@
-import { verifyStoredRelativeTarget } from "./nativeAlias";
+import { readStoredSiblingName, verifyStoredRelativeTarget } from "./nativeAlias";
 import { createDirectoryExclusive, renameNoReplace } from "./nativePublication";
 import {
 	basename, exists, readFile, remove, resolve, rmdir, symlink, writeFile,
 } from "std/fs";
-import { argv, cwd } from "std/process";
+import { argv, cwd, platform } from "std/process";
 import { IoError, IoErrorKind } from "std/io/errors";
 
 let cases: int32 = 0;
@@ -63,6 +63,16 @@ function run(): void {
 	const unicodeAliasName = "unicode alias.a";
 	completed(symlink(unicodeName, root + "/" + unicodeAliasName));
 	accepted(root + "/" + unicodeAliasName, unicodeName);
+	if (platform != "windows") {
+		const names = [readStoredSiblingName(alias), readStoredSiblingName(root + "/" + unicodeAliasName)];
+		if (!names[0].ok || names[0].value != targetName || !names[1].ok || names[1].value != unicodeName) {
+			throw new Error("a sibling alias's name did not read back");
+		}
+		if (readStoredSiblingName(absolute).ok || readStoredSiblingName(target).ok) {
+			throw new Error("an absolute alias or a regular file read as a sibling name");
+		}
+		cases += 1;
+	}
 	const chainedName = "chained alias.a";
 	completed(symlink("libsample.so", root + "/" + chainedName));
 	accepted(root + "/" + chainedName, "libsample.so");
