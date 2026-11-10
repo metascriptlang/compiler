@@ -28,6 +28,13 @@ function hostMember(sym: Symbol | null): boolean {
 	return false;
 }
 
+// The routine a `super(...)` runs, the implementation or a signature's variant, belongs to its class through ctorOwner.
+function hostConstructor(routine: Symbol | null): boolean {
+	if (routine == null) return false;
+	if (hasFlag(routine, SymbolFlag.JsHost)) return true;
+	return routine.ctorOwner != null && hasFlag(routine.ctorOwner, SymbolFlag.JsHost);
+}
+
 function hostClassType(t: Type | null): boolean {
 	let cur = t;
 	if (cur != null && cur.kind == TypeKind.Ref && cur.typeReturn != null) cur = cur.typeReturn;
@@ -59,7 +66,7 @@ function hostArg(arg: Node): Node {
 function hostCall(node: Node): Node {
 	const d = node.data as CallExprData;
 	if (d.callee.kind == NodeKind.Identifier && (d.callee.data as IdentifierData).name == "super") {
-		if (hostClassType(node.nodeType) || hostMember(d.callee.resolvedSym) || (d.callee.resolvedSym != null && hasFlag(d.callee.resolvedSym, SymbolFlag.JsHost))) d.arguments = written(d.arguments);
+		if (hostClassType(node.nodeType) || hostMember(d.callee.resolvedSym) || hostConstructor(d.callee.resolvedSym)) d.arguments = written(d.arguments);
 		return node;
 	}
 	if (d.callee.kind != NodeKind.MemberExpr) return node;
