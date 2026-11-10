@@ -1,6 +1,6 @@
-// The prelude's typed arrays on the JS backend: the host's own classes, so a value crosses to a
-// JS API with no copy. A subscript outside the view stops like an array index does, where the
-// host would read undefined and drop the write.
+// The prelude's typed arrays on the JS backend: the classes are the shared core, which the host's own
+// classes represent. A subscript outside the view stops like an array index does, where the host
+// would read undefined and drop the write.
 
 export { ArrayBuffer, TypedArray, Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float32Array, Float64Array } from "./core";
 import { ArrayBuffer, TypedArray, Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float32Array, Float64Array } from "./core";
@@ -13,14 +13,6 @@ extern function writableElementsOf<T>(a: TypedArray<T>): T[] from "#";
 // The host clamps what a Uint8ClampedArray stores, so its elements take any number.
 extern function clampedElementsOf(a: Uint8ClampedArray): number[] from "#";
 
-export extern function slice(this b: ArrayBuffer, begin: number = 0, end: number = b.byteLength): ArrayBuffer from "#.slice(#, #)";
-
-// A view over a buffer whose length is omitted lets the host compute it; a ragged buffer passes -1,
-// which the host refuses as the native backends do.
-
-export extern function join<T>(this a: Readonly<TypedArray<T>>, separator: string = ","): string from "#.join(#)";
-export extern function toString<T>(this a: Readonly<TypedArray<T>>): string from "#.toString()";
-
 export function `[]`<T>(this a: Readonly<TypedArray<T>>, index: number): T {
 	return elementsOf(a)[index];
 }
@@ -32,108 +24,3 @@ export function `[]=`<T>(this a: TypedArray<T>, index: number, value: T): void {
 export function `[]=`(this a: Uint8ClampedArray, index: number, value: number): void {
 	clampedElementsOf(a)[index] = value;
 }
-
-export function set<T>(this a: TypedArray<T>, source: Readonly<Span<T>>, offset: number = 0): void {
-	if (offset + source.length > a.length) throw new RangeError("offset is out of bounds");
-	const into = writableElementsOf(a);
-	for (let i = 0; i < source.length; i++) into[offset + i] = source[i];
-}
-
-export function from(this typeof Int8Array, source: Readonly<Span<int8>>): Int8Array {
-	const out = new Int8Array(source.length);
-	const into = writableElementsOf(out);
-	for (let i = 0; i < source.length; i++) into[i] = source[i];
-	return out;
-}
-
-export extern function subarray(this a: Int8Array, begin: number = 0, end: number = a.length): Int8Array from "#.subarray(#, #)";
-export extern function slice(this a: Int8Array, begin: number = 0, end: number = a.length): Int8Array from "#.slice(#, #)";
-export extern function fill(this a: Int8Array, value: number, begin: number = 0, end: number = a.length): Int8Array from "#.fill(#, #, #)";
-
-export function from(this typeof Uint8Array, source: Readonly<Span<uint8>>): Uint8Array {
-	const out = new Uint8Array(source.length);
-	const into = writableElementsOf(out);
-	for (let i = 0; i < source.length; i++) into[i] = source[i];
-	return out;
-}
-
-export extern function subarray(this a: Uint8Array, begin: number = 0, end: number = a.length): Uint8Array from "#.subarray(#, #)";
-export extern function slice(this a: Uint8Array, begin: number = 0, end: number = a.length): Uint8Array from "#.slice(#, #)";
-export extern function fill(this a: Uint8Array, value: number, begin: number = 0, end: number = a.length): Uint8Array from "#.fill(#, #, #)";
-
-export function from(this typeof Uint8ClampedArray, source: Readonly<Span<number>>): Uint8ClampedArray {
-	const out = new Uint8ClampedArray(source.length);
-	const into = clampedElementsOf(out);
-	for (let i = 0; i < source.length; i++) into[i] = source[i];
-	return out;
-}
-
-export extern function subarray(this a: Uint8ClampedArray, begin: number = 0, end: number = a.length): Uint8ClampedArray from "#.subarray(#, #)";
-export extern function slice(this a: Uint8ClampedArray, begin: number = 0, end: number = a.length): Uint8ClampedArray from "#.slice(#, #)";
-export extern function fill(this a: Uint8ClampedArray, value: number, begin: number = 0, end: number = a.length): Uint8ClampedArray from "#.fill(#, #, #)";
-
-export function from(this typeof Int16Array, source: Readonly<Span<int16>>): Int16Array {
-	const out = new Int16Array(source.length);
-	const into = writableElementsOf(out);
-	for (let i = 0; i < source.length; i++) into[i] = source[i];
-	return out;
-}
-
-export extern function subarray(this a: Int16Array, begin: number = 0, end: number = a.length): Int16Array from "#.subarray(#, #)";
-export extern function slice(this a: Int16Array, begin: number = 0, end: number = a.length): Int16Array from "#.slice(#, #)";
-export extern function fill(this a: Int16Array, value: number, begin: number = 0, end: number = a.length): Int16Array from "#.fill(#, #, #)";
-
-export function from(this typeof Uint16Array, source: Readonly<Span<uint16>>): Uint16Array {
-	const out = new Uint16Array(source.length);
-	const into = writableElementsOf(out);
-	for (let i = 0; i < source.length; i++) into[i] = source[i];
-	return out;
-}
-
-export extern function subarray(this a: Uint16Array, begin: number = 0, end: number = a.length): Uint16Array from "#.subarray(#, #)";
-export extern function slice(this a: Uint16Array, begin: number = 0, end: number = a.length): Uint16Array from "#.slice(#, #)";
-export extern function fill(this a: Uint16Array, value: number, begin: number = 0, end: number = a.length): Uint16Array from "#.fill(#, #, #)";
-
-export function from(this typeof Int32Array, source: Readonly<Span<int32>>): Int32Array {
-	const out = new Int32Array(source.length);
-	const into = writableElementsOf(out);
-	for (let i = 0; i < source.length; i++) into[i] = source[i];
-	return out;
-}
-
-export extern function subarray(this a: Int32Array, begin: number = 0, end: number = a.length): Int32Array from "#.subarray(#, #)";
-export extern function slice(this a: Int32Array, begin: number = 0, end: number = a.length): Int32Array from "#.slice(#, #)";
-export extern function fill(this a: Int32Array, value: number, begin: number = 0, end: number = a.length): Int32Array from "#.fill(#, #, #)";
-
-export function from(this typeof Uint32Array, source: Readonly<Span<uint32>>): Uint32Array {
-	const out = new Uint32Array(source.length);
-	const into = writableElementsOf(out);
-	for (let i = 0; i < source.length; i++) into[i] = source[i];
-	return out;
-}
-
-export extern function subarray(this a: Uint32Array, begin: number = 0, end: number = a.length): Uint32Array from "#.subarray(#, #)";
-export extern function slice(this a: Uint32Array, begin: number = 0, end: number = a.length): Uint32Array from "#.slice(#, #)";
-export extern function fill(this a: Uint32Array, value: number, begin: number = 0, end: number = a.length): Uint32Array from "#.fill(#, #, #)";
-
-export function from(this typeof Float32Array, source: Readonly<Span<float32>>): Float32Array {
-	const out = new Float32Array(source.length);
-	const into = writableElementsOf(out);
-	for (let i = 0; i < source.length; i++) into[i] = source[i];
-	return out;
-}
-
-export extern function subarray(this a: Float32Array, begin: number = 0, end: number = a.length): Float32Array from "#.subarray(#, #)";
-export extern function slice(this a: Float32Array, begin: number = 0, end: number = a.length): Float32Array from "#.slice(#, #)";
-export extern function fill(this a: Float32Array, value: number, begin: number = 0, end: number = a.length): Float32Array from "#.fill(#, #, #)";
-
-export function from(this typeof Float64Array, source: Readonly<Span<float64>>): Float64Array {
-	const out = new Float64Array(source.length);
-	const into = writableElementsOf(out);
-	for (let i = 0; i < source.length; i++) into[i] = source[i];
-	return out;
-}
-
-export extern function subarray(this a: Float64Array, begin: number = 0, end: number = a.length): Float64Array from "#.subarray(#, #)";
-export extern function slice(this a: Float64Array, begin: number = 0, end: number = a.length): Float64Array from "#.slice(#, #)";
-export extern function fill(this a: Float64Array, value: number, begin: number = 0, end: number = a.length): Float64Array from "#.fill(#, #, #)";

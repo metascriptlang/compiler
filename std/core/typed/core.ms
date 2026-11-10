@@ -1,7 +1,8 @@
-// The typed-array core of the native backends: one owned byte payload per ArrayBuffer, and views
-// that share it. A view reads and writes its elements as a Span of its element type over the
-// payload, so the subscripts, `set` and `join` are one body for every element type. The JS backend
-// binds the same names to the host's classes (index.jms).
+// The typed arrays of every backend. On C and the engine: one owned byte payload per ArrayBuffer,
+// and views that share it; a view reads and writes its elements as a Span of its element type over
+// the payload, so the subscripts, `set` and `join` are one body for every element type. On JS each
+// `@jsHost` class is the host's class of its name and its members the host's, so a value crosses to
+// a JS API with no copy.
 
 import { Math, ceil, floor, round } from "../math";
 
@@ -59,6 +60,7 @@ export function clampUint8(value: number): uint8 {
 	return (nearest - value == 0.5 && nearest % 2 != 0 ? nearest - 1 : nearest) as uint8;
 }
 
+@jsHost
 export class ArrayBuffer {
 	bytes: Vec<uint8>;
 
@@ -90,6 +92,7 @@ function joinElements<T>(elements: Readonly<Span<T>>, separator: string): string
 // shared (`buffer`, `subarray`) the bytes move into an ArrayBuffer (`store`) that every view of them reads,
 // so `buffer` answers the same object each time.
 @builtin("TypedArray")
+@jsHost
 export class TypedArray<T> {
 	own: Vec<uint8>;
 	store: ArrayBuffer | null;
@@ -122,6 +125,7 @@ export class TypedArray<T> {
 
 }
 
+@jsHost
 export class Int8Array extends TypedArray<int8> {
 	static readonly BYTES_PER_ELEMENT: number = 1;
 
@@ -181,6 +185,7 @@ export class Int8Array extends TypedArray<int8> {
 	}
 }
 
+@jsHost
 export class Uint8Array extends TypedArray<uint8> {
 	static readonly BYTES_PER_ELEMENT: number = 1;
 
@@ -240,6 +245,7 @@ export class Uint8Array extends TypedArray<uint8> {
 	}
 }
 
+@jsHost
 export class Uint8ClampedArray extends TypedArray<uint8> {
 	static readonly BYTES_PER_ELEMENT: number = 1;
 
@@ -300,6 +306,7 @@ export class Uint8ClampedArray extends TypedArray<uint8> {
 	}
 }
 
+@jsHost
 export class Int16Array extends TypedArray<int16> {
 	static readonly BYTES_PER_ELEMENT: number = 2;
 
@@ -359,6 +366,7 @@ export class Int16Array extends TypedArray<int16> {
 	}
 }
 
+@jsHost
 export class Uint16Array extends TypedArray<uint16> {
 	static readonly BYTES_PER_ELEMENT: number = 2;
 
@@ -418,6 +426,7 @@ export class Uint16Array extends TypedArray<uint16> {
 	}
 }
 
+@jsHost
 export class Int32Array extends TypedArray<int32> {
 	static readonly BYTES_PER_ELEMENT: number = 4;
 
@@ -477,6 +486,7 @@ export class Int32Array extends TypedArray<int32> {
 	}
 }
 
+@jsHost
 export class Uint32Array extends TypedArray<uint32> {
 	static readonly BYTES_PER_ELEMENT: number = 4;
 
@@ -536,6 +546,7 @@ export class Uint32Array extends TypedArray<uint32> {
 	}
 }
 
+@jsHost
 export class Float32Array extends TypedArray<float32> {
 	static readonly BYTES_PER_ELEMENT: number = 4;
 
@@ -595,6 +606,7 @@ export class Float32Array extends TypedArray<float32> {
 	}
 }
 
+@jsHost
 export class Float64Array extends TypedArray<float64> {
 	static readonly BYTES_PER_ELEMENT: number = 8;
 
