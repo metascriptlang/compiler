@@ -73,6 +73,17 @@ export function ctorVariantDecl(variant: Symbol): Node {
 	return decl;
 }
 
+/** The variants this process minted, each keyed to the declaration lowering copies; a std unit carries them. */
+export function ctorVariantRoutines(): Symbol[] {
+	const out: Symbol[] = [];
+	for (const variant of _variantDecls.keys()) out.push(variant);
+	return out;
+}
+
+export function replayCtorVariant(variant: Symbol, decl: Node): void {
+	_variantDecls.set(variant, decl);
+}
+
 export function ctorVariantsOf(impl: Symbol | null): Symbol[] {
 	const out: Symbol[] = [];
 	if (impl == null) return out;

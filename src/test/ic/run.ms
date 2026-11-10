@@ -454,7 +454,8 @@ const UNIT_PROGRAM_B = [
 	"const ages = new Map<string, int32>();",
 	"ages.set(\"b\", 2);",
 	"const names = [\"x\", \"y\"].map((s: string): string => s.toUpperCase());",
-	"console.log(`${new Greeter(names[0]).greet()} ${ages.size}`);",
+	"const view = new Uint8Array(new ArrayBuffer(4), 1);",
+	"console.log(`${new Greeter(names[0]).greet()} ${ages.size} ${view.length}`);",
 	"",
 ].join("\n");
 

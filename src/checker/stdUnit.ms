@@ -56,6 +56,7 @@ import { IdentCache, getIdentId } from "./idents";
 import { InitTracker } from "./initTracker";
 import { AffineTracker } from "./spawnAffinity";
 import { TargetInfo, wellKnownTypes, maybeCacheSize, maybeCacheKeys, maybeCacheTypes, replayMaybeCache, duVariantMark, duVariantsFrom, replayDuVariants, HeldBeyondRows, heldBeyondRows, replayHeldBeyond } from "./types";
+import { ctorVariantRoutines, ctorVariantDecl, replayCtorVariant } from "./ctorRoutine";
 import { InstanceHookRows, instanceHookRows, replayInstanceHooks, registeredModuleCount, localGenericCount } from "./instantiate";
 import { effectsCheckedModules, effectsAtRestAfter, restoreEffectsAfterPrelude } from "./effects";
 import { forwardTablesPending } from "./resolvePass";
@@ -80,7 +81,7 @@ import { hashContent } from "../utils/contentHash";
 import { readFile, writeFile, ensureDir, rename, remove } from "std/fs";
 import { env } from "std/process";
 
-const STD_UNIT_MAGIC = "MSSU1";
+const STD_UNIT_MAGIC = "MSSU2";
 const MAX_ROW_COUNT: int64 = 100000000;
 
 function encodedAs(column: string): FieldRole {
@@ -407,6 +408,7 @@ export function processFreshness(): string {
 	if (_graphChecks > 0) return "this process ran an earlier graph check";
 	if (maybeCacheSize() != 0) return "the Maybe cache is not empty";
 	if (duVariantMark() != 0) return "the union variant registry is not empty";
+	if (ctorVariantRoutines().length != 0) return "the constructor variant table is not empty";
 	if (opMark() != 0) return "the type-bound op table is not empty";
 	if (linkFlags().size != 0 || linkObjects().size != 0) return "the link state is not empty";
 	if (moduleItemPaths().length != 0) return "module item ids were interned";
@@ -837,6 +839,14 @@ function putGlobals(o: UnitOut, u: StdUnitInput): void {
 	o.end();
 	o.begin("v");
 	o.putTypes(duVariantsFrom(0));
+	o.end();
+	const variants = sortedSyms(o, ctorVariantRoutines());
+	o.begin("~");
+	o.putInt(variants.length);
+	for (const variant of variants) {
+		o.putSym(variant);
+		o.putNode(ctorVariantDecl(variant));
+	}
 	o.end();
 	const defaults = defaultsRows();
 	o.begin("d");
@@ -1736,6 +1746,8 @@ export class StdUnitLoaded {
 	maybeKeys: string[] = [];
 	maybeTypes: Type[] = [];
 	duVariants: Type[] = [];
+	ctorVariants: Symbol[] = [];
+	ctorVariantDecls: Node[] = [];
 	defaults: DefaultsRows = new DefaultsRows();
 	hooks: InstanceHookRows = new InstanceHookRows();
 	held: HeldBeyondRows = new HeldBeyondRows();
@@ -1794,6 +1806,20 @@ function readGlobals(u: UnitIn, out: StdUnitLoaded, cache: IdentCache): void {
 	}
 	if (u.row("v")) {
 		out.duVariants = u.getTypes();
+		u.close();
+	}
+	if (u.row("~")) {
+		const n = u.getCount();
+		for (let i = 0; i < n && u.problem == ""; i += 1) {
+			const variant = u.getSym();
+			const decl = u.getNode();
+			if (variant == null || decl == null) {
+				u.miss("a constructor variant row names no routine or declaration");
+				break;
+			}
+			out.ctorVariants.push(variant);
+			out.ctorVariantDecls.push(decl);
+		}
 		u.close();
 	}
 	if (u.row("d")) {
@@ -2690,6 +2716,7 @@ export function applyStdUnit(loaded: StdUnitLoaded, db: TransAmDb, graph: Module
 	applyWellKnown(loaded.wellKnown);
 	replayMaybeCache(loaded.maybeKeys, loaded.maybeTypes);
 	replayDuVariants(loaded.duVariants);
+	for (let i = 0; i < loaded.ctorVariants.length; i += 1) replayCtorVariant(loaded.ctorVariants[i], loaded.ctorVariantDecls[i]);
 	prewarmRoutineFlags(loaded.flagKeys);
 	prewarmRoutineFlagTexts(loaded.flagTextKeys);
 	for (let i = 0; i < loaded.itemPaths.length; i += 1) {
