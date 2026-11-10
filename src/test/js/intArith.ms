@@ -179,7 +179,8 @@ test "uint32 remainder is left alone" {
 test "int32 addition is checked, not wrapped, in the default build" {
 	const result = compileToJSBare("function f(a: int32, b: int32): int32 { return a + b; }");
 	assert result.ok;
-	assert !result.value.contains("| 0");
+	assert !result.value.contains("((a + b) | 0)"), result.value;
+	assert result.value.contains("msOverflowI32"), result.value;
 }
 
 test "uint8 addition wraps at a byte" {

@@ -65,7 +65,7 @@ test "an array slice is a checked view" {
 test "an inclusive slice passes the end past the last element" {
 	const result = compileToJSBare("function f(xs: Span<int32>): int32 { return xs.length; } function g(a: int32[], s: int32, e: int32): int32 { return f(a[s...e]); }");
 	assert result.ok;
-	assert result.value.contains("msSliceOf(a, s, msOverflowI32((e + 1)))");
+	assert result.value.contains("msSliceOf(a, s, ((($int_0 = (e + 1)) === ($int_0 | 0)) ? $int_0 : msOverflowI32($int_0)))");
 }
 
 test "a slice of a span rebases the view" {
@@ -83,7 +83,7 @@ test "an element write checks the index against the array it writes" {
 test "an element update checks the index" {
 	const result = compileToJSBare("function f(a: int32[], i: int32): void { a[i]++; }");
 	assert result.ok;
-	assert result.value.contains("a[(((i >= 0) && (i < a.length)) ? i : msIndexFail(i, a.length))] = msOverflowI32((a[(((i >= 0) && (i < a.length)) ? i : msIndexFail(i, a.length))] + 1))");
+	assert result.value.contains("a[(((i >= 0) && (i < a.length)) ? i : msIndexFail(i, a.length))] = ((($int_0 = (a[(((i >= 0) && (i < a.length)) ? i : msIndexFail(i, a.length))] + 1)) === ($int_0 | 0)) ? $int_0 : msOverflowI32($int_0))");
 }
 
 test "a write into a computed array checks through the array once" {
@@ -145,7 +145,7 @@ test "a computed index is held once in a temporary assigned inside the test" {
 	const result = compileToJSBare("function f(a: int32[], i: int32): int32 { return a[i + 1]; }");
 	assert result.ok;
 	assert result.value.contains("var $idx_");
-	assert result.value.contains(" = msOverflowI32((i + 1))) >= 0)");
+	assert result.value.contains(" = ((($int_0 = (i + 1)) === ($int_0 | 0)) ? $int_0 : msOverflowI32($int_0))) >= 0)");
 	assert !result.value.contains("msChkIndex(");
 }
 
@@ -153,4 +153,10 @@ test "a 64-bit index is narrowed to a number only on the in-range path" {
 	const result = compileToJSBare("function f(a: int32[], j: int64): int32 { return a[j]; }");
 	assert result.ok;
 	assert result.value.contains("? globalThis.Number(j) : msIndexFail(j, a.length))");
+}
+
+test "an int32 sum is range-tested inline and only a value out of range calls msOverflowI32" {
+	const result = compileToJSBare("function f(a: int32, b: int32): int32 { return a + b; }");
+	assert result.ok;
+	assert result.value.contains("return ((($int_0 = (a + b)) === ($int_0 | 0)) ? $int_0 : msOverflowI32($int_0));"), result.value;
 }

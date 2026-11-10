@@ -37,7 +37,7 @@ function checkedCount(node: Node): Node {
 function holdPlacesStmt(stmt: Node, ctx: TransformContext): Node[] {
 	const temps: Node[] = [];
 	holdPlaces(stmt, temps, ctx);
-	temps.push(walkWithinStatement(stmt, (node: Node): Node => inlineIndexCheck(node, temps, ctx)));
+	temps.push(walkWithinStatement(stmt, (node: Node): Node => isRuntimeProcCall(node, "msOverflowI32") ? inlineOverflowCheck(node, temps, ctx) : inlineIndexCheck(node, temps, ctx)));
 	return temps;
 }
 
@@ -87,6 +87,24 @@ function inlineIndexCheck(node: Node, temps: Node[], ctx: TransformContext): Nod
 	const value = wide ? makeCall(jsGlobalRef("Number", loc), [read()], loc) : read();
 	const fail = makeCall(runtimeRef("msIndexFail", loc), [read(), lenAgain], loc);
 	const checked = makeConditional(inRange, value, fail, loc);
+	checked.nodeType = node.nodeType;
+	return checked;
+}
+
+function inlineOverflowCheck(node: Node, temps: Node[], ctx: TransformContext): Node {
+	const loc = node.location;
+	const sym = freshTempSym(ctx, "int", unknownType());
+	const decl = makeVarDecl(sym.name, makeNull(loc), DeclKind.Var, loc);
+	decl.resolvedSym = sym;
+	decl.nodeType = sym.symbolType;
+	temps.push(decl);
+	const read = (): Node => makeIdentResolved(sym, loc);
+	const first = makeAssign(read(), asUnknown((node.data as CallExprData).arguments[0], loc), loc);
+	first.nodeType = sym.symbolType;
+	const exact = makeBinary(first, "===", makeBinary(read(), "|", makeNumber(0, loc), loc), loc);
+	const fail = makeCall(runtimeRef("msOverflowI32", loc), [read()], loc);
+	fail.nodeType = node.nodeType;
+	const checked = makeConditional(exact, read(), fail, loc);
 	checked.nodeType = node.nodeType;
 	return checked;
 }
