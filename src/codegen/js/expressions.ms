@@ -178,6 +178,7 @@ export function jsEnumMemberName(gen: JSGenerator, enumSym: Symbol | null, enumN
 
 function jsNameOf(gen: JSGenerator, sym: Symbol | null, name: string, declared: string): string {
 	if (sym == null) return safeJsName(name);
+	if (sym.symbolKind == SymbolKind.Class && hasFlag(sym, SymbolFlag.JsHost)) return sym.name;
 	if (sym.symbolKind == SymbolKind.Variable && sym.instantiatedFrom != null) return safeJsName(sym.name);
 	if (gen.multiFile && sym.symbolKind == SymbolKind.Module && sym.modulePath != "" && sym.modulePath != gen.currentModulePath && !gen.ownNamespaceAliases.has(name)) {
 		return recordNamespaceImport(gen, sym.modulePath, safeJsName(name));

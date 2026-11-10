@@ -561,6 +561,14 @@ function msSpanOf(a: unknown): unknown {
 	unreachable;
 }
 
+// A span crossing to a @jsHost member: the host's own array, a view over a typed array as its subarray and any other as a copy of its range.
+@compilerFunc
+function msSpanHost(s: unknown): unknown {
+	@emit(`const b = ${s}.base, from = ${s}.off, to = from + ${s}.len;
+	return ArrayBuffer.isView(b) ? b.subarray(from, to) : b.slice(from, to);`);
+	unreachable;
+}
+
 @compilerFunc
 function msSliceOf(a: unknown, start: number, end: number): unknown {
 	@emit(`const s = Number(${start}), e = Number(${end}), n = ${a}.length;

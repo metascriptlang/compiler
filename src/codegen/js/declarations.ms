@@ -148,13 +148,13 @@ function emitStaticPropertyDecl(gen: JSGenerator, member: Node): void {
 }
 
 // A class declaration that produces no JS at all: an `extern class` binds a
-// native global, and a class merged onto a callable namespace resolves to the
+// native global, a `@jsHost` class is the host's class of its name, and a class merged onto a callable namespace resolves to the
 // prelude function of the same name. Both emitters must agree — the ES-module
 // path writes `export ` before it dispatches, so it has to decide first or it
 // leaves a dangling keyword behind.
 export function classEmitsNoJs(node: Node): boolean {
 	if (node.flags.has(NodeFlag.ExternC)) return true;
-	return node.resolvedSym != null && node.resolvedSym.symbolKind == SymbolKind.Function;
+	return node.resolvedSym != null && (node.resolvedSym.symbolKind == SymbolKind.Function || hasFlag(node.resolvedSym, SymbolFlag.JsHost));
 }
 
 function emitClassDeclInner(gen: JSGenerator, node: Node, assigned: boolean = false): void {

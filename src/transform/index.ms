@@ -89,6 +89,7 @@ import { lowerLambda } from "./lowering/lambdaLifting";
 import { lowerCallHoist } from "./lowering/callHoist";
 import { lowerRvalueBridge } from "./lowering/rvalueLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
+import { lowerJsHostMembers } from "./lowering/jsHostLower";
 import { lowerBorrow } from "./lowering/borrowLower";
 import { lowerMethodToFunction } from "./lowering/methodToFunction";
 import { lowerMethodDispatch } from "./lowering/methodDispatchLower";
@@ -146,7 +147,8 @@ function runs(program: Node, ctx: TransformContext, need: BitSet<ModuleFact>, pa
 function hasJsSourceBinding(sym: Symbol): boolean {
 	const kind = sym.symbolKind;
 	if (kind == SymbolKind.Interface || kind == SymbolKind.TypeAlias || kind == SymbolKind.Struct
-		|| hasFlag(sym, SymbolFlag.CompileTime) || hasFlag(sym, SymbolFlag.ImportC)) return false;
+		|| hasFlag(sym, SymbolFlag.CompileTime) || hasFlag(sym, SymbolFlag.ImportC)
+		|| (kind == SymbolKind.Class && hasFlag(sym, SymbolFlag.JsHost))) return false;
 	const decl = sym.declNode;
 	if (decl == null) return true;
 	if (decl.kind == NodeKind.MacroDecl || decl.kind == NodeKind.ExternDecl || decl.flags.has(NodeFlag.ExternC)) return false;
@@ -224,6 +226,7 @@ export function transformProgramHead(program: Node, checkerCtx: CheckerContext, 
 	if (jsBackend) elideJsReexportBindings(program, checkerCtx);
 	let result = dropCtorSignatures(program, ctx);
 	flowLap("pass.dropCtorSignatures");
+	if (jsBackend) { result = lowerJsHostMembers(result, ctx); flowLap("pass.lowerJsHostMembers"); }
 	result = eraseBrandTypes(result, ctx);
 	flowLap("pass.eraseBrandTypes");
 	if (runs(result, ctx, fact(ModuleFact.WhenRaiser), "pass.pickWhenRaiser")) result = pickWhenRaiser(result, false);
