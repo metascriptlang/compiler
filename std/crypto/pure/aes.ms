@@ -1,9 +1,10 @@
 import { newGhash, updateGhash, finishGhash } from "./ghash";
 import { InputBytes } from "./bytes";
-import { declassify, wipeBytes, wipeWords, wipeWords64 } from "./secret";
+import { declassify, wipeBytes, wipeWords } from "./secret";
 import { load32LE, store32LE, store32BE } from "./endian";
 
 when (c) {
+	import { wipeWords64 } from "./secret";
 	import { Buffer } from "std/core/buffer";
 	import { aesHwAvailable, aesGcmHwSeal, aesGcmHwOpen, aesGcmHwOpenFresh, aesCbcHwEncrypt, aesCbcHwDecrypt } from "./hw";
 }
