@@ -381,12 +381,12 @@ export function dec(this r: PackReader): int32 {
 
 export function nodeRef(this r: PackReader, nodes: Node[]): Node | null {
 	const v = r.int();
-	return v >= 0 && v < nodes.length ? nodes[v as int32] : null;
+	return !r.bad && v >= 0 && v < nodes.length ? nodes[v as int32] : null;
 }
 
 export function typeRef(this r: PackReader, types: Type[]): Type | null {
 	const v = r.int();
-	return v >= 0 && v < types.length ? types[v as int32] : null;
+	return !r.bad && v >= 0 && v < types.length ? types[v as int32] : null;
 }
 
 function expect(this r: PackReader, c: int32, end: int32): void {
@@ -1574,6 +1574,18 @@ function fieldReader(field: string): PackReader {
 	const rd = new PackReader(`Q\t${field}\n`);
 	rd.startRow();
 	return rd;
+}
+
+test "rowCodec: a node or type index that is not a number links nothing" {
+	const nodes: Node[] = [createNodeAt(NodeKind.Identifier, { name: "self" } as NodeData, makeLoc(1, 1))];
+	const types: Type[] = [emptyType()];
+	for (const field of ["q", "0q"]) {
+		const n = fieldReader(field);
+		assert n.nodeRef(nodes) == null && n.bad, field;
+		const t = fieldReader(field);
+		assert t.typeRef(types) == null && t.bad, field;
+	}
+	assert fieldReader("0").nodeRef(nodes) == nodes[0];
 }
 
 test "rowCodec: a list field tells null, the empty list and empty strings apart" {
