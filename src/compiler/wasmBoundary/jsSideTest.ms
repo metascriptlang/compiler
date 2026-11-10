@@ -74,6 +74,7 @@ export class Counter { n: int32 = 0; }
 export function open(start: int32): Handle<Counter> { return null as unknown as Handle<Counter>; }
 export function bump(h: Handle<Counter>, by: int32): int32 { return by; }
 export function peek(h: Handle<Counter>): int32 { return 0; }
+export function bumpThen(h: Handle<Counter>, cb: () => void): int32 { cb(); return 0; }
 `;
 
 function manifestFrom(source: string, names: string[], also: string[] = []): Manifest {
@@ -741,11 +742,19 @@ function handleBindings(dev: boolean) {
 	return jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: (name) => false, dev });
 }
 
-test "js side: a Handle parameter is lent inside try and unlent in finally behind its null flag" {
+test "js side: a Handle parameter beside a callback is lent inside try and unlent in finally behind its null flag" {
+	const m = manifestFrom(HANDLES, ["open", "bumpThen"], ["Counter"]);
+	const code = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: (name) => false, dev: true }).modules[0].code;
+	assert code.includes("function bundled_bumpThen(a0, a1) {\n\t__msb.enter();\n\tlet l0 = null;\n");
+	assert code.includes("\t\tconst p0 = __msb.lend(a0.ptr); l0 = a0.ptr;");
+	assert code.includes("if (l0 !== null) __msb.unlend(l0);");
+}
+
+test "js side: a Handle parameter of a call that runs no JS is only checked live, not lent" {
 	const code = handleBindings(true).modules[0].code;
-	assert code.includes("function bundled_bump(a0, a1) {\n\t__msb.enter();\n\tlet l0 = null;\n\ttry {\n\t\tconst p0 = __msb.lend(a0.ptr); l0 = a0.ptr;");
+	assert code.includes("function bundled_bump(a0, a1) {\n\t__msb.enter();\n\tconst p0 = __msb.at(a0.ptr);\n\tlet v;\n");
 	assert code.includes("_msb_calc_bump(p0, a1)");
-	assert code.includes("} finally {\n\t\tif (l0 !== null) __msb.unlend(l0);\n\t}");
+	assert !code.includes("__msb.lend(a0.ptr)");
 }
 
 test "js side: a member the JS half reaches is a method of the class's proxy, which a Handle result of that class builds" {
@@ -759,6 +768,18 @@ test "js side: a member the JS half reaches is a method of the class's proxy, wh
 	const entry = wasmEntrySource(m.functions, (path) => path).source;
 	assert entry.includes("Handle.at<msbm0_Counter>(h as uint64 as Ptr<void>).value().bump(by)");
 	assert !entry.includes("bump as msbm0_bump");
+}
+
+test "js side: a constructor builds the object in wasm and owns it with the class's proxy" {
+	const m = manifestFrom(HANDLES, ["open"], ["Counter"]);
+	m.functions[0].resultClass = "calc$Counter";
+	m.functions[0].member = { classKey: "calc$Counter", property: "constructor", jsName: "new", access: MemberAccess.New };
+	const b = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: (name) => false, dev: false });
+	assert b.prelude.includes("class __msbRef$calc$Counter {\n\tconstructor(r) { this[__msbSelf] = r; }\n}\n");
+	assert b.modules[0].code.includes("return { ptr: __msb.own(v, \"Handle<Counter>\", \"\", null, __msbRef$calc$Counter) };");
+	const entry = wasmEntrySource(m.functions, (path) => path).source;
+	assert entry.includes("const r = Handle.retain(new msbm0_Counter(start));");
+	assert !entry.includes("open as msbm0_open");
 }
 
 test "js side: a field read and write are a getter and a setter of the proxy" {
