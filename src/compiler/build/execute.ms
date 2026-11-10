@@ -429,6 +429,13 @@ function settle(j: Job): string {
 	const status = j.child!.wait(60000);
 	j.child!.close();
 	const code = status.ok ? status.value.code : -1;
+	const peak = j.child!.peakRss();
+	if (status.ok && j.node.maxRss > 0 && peak != null && peak > j.node.maxRss) {
+		if (j.out != "") console.log(j.out.trimEnd());
+		if (j.err != "") console.log(j.err.trimEnd());
+		j.abandon();
+		return `${label(j.node)}: ${j.shown} peaked at ${bytes(peak)}, above its declared maxRss of ${bytes(j.node.maxRss)}`;
+	}
 	if (code != Math.max(j.expectExit, 0)) {
 		if (j.out != "") console.log(j.out.trimEnd());
 		if (j.err != "") console.log(j.err.trimEnd());
