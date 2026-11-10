@@ -6,7 +6,7 @@ import { ModuleError } from "../../module/graph";
 import { RaiserModule } from "../../raiser/module";
 import { RaiserContext } from "../../raiser/context";
 import { RaiserValueKind } from "../../raiser/value";
-import { RaiserHostValue, field, length, at, text, boxString, unboxString } from "../../raiser/marshal";
+import { RaiserHostValue, field, length, at, text, boxString, unboxString, unboxFloat } from "../../raiser/marshal";
 import { RaiserValue } from "../../raiser/value";
 import { registerHostFn, HostCapability } from "../../raiser/hostRegistry";
 import { ensureHostTableLoaded } from "../meta/hostTable";
@@ -67,6 +67,7 @@ export interface GraphNode {
 	expectExit: int32;
 	artifact: int32;
 	files: GraphFile[];
+	maxRss: number;
 }
 
 export interface BuildGraph {
@@ -100,7 +101,7 @@ interface GlobListing {
 	listing: string;
 }
 
-const CONFIGURE_FORMAT = "cfg5";
+const CONFIGURE_FORMAT = "cfg6";
 
 export interface GraphOption {
 	name: string;
@@ -229,7 +230,7 @@ function pathShape(p: GraphPath | null, self: int32): string {
 
 // Everything a node does, without its id: two nodes with one shape do the same work.
 function shapeOf(n: GraphNode): string {
-	let s = `${n.kind}|${n.description}|${n.deps.join(",")}|${pathShape(n.entry, n.id)}|${pathShape(n.from, n.id)}|${n.os}|${n.cpu}|${n.abi}|${n.optimize}|${n.linkage}|${n.link.join(",")}|${n.lto}|${n.compiler}`;
+	let s = `${n.kind}|${n.description}|${n.deps.join(",")}|${pathShape(n.entry, n.id)}|${pathShape(n.from, n.id)}|${n.os}|${n.cpu}|${n.abi}|${n.optimize}|${n.linkage}|${n.link.join(",")}|${n.lto}|${n.compiler}|${n.maxRss}`;
 	for (const a of n.argv) s = `${s}|${a.kind}:${a.text}:${pathShape(a.path, n.id)}`;
 	s = `${s}|${pathShape(n.cwd, n.id)}`;
 	for (const p of n.inputs) s = `${s}|in:${pathShape(p, n.id)}`;
@@ -284,6 +285,7 @@ function readNode(r: Reader, v: RaiserHostValue): int32 {
 		id, kind: v.field("kind").text(), name: "", description: v.field("description").text(), deps: [],
 		entry: null, from: null, os: "", cpu: "", abi: "", optimize: 0, linkage: 0, link: [], lto: -1, compiler: -1,
 		argv: [], cwd: null, inputs: [], env: [], stdout: false, sideEffects: false, expectExit: -1, artifact: -1, files: [],
+		maxRss: unboxFloat(v.field("maxRss").root),
 	};
 	r.nodes.push(node);
 	if (node.kind == "step") r.steps.set(id, v);

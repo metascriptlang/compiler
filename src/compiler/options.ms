@@ -103,6 +103,7 @@ export interface CliOptions {
 	graphOptions: string[];    // -Dname=value: an option build.ms declares with option()
 	graphJobs: int32;          // -j<n>: build graph processes at once; 0 = one per cpu
 	graphSeed: int32;          // --seed=<n>: start ready graph nodes in a shuffled order
+	graphMaxRss: number;
 	projectRoot: string;       // set by CLI main from findProjectRoot() — dir containing build.ms
 	resolve: ResolveSection;   // build.ms resolve section of projectRoot, set by applyProjectConfig
 	extraArgs: string[];       // remaining args passed through for package manager commands (add, remove, etc.)
@@ -231,6 +232,7 @@ export function newCliOptions(): CliOptions {
 		graphOptions: [],
 		graphJobs: 0,
 		graphSeed: 0,
+		graphMaxRss: 0,
 		projectRoot: "",
 		resolve: defaultResolveSection(),
 		extraArgs: [],
@@ -595,6 +597,9 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 		} else if (arg.startsWith("--seed=")) {
 			opts.graphSeed = parseIntStr(arg.slice(7, arg.length));
 			if (opts.graphSeed < 1 || `${opts.graphSeed}` != arg.slice(7, arg.length)) return Result.err(`${arg}: --seed takes a whole number, at least 1`);
+		} else if (arg.startsWith("--maxrss=")) {
+			opts.graphMaxRss = parseSize(arg.slice(9, arg.length));
+			if (opts.graphMaxRss < 1) return Result.err(`${arg}: --maxrss takes a byte count, at least 1, with an optional K, M, G or T (Ki, Mi, Gi, Ti for powers of 1024)`);
 		} else if (arg.startsWith("-j") && arg.length > 2) {
 			opts.graphJobs = parseIntStr(arg.slice(2, arg.length));
 			if (opts.graphJobs < 1 || `${opts.graphJobs}` != arg.slice(2, arg.length)) return Result.err(`${arg}: -j takes a whole number of processes, at least 1`);
@@ -736,6 +741,34 @@ test "run: everything after the first program argument is the program's, flags a
 	assert opts.extraArgs.length == 5;
 	assert opts.extraArgs[1] == "--release" && opts.extraArgs[2] == "--target=js";
 	assert opts.extraArgs[3] == "--" && opts.extraArgs[4] == "-x";
+}
+
+export function parseSize(text: string): number {
+	let digits = text.endsWith("B") ? text.slice(0, text.length - 1) : text;
+	let base = 1000;
+	if (digits.endsWith("i")) {
+		digits = digits.slice(0, digits.length - 1);
+		base = 1024;
+	}
+	const last = digits == "" ? "" : digits.charAt(digits.length - 1);
+	const order = last == "" ? -1 : last == "k" ? 0 : "KMGT".indexOf(last);
+	if (order >= 0) digits = digits.slice(0, digits.length - 1);
+	else if (base == 1024) return -1;
+	const count = parseIntStr(digits);
+	if (count < 1 || `${count}` != digits) return -1;
+	return count * Math.pow(base, order + 1);
+}
+
+test "build: --maxrss reads a byte count with Zig's size suffixes" {
+	assert parseSize("2048") == 2048;
+	assert parseSize("8G") == 8000000000;
+	assert parseSize("8GiB") == 8 * 1024 * 1024 * 1024;
+	assert parseSize("512Mi") == 512 * 1024 * 1024;
+	assert parseSize("Gi") == -1;
+	assert parseSize("8X") == -1;
+	assert parseSize("8m") == -1;
+	assert parseSize("4k") == 4000;
+	assert parseSize("0") == -1;
 }
 
 test "build: everything after -- is the node's, flags included" {

@@ -8,6 +8,7 @@ import { exists, isDir, readDir, readFile, writeFile, ensureDir, removeAll } fro
 import { join, dirname, basename, isAbsolute } from "std/fs/path";
 import { execPath, platform, findOnPath } from "std/process";
 import { spawn, ChildProcess, ChildStream } from "std/process/child";
+import { totalMem } from "std/os";
 import { writeStdout, writeStderr } from "std/io";
 import { vmCallFunction } from "../../raiser/vm";
 import { field } from "../../raiser/marshal";
@@ -28,10 +29,22 @@ export interface Execution {
 	jobs: int32;
 	seed: int32;   // nonzero: start ready nodes in an order shuffled by this seed
 	hashed: string[];
+	maxRss: number;
+	claimedRss: number;
+}
+
+function buildMaxRss(opts: CliOptions): number {
+	if (opts.graphMaxRss > 0) return opts.graphMaxRss;
+	const total = totalMem() as number;
+	return total > 0 ? total : Number.POSITIVE_INFINITY;
+}
+
+function bytes(n: number): string {
+	return n >= 1048576 ? `${Math.round(n / 1048576)} MiB` : `${n} bytes`;
 }
 
 export function newExecution(graph: BuildGraph, opts: CliOptions, projectRoot: string, dryRun: boolean, passArgs: string[], target: int32, jobs: int32): Execution {
-	return { graph, opts, projectRoot, outputs: new HashMap<int32, string>(), digests: new HashMap<int32, string>(), dryRun, ran: [], reused: [], passArgs, target, jobs, seed: opts.graphSeed, hashed: [] };
+	return { graph, opts, projectRoot, outputs: new HashMap<int32, string>(), digests: new HashMap<int32, string>(), dryRun, ran: [], reused: [], passArgs, target, jobs, seed: opts.graphSeed, hashed: [], maxRss: buildMaxRss(opts), claimedRss: 0 };
 }
 
 function shuffle(plan: GraphNode[], seed: int32): void {
@@ -446,6 +459,9 @@ function executePlan(x: Execution, id: int32): string {
 	const plan: GraphNode[] = [];
 	order(x.graph, id, new HashSet<int32>(), new HashSet<int32>(), plan);
 	if (x.seed != 0) shuffle(plan, x.seed);
+	for (const n of plan) {
+		if (n.maxRss > x.maxRss) throw new Error(`${label(n)}: declares maxRss ${bytes(n.maxRss)}, above the ${bytes(x.maxRss)} this build may use (--maxrss)`);
+	}
 	const done = new HashSet<int32>();
 	const started = new HashSet<int32>();
 	const running: Job[] = [];
@@ -455,6 +471,7 @@ function executePlan(x: Execution, id: int32): string {
 		for (const n of plan) {
 			if (failure != "" || started.has(n.id) || running.length >= x.jobs) continue;
 			if (!n.deps.every((d: int32): boolean => done.has(d))) continue;
+			if (x.claimedRss + n.maxRss > x.maxRss) continue;
 			started.add(n.id);
 			moved = true;
 			try {
@@ -471,6 +488,7 @@ function executePlan(x: Execution, id: int32): string {
 				}
 				j.child = child.value;
 				j.child!.closeStdin();
+				x.claimedRss += n.maxRss;
 				running.push(j);
 			} catch (e) {
 				failure = e.message;
@@ -480,6 +498,7 @@ function executePlan(x: Execution, id: int32): string {
 			const j = running[i];
 			if (!pump(j, 0)) continue;
 			running.splice(i, 1);
+			x.claimedRss -= j.node.maxRss;
 			const problem = settle(j);
 			if (problem != "" && failure == "") failure = problem;
 			done.add(j.node.id);

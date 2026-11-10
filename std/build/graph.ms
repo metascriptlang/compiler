@@ -39,12 +39,14 @@ export class BuildNode {
 	kind: string;
 	description: string;
 	deps: BuildNode[];
+	maxRss: number;
 	constructor(kind: string, description: string) {
 		nextId += 1;
 		this.id = nextId;
 		this.kind = kind;
 		this.description = description;
 		this.deps = [];
+		this.maxRss = 0;
 	}
 }
 
@@ -216,10 +218,13 @@ export interface ExecutableOptions {
 	link?: Library[];
 	lto?: LtoMode;
 	compiler?: Executable;
+	maxRss?: number;
 }
 
 export function executable(o: ExecutableOptions): Executable {
-	return new Executable(o.entry, o.target ?? host(), o.optimize ?? Optimize.Debug, o.link ?? [], o.lto ?? null, o.compiler ?? null);
+	const made = new Executable(o.entry, o.target ?? host(), o.optimize ?? Optimize.Debug, o.link ?? [], o.lto ?? null, o.compiler ?? null);
+	made.maxRss = o.maxRss ?? 0;
+	return made;
 }
 
 export interface LibraryOptions {
