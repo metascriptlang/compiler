@@ -8,7 +8,9 @@
 
 import { Buffer } from "std/core/buffer";
 import { ByteInput } from "std/core/buffer/bytes";
-import { bytesOf } from "./pure/bytes";
+when (!nodejs) {
+	import { bytesOf } from "./pure/bytes";
+}
 import { CryptoError, hashFailed, hmacFailed, keyDerivationFailed } from "./errors";
 import { HashAlgorithm, digestSync, hmacSync } from "./pure/coreNative";
 import { pbkdf2Sync, hkdfSync, pbkdf2Refusal, hkdfRefusal } from "./pure/kdfNative";
@@ -81,7 +83,11 @@ function subtleName(algorithm: string): string {
 }
 
 export function digest<D extends ByteInput>(algorithm: HashAlgorithm, data: D): Promise<Result<Buffer, CryptoError>> {
-	return digestOwned(algorithm, bytesOf(data));
+	when (nodejs) {
+		return Promise.resolve(digestSync(algorithm, data));
+	} else {
+		return digestOwned(algorithm, bytesOf(data));
+	}
 }
 
 async function digestOwned(algorithm: HashAlgorithm, data: Buffer): Promise<Result<Buffer, CryptoError>> {
@@ -99,7 +105,11 @@ export function sha1<D extends ByteInput>(data: D): Promise<Result<Buffer, Crypt
 export function md5<D extends ByteInput>(data: D): Promise<Result<Buffer, CryptoError>> { return digest("md5", data); }
 
 export function hmac<K extends ByteInput, D extends ByteInput>(algorithm: HashAlgorithm, key: K, data: D): Promise<Result<Buffer, CryptoError>> {
-	return hmacOwned(algorithm, bytesOf(key), bytesOf(data));
+	when (nodejs) {
+		return Promise.resolve(hmacSync(algorithm, key, data));
+	} else {
+		return hmacOwned(algorithm, bytesOf(key), bytesOf(data));
+	}
 }
 
 async function hmacOwned(algorithm: HashAlgorithm, key: Buffer, data: Buffer): Promise<Result<Buffer, CryptoError>> {
@@ -112,7 +122,11 @@ async function hmacOwned(algorithm: HashAlgorithm, key: Buffer, data: Buffer): P
 }
 
 export function pbkdf2<P extends ByteInput, S extends ByteInput>(password: P, salt: S, iterations: int32, keyLength: int32, digest: HashAlgorithm): Promise<Result<Buffer, CryptoError>> {
-	return pbkdf2Owned(bytesOf(password), bytesOf(salt), iterations, keyLength, digest);
+	when (nodejs) {
+		return Promise.resolve(pbkdf2Sync(password, salt, iterations, keyLength, digest));
+	} else {
+		return pbkdf2Owned(bytesOf(password), bytesOf(salt), iterations, keyLength, digest);
+	}
 }
 
 async function pbkdf2Owned(password: Buffer, salt: Buffer, iterations: int32, keyLength: int32, digest: HashAlgorithm): Promise<Result<Buffer, CryptoError>> {
@@ -126,7 +140,11 @@ async function pbkdf2Owned(password: Buffer, salt: Buffer, iterations: int32, ke
 }
 
 export function hkdf<I extends ByteInput, S extends ByteInput, N extends ByteInput>(algorithm: HashAlgorithm, ikm: I, salt: S, info: N, length: int32): Promise<Result<Buffer, CryptoError>> {
-	return hkdfOwned(algorithm, bytesOf(ikm), bytesOf(salt), bytesOf(info), length);
+	when (nodejs) {
+		return Promise.resolve(hkdfSync(algorithm, ikm, salt, info, length));
+	} else {
+		return hkdfOwned(algorithm, bytesOf(ikm), bytesOf(salt), bytesOf(info), length);
+	}
 }
 
 async function hkdfOwned(algorithm: HashAlgorithm, ikm: Buffer, salt: Buffer, info: Buffer, length: int32): Promise<Result<Buffer, CryptoError>> {

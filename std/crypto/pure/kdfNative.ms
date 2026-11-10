@@ -3,10 +3,17 @@ import { ByteInput } from "std/core/buffer/bytes";
 import {
 	HashAlgorithm, createHmac, digestSync, isHashSupported,
 } from "./coreNative";
-import { bytesOf, wipeIfCopied } from "./bytes";
-import { hashKind } from "./hash";
-import { pbkdf2Of, hkdfOf } from "./hmac";
 import { wipeBytes } from "./secret";
+
+when (js && nodejs) {
+	import { nodeInput, nodePbkdf2, nodeHkdf } from "./nodeCrypto";
+}
+
+when (!(js && nodejs)) {
+	import { bytesOf, wipeIfCopied } from "./bytes";
+	import { hashKind } from "./hash";
+	import { pbkdf2Of, hkdfOf } from "./hmac";
+}
 import {
 	CryptoError, invalidInput, keyDerivationFailed,
 } from "../errors";
@@ -114,20 +121,24 @@ export function pbkdf2Sync<D extends ByteInput, K extends ByteInput>(
 ): Result<Buffer, CryptoError> {
 	const refusal = pbkdf2Refusal(iterations, keyLength, digest);
 	if (refusal != null) return Result.err(refusal);
-	const key = bytesOf(password);
-	const saltBytes = bytesOf(salt);
-	const kind = hashKind(digest);
-	try {
-		if (kind >= 0) {
-			return Result.ok(
-				pbkdf2Of(kind, key, saltBytes, iterations, keyLength) as Buffer,
-			);
+	when (js && nodejs) {
+		return Result.ok(nodePbkdf2(nodeInput(password), nodeInput(salt), iterations, keyLength, digest));
+	} else {
+		const key = bytesOf(password);
+		const saltBytes = bytesOf(salt);
+		const kind = hashKind(digest);
+		try {
+			if (kind >= 0) {
+				return Result.ok(
+					pbkdf2Of(kind, key, saltBytes, iterations, keyLength) as Buffer,
+				);
+			}
+			return Result.ok(extendedPassword(
+				digest, key, saltBytes, iterations, keyLength,
+			) as Buffer);
+		} finally {
+			wipeIfCopied(password, key);
 		}
-		return Result.ok(extendedPassword(
-			digest, key, saltBytes, iterations, keyLength,
-		) as Buffer);
-	} finally {
-		wipeIfCopied(password, key);
 	}
 }
 
@@ -150,21 +161,25 @@ export function hkdfSync<D extends ByteInput, K extends ByteInput, S extends Byt
 ): Result<Buffer, CryptoError> {
 	const refusal = hkdfRefusal(algorithm, length);
 	if (refusal != null) return Result.err(refusal);
-	const key = bytesOf(ikm);
-	const saltBytes = bytesOf(salt);
-	const infoBytes = bytesOf(info);
-	const kind = hashKind(algorithm);
-	try {
-		if (kind >= 0) {
-			return Result.ok(
-				hkdfOf(kind, key, saltBytes, infoBytes, length) as Buffer,
-			);
+	when (js && nodejs) {
+		return Result.ok(nodeHkdf(algorithm, nodeInput(ikm), nodeInput(salt), nodeInput(info), length));
+	} else {
+		const key = bytesOf(ikm);
+		const saltBytes = bytesOf(salt);
+		const infoBytes = bytesOf(info);
+		const kind = hashKind(algorithm);
+		try {
+			if (kind >= 0) {
+				return Result.ok(
+					hkdfOf(kind, key, saltBytes, infoBytes, length) as Buffer,
+				);
+			}
+			return Result.ok(extendedKey(
+				algorithm, key, saltBytes, infoBytes, length,
+			) as Buffer);
+		} finally {
+			wipeIfCopied(ikm, key);
 		}
-		return Result.ok(extendedKey(
-			algorithm, key, saltBytes, infoBytes, length,
-		) as Buffer);
-	} finally {
-		wipeIfCopied(ikm, key);
 	}
 }
 

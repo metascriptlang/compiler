@@ -3,14 +3,7 @@ import { ByteInput } from "std/core/buffer/bytes";
 import {
 	encodeHex, decodeHex, encodeBase64, decodeBase64,
 } from "../../core/encoding";
-import { bytesOf, wipeIfCopied } from "./bytes";
-import { HashState } from "./state";
-import {
-	hashKind, newHash, updateHash, finishHash, hashOf,
-} from "./hash";
-import {
-	HmacState, newHmac, updateHmac, finishHmac, hmacOf, wipeHmac,
-} from "./hmac";
+import { hashKind, hashOf } from "./hash";
 import {
 	Ripemd160State,
 	newRipemd160, updateRipemd160, finishRipemd160, ripemd160Of,
@@ -31,6 +24,21 @@ export type HashAlgorithm =
 
 when (js) {
 	import { randomOctets } from "./bigint";
+}
+
+when (!(js && nodejs)) {
+	import { bytesOf, wipeIfCopied } from "./bytes";
+	import { HashState } from "./state";
+	import { newHash, updateHash, finishHash } from "./hash";
+	import {
+		HmacState, newHmac, updateHmac, finishHmac, hmacOf, wipeHmac,
+	} from "./hmac";
+}
+
+when (js && nodejs) {
+	import {
+		NodeHash, nodeInput, nodeDigest, nodeHmac, nodeHashNew, nodeHmacNew, nodeHashUpdate, nodeHashDigest,
+	} from "./nodeCrypto";
 }
 
 when (c) {
@@ -337,17 +345,22 @@ export function digestSync<D extends ByteInput>(
 	data: D,
 ): Result<Buffer, CryptoError> {
 	const kind = hashKind(algorithm);
-	if (kind >= 0) {
-		when (c) {
-			return Result.ok(hashOf(kind, typeof data == "string" ? data.asBytes() : data) as Buffer);
-		} else {
-			return Result.ok(hashOf(kind, bytesOf(data)) as Buffer);
+	when (js && nodejs) {
+		if (kind < 0 && !isExtAlg(algorithm)) return Result.err(invalidAlgorithm(algorithm));
+		return Result.ok(nodeDigest(algorithm, nodeInput(data)));
+	} else {
+		if (kind >= 0) {
+			when (c) {
+				return Result.ok(hashOf(kind, typeof data == "string" ? data.asBytes() : data) as Buffer);
+			} else {
+				return Result.ok(hashOf(kind, bytesOf(data)) as Buffer);
+			}
 		}
+		if (!isExtAlg(algorithm)) {
+			return Result.err(invalidAlgorithm(algorithm));
+		}
+		return Result.ok(extOneShot(algorithm, bytesOf(data)) as Buffer);
 	}
-	if (!isExtAlg(algorithm)) {
-		return Result.err(invalidAlgorithm(algorithm));
-	}
-	return Result.ok(extOneShot(algorithm, bytesOf(data)) as Buffer);
 }
 
 export function hmacSync<K extends ByteInput, D extends ByteInput>(
@@ -356,28 +369,33 @@ export function hmacSync<K extends ByteInput, D extends ByteInput>(
 	data: D,
 ): Result<Buffer, CryptoError> {
 	const kind = hashKind(algorithm);
-	if (kind >= 0) {
-		when (c) {
-			return Result.ok(hmacOf(
-				kind,
-				typeof key == "string" ? key.asBytes() : key,
-				typeof data == "string" ? data.asBytes() : data,
-			) as Buffer);
-		} else {
-			const secret = bytesOf(key);
-			const mac = hmacOf(kind, secret, bytesOf(data));
-			wipeIfCopied(key, secret);
-			return Result.ok(mac as Buffer);
+	when (js && nodejs) {
+		if (kind < 0 && !isExtAlg(algorithm)) return Result.err(invalidAlgorithm(algorithm));
+		return Result.ok(nodeHmac(algorithm, nodeInput(key), nodeInput(data)));
+	} else {
+		if (kind >= 0) {
+			when (c) {
+				return Result.ok(hmacOf(
+					kind,
+					typeof key == "string" ? key.asBytes() : key,
+					typeof data == "string" ? data.asBytes() : data,
+				) as Buffer);
+			} else {
+				const secret = bytesOf(key);
+				const mac = hmacOf(kind, secret, bytesOf(data));
+				wipeIfCopied(key, secret);
+				return Result.ok(mac as Buffer);
+			}
 		}
+		if (!isExtAlg(algorithm)) {
+			return Result.err(invalidAlgorithm(algorithm));
+		}
+		const secret = bytesOf(key);
+		const ctx = newExtHmac(algorithm, secret);
+		wipeIfCopied(key, secret);
+		updateExtHmac(ctx, bytesOf(data));
+		return Result.ok(finishExtHmac(ctx) as Buffer);
 	}
-	if (!isExtAlg(algorithm)) {
-		return Result.err(invalidAlgorithm(algorithm));
-	}
-	const secret = bytesOf(key);
-	const ctx = newExtHmac(algorithm, secret);
-	wipeIfCopied(key, secret);
-	updateExtHmac(ctx, bytesOf(data));
-	return Result.ok(finishExtHmac(ctx) as Buffer);
 }
 
 export function digest<D extends ByteInput>(
@@ -427,103 +445,151 @@ export function md5<D extends ByteInput>(data: D): Promise<Result<Buffer, Crypto
 	return digest("md5", data);
 }
 
-export class Hasher {
-	_ctx: HashState | Ripemd160State | Sha3State;
+when (js && nodejs) {
+	export class Hasher {
+		_hash: NodeHash;
+		_done: boolean;
 
-	static create(algorithm: HashAlgorithm): Hasher {
-		const kind = hashKind(algorithm);
-		if (kind >= 0) return { _ctx: newHash(kind) };
-		if (algorithm == "ripemd160") return { _ctx: newRipemd160() };
-		const bits = sha3BitsOf(algorithm);
-		if (bits < 0) {
-			throw new Error(
-				`createHash: could not start "${algorithm}"`,
-			);
-		}
-		return { _ctx: newSha3(bits) };
-	}
-
-	update<D extends ByteInput>(data: D): Hasher {
-		const ctx = this._ctx;
-		if (ctx instanceof HashState) {
-			if (ctx.finished) return this;
-			when (c) {
-				updateHash(
-					ctx,
-					typeof data == "string" ? data.asBytes() : data,
-				);
-			} else {
-				updateHash(ctx, bytesOf(data));
+		static create(algorithm: HashAlgorithm): Hasher {
+			if (hashKind(algorithm) < 0 && !isExtAlg(algorithm)) {
+				throw new Error(`createHash: could not start "${algorithm}"`);
 			}
-		} else if (ctx instanceof Ripemd160State) {
-			if (ctx.finished) return this;
-			updateRipemd160(ctx, bytesOf(data));
-		} else {
-			if (ctx.finished) return this;
-			updateSha3(ctx, bytesOf(data));
+			return { _hash: nodeHashNew(algorithm), _done: false };
 		}
-		return this;
-	}
 
-	digest(): Buffer {
-		const ctx = this._ctx;
-		if (ctx instanceof HashState) {
-			if (ctx.finished) return new Array<uint8>(0) as Buffer;
-			return finishHash(ctx) as Buffer;
-		} else if (ctx instanceof Ripemd160State) {
-			if (ctx.finished) return new Array<uint8>(0) as Buffer;
-			return finishRipemd160(ctx) as Buffer;
-		} else {
-			if (ctx.finished) return new Array<uint8>(0) as Buffer;
-			return finishSha3(ctx) as Buffer;
+		update<D extends ByteInput>(data: D): Hasher {
+			if (!this._done) nodeHashUpdate(this._hash, nodeInput(data));
+			return this;
+		}
+
+		digest(): Buffer {
+			if (this._done) return new Array<uint8>(0) as Buffer;
+			this._done = true;
+			return nodeHashDigest(this._hash);
 		}
 	}
-}
 
-export class Hmac {
-	_ctx: HmacState | ExtHmacCtx;
-	_done: boolean;
+	export class Hmac {
+		_hash: NodeHash;
+		_done: boolean;
 
-	static create<K extends ByteInput>(algorithm: HashAlgorithm, key: K): Hmac {
-		const kind = hashKind(algorithm);
-		if (kind < 0 && !isExtAlg(algorithm)) {
-			throw new Error(
-				`createHmac: could not start "${algorithm}"`,
-			);
+		static create<K extends ByteInput>(algorithm: HashAlgorithm, key: K): Hmac {
+			if (hashKind(algorithm) < 0 && !isExtAlg(algorithm)) {
+				throw new Error(`createHmac: could not start "${algorithm}"`);
+			}
+			return { _hash: nodeHmacNew(algorithm, nodeInput(key)), _done: false };
 		}
-		const secret = bytesOf(key);
-		const ctx: HmacState | ExtHmacCtx = kind >= 0 ?
-			newHmac(kind, secret) : newExtHmac(algorithm, secret);
-		wipeIfCopied(key, secret);
-		return { _ctx: ctx, _done: false };
+
+		update<D extends ByteInput>(data: D): Hmac {
+			if (!this._done) nodeHashUpdate(this._hash, nodeInput(data));
+			return this;
+		}
+
+		digest(): Buffer {
+			if (this._done) return new Array<uint8>(0) as Buffer;
+			this._done = true;
+			return nodeHashDigest(this._hash);
+		}
+	}
+} else {
+	export class Hasher {
+		_ctx: HashState | Ripemd160State | Sha3State;
+
+		static create(algorithm: HashAlgorithm): Hasher {
+			const kind = hashKind(algorithm);
+			if (kind >= 0) return { _ctx: newHash(kind) };
+			if (algorithm == "ripemd160") return { _ctx: newRipemd160() };
+			const bits = sha3BitsOf(algorithm);
+			if (bits < 0) {
+				throw new Error(
+					`createHash: could not start "${algorithm}"`,
+				);
+			}
+			return { _ctx: newSha3(bits) };
+		}
+
+		update<D extends ByteInput>(data: D): Hasher {
+			const ctx = this._ctx;
+			if (ctx instanceof HashState) {
+				if (ctx.finished) return this;
+				when (c) {
+					updateHash(
+						ctx,
+						typeof data == "string" ? data.asBytes() : data,
+					);
+				} else {
+					updateHash(ctx, bytesOf(data));
+				}
+			} else if (ctx instanceof Ripemd160State) {
+				if (ctx.finished) return this;
+				updateRipemd160(ctx, bytesOf(data));
+			} else {
+				if (ctx.finished) return this;
+				updateSha3(ctx, bytesOf(data));
+			}
+			return this;
+		}
+
+		digest(): Buffer {
+			const ctx = this._ctx;
+			if (ctx instanceof HashState) {
+				if (ctx.finished) return new Array<uint8>(0) as Buffer;
+				return finishHash(ctx) as Buffer;
+			} else if (ctx instanceof Ripemd160State) {
+				if (ctx.finished) return new Array<uint8>(0) as Buffer;
+				return finishRipemd160(ctx) as Buffer;
+			} else {
+				if (ctx.finished) return new Array<uint8>(0) as Buffer;
+				return finishSha3(ctx) as Buffer;
+			}
+		}
 	}
 
-	update<D extends ByteInput>(data: D): Hmac {
-		if (!this._done) {
+	export class Hmac {
+		_ctx: HmacState | ExtHmacCtx;
+		_done: boolean;
+
+		static create<K extends ByteInput>(algorithm: HashAlgorithm, key: K): Hmac {
+			const kind = hashKind(algorithm);
+			if (kind < 0 && !isExtAlg(algorithm)) {
+				throw new Error(
+					`createHmac: could not start "${algorithm}"`,
+				);
+			}
+			const secret = bytesOf(key);
+			const ctx: HmacState | ExtHmacCtx = kind >= 0 ?
+				newHmac(kind, secret) : newExtHmac(algorithm, secret);
+			wipeIfCopied(key, secret);
+			return { _ctx: ctx, _done: false };
+		}
+
+		update<D extends ByteInput>(data: D): Hmac {
+			if (!this._done) {
+				const ctx = this._ctx;
+				if (ctx instanceof HmacState) {
+					when (c) {
+						updateHmac(ctx, typeof data == "string" ? data.asBytes() : data);
+					} else {
+						updateHmac(ctx, bytesOf(data));
+					}
+				} else {
+					updateExtHmac(ctx, bytesOf(data));
+				}
+			}
+			return this;
+		}
+
+		digest(): Buffer {
+			if (this._done) return new Array<uint8>(0) as Buffer;
+			this._done = true;
 			const ctx = this._ctx;
 			if (ctx instanceof HmacState) {
-				when (c) {
-					updateHmac(ctx, typeof data == "string" ? data.asBytes() : data);
-				} else {
-					updateHmac(ctx, bytesOf(data));
-				}
-			} else {
-				updateExtHmac(ctx, bytesOf(data));
+				const buf = finishHmac(ctx);
+				wipeHmac(ctx);
+				return buf as Buffer;
 			}
+			return finishExtHmac(ctx) as Buffer;
 		}
-		return this;
-	}
-
-	digest(): Buffer {
-		if (this._done) return new Array<uint8>(0) as Buffer;
-		this._done = true;
-		const ctx = this._ctx;
-		if (ctx instanceof HmacState) {
-			const buf = finishHmac(ctx);
-			wipeHmac(ctx);
-			return buf as Buffer;
-		}
-		return finishExtHmac(ctx) as Buffer;
 	}
 }
 

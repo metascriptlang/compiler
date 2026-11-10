@@ -1,0 +1,47 @@
+import { Buffer } from "std/core/buffer";
+import { ByteInput } from "std/core/buffer/bytes";
+
+@import("node:crypto", { createHash, createHmac, pbkdf2Sync, hkdfSync });
+
+// An indexed loop back into an Array: 259 MB/s on 1 MB, against 29 for Array.from(u8) (node 24.1, Mac, 2026-11-10).
+@emit(`function msNodeBytes(u8) {
+	const n = u8.length;
+	const out = new Array(n);
+	for (let i = 0; i < n; i++) out[i] = u8[i];
+	return out;
+}`);
+
+export type NodeInput = string | Uint8Array;
+
+export interface NodeHash {}
+
+/** What node reads in place: a string or a Uint8Array as it is, other bytes copied once into a Uint8Array. */
+export function nodeInput<D extends ByteInput>(data: D): NodeInput {
+	if (typeof data == "string") return data;
+	if (data instanceof Uint8Array) return data;
+	const out = new Uint8Array(data.length);
+	for (let i = 0; i < data.length; i++) out[i] = data[i];
+	return out;
+}
+
+extern function msDigest(name: string, data: NodeInput): Buffer from "msNodeBytes(createHash(#).update(#).digest())";
+extern function msHmac(name: string, key: NodeInput, data: NodeInput): Buffer from "msNodeBytes(createHmac(#, #).update(#).digest())";
+extern function msHashNew(name: string): NodeHash from "createHash(#)";
+extern function msHmacNew(name: string, key: NodeInput): NodeHash from "createHmac(#, #)";
+extern function msHashUpdate(hash: NodeHash, data: NodeInput): void from "#.update(#)";
+extern function msHashDigest(hash: NodeHash): Buffer from "msNodeBytes(#.digest())";
+extern function msPbkdf2(password: NodeInput, salt: NodeInput, iterations: int32, keyLength: int32, digest: string): Buffer from "msNodeBytes(pbkdf2Sync(#, #, #, #, #))";
+extern function msHkdf(digest: string, ikm: NodeInput, salt: NodeInput, info: NodeInput, length: int32): Buffer from "msNodeBytes(new Uint8Array(hkdfSync(#, #, #, #, #)))";
+
+export function nodeDigest(name: string, data: NodeInput): Buffer { return msDigest(name, data); }
+export function nodeHmac(name: string, key: NodeInput, data: NodeInput): Buffer { return msHmac(name, key, data); }
+export function nodeHashNew(name: string): NodeHash { return msHashNew(name); }
+export function nodeHmacNew(name: string, key: NodeInput): NodeHash { return msHmacNew(name, key); }
+export function nodeHashUpdate(hash: NodeHash, data: NodeInput): void { msHashUpdate(hash, data); }
+export function nodeHashDigest(hash: NodeHash): Buffer { return msHashDigest(hash); }
+export function nodePbkdf2(password: NodeInput, salt: NodeInput, iterations: int32, keyLength: int32, digest: string): Buffer {
+	return msPbkdf2(password, salt, iterations, keyLength, digest);
+}
+export function nodeHkdf(digest: string, ikm: NodeInput, salt: NodeInput, info: NodeInput, length: int32): Buffer {
+	return msHkdf(digest, ikm, salt, info, length);
+}

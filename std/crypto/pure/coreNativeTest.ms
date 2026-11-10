@@ -4,7 +4,9 @@ import {
 	hmacSync, getHashes, isHashSupported, encodedHash, base64String,
 	HashAlgorithm,
 } from "./coreNative";
-import { HmacState } from "./hmac";
+when (!nodejs) {
+	import { HmacState } from "./hmac";
+}
 import { CryptoError } from "../errors";
 
 function got<T>(result: Result<T, CryptoError>): T {
@@ -265,34 +267,36 @@ test "ripemd160 and sha3 HMAC with long key, empty and binary-NUL messages" {
 }
 
 test "Hmac.digest wipes old-six key-cache state on consume" {
-	const oldSix: HashAlgorithm[] = [
-		"sha256", "sha512", "sha384", "sha224", "sha1", "md5",
-	];
-	for (const length of [7, 200]) {
-		const key = new Array<uint8>(length);
-		for (let i = 0; i < length; i++) key[i] = (i & 255) as uint8;
-		const before = toHex(key);
-		const data = "pintest-data";
-		for (const name of oldSix) {
-			const reference = hmacSync(name, key, data);
-			assert reference.ok;
-			const hmac = createHmac(name, key);
-			const ctx = hmac._ctx;
-			assert ctx instanceof HmacState;
-			hmac.update(data);
-			assert toHex(hmac.digest()) == toHex(reference.value);
-			for (const state of [
-				ctx.inner, ctx.outer, ctx.innerKeyed, ctx.outerKeyed,
-			]) {
-				for (const word of state.state) assert word == 0;
-				for (const word of state.schedule) assert word == 0;
-				for (const byte of state.block) assert byte == 0;
+	when (!nodejs) {
+		const oldSix: HashAlgorithm[] = [
+			"sha256", "sha512", "sha384", "sha224", "sha1", "md5",
+		];
+		for (const length of [7, 200]) {
+			const key = new Array<uint8>(length);
+			for (let i = 0; i < length; i++) key[i] = (i & 255) as uint8;
+			const before = toHex(key);
+			const data = "pintest-data";
+			for (const name of oldSix) {
+				const reference = hmacSync(name, key, data);
+				assert reference.ok;
+				const hmac = createHmac(name, key);
+				const ctx = hmac._ctx;
+				assert ctx instanceof HmacState;
+				hmac.update(data);
+				assert toHex(hmac.digest()) == toHex(reference.value);
+				for (const state of [
+					ctx.inner, ctx.outer, ctx.innerKeyed, ctx.outerKeyed,
+				]) {
+					for (const word of state.state) assert word == 0;
+					for (const word of state.schedule) assert word == 0;
+					for (const byte of state.block) assert byte == 0;
+				}
+				for (const byte of ctx.innerDigest) assert byte == 0;
+				assert toHex(key) == before;
+				assert hmac.digest().length == 0;
+				hmac.update(data);
+				assert hmac.digest().length == 0;
 			}
-			for (const byte of ctx.innerDigest) assert byte == 0;
-			assert toHex(key) == before;
-			assert hmac.digest().length == 0;
-			hmac.update(data);
-			assert hmac.digest().length == 0;
 		}
 	}
 }
