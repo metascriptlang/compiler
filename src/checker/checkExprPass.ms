@@ -448,7 +448,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type | 
 		: expectedType;
 	const recordsWereOff = ctx.symRecordsOff;
 	ctx.symRecordsOff = node.flags.has(NodeFlag.FromTemplate);
-	checkExprInner(ctx, node, slotType);
+	checkExprInner(ctx, node, slotType != null ? withoutUnowned(slotType) : slotType);
 	ctx.symRecordsOff = recordsWereOff;
 	viewThroughReadonlyBase(node);
 	node.flags = node.flags.incl(NodeFlag.Sem);
