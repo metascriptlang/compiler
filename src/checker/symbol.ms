@@ -499,8 +499,22 @@ export function makeSymbol(name: string, kind: SymbolKind, symType: Type | null,
 	return makeSymbolState(name, kind, symType, mutable, SymbolState.Hollow);
 }
 
+// Every symbol the compile makes stays alive until it exits: a type names its symbol, and a symbol its owner, Unowned.
+const heldSymbols: Symbol[] = [];
+let _symbolsSealed = false;
+
+export function sealSymbols(sealed: boolean): void {
+	_symbolsSealed = sealed;
+}
+
+export function holdSymbol(sym: Symbol): Symbol {
+	if (_symbolsSealed) throw new Error(`internal: symbol '${sym.name}' is made while C modules are emitted in parallel, where the holder of every symbol takes no push`);
+	heldSymbols.push(sym);
+	return sym;
+}
+
 export function makeSymbolState(name: string, kind: SymbolKind, symType: Type | null, mutable: boolean, state: SymbolState): Symbol {
-	return {
+	return holdSymbol({
 		name,
 		nameId: 0,
 		symbolKind: kind,
@@ -535,7 +549,7 @@ export function makeSymbolState(name: string, kind: SymbolKind, symType: Type | 
 		ctorRoutine: null,
 		borrowedFrom: null,
 		typeParams: [],
-	};
+	});
 }
 
 export function initSymbol(sym: Symbol, name: string, kind: SymbolKind, symType: Type | null, mutable: boolean, state: SymbolState): void {

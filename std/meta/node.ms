@@ -158,8 +158,8 @@ export class Type {
 	typeFlags: BitSet<TypeFlag>;
 	typeValue: int32;
 	callConv: CallingConvention;
-	attachedOps: (Symbol | null)[];
-	sym: Symbol | null;
+	attachedOps: (Unowned<Symbol> | null)[];
+	sym: Unowned<Symbol> | null;
 	typeInst: Type | null;
 	readonlyView: Type | null;
 	mutableView: Type | null;
@@ -385,7 +385,7 @@ export class Symbol {
 	state: SymbolState;
 	location: SourceLocation;
 	declNode: Unowned<Node>;
-	overloads: Symbol[];
+	overloads: Owned<Symbol>[];
 	nativeName: string;
 	exportName: string;
 	builtinKind: BuiltinKind;
@@ -397,7 +397,7 @@ export class Symbol {
 	overloadIdx: int32;    // Index within overload set (0=primary, 1+=overload)
 	disamb: int32;         // Per-(module, name) ordinal minted at declaration; the C name's _u suffix. Distinct from overloadIdx: a name that never joins an overload set still needs one, and it must travel with the symbol across module boundaries rather than be recomputed from position.
 	mutatedParams: int32;  // Bitfield: bit i = param i is mutated in body (gates const-ptr promotion)
-	staticFields: Symbol[];  // Static properties (only for class symbols)
+	staticFields: Owned<Symbol>[];  // Static properties (only for class symbols)
 	fieldDecoratorNames: string[];
 	fieldDecorators: Unowned<Node>[][];
 	metaKeys: string[];
@@ -406,14 +406,14 @@ export class Symbol {
 	duVariantSlot: int32;  // Narrowed DU field access: 0 = none, N = union variant N-1 (checker stamps on the property sym; C codegen routes .v<N-1>)
 	itemModule: int32;     // Identity within one compilation: the owning module's index and the ordinal of this symbol in it
 	item: int32;
-	instantiatedFrom: Symbol | null;
+	instantiatedFrom: Unowned<Symbol> | null;
 	instanceArgs: Type[] | null;
 	instanceParams: Type[] | null;
-	ctorRoutine: Symbol | null;
-	ctorOwner: Symbol | null;
-	borrowedFrom: Symbol | null;
-	staticOwner: Symbol | null;
-	typeParamOwner: Symbol | null;
+	ctorRoutine: Owned<Symbol> | null;
+	ctorOwner: Unowned<Symbol> | null;
+	borrowedFrom: Unowned<Symbol> | null;
+	staticOwner: Unowned<Symbol> | null;
+	typeParamOwner: Unowned<Symbol> | null;
 	typeParams: Type[];
 	subclasses: Type[] | null; // Class: the structs of the classes that extend it, noted when each subclass resolves; every copy of the class's type shares this symbol
 }

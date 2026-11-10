@@ -57,6 +57,11 @@ test "the compiler's flow graph is acyclic: a label's antecedent list and a redu
 	}
 }
 
+test "the compiler's Symbol is acyclic: a type names its symbol and a symbol its owner Unowned, a symbol owns its overloads" {
+	const c = builtModuleC("unownedEdge", "compilerSymbol", "import { makeSymbol } from \"../../../src/checker/symbol\";\nimport { SymbolKind } from \"std/meta/node\";\nconst s = makeSymbol(\"x\", SymbolKind.Variable, null, false);\nconsole.log(s.name);\n", ["--danger"], "node");
+	assert typeInfoOf(c, "Symbol").contains(".isCyclic = MS_FALSE"), typeInfoOf(c, "Symbol") != "" ? typeInfoOf(c, "Symbol") : c.slice(0, 400);
+}
+
 test "owned children with an Unowned parent edge are acyclic" {
 	assert verdict("class N { kids: Vec<Owned<N>> = []; up: Unowned<N> | null = null; }\nconst n = new N();", "N") == "acyclic";
 	assert verdict("class N { left: Owned<N> | null = null; up: Unowned<N> | null = null; }\nconst n = new N();", "N") == "acyclic";

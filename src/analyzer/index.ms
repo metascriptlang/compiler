@@ -8,7 +8,7 @@ import { reportShareIfRequested } from "../transform/shareCount";
 import { Node, NodeKind, NodeFlag, ProgramData, BlockStmtData, ExportDeclData, FunctionDeclData, Symbol, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { flowLap, flowMark } from "../compiler/flows";
-import { RoutineFlag, hasFlag, routineFlagSet, SymbolFlag } from "../checker/symbol";
+import { RoutineFlag, hasFlag, routineFlagSet, SymbolFlag, holdSymbol } from "../checker/symbol";
 import { CheckerContext, GcMode, createDispatchRegistry, dispatchEntryFor, nextDisamb } from "../checker/context";
 import { createTransformContextWithChecker } from "../transform/context";
 import { createDrcContext, pushScope, popScope } from "./scope";
@@ -58,7 +58,7 @@ function callbackReader(w: WriteEffects, stmt: Node): Node | null {
 }
 
 function copySymbol(s: Symbol): Symbol {
-	return {
+	return holdSymbol({
 		name: s.name, nameId: s.nameId, symbolKind: s.symbolKind, symbolType: s.symbolType, state: s.state, location: s.location,
 		declNode: s.declNode, overloads: s.overloads, nativeName: s.nativeName, exportName: s.exportName, builtinKind: s.builtinKind,
 		symFlags: s.symFlags, defaultParams: s.defaultParams, modulePath: s.modulePath, headerPath: s.headerPath, jsModulePath: s.jsModulePath,
@@ -66,7 +66,7 @@ function copySymbol(s: Symbol): Symbol {
 		fieldDecoratorNames: s.fieldDecoratorNames, fieldDecorators: s.fieldDecorators, metaKeys: s.metaKeys, metaValues: s.metaValues,
 		nonisolatedFields: s.nonisolatedFields, duVariantSlot: s.duVariantSlot, itemModule: s.itemModule, item: s.item,
 		instantiatedFrom: s.instantiatedFrom, borrowedFrom: s.borrowedFrom, staticOwner: s.staticOwner, typeParamOwner: s.typeParamOwner, typeParams: s.typeParams,
-	};
+	});
 }
 
 function isFrameSymbol(sym: Symbol): boolean {

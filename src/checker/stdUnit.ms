@@ -1913,7 +1913,7 @@ class WellKnownState {
 	typeReturn: Type | null = null;
 	typeExtra: Type | null = null;
 	typeParamDefault: Type | null = null;
-	attachedOps: (Symbol | null)[] = [];
+	attachedOps: (Unowned<Symbol> | null)[] = [];
 	sym: Symbol | null = null;
 	typeInst: Type | null = null;
 	readonlyView: Type | null = null;

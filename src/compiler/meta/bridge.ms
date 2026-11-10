@@ -63,7 +63,7 @@ import {
 import { Token, TokenKind, createToken } from "../../lexer/token";
 import { actorHandleIndex, instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase, skipModifier, peelToRepr, unwrapMaybeType, isFloatType, numberLiteralBase } from "../../checker/types";
 import { isUnsignedIntegerType } from "../../checker/compat";
-import { hasFlag, isTypeSymbol, SymbolFlag, symbolCarried, overloadWinner } from "../../checker/symbol";
+import { hasFlag, isTypeSymbol, SymbolFlag, symbolCarried, overloadWinner, holdSymbol } from "../../checker/symbol";
 import { forEachChild } from "../../ast/visitor";
 import { int64Bits } from "../../utils/stdBackport";
 import { parseIntegerLiteral, parseNumberLiteral } from "../../utils/string";
@@ -4273,7 +4273,7 @@ test "nodeToValue — child Nodes' nodeType cascades through dispatch" {
 // ===== Day 9 tests — nodeToValue emits `resolvedSym` for bound Nodes =====
 
 function makeSymbol(name: string, kind: SymbolKind): Symbol {
-	return {
+	return holdSymbol({
 		name,
 		nameId: 0 as int32,
 		symbolKind: kind,
@@ -4310,7 +4310,7 @@ function makeSymbol(name: string, kind: SymbolKind): Symbol {
 		staticOwner: null,
 		typeParamOwner: null,
 		typeParams: [],
-	};
+	});
 }
 
 test "nodeToValue — Node with resolvedSym emits { name, symbolKind } object" {
