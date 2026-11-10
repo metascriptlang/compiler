@@ -1,13 +1,15 @@
 // guard: @builtin is refused in a module outside the std tree the compiler resolved, on a function,
 // an extern and a method, and in a user file whose path spells a std module, so every reader of a
-// builtin kind can trust that std declared it. @iteratorHelper is open to every module: a
-// well-shaped user generator is accepted and each misuse shape is refused at its declaration.
+// builtin kind can trust that std declared it; so is @jsHost on a user class. @iteratorHelper is
+// open to every module: a well-shaped user generator is accepted and each misuse shape is refused
+// at its declaration.
 //
 // WHY A SUBPROCESS: the fake std file needs a directory tree beside the entry module.
 //
-// RED MEANS: a user module can claim a builtin kind (PromiseSpawn, PtrBits, ToString) and borrow
-//   the checker's trust in the std declaration, std membership is read from a path spelling, a
-//   well-shaped user @iteratorHelper is refused, or a misused one reaches the lowering.
+// RED MEANS: a user module can claim a builtin kind (PromiseSpawn, PtrBits, ToString) or a JS host
+//   class (@jsHost) and borrow the checker's trust in the std declaration, std membership is read
+//   from a path spelling, a well-shaped user @iteratorHelper is refused, or a misused one reaches
+//   the lowering.
 
 import { execFileResult, cwd, exit, env } from "std/process";
 import { ensureDir, isFile, writeFile } from "std/fs";
@@ -55,6 +57,12 @@ const cases: Case[] = [
 		refusal: "@builtin(\"ToString\") is reserved for the standard library",
 		declaredIn: "/main.ms'",
 		files: [{ path: "main.ms", text: "class C {\n\t@builtin(\"ToString\")\n\tshow(): string { return \"c\"; }\n}\nconsole.log(new C().show());\n" }],
+	},
+	{
+		name: "a user class claiming @jsHost",
+		refusal: "@jsHost is reserved for the standard library",
+		declaredIn: "/main.ms'",
+		files: [{ path: "main.ms", text: "@jsHost\nclass DataView {\n\tbyteLength: number = 0;\n}\nconsole.log(new DataView().byteLength);\n" }],
 	},
 	{
 		name: "a user file at std/core/struct.ms claiming PtrBits",

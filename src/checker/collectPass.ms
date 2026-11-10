@@ -318,6 +318,11 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 		if (sym.symbolKind != SymbolKind.Class) addError(ctx, `@acyclic applies to a class, not to '${declName}'`, node.location.line, node.location.column);
 		else setFlag(sym, SymbolFlag.Acyclic);
 	}
+	if (info.jsHost) {
+		if (sym.symbolKind != SymbolKind.Class) addError(ctx, `@jsHost applies to a class, not to '${declName}'`, node.location.line, node.location.column);
+		else if (ctx.modulePath != "" && isOutsideResolvedStd(ctx, ctx.modulePath)) addError(ctx, `@jsHost is reserved for the standard library, and '${ctx.modulePath}' is not one of its modules`, node.location.line, node.location.column);
+		else setFlag(sym, SymbolFlag.JsHost);
+	}
 	if (info.iteratorHelper) {
 		const problem = iteratorHelperMisuse(ctx, dd);
 		if (problem != "") addError(ctx, problem, node.location.line, node.location.column);

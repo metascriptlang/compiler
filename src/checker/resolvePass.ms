@@ -3464,6 +3464,7 @@ export function resolveClass(ctx: CheckerContext, node: Node): void {
 				fnType.typeName = methodSym.symbolType.typeName;
 			}
 			if (methodSym != null && hasFlag(methodSym, SymbolFlag.Inline)) fnType.callConv = CallingConvention.CcInline;
+			if (methodSym != null && hasFlag(sym, SymbolFlag.JsHost)) setFlag(methodSym, SymbolFlag.JsHost);
 			member.nodeType = fnType;
 			// Update the method symbol's type with resolved params/return
 			if (methodSym != null && methodSym.symbolType != null) {

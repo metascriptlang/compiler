@@ -261,6 +261,7 @@ export enum SymbolFlag {
 	JsCell, // JS: a `ref` borrow takes this binding, so every module reads and writes it through a one-element cell
 	Wasm, // @wasm: an exported function the js build places in its wasm half
 	OwnedCycle, // the trace of a class that stays under the collector only because this build checks owned cycles: a dead set holding one stops the program
+	JsHost, // @jsHost class, and each of its members: on the JS backend the host's class of the same name is the value and its members
 }
 
 // The compiler-intercepted operation a symbol stands for: `@builtin("Name")` in the standard

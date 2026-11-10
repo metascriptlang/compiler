@@ -16,11 +16,12 @@ export interface DecoratorInfo {
 	noInline: boolean;
 	acyclic: boolean;
 	iteratorHelper: boolean;
+	jsHost: boolean;
 }
 
 const passThroughDirectives: string[] = [
 	"emit", "include", "compile", "link", "passC", "passL", "import",
-	"comptime", "builtin", "exportName", "beforeReload", "afterReload", "inline", "noinline", "computedGoto", "acyclic", "iteratorHelper", "wasm",
+	"comptime", "builtin", "exportName", "beforeReload", "afterReload", "inline", "noinline", "computedGoto", "acyclic", "iteratorHelper", "wasm", "jsHost",
 ];
 export const intrinsicBuiltins: BuiltinKind[] = [BuiltinKind.nonisolated, BuiltinKind.compilerFunc, BuiltinKind.throws, BuiltinKind.delegate];
 
@@ -210,6 +211,7 @@ export function extractDecoratorInfo(ctx: CheckerContext, node: Node): Decorator
 	let keptOutOfLine = false;
 	let prunesCycles = false;
 	let closesSource = false;
+	let hostOnJs = false;
 	for (let i = 0; i < dd.decorators.length; i += 1) {
 		const dec = dd.decorators[i];
 		if (dec.kind != NodeKind.MacroInvocation) continue;
@@ -222,6 +224,7 @@ export function extractDecoratorInfo(ctx: CheckerContext, node: Node): Decorator
 		if (name == "noinline") keptOutOfLine = true;
 		if (name == "acyclic") prunesCycles = true;
 		if (name == "iteratorHelper") closesSource = true;
+		if (name == "jsHost") hostOnJs = true;
 	}
 	const exportDec = decoratorNamed(dd.decorators, "exportName");
 	const exportName = exportDec != null ? exportNameOf(exportDec, dd.decoratedNode) : "";
@@ -244,6 +247,7 @@ export function extractDecoratorInfo(ctx: CheckerContext, node: Node): Decorator
 		compileTime: atCompileTime,
 		noInline: keptOutOfLine,
 		acyclic: prunesCycles,
+		jsHost: hostOnJs,
 		iteratorHelper: closesSource,
 	};
 }
