@@ -67,11 +67,14 @@ function commandCases(): void {
 	expect(darwin.contains("-DLLVM_BUILD_STATIC=OFF") &&
 		darwin.contains("-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0"),
 		"a macOS host links against the system libraries from macOS 11");
+	expect(darwin.contains("-DCOMPILER_RT_SANITIZERS_TO_BUILD=asan;tsan;ubsan_minimal") &&
+		!args.contains("COMPILER_RT_SANITIZERS_TO_BUILD"),
+		"only macOS builds the sanitizers its SDK builds link from the engine");
 	const posix = buildCommand("/u/ninja", "/w/build", 16, "/usr/bin/nice");
 	expect(posix.ok && posix.value.file == "/usr/bin/nice" &&
 		posix.value.args.join(" ") ==
-		"-n 10 /u/ninja -C /w/build -j16 install-distribution",
-		"a POSIX build installs the distribution under nice");
+		"-n 10 /u/ninja -C /w/build -j16 install-distribution-stripped",
+		"a POSIX build installs the stripped distribution under nice");
 	const windows = buildCommand("C:/t/ninja.exe", "C:/w/build", 8, null);
 	expect(windows.ok && windows.value.file == "C:/t/ninja.exe",
 		"a build without nice runs ninja itself");

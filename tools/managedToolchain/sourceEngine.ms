@@ -9,6 +9,7 @@ import { MINIMUM_MACOS_VERSION } from "./darwinConfig";
 
 const SOURCE_PREFIX = "llvm-project-";
 const SOURCE_SUFFIX = ".src.tar.xz";
+const DARWIN_SANITIZERS = "asan;tsan;ubsan_minimal";
 
 export struct SourceTools {
 	cc: string;
@@ -41,7 +42,7 @@ export struct SourceProvenance {
 	sourceTarball: string;
 }
 
-function digitsOnly(text: string): boolean {
+export function digitsOnly(text: string): boolean {
 	if (text == "") { return false; }
 	for (let i: int32 = 0; i < text.length; i += 1) {
 		const code = text.charCodeAt(i);
@@ -99,6 +100,7 @@ export function configureCommand(
 	if (hostOs == "darwin" || hostOs == "macos") {
 		args.push("-DLLVM_BUILD_STATIC=OFF");
 		args.push("-DCMAKE_OSX_DEPLOYMENT_TARGET=" + MINIMUM_MACOS_VERSION);
+		args.push("-DCOMPILER_RT_SANITIZERS_TO_BUILD=" + DARWIN_SANITIZERS);
 	}
 	return { file: cmake, args };
 }
@@ -112,7 +114,7 @@ export function buildCommand(
 	if (jobs < 1) {
 		return Result.err("--jobs must be at least 1, got " + String(jobs));
 	}
-	const args = ["-C", build, "-j" + String(jobs), "install-distribution"];
+	const args = ["-C", build, "-j" + String(jobs), "install-distribution-stripped"];
 	if (nice == null) { return Result.ok({ file: ninja, args }); }
 	return Result.ok({ file: nice, args: ["-n", "10", ninja, ...args] });
 }
