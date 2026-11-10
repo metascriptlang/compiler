@@ -141,7 +141,10 @@ holder is destroyed on time and a later read through the edge stops (`Error: an 
 was destroyed`), while a holder that never reads the dead edge exits cleanly. Arena links need a proved bulk teardown.
 Evidence (candidates of `wt/unified-drc`, rtx and d87, 2026-11-09): corpus `unownedEdge*`, `unownedArrayHeldAnywhere`,
 `unownedLocalArrayReadAfterTargetDies`, `unownedHuskFreedByLastEdge` on C, danger and Raiser (JS on the programs with
-no stop), `src/test/c/unownedEdge.ms` (18), guard `bareWasmUnownedEdges` on wasm32. Not established: async frames, threads, HCR,
+no stop), `src/test/c/unownedEdge.ms` (18), guard `bareWasmUnownedEdges` on wasm32. A graph lent to spawned workers is read
+through its edges without a count on the shared targets: guard `unownedEdgeLentToSpawnsRaceFree` (eight spawns, drc and TSan
+cells green on a candidate, red on the installed `9a9713925d5a` with a ThreadSanitizer race and a ledger abort; rtx, 2026-11-10)
+and `src/test/c/unownedEdge.ms` (20). Not established: async frames, an Unowned edge stored or released on another thread, HCR,
 and the gate of the landed slice; the main `8f166cdb812` evidence (gate `q1105115549-rtx`) covers the earlier
 stop-at-free contract only.
 
