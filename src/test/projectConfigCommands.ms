@@ -344,6 +344,27 @@ const stagedPlan = run(staged, ["build", "--colors=off", "--dry-run", "stage2"])
 record("lto: LtoMode.None builds with --lto=off", "--lto=off", stagedPlan[0].split(" ").filter((w: string): boolean => w.startsWith("--lto")).join(" "));
 record("an executable with a compiler is built by that artifact", `${staged}/out/stage1`, stagedPlan.length > 1 ? stagedPlan[1].split(" ")[0] : stagedPlan.join("|"));
 
+const bounded = `${root}/bounded`;
+ensureDir(bounded);
+put(`${bounded}/build.ms`, [
+	"import { systemCommand, step, Command } from \"std/build\";",
+	"function exclusive(name: string, maxRss: number): Command {",
+	"\tconst c = systemCommand([\"sh\", \"-c\", `mkdir held || exit 9; sleep 1; rmdir held; echo ${name}`]);",
+	"\tc.maxRss = maxRss;",
+	"\treturn c;",
+	"}",
+	"export const both = step({ description: \"both\", inputs: [exclusive(\"a\", 600), exclusive(\"b\", 600)], make: (): void => {} });",
+	"export const huge = exclusive(\"huge\", 1e18);",
+	"",
+].join("\n"));
+record("two nodes whose maxRss together exceed --maxrss never run at once", "passed", passes(run(bounded, ["build", "--colors=off", "-j2", "--maxrss=1000", "both"])));
+const overlapped = run(bounded, ["build", "--colors=off", "-j2", "--maxrss=1200", "both"]);
+record("two nodes whose maxRss fit --maxrss run at once", "exited with 9", overlapped.includes("exited with 9") ? "exited with 9" : overlapped);
+record("a node above --maxrss stops the build before anything runs", "huge: declares maxRss 953674316406 MiB, above the 1000 bytes this build may use (--maxrss)",
+	errorLine(run(bounded, ["build", "--colors=off", "--maxrss=1000", "huge"])));
+const aboveTotal = errorLine(run(bounded, ["build", "--colors=off", "huge"]));
+record("without --maxrss the bound is the machine's memory", "MiB this build may use", aboveTotal.endsWith("MiB this build may use (--maxrss)") ? "MiB this build may use" : aboveTotal);
+
 const hostile = `${root}/hostile`;
 ensureDir(`${hostile}/src`);
 put(`${hostile}/src/main.ms`, "console.log(1);\n");
