@@ -6,7 +6,7 @@ import { Node, Symbol, SymbolKind, SymbolFlag, SymbolState, Type, createNode, No
 import { forEachChild } from "../../ast/visitor";
 import { parseSource } from "../../parser/statements/validation";
 import { parseAsBuildOf } from "../../parser/context";
-import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
+import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, loadPreludeStdModule, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
 import { DispatchRegistry, createDispatchRegistry, ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, declareReplica, forgetReplica, isPreludeExport, stdSymbol, extensionsOf, getExtReceiverType, getStaticExtTypeName, extractGenericNames } from "../../checker/context";
 import { sameType } from "../../checker/compat";
 import { typeDisplayName, createUnifyBindings, unifyType } from "../../checker/types";
@@ -17,6 +17,7 @@ import { createCompState } from "./context";
 import { findModule } from "../../module/graph";
 import { resolveRuntimeDir } from "../../utils/path";
 import { join } from "std/fs/path";
+import { exists } from "std/fs";
 import { platform } from "std/process";
 import { writeStderr } from "std/io";
 import { createTransformContextWithChecker } from "../../transform/context";
@@ -509,7 +510,7 @@ function raiserCounterpart(own: Symbol): Symbol {
 	if (_raiserPreludeBuilding || own.modulePath == "" || !isRoutineSym(own) || isVmPreludeSym(own) || isVmStdHelper(own)) return own;
 	const dot = own.modulePath.lastIndexOf(".");
 	const raiserPath = own.modulePath.slice(0, dot) + ".rms";
-	const scope = raiserPreludeCtx().preludeModuleScopes.get(raiserPath);
+	const scope = jsTierScope(own.modulePath) ?? raiserPreludeCtx().preludeModuleScopes.get(raiserPath);
 	if (scope == null) return own;
 	const shape = routineShape(own);
 	if (shape == "") return own;
@@ -527,7 +528,7 @@ function raiserCounterpartClass(own: Symbol): Symbol {
 	if (_raiserPreludeBuilding || own.symbolKind != SymbolKind.Class || !isStdTierSym(own)) return own;
 	const stem = own.modulePath.slice(0, own.modulePath.byteLength - 4);
 	const scopes = raiserPreludeCtx().preludeModuleScopes;
-	const scope = scopes.get(stem + ".rms") ?? scopes.get(stem + ".ms");
+	const scope = jsTierScope(own.modulePath) ?? scopes.get(stem + ".rms") ?? scopes.get(stem + ".ms");
 	if (scope == null) return own;
 	for (const held of scope) {
 		if (held.name == own.name && held.symbolKind == SymbolKind.Class) return held;
@@ -580,6 +581,34 @@ function raiserTierOf(sym: Symbol): Symbol | null {
 	const tierPath = sym.modulePath.slice(0, sym.modulePath.byteLength - 4) + ".rms";
 	const tier = raiserPreludeCtx().preludeModuleScopes.get(tierPath);
 	if (tier == null) return null;
+	return tierTwinIn(sym, tier);
+}
+
+// The Raiser prelude's scope for the module of a JS std symbol: its .rms tier, or the .ms module every
+// native tier shares. A std module outside the prelude list joins the Raiser prelude the first time.
+const _tierModulesTried = new HashSet<string>();
+
+function jsTierScope(jsPath: string): Symbol[] | null {
+	if (!jsPath.endsWith(".jms")) return null;
+	const stem = jsPath.slice(0, jsPath.byteLength - 4);
+	const scopes = raiserPreludeCtx().preludeModuleScopes;
+	const held = scopes.get(stem + ".rms") ?? scopes.get(stem + ".ms");
+	if (held != null || _tierModulesTried.has(stem)) return held ?? null;
+	_tierModulesTried.add(stem);
+	const specifier = stdModuleName(jsPath);
+	if (specifier == "" || !(exists(stem + ".rms") || exists(stem + ".ms"))) return null;
+	const root = resolveRuntimeDir();
+	loadPreludeStdModule(raiserPreludeCtx(), specifier, root != "" ? join(root, "std") : "", ".rms");
+	_vmPreludeSyms = null;
+	_vmStdHelpers = null;
+	return scopes.get(stem + ".rms") ?? scopes.get(stem + ".ms") ?? null;
+}
+
+// A JS routine of a std module runs its Raiser tier's routine of the same name, when the tier has one.
+function jsTierOf(sym: Symbol): Symbol | null {
+	if (!isRoutineSym(sym)) return null;
+	const tier = jsTierScope(sym.modulePath);
+	if (tier == null || !tier.some((head: Symbol): boolean => head.name == sym.name)) return null;
 	return tierTwinIn(sym, tier);
 }
 
@@ -877,7 +906,7 @@ function methodsByName(cls: Node): HashMap<string, Symbol[]> {
 function ensureCompiledIntoEngine(sym: Symbol): int32 {
 	if (_engine == null) return -1;
 	recordBodyRead(sym.modulePath);
-	const tierSym = raiserTierOf(sym);
+	const tierSym = raiserTierOf(sym) ?? jsTierOf(sym);
 	if (tierSym == sym) return -1;
 	if (tierSym != null) return ensureCompiledIntoEngine(tierSym);
 	const isClass = sym.symbolKind == SymbolKind.Class;

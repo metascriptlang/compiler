@@ -1,8 +1,6 @@
-// A @comptime block and a macro run std/process spawning on the compiling host on every native build:
+// A @comptime block and a macro run std/process spawning on the compiling host on every build:
 // exec and execFileCapture return the child's output, and a program that never starts fails with its errno, not ENOSYS.
 // @stdout: hi | macro-ok | missing=true
-// @xfail(js): a JS build compiles the .jms body of exec and execFileCapture for the macro VM (inbox 2026-10-19-macro-on-js-runs-the-jms-variant-of-its-imports)
-// @xfail(esm): the same JS gap as @xfail(js)
 
 import { Node, NodeKind } from "std/meta";
 import { exec, execFileCapture } from "std/process";

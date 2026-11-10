@@ -4478,6 +4478,24 @@ export function buildPreludeContext(stdPath: string, backendExt: string = ".cms"
 	return asPreludeBuild(backendExt, () => buildPreludeUnderDefines(stdPath, backendExt, dispatchRegistry)).ctx;
 }
 
+// A std module outside the prelude list joins a built prelude as the build loads a submodule: parsed
+// for the prelude's backend, its generic instances checked in the prelude module declaring them.
+// So a backend tier (the Raiser's .rms) can serve a routine its build checked from another tier.
+export function loadPreludeStdModule(ctx: CheckerContext, specifier: string, stdPath: string, backendExt: string): void {
+	if (stdPath == "") return;
+	asPreludeBuild(backendExt, (): void => {
+		const pr = parseSource(`import "${specifier}";`);
+		if (!pr.ok) return;
+		const current = ctx.table.current;
+		ctx.table.current = globalScope(ctx.table);
+		try {
+			asPreludeUnit(ctx, (): void => loadPreludeSubModules(ctx, pr.value, stdPath + "/core/index" + backendExt, stdPath, backendExt));
+		} finally {
+			ctx.table.current = current;
+		}
+	});
+}
+
 export function checkPreludeFromSource(stdPath: string, backendExt: string): CheckerContext {
 	return asPreludeBuild(backendExt, () => checkPreludeSource(stdPath, backendExt));
 }
@@ -4526,21 +4544,31 @@ export function createGraphPreludeContext(dispatchRegistry: DispatchRegistry = c
 
 function checkPreludeSource(stdPath: string, backendExt: string, dispatchRegistry: DispatchRegistry = createDispatchRegistry()): CheckerContext {
 	const imps = defaultGlobalImports();
-	const outerGensym = beginGensymUnit();
 	const ctx = createContextWithCache(createIdentCache(), dispatchRegistry);
 	ctx.extensionRegistry = createExtensionRegistry();
 	const stdRoot = stdPath != "" ? stdPath : join(cwd(), "std");
 	ctx.stdRoot = stdRoot;
 	defineBuiltinConstants(ctx);
-	const buildModules = swapModuleCtxRegistry(createModuleCtxRegistry());
-	try {
+	asPreludeUnit(ctx, (): void => {
 		for (const imp of imps) loadPreludeOne(ctx, imp, stdRoot, backendExt);
+	});
+	forgetInstances(ctx);
+	return ctx;
+}
+
+// Prelude modules are checked against each other only: a generic instance's body is checked in the
+// prelude module declaring the generic, never in a build module of the same path, and quote names
+// count from zero.
+function asPreludeUnit(ctx: CheckerContext, load: () => void): void {
+	const outerGensym = beginGensymUnit();
+	const buildModules = swapModuleCtxRegistry(createModuleCtxRegistry());
+	for (const path of ctx.preludeModuleScopes.keys()) registerModuleCtx(path, preludeBodyCtx(ctx, path));
+	try {
+		load();
 	} finally {
 		swapModuleCtxRegistry(buildModules);
+		rewindTemplateGensym(outerGensym);
 	}
-	forgetInstances(ctx);
-	rewindTemplateGensym(outerGensym);
-	return ctx;
 }
 
 // Get the shared IdentCache from a prelude context.
