@@ -195,7 +195,7 @@ export function withoutReachHooks(c: string): string {
 
 // The C unit `msc build --emit=c` writes for one program, built by `$MSC` (else `./msc`) under out/<dir>/<name>:
 // std bodies reach the iterator inliner only in such a whole-program build, never through compileToC.
-export function builtModuleC(dir: string, name: string, source: string, flags: string[]): string {
+export function builtModuleC(dir: string, name: string, source: string, flags: string[], unit: string = name): string {
 	const root = cwd();
 	const mscEnv = env.get("MSC");
 	const msc = mscEnv != "" ? mscEnv : `${root}/msc`;
@@ -209,13 +209,13 @@ export function builtModuleC(dir: string, name: string, source: string, flags: s
 	if (r.exitCode != 0) return "error: " + r.errorOutput;
 	for (const mode of readDir(`${at}/out`)) {
 		for (const file of readDir(`${at}/out/${mode}`)) {
-			if (file == `${name}Oms.c` || file.endsWith(`Z${name}Oms.c`)) {
+			if (file == `${unit}Oms.c` || file.endsWith(`Z${unit}Oms.c`)) {
 				const text = readFile(`${at}/out/${mode}/${file}`);
 				return text.ok ? text.value : "error: unreadable " + file;
 			}
 		}
 	}
-	return "error: no C unit for " + name;
+	return "error: no C unit for " + unit;
 }
 
 // Like compileToC but with std/ library resolution enabled (stdPath from the

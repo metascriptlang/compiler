@@ -2,7 +2,7 @@
 // the cycle collector, a store counts it, the holder's destroy releases it, and a read never
 // moves it into a strong owner. Runtime behaviour: corpus `unownedEdgeReadsItsTarget` and its `unownedEdge*` siblings.
 
-import { compileToC } from "../helpers";
+import { compileToC, builtModuleC } from "../helpers";
 import { hostTargetInfo } from "../../checker/types";
 
 function typeInfoOf(c: string, name: string): string {
@@ -36,6 +36,11 @@ test "an Unowned back edge is acyclic" {
 
 test "a plain back edge is cyclic" {
 	assert verdict("class N { up: N | null = null; }\nconst n = new N();", "N") == "cyclic";
+}
+
+test "the compiler's own Node is acyclic: its owning edges are Owned and its edges back from symbols and flow nodes Unowned" {
+	const c = builtModuleC("unownedEdge", "compilerNode", "import { NodeKind, createNodeAt, makeLoc } from \"std/meta/node\";\nconst n = createNodeAt(NodeKind.Identifier, { name: \"x\" }, makeLoc(1, 1));\nconsole.log(n.kind);\n", ["--danger"], "node");
+	assert typeInfoOf(c, "Node").contains(".isCyclic = MS_FALSE"), typeInfoOf(c, "Node") != "" ? typeInfoOf(c, "Node") : c.slice(0, 400);
 }
 
 test "owned children with an Unowned parent edge are acyclic" {
