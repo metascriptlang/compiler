@@ -62,7 +62,7 @@ import { forwardTablesPending } from "./resolvePass";
 import { createGraphPreludeContext, enterComptimeOuter, checksInFlight } from "./checkPass";
 import { defaultGlobalImports, extraGlobalImports, modulePassIdentity } from "./prelude";
 import { KeyedOp, opMark, opsFrom, replayOps, OpCanonRows, opCanonRows, replayOpCanonRows, opTablesAtRest } from "../codegen/c/types";
-import { buildModuleNameRoots } from "../codegen/c/names";
+import { buildModuleNameRoots, rootedModuleKey } from "../codegen/c/names";
 import { linkFlags, linkObjects } from "../utils/linkState";
 import { TransAmDb, TaCheckRecord, dbCheckRecordMissing, dbRestoreCheck, dbStdUnitBlocker } from "../compiler/transam/index";
 import { TaQueryKind, TaDurability } from "../compiler/transam/revision";
@@ -439,14 +439,15 @@ export function stdUnitKeyText(graph: ModuleGraph, config: ResolverConfig, targe
 	const stdFn = _stdStampFn;
 	if (toolFn == null || stdFn == null || config.stdPath == "") return "";
 	const runtimeRoot = resolveRuntimeDir();
+	const roots = buildModuleNameRoots();
 	const modules: string[] = [];
 	for (const path of graph.loadOrder) {
 		const mod = findModule(graph, path);
 		if (mod == null || !mod.stdPrelude) continue;
 		const stamped = underTree(path, config.stdPath) || underTree(path, `${runtimeRoot}/runtime`) || underTree(path, `${runtimeRoot}/vendor`);
-		modules.push(stamped ? path : `${path}#${hashContent(mod.rawSource)}`);
+		const named = `${path}=${rootedModuleKey(roots, path)}`;
+		modules.push(stamped ? named : `${named}#${hashContent(mod.rawSource)}`);
 	}
-	const roots = buildModuleNameRoots();
 	const parts: string[] = [
 		STD_UNIT_MAGIC,
 		`tool=${toolFn()}`,
@@ -465,7 +466,7 @@ export function stdUnitKeyText(graph: ModuleGraph, config: ResolverConfig, targe
 		`imports=${defaultGlobalImports().join(",")}`,
 		`extra=${extraGlobalImports().join(",")}`,
 		`passes=${modulePassIdentity()}`,
-		`roots=${roots.compiler},${roots.packages},${roots.project}`,
+		`roots=${roots.compiler},${roots.packages}`,
 		`runtime=${runtimeRoot}`,
 		`modules=${modules.join(",")}`,
 	];

@@ -532,6 +532,13 @@ function runStdUnitSteps(dir: string, cache: string, project: string, reasons: s
 	const hit = checkUnitStep("step 2 (second program, same project)", unitBuild(b, `${dir}/localCache2`, true, true), "hit", "", reasons);
 	if (hit.contains(" [")) reasons.push(`step 2 (second program, same project): a hit carries notes:\n${hit}`);
 
+	const loose = `${dir}/loose`;
+	put(`${loose}/one/main.ms`, UNIT_PROGRAM_A);
+	put(`${loose}/two/main.ms`, UNIT_PROGRAM_B);
+	checkUnitStep("step 2a (a program with no build.ms)", unitBuild(`${loose}/one`, `${dir}/localCache2a`, true, true), "written", "[miss: no unit]x1", reasons);
+	checkUnitStep("step 2a (a program with no build.ms in another directory)", unitBuild(`${loose}/two`, `${dir}/localCache2a2`, true, true), "hit", "", reasons);
+	if (stdUnitFiles(cache).length != 2) reasons.push(`step 2a: ${stdUnitFiles(cache).length} units under ${cache}/stdunit, expected one for the build.ms project and one shared by the two directories without one`);
+
 	const c = `${project}/c`;
 	put(`${c}/first.txt`, "a");
 	put(`${c}/second.txt`, "b");
