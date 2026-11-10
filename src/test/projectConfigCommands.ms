@@ -349,19 +349,33 @@ ensureDir(bounded);
 put(`${bounded}/build.ms`, [
 	"import { systemCommand, step, Command } from \"std/build\";",
 	"function exclusive(name: string, maxRss: number): Command {",
-	"\tconst c = systemCommand([\"sh\", \"-c\", `mkdir held || exit 9; sleep 1; rmdir held; echo ${name}`]);",
+	"\tconst c = systemCommand([\"sh\", \"-c\", `date +%s%N > ${name}.start; sleep 1; date +%s%N > ${name}.end`]);",
 	"\tc.maxRss = maxRss;",
 	"\treturn c;",
 	"}",
-	"export const both = step({ description: \"both\", inputs: [exclusive(\"a\", 600), exclusive(\"b\", 600)], make: (): void => {} });",
+	"export const both = step({ description: \"both\", inputs: [exclusive(\"a\", 600e6), exclusive(\"b\", 600e6)], make: (): void => {} });",
 	"export const huge = exclusive(\"huge\", 1e18);",
+	"export const greedy = systemCommand([\"sh\", \"-c\", \"held=$(head -c 100000000 /dev/zero | tr \\\\\\\\0 a); echo ${#held}\"]);",
+	"greedy.maxRss = 20e6;",
 	"",
 ].join("\n"));
-record("two nodes whose maxRss together exceed --maxrss never run at once", "passed", passes(run(bounded, ["build", "--colors=off", "-j2", "--maxrss=1000", "both"])));
-const overlapped = run(bounded, ["build", "--colors=off", "-j2", "--maxrss=1200", "both"]);
-record("two nodes whose maxRss fit --maxrss run at once", "exited with 9", overlapped.includes("exited with 9") ? "exited with 9" : overlapped);
+function overlap(dir: string, args: string[]): string {
+	const out = run(dir, args);
+	if (out.startsWith("exit ")) return out;
+	const at = (file: string): number => {
+		const text = readFile(`${dir}/${file}`);
+		return text.ok ? parseFloat(text.value) : NaN;
+	};
+	const a = [at("a.start"), at("a.end")];
+	const b = [at("b.start"), at("b.end")];
+	return a[0] < b[1] && b[0] < a[1] ? "overlapped" : "one after the other";
+}
+record("two nodes whose maxRss together exceed --maxrss never run at once", "one after the other", overlap(bounded, ["build", "--colors=off", "-j2", "--maxrss=1000M", "both"]));
+record("two nodes whose maxRss fit --maxrss run at once", "overlapped", overlap(bounded, ["build", "--colors=off", "-j2", "--maxrss=1200M", "both"]));
 record("a node above --maxrss stops the build before anything runs", "huge: declares maxRss 953674316406 MiB, above the 1000 bytes this build may use (--maxrss)",
 	errorLine(run(bounded, ["build", "--colors=off", "--maxrss=1000", "huge"])));
+const greedy = errorLine(run(bounded, ["build", "--colors=off", "greedy"]));
+record("a command that peaks above its maxRss fails the build", "peaked above maxRss of 19 MiB", greedy.includes(" peaked at ") && greedy.endsWith("above its declared maxRss of 19 MiB") ? "peaked above maxRss of 19 MiB" : greedy);
 const aboveTotal = errorLine(run(bounded, ["build", "--colors=off", "huge"]));
 record("without --maxrss the bound is the machine's memory", "MiB this build may use", aboveTotal.endsWith("MiB this build may use (--maxrss)") ? "MiB this build may use" : aboveTotal);
 
