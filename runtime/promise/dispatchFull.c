@@ -1036,6 +1036,9 @@ int msAdjustTimeout(msDispatcher* d, int pollTimeout, int nextTimerMs) {
 	if (msActorIdleCapMs > 0 && (pollTimeout < 0 || msActorIdleCapMs < pollTimeout)) {
 		pollTimeout = msActorIdleCapMs;
 	}
+#if MS_HEAP_THREADS
+	pollTimeout = msHeapIdleWaitMs(pollTimeout);
+#endif
 	/* No timers → use poll timeout as-is */
 	if (nextTimerMs < 0) return pollTimeout;
 	/* Use the smaller of poll timeout and next timer */
@@ -1079,14 +1082,10 @@ static bool msRunOnceIn(int timeoutMs) {
 		didWork = true;
 	}
 	/* A turn that ran work polls without waiting, so only a turn about to sleep asks (and drops the wake token). */
-	int adj = didWork ? 0 : msAdjustTimeout(d, timeoutMs, nextTimer);
 #if MS_HEAP_THREADS
-	if (didWork) msHeapIdleBusy();
-	else {
-		if (msHeapIdleDue()) msHeapReturnIdle();
-		adj = msHeapIdleWaitMs(adj);
-	}
+	msHeapReturnUnused();
 #endif
+	int adj = didWork ? 0 : msAdjustTimeout(d, timeoutMs, nextTimer);
 #ifdef _WIN32
 	/* Windows: IOCP — drain thread-pool completions (and future I/O engine completions).
 	 * Worker already set value + finished (Step 1, see thread.h:99-103); main thread

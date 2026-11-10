@@ -79,10 +79,8 @@ void msHeapThreadRelease(void) { msHeapAttached = 0; }
 void msHeapThreadFlush(void) {}
 #if MS_HEAP_THREADS
 void msHeapReturnIdle(void) {}
-int msHeapIdlePending(void) { return 0; }
+void msHeapReturnUnused(void) {}
 int msHeapIdleWaitMs(int waitMs) { return waitMs; }
-int msHeapIdleDue(void) { return 0; }
-void msHeapIdleBusy(void) {}
 #endif
 
 #elif MS_HEAP_USE_MALLOC
@@ -121,10 +119,8 @@ void msHeapThreadRelease(void) {}
 void msHeapThreadFlush(void) {}
 #if MS_HEAP_THREADS
 void msHeapReturnIdle(void) {}
-int msHeapIdlePending(void) { return 0; }
+void msHeapReturnUnused(void) {}
 int msHeapIdleWaitMs(int waitMs) { return waitMs; }
-int msHeapIdleDue(void) { return 0; }
-void msHeapIdleBusy(void) {}
 #endif
 
 #else
@@ -158,7 +154,8 @@ enum {
     MS_HEAP_MAX_REMOTE_BIG_STEPS = 20,
     MS_HEAP_REMOTE_BATCH_BYTES = 16384,
     MS_HEAP_DISCARD_MIN_BYTES = 65536,
-    MS_HEAP_IDLE_RETURN_MS = 500
+    MS_HEAP_RETURN_AFTER_MS = 10000,
+    MS_HEAP_RETURN_STEP_MS = 1000
 };
 
 #define MS_HEAP_MAX_BIG (((size_t)1 << 30) - ((size_t)1 << 24))
@@ -186,7 +183,9 @@ typedef struct {
 
 /* A big chunk's state: MS_HEAP_ZEROED when every byte past its header reads zero;
  * MS_HEAP_DISCARDED when a free chunk's pages past its first went back to the OS and must be
- * reused before they are touched. A discarded chunk is never zeroed. */
+ * reused before they are touched. A discarded chunk is never zeroed, and joins only discarded
+ * chunks: joined to a dirty one, either the dirty pages stay resident or the discarded ones are
+ * accounted again (macOS charges every reused page, touched or not). */
 enum { MS_HEAP_ZEROED = 1, MS_HEAP_DISCARDED = 2 };
 
 struct msHeapBig {
@@ -245,7 +244,9 @@ struct msHeapRegion {
     size_t lastSize;
     int blockChunkGrowth;
     uint32_t spreadSeq;
-    size_t releasedSinceIdle;
+#if MS_HEAP_THREADS
+    int64_t returnDue;
+#endif
 };
 
 typedef struct {
@@ -559,6 +560,72 @@ static msHeapBig* msHeapSplit(msHeapRegion* a, msHeapBig* chunk, size_t size) {
     return rest;
 }
 
+#if MS_HEAP_THREADS
+#ifndef MS_HEAP_NOW_MS
+#if defined(_WIN32)
+static int64_t msHeapNowMs(void) { return (int64_t)GetTickCount64(); }
+#else
+#include <time.h>
+#if defined(CLOCK_MONOTONIC_COARSE)
+#define MS_HEAP_CLOCK CLOCK_MONOTONIC_COARSE
+#elif defined(CLOCK_MONOTONIC_RAW_APPROX)
+#define MS_HEAP_CLOCK CLOCK_MONOTONIC_RAW_APPROX
+#else
+#define MS_HEAP_CLOCK CLOCK_MONOTONIC
+#endif
+static int64_t msHeapNowMs(void) {
+    struct timespec t;
+    clock_gettime(MS_HEAP_CLOCK, &t);
+    return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+#endif
+#define MS_HEAP_NOW_MS() msHeapNowMs()
+#endif
+
+static int64_t* msHeapUnusedSince(msHeapBig* chunk) { return (int64_t*)chunk->data; }
+
+static int64_t msHeapUnusedNow(void) {
+    int64_t now = MS_HEAP_NOW_MS();
+    return now - now % MS_HEAP_RETURN_STEP_MS;
+}
+
+/* Two free chunks joined keep the age of the larger: a small one neither renews a large chunk
+ * that stayed unused nor sends back a large one just freed. */
+static int64_t msHeapJoinedSince(msHeapBig* joined, size_t size, int64_t since) {
+    return !joined->zeroed && joined->base.size >= size ? *msHeapUnusedSince(joined) : since;
+}
+
+static int msHeapFreeDiscarded(msHeapRegion* a, uintptr_t address) {
+    if (!msHeapContains(a, address)) return 0;
+    msHeapBig* chunk = (msHeapBig*)address;
+    return !(chunk->base.prevSize & 1) && (chunk->zeroed & MS_HEAP_DISCARDED);
+}
+
+static int msHeapNearDiscarded(msHeapRegion* a, msHeapBig* chunk) {
+    size_t prevSize = chunk->base.prevSize & ~(size_t)1;
+    return (prevSize && msHeapFreeDiscarded(a, (uintptr_t)chunk - prevSize)) ||
+           msHeapFreeDiscarded(a, (uintptr_t)chunk + chunk->base.size);
+}
+
+static int msHeapReturnable(msHeapRegion* a, msHeapBig* chunk) {
+    return chunk->base.size - MS_HEAP_PAGE_SIZE >= MS_HEAP_DISCARD_MIN_BYTES || msHeapNearDiscarded(a, chunk);
+}
+
+static void msHeapInsertUnused(msHeapRegion* a, msHeapBig* chunk, int64_t since) {
+    *msHeapUnusedSince(chunk) = since;
+    msHeapInsertBig(a, chunk);
+    int64_t due = since + MS_HEAP_RETURN_AFTER_MS + MS_HEAP_RETURN_STEP_MS;
+    if ((!a->returnDue || due < a->returnDue) && msHeapReturnable(a, chunk)) a->returnDue = due;
+}
+
+static void msHeapReturnOld(msHeapRegion* a);
+#else
+#define msHeapUnusedNow() 0
+#define msHeapJoinedSince(joined, size, since) (since)
+#define msHeapInsertUnused(a, chunk, since) msHeapInsertBig(a, chunk)
+#define msHeapReturnOld(a) ((void)0)
+#endif
+
 static msHeapBig* msHeapRequest(msHeapRegion* a, size_t size) {
     if (!a->blockChunkGrowth) {
         if (a->occupied < 64 * 1024) a->nextChunkSize = MS_HEAP_PAGE_SIZE * 4;
@@ -594,37 +661,46 @@ static msHeapBig* msHeapRequest(msHeapRegion* a, size_t size) {
 }
 
 #if MS_HEAP_THREADS
-static void msHeapRearm(msHeapBig* chunk) {
+/* Re-arms the front of a discarded chunk taken off the free lists, `bytes` or a discard's least
+ * size, and leaves the rest discarded and free: one syscall then serves many page-sized takes. */
+static void msHeapRearm(msHeapRegion* a, msHeapBig* chunk, size_t bytes) {
     if (!(chunk->zeroed & MS_HEAP_DISCARDED)) return;
-    if (!msHeapReusePages((unsigned char*)chunk + MS_HEAP_PAGE_SIZE, chunk->base.size - MS_HEAP_PAGE_SIZE))
-        msHeapOutOfMemory();
+    size_t front = bytes < MS_HEAP_DISCARD_MIN_BYTES ? MS_HEAP_DISCARD_MIN_BYTES : bytes;
+    int keepsRest = chunk->base.size >= front + MS_HEAP_PAGE_SIZE + MS_HEAP_DISCARD_MIN_BYTES;
+    if (!keepsRest) front = chunk->base.size - MS_HEAP_PAGE_SIZE;
+    if (!msHeapReusePages((unsigned char*)chunk + MS_HEAP_PAGE_SIZE, front)) msHeapOutOfMemory();
+    if (keepsRest) msHeapInsertBig(a, msHeapSplit(a, chunk, front));
     chunk->zeroed = 0;
+    *msHeapUnusedSince(chunk) = msHeapUnusedNow();
 }
 #else
-#define msHeapRearm(chunk) ((void)0)
+#define msHeapRearm(a, chunk, bytes) ((void)0)
 #endif
 
 static msHeapBig* msHeapGetBig(msHeapRegion* a, size_t size) {
     unsigned fl, sl;
+    msHeapReturnOld(a);
     size = msHeapSearchMapping(size, &fl, &sl);
     msHeapBig* chunk = msHeapFindBig(a, fl, sl);
     if (chunk) {
         msHeapRemoveBig(a, chunk);
-        msHeapRearm(chunk);
+        msHeapRearm(a, chunk, size);
     } else {
         size_t request = MS_HEAP_MIN_PAGES * (size_t)MS_HEAP_PAGE_SIZE;
         if (request < size) request = size;
         chunk = msHeapRequest(a, request);
     }
-    if (chunk->base.size >= size + MS_HEAP_PAGE_SIZE)
-        msHeapInsertBig(a, msHeapSplit(a, chunk, size));
+    if (chunk->base.size >= size + MS_HEAP_PAGE_SIZE) {
+        msHeapBig* rest = msHeapSplit(a, chunk, size);
+        if (rest->zeroed) msHeapInsertBig(a, rest);
+        else msHeapInsertUnused(a, rest, *msHeapUnusedSince(chunk));
+    }
     chunk->base.prevSize = 1;
     msHeapInclude(a, (uintptr_t)chunk);
     return chunk;
 }
 
 static void msHeapReleaseBig(msHeapRegion* a, msHeapBig* chunk) {
-    a->releasedSinceIdle += chunk->base.size;
     chunk->base.prevSize &= ~(size_t)1;
     chunk->zeroed = 0;
     if (chunk->base.size > MS_HEAP_MAX_BIG) {
@@ -632,21 +708,23 @@ static void msHeapReleaseBig(msHeapRegion* a, msHeapBig* chunk) {
         msHeapDeallocPages(chunk, chunk->base.size);
         return;
     }
+    int64_t since = msHeapUnusedNow();
+    (void)since;
     size_t prevSize = chunk->base.prevSize;
     if (prevSize) {
         uintptr_t address = (uintptr_t)chunk - prevSize;
         if (msHeapContains(a, address)) {
             msHeapBig* left = (msHeapBig*)address;
-            if (!(left->base.prevSize & 1) && left->base.size < MS_HEAP_MAX_BIG) {
+            if (!(left->base.prevSize & 1) && !(left->zeroed & MS_HEAP_DISCARDED) && left->base.size < MS_HEAP_MAX_BIG) {
                 msHeapRemoveBig(a, left);
-                msHeapRearm(left);
+                since = msHeapJoinedSince(left, chunk->base.size, since);
                 left->base.size += chunk->base.size;
                 msHeapExclude(a, (uintptr_t)chunk);
                 chunk = left;
                 chunk->zeroed = 0;
                 if (chunk->base.size > MS_HEAP_MAX_BIG) {
                     msHeapBig* rest = msHeapSplit(a, chunk, MS_HEAP_MAX_BIG);
-                    msHeapInsertBig(a, chunk);
+                    msHeapInsertUnused(a, chunk, since);
                     chunk = rest;
                 }
             }
@@ -655,16 +733,16 @@ static void msHeapReleaseBig(msHeapRegion* a, msHeapBig* chunk) {
     uintptr_t address = (uintptr_t)chunk + chunk->base.size;
     if (msHeapContains(a, address)) {
         msHeapBig* right = (msHeapBig*)address;
-        if (!(right->base.prevSize & 1) && chunk->base.size < MS_HEAP_MAX_BIG) {
+        if (!(right->base.prevSize & 1) && !(right->zeroed & MS_HEAP_DISCARDED) && chunk->base.size < MS_HEAP_MAX_BIG) {
             msHeapRemoveBig(a, right);
-            msHeapRearm(right);
+            since = msHeapJoinedSince(right, chunk->base.size, since);
             chunk->base.size += right->base.size;
             msHeapExclude(a, address);
             if (chunk->base.size > MS_HEAP_MAX_BIG)
-                msHeapInsertBig(a, msHeapSplit(a, chunk, MS_HEAP_MAX_BIG));
+                msHeapInsertUnused(a, msHeapSplit(a, chunk, MS_HEAP_MAX_BIG), since);
         }
     }
-    msHeapInsertBig(a, chunk);
+    msHeapInsertUnused(a, chunk, since);
 }
 
 static void msHeapDeallocBig(msHeapRegion* a, msHeapBig* chunk) {
@@ -848,56 +926,81 @@ void msHeapFree(void* p) {
 }
 
 #if MS_HEAP_THREADS
-#if defined(_WIN32)
-static int64_t msHeapNowMs(void) { return (int64_t)GetTickCount64(); }
-#else
-#include <time.h>
-static int64_t msHeapNowMs(void) {
-    struct timespec t;
-    clock_gettime(CLOCK_MONOTONIC, &t);
-    return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
-}
-#endif
-
-static _Thread_local int64_t msHeapIdleSince;
-
-/* Pages of a free chunk that was never handed out were never touched, so only dirty chunks go back. */
-void msHeapReturnIdle(void) {
-    msHeapIdleSince = 0;
-    msHeapHandle* here = msHeapCurrent;
-    if (!here) return;
-    msHeapRegion* a = MS_HEAP_REGION(here);
-    msHeapCloseRuns(here);
-    while (a->pendingBig || __atomic_load_n(&here->sharedBig, __ATOMIC_RELAXED)) msHeapDrainRemoteBig(a);
-    a->releasedSinceIdle = 0;
+/* Pages of a free chunk that was never handed out were never touched, so only dirty chunks go
+ * back. A chunk too small to discard goes with a discarded neighbour, which a second sweep sees. */
+static int msHeapDiscardDue(msHeapRegion* a, int64_t now) {
+    int discarded = 0;
+    a->returnDue = 0;
     for (unsigned fl = 0; fl < MS_HEAP_FL_COUNT; ++fl) {
-        if (!(a->flBitmap & ((uint32_t)1 << fl))) continue;
         for (unsigned sl = 0; sl < MS_HEAP_SL_COUNT; ++sl) {
             for (msHeapBig* chunk = a->matrix[fl][sl]; chunk; chunk = chunk->next) {
-                if (chunk->zeroed || chunk->base.size - MS_HEAP_PAGE_SIZE < MS_HEAP_DISCARD_MIN_BYTES) continue;
-                msHeapDiscardPages((unsigned char*)chunk + MS_HEAP_PAGE_SIZE, chunk->base.size - MS_HEAP_PAGE_SIZE);
+                if (chunk->zeroed || !msHeapReturnable(a, chunk)) continue;
+                int64_t due = *msHeapUnusedSince(chunk) + MS_HEAP_RETURN_AFTER_MS + MS_HEAP_RETURN_STEP_MS;
+                if (now < due) {
+                    if (!a->returnDue || due < a->returnDue) a->returnDue = due;
+                    continue;
+                }
+                if (chunk->base.size > MS_HEAP_PAGE_SIZE)
+                    msHeapDiscardPages((unsigned char*)chunk + MS_HEAP_PAGE_SIZE, chunk->base.size - MS_HEAP_PAGE_SIZE);
                 chunk->zeroed = MS_HEAP_DISCARDED;
+                discarded = 1;
+            }
+        }
+    }
+    return discarded;
+}
+
+static void msHeapJoinDiscarded(msHeapRegion* a) {
+    for (unsigned fl = 0; fl < MS_HEAP_FL_COUNT; ++fl) {
+        for (unsigned sl = 0; sl < MS_HEAP_SL_COUNT; ++sl) {
+            msHeapBig* chunk = a->matrix[fl][sl];
+            while (chunk) {
+                uintptr_t address = (uintptr_t)chunk + chunk->base.size;
+                msHeapBig* right = (msHeapBig*)address;
+                if (!(chunk->zeroed & MS_HEAP_DISCARDED) || !msHeapFreeDiscarded(a, address) ||
+                    chunk->base.size + right->base.size > MS_HEAP_MAX_BIG) {
+                    chunk = chunk->next;
+                    continue;
+                }
+                msHeapRemoveBig(a, right);
+                msHeapRemoveBig(a, chunk);
+                msHeapExclude(a, address);
+                chunk->base.size += right->base.size;
+                msHeapUpdateNext(a, chunk);
+                msHeapInsertBig(a, chunk);
+                chunk = a->matrix[fl][sl];
             }
         }
     }
 }
 
-int msHeapIdlePending(void) {
-    msHeapHandle* here = msHeapCurrent;
-    return here && MS_HEAP_REGION(here)->releasedSinceIdle >= MS_HEAP_DISCARD_MIN_BYTES;
+static void msHeapReturn(msHeapRegion* a, int64_t now) {
+    msHeapHandle* here = msHeapOwnerOf(a);
+    msHeapCloseRuns(here);
+    while (a->pendingBig || __atomic_load_n(&here->sharedBig, __ATOMIC_RELAXED)) msHeapDrainRemoteBig(a);
+    if (!msHeapDiscardDue(a, now)) return;
+    while (msHeapDiscardDue(a, now)) {}
+    msHeapJoinDiscarded(a);
 }
 
-void msHeapIdleBusy(void) { msHeapIdleSince = 0; }
+static void msHeapReturnOld(msHeapRegion* a) {
+    if (!a->returnDue) return;
+    int64_t now = MS_HEAP_NOW_MS();
+    if (now >= a->returnDue) msHeapReturn(a, now);
+}
 
-int msHeapIdleDue(void) {
-    return msHeapIdleSince && msHeapIdlePending() && msHeapNowMs() - msHeapIdleSince >= MS_HEAP_IDLE_RETURN_MS;
+void msHeapReturnIdle(void) {
+    if (msHeapCurrent) msHeapReturn(MS_HEAP_REGION(msHeapCurrent), INT64_MAX);
+}
+
+void msHeapReturnUnused(void) {
+    if (msHeapCurrent) msHeapReturnOld(MS_HEAP_REGION(msHeapCurrent));
 }
 
 int msHeapIdleWaitMs(int waitMs) {
-    if (waitMs == 0 || !msHeapIdlePending()) return waitMs;
-    int64_t now = msHeapNowMs();
-    if (!msHeapIdleSince) msHeapIdleSince = now ? now : 1;
-    int64_t left = msHeapIdleSince + MS_HEAP_IDLE_RETURN_MS - now;
+    msHeapHandle* here = msHeapCurrent;
+    if (waitMs == 0 || !here || !MS_HEAP_REGION(here)->returnDue) return waitMs;
+    int64_t left = MS_HEAP_REGION(here)->returnDue - MS_HEAP_NOW_MS();
     if (left < 1) left = 1;
     return waitMs < 0 || waitMs > left ? (int)left : waitMs;
 }
@@ -926,14 +1029,15 @@ static int msHeapGrowInPlace(void* p, size_t newSize, size_t* zeroFrom) {
     msHeapBig* right = (msHeapBig*)address;
     if ((right->base.prevSize & 1) || oldBytes + right->base.size < bytes) return 0;
     msHeapRemoveBig(a, right);
-    msHeapRearm(right);
+    msHeapRearm(a, right, bytes - oldBytes);
     size_t rightZeroed = right->zeroed & MS_HEAP_ZEROED;
     msHeapExclude(a, address);
     chunk->base.size = oldBytes + right->base.size;
     if (chunk->base.size >= bytes + MS_HEAP_PAGE_SIZE) {
         msHeapBig* rest = msHeapSplit(a, chunk, bytes);
         rest->zeroed = rightZeroed;
-        msHeapInsertBig(a, rest);
+        if (rightZeroed) msHeapInsertBig(a, rest);
+        else msHeapInsertUnused(a, rest, *msHeapUnusedSince(right));
     } else msHeapUpdateNext(a, chunk);
     a->occupied += chunk->base.size - oldBytes;
     *zeroFrom = rightZeroed ? oldBytes + offsetof(msHeapBig, data) - lead : newSize;

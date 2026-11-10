@@ -70,12 +70,10 @@ MS_HEAP_API void* msHeapTryAllocPages(size_t bytes);
 MS_HEAP_API void msHeapDeallocPages(void* p, size_t bytes);
 #if MS_HEAP_THREADS
 MS_HEAP_API void msHeapReturnIdle(void);
-MS_HEAP_API int msHeapIdlePending(void);
-/* A thread about to block for waitMs (negative: until woken) caps the wait so it wakes when it
- * has idled long enough to return memory; it then calls msHeapReturnIdle while it holds no lock. */
+/* Every loop turn calls msHeapReturnUnused while it holds no lock; a thread about to block for
+ * waitMs (negative: until woken) caps the wait so it wakes when its oldest free chunk is due. */
+MS_HEAP_API void msHeapReturnUnused(void);
 MS_HEAP_API int msHeapIdleWaitMs(int waitMs);
-MS_HEAP_API int msHeapIdleDue(void);
-MS_HEAP_API void msHeapIdleBusy(void);
 MS_HEAP_API void msHeapDiscardPages(void* p, size_t bytes);
 MS_HEAP_API int msHeapReusePages(void* p, size_t bytes);
 #endif

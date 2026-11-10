@@ -71,13 +71,16 @@ void msHeapDeallocPages(void* p, size_t bytes) {
 #include <unistd.h>
 
 /* The OS page can be larger than the heap's (16 KiB on Apple silicon), and madvise and mprotect
- * refuse a range that is not aligned to it, so a discard covers only the whole OS pages inside. */
-static int msHeapOsPages(void** p, size_t* bytes) {
+ * refuse a range that is not aligned to it, so a discard covers only the whole OS pages inside,
+ * and a reuse every OS page the range touches: one a discard could not cover was never discarded. */
+static int msHeapOsPages(void** p, size_t* bytes, int touched) {
 	static uintptr_t cached;
 	uintptr_t osPage = __atomic_load_n(&cached, __ATOMIC_RELAXED);
 	if (!osPage) __atomic_store_n(&cached, osPage = (uintptr_t)sysconf(_SC_PAGESIZE), __ATOMIC_RELAXED);
-	uintptr_t start = ((uintptr_t)*p + osPage - 1) & ~(osPage - 1);
-	uintptr_t end = ((uintptr_t)*p + *bytes) & ~(osPage - 1);
+	if (!*bytes) return 0;
+	uintptr_t grow = touched ? osPage - 1 : 0;
+	uintptr_t start = ((uintptr_t)*p + osPage - 1 - grow) & ~(osPage - 1);
+	uintptr_t end = ((uintptr_t)*p + *bytes + grow) & ~(osPage - 1);
 	if (end <= start) return 0;
 	*p = (void*)start;
 	*bytes = end - start;
@@ -90,26 +93,26 @@ static int msHeapOsPages(void** p, size_t* bytes) {
  * reused, and come back holding bytes nobody wrote. */
 void msHeapDiscardPages(void* p, size_t bytes) {
 	memset(p, 0xa5, bytes);
-	if (msHeapOsPages(&p, &bytes) && mprotect(p, bytes, PROT_NONE) != 0) __builtin_trap();
+	if (msHeapOsPages(&p, &bytes, 0) && mprotect(p, bytes, PROT_NONE) != 0) __builtin_trap();
 }
 
 int msHeapReusePages(void* p, size_t bytes) {
-	return !msHeapOsPages(&p, &bytes) || mprotect(p, bytes, PROT_READ | PROT_WRITE) == 0;
+	return !msHeapOsPages(&p, &bytes, 1) || mprotect(p, bytes, PROT_READ | PROT_WRITE) == 0;
 }
 #elif defined(__APPLE__)
 /* Only MADV_FREE_REUSABLE lowers a macOS task's footprint; MADV_FREE_REUSE accounts the pages
  * again before they are written, as libmalloc does. The contents are not cleared. */
 void msHeapDiscardPages(void* p, size_t bytes) {
-	if (msHeapOsPages(&p, &bytes)) (void)madvise(p, bytes, MADV_FREE_REUSABLE);
+	if (msHeapOsPages(&p, &bytes, 0)) (void)madvise(p, bytes, MADV_FREE_REUSABLE);
 }
 
 int msHeapReusePages(void* p, size_t bytes) {
-	if (msHeapOsPages(&p, &bytes)) (void)madvise(p, bytes, MADV_FREE_REUSE);
+	if (msHeapOsPages(&p, &bytes, 1)) (void)madvise(p, bytes, MADV_FREE_REUSE);
 	return 1;
 }
 #else
 void msHeapDiscardPages(void* p, size_t bytes) {
-	if (msHeapOsPages(&p, &bytes)) (void)madvise(p, bytes, MADV_DONTNEED);
+	if (msHeapOsPages(&p, &bytes, 0)) (void)madvise(p, bytes, MADV_DONTNEED);
 }
 
 int msHeapReusePages(void* p, size_t bytes) {
