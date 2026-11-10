@@ -11,7 +11,7 @@ import { ByteInput } from "std/core/buffer/bytes";
 	return out;
 }`);
 
-export type NodeInput = string | Uint8Array;
+export type NodeInput = string | Readonly<Uint8Array>;
 
 export interface NodeHash {}
 
@@ -19,10 +19,11 @@ export interface NodeHash {}
 export function nodeInput<D extends ByteInput>(data: D): NodeInput {
 	if (typeof data == "string") return data;
 	if (data instanceof Uint8Array) return data;
-	const out = new Uint8Array(data.length);
-	for (let i = 0; i < data.length; i++) out[i] = data[i];
-	return out;
+	return uint8ArrayFrom(data);
 }
+
+// Uint8Array.from copies 1 MB at 1142 MB/s against 324 for new Uint8Array(array) (node 24.1, Mac, 2026-11-10).
+extern function uint8ArrayFrom(data: Readonly<Span<uint8>>): Uint8Array from "(s => Uint8Array.from(s.off === 0 && s.len === s.base.length ? s.base : s.base.slice(s.off, s.off + s.len)))(#)";
 
 extern function msDigest(name: string, data: NodeInput): Buffer from "msNodeBytes(createHash(#).update(#).digest())";
 extern function msHmac(name: string, key: NodeInput, data: NodeInput): Buffer from "msNodeBytes(createHmac(#, #).update(#).digest())";

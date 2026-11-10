@@ -13,8 +13,11 @@
 import { Buffer } from "std/core/buffer";
 import { ByteInput } from "std/core/buffer/bytes";
 import { bytesOf } from "../pure/bytes";
-import { expandKey, expandKeyDecrypt, gcmSealWithNonce, gcmOpen, cbcEncrypt as pureCbcEncrypt, cbcDecrypt as pureCbcDecrypt } from "../pure/aes";
+import { expandKeyDecrypt, gcmSealWithNonce, gcmOpen, cbcEncrypt as pureCbcEncrypt, cbcDecrypt as pureCbcDecrypt } from "../pure/aes";
 import { randomBytesSync } from "../index";
+when (!nodejs) {
+	import { expandKey } from "../pure/aes";
+}
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
 
@@ -70,6 +73,98 @@ async function msAesCbc(key, iv, data, encrypt) {
 	}
 }`);
 
+when (nodejs) {
+	import { NodeInput, nodeInput } from "../pure/nodeCrypto";
+
+	@import("node:crypto", { createCipheriv, createDecipheriv });
+
+	@emit(`function msAesNodeIn(x) {
+	return typeof x === "string" ? new TextEncoder().encode(x) : x;
+}
+function msAesNodeName(raw, mode) {
+	return (raw.length === 16 ? "aes-128-" : "aes-256-") + mode;
+}
+function msAesNodeOut(parts) {
+	let n = 0;
+	for (const p of parts) n += p.length;
+	const out = new Array(n);
+	let at = 0;
+	for (const p of parts) for (let i = 0; i < p.length; i++) out[at++] = p[i];
+	return out;
+}
+function msAesNodeGcmSeal(raw, nonce, plain, aad) {
+	const iv = Uint8Array.from(nonce);
+	const c = createCipheriv(msAesNodeName(raw, "gcm"), Uint8Array.from(raw), iv);
+	const extra = msAesNodeIn(aad);
+	if (extra.length > 0) c.setAAD(extra);
+	const head = c.update(msAesNodeIn(plain));
+	const tail = c.final();
+	return msAesNodeOut([iv, head, tail, c.getAuthTag()]);
+}
+function msAesNodeGcmOpen(raw, sealed, aad) {
+	const all = msAesNodeIn(sealed);
+	const d = createDecipheriv(msAesNodeName(raw, "gcm"), Uint8Array.from(raw), all.subarray(0, 12));
+	d.setAuthTag(all.subarray(all.length - 16));
+	const extra = msAesNodeIn(aad);
+	if (extra.length > 0) d.setAAD(extra);
+	const head = d.update(all.subarray(12, all.length - 16));
+	try {
+		return msAesNodeOut([head, d.final()]);
+	} catch (e) {
+		return null;
+	}
+}
+function msAesNodeCbc(raw, iv, data, encrypt) {
+	try {
+		const make = encrypt ? createCipheriv : createDecipheriv;
+		const c = make(msAesNodeName(raw, "cbc"), Uint8Array.from(raw), msAesNodeIn(iv));
+		const head = c.update(msAesNodeIn(data));
+		return msAesNodeOut([head, c.final()]);
+	} catch (e) {
+		return null;
+	}
+}`);
+
+	extern function nodeGcmSeal(raw: Buffer, nonce: Buffer, plain: NodeInput, aad: NodeInput): Buffer from "msAesNodeGcmSeal(#, #, #, #)";
+	extern function nodeGcmOpen(raw: Buffer, sealed: NodeInput, aad: NodeInput): Buffer | null from "msAesNodeGcmOpen(#, #, #)";
+	extern function nodeCbc(raw: Buffer, iv: NodeInput, data: NodeInput, encrypt: boolean): Buffer | null from "msAesNodeCbc(#, #, #, #)";
+
+	function sealNode(key: AesKey, plain: NodeInput, aad: NodeInput): Result<Buffer, CryptoError> {
+		const nonce = randomBytesSync(12);
+		if (!nonce.ok) {
+			return Result.err(cryptoError(CryptoErrorKind.RandomFailed, "seal", "the platform random source failed"));
+		}
+		return Result.ok(nodeGcmSeal(key._raw, nonce.value, plain, aad));
+	}
+
+	function openNode(key: AesKey, sealed: NodeInput, aad: NodeInput): Result<Buffer, CryptoError> {
+		if (nodeInputLength(sealed) < 28) {
+			return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "open", "sealed data too short"));
+		}
+		const plain = nodeGcmOpen(key._raw, sealed, aad);
+		if (plain == null) {
+			return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "open", "authentication tag mismatch"));
+		}
+		return Result.ok(plain);
+	}
+
+	function cbcNode(key: AesKey, data: NodeInput, iv: NodeInput, encrypt: boolean): Result<Buffer, CryptoError> {
+		const operation = encrypt ? "cbcEncrypt" : "cbcDecrypt";
+		if (nodeInputLength(iv) != 16) {
+			return Result.err(cryptoError(CryptoErrorKind.InvalidInput, operation, "IV must be 16 bytes"));
+		}
+		const out = nodeCbc(key._raw, iv, data, encrypt);
+		if (out == null) {
+			return encrypt
+				? Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, operation, "AES-CBC encryption failed"))
+				: Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, operation, "AES-CBC decryption failed (bad padding or key)"));
+		}
+		return Result.ok(out);
+	}
+
+	extern function nodeInputLength(data: NodeInput): int32 from "(x => typeof x === \"string\" ? new TextEncoder().encode(x).length : x.length)(#)";
+}
+
 interface Imported {
 	key: unknown;
 	error: string;
@@ -102,7 +197,11 @@ export class AesKey {
 		if (bytes.length != 16 && bytes.length != 32) {
 			return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "AesKey.import", "key must be 16 or 32 bytes"));
 		}
-		return Result.ok({ _raw: bytes.slice(0), _enc: expandKey(bytes), _dec: new Array<uint32>(0), _gcm: null, _cbc: null });
+		when (nodejs) {
+			return Result.ok({ _raw: bytes.slice(0), _enc: new Array<uint32>(0), _dec: new Array<uint32>(0), _gcm: null, _cbc: null });
+		} else {
+			return Result.ok({ _raw: bytes.slice(0), _enc: expandKey(bytes), _dec: new Array<uint32>(0), _gcm: null, _cbc: null });
+		}
 	}
 
 	/** A random key from the platform source: 128 or 256 bits. */
@@ -145,7 +244,11 @@ async function subtleKey(key: AesKey, gcm: boolean, operation: string): Promise<
  * Returns: nonce(12) || cipherText || authTag(16) as one Buffer.
  */
 export function sealSync<P extends ByteInput, A extends ByteInput>(key: AesKey, plainTextBytes: P, aadBytes: A = ""): Result<Buffer, CryptoError> {
-	return sealSyncOwned(key, bytesOf(plainTextBytes), bytesOf(aadBytes));
+	when (nodejs) {
+		return sealNode(key, nodeInput(plainTextBytes), nodeInput(aadBytes));
+	} else {
+		return sealSyncOwned(key, bytesOf(plainTextBytes), bytesOf(aadBytes));
+	}
 }
 
 function sealSyncOwned(key: AesKey, plainTextBytes: Buffer, aadBytes: Buffer): Result<Buffer, CryptoError> {
@@ -157,7 +260,11 @@ function sealSyncOwned(key: AesKey, plainTextBytes: Buffer, aadBytes: Buffer): R
 }
 
 export function seal<P extends ByteInput, A extends ByteInput>(key: AesKey, plainTextBytes: P, aadBytes: A = ""): Promise<Result<Buffer, CryptoError>> {
-	return sealOwned(key, bytesOf(plainTextBytes), bytesOf(aadBytes));
+	when (nodejs) {
+		return Promise.resolve(sealNode(key, nodeInput(plainTextBytes), nodeInput(aadBytes)));
+	} else {
+		return sealOwned(key, bytesOf(plainTextBytes), bytesOf(aadBytes));
+	}
 }
 
 async function sealOwned(key: AesKey, plainTextBytes: Buffer, aadBytes: Buffer): Promise<Result<Buffer, CryptoError>> {
@@ -179,7 +286,11 @@ async function sealOwned(key: AesKey, plainTextBytes: Buffer, aadBytes: Buffer):
  * Returns plainText or error if authentication fails.
  */
 export function openSync<S extends ByteInput, A extends ByteInput>(key: AesKey, sealedBytes: S, aadBytes: A = ""): Result<Buffer, CryptoError> {
-	return openSyncOwned(key, bytesOf(sealedBytes), bytesOf(aadBytes));
+	when (nodejs) {
+		return openNode(key, nodeInput(sealedBytes), nodeInput(aadBytes));
+	} else {
+		return openSyncOwned(key, bytesOf(sealedBytes), bytesOf(aadBytes));
+	}
 }
 
 function openSyncOwned(key: AesKey, sealedBytes: Buffer, aadBytes: Buffer): Result<Buffer, CryptoError> {
@@ -195,7 +306,11 @@ function openSyncOwned(key: AesKey, sealedBytes: Buffer, aadBytes: Buffer): Resu
 }
 
 export function open<S extends ByteInput, A extends ByteInput>(key: AesKey, sealedBytes: S, aadBytes: A = ""): Promise<Result<Buffer, CryptoError>> {
-	return openOwned(key, bytesOf(sealedBytes), bytesOf(aadBytes));
+	when (nodejs) {
+		return Promise.resolve(openNode(key, nodeInput(sealedBytes), nodeInput(aadBytes)));
+	} else {
+		return openOwned(key, bytesOf(sealedBytes), bytesOf(aadBytes));
+	}
 }
 
 async function openOwned(key: AesKey, sealedBytes: Buffer, aadBytes: Buffer): Promise<Result<Buffer, CryptoError>> {
@@ -218,7 +333,11 @@ async function openOwned(key: AesKey, sealedBytes: Buffer, aadBytes: Buffer): Pr
  * WARNING: CBC provides no authentication. Use seal/open for authenticated encryption.
  */
 export function cbcEncryptSync<P extends ByteInput, I extends ByteInput>(key: AesKey, plainTextBytes: P, ivBytes: I): Result<Buffer, CryptoError> {
-	return cbcEncryptSyncOwned(key, bytesOf(plainTextBytes), bytesOf(ivBytes));
+	when (nodejs) {
+		return cbcNode(key, nodeInput(plainTextBytes), nodeInput(ivBytes), true);
+	} else {
+		return cbcEncryptSyncOwned(key, bytesOf(plainTextBytes), bytesOf(ivBytes));
+	}
 }
 
 function cbcEncryptSyncOwned(key: AesKey, plainTextBytes: Buffer, ivBytes: Buffer): Result<Buffer, CryptoError> {
@@ -230,7 +349,11 @@ function cbcEncryptSyncOwned(key: AesKey, plainTextBytes: Buffer, ivBytes: Buffe
 }
 
 export function cbcEncrypt<P extends ByteInput, I extends ByteInput>(key: AesKey, plainTextBytes: P, ivBytes: I): Promise<Result<Buffer, CryptoError>> {
-	return cbcEncryptOwned(key, bytesOf(plainTextBytes), bytesOf(ivBytes));
+	when (nodejs) {
+		return Promise.resolve(cbcNode(key, nodeInput(plainTextBytes), nodeInput(ivBytes), true));
+	} else {
+		return cbcEncryptOwned(key, bytesOf(plainTextBytes), bytesOf(ivBytes));
+	}
 }
 
 async function cbcEncryptOwned(key: AesKey, plainTextBytes: Buffer, ivBytes: Buffer): Promise<Result<Buffer, CryptoError>> {
@@ -252,7 +375,11 @@ async function cbcEncryptOwned(key: AesKey, plainTextBytes: Buffer, ivBytes: Buf
  * tamper with the cipher text and see whether decryption failed. Use seal/open for authenticated encryption.
  */
 export function cbcDecryptSync<C extends ByteInput, I extends ByteInput>(key: AesKey, cipherTextBytes: C, ivBytes: I): Result<Buffer, CryptoError> {
-	return cbcDecryptSyncOwned(key, bytesOf(cipherTextBytes), bytesOf(ivBytes));
+	when (nodejs) {
+		return cbcNode(key, nodeInput(cipherTextBytes), nodeInput(ivBytes), false);
+	} else {
+		return cbcDecryptSyncOwned(key, bytesOf(cipherTextBytes), bytesOf(ivBytes));
+	}
 }
 
 function cbcDecryptSyncOwned(key: AesKey, cipherTextBytes: Buffer, ivBytes: Buffer): Result<Buffer, CryptoError> {
@@ -268,7 +395,11 @@ function cbcDecryptSyncOwned(key: AesKey, cipherTextBytes: Buffer, ivBytes: Buff
 }
 
 export function cbcDecrypt<C extends ByteInput, I extends ByteInput>(key: AesKey, cipherTextBytes: C, ivBytes: I): Promise<Result<Buffer, CryptoError>> {
-	return cbcDecryptOwned(key, bytesOf(cipherTextBytes), bytesOf(ivBytes));
+	when (nodejs) {
+		return Promise.resolve(cbcNode(key, nodeInput(cipherTextBytes), nodeInput(ivBytes), false));
+	} else {
+		return cbcDecryptOwned(key, bytesOf(cipherTextBytes), bytesOf(ivBytes));
+	}
 }
 
 async function cbcDecryptOwned(key: AesKey, cipherTextBytes: Buffer, ivBytes: Buffer): Promise<Result<Buffer, CryptoError>> {
