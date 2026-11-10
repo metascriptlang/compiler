@@ -410,9 +410,6 @@ extern function msUnownedTake(p: Ptr<void>): Ptr<void>;
 extern function msUnownedGive(sink p: Ptr<void>): Ptr<void>;
 
 @compilerFunc
-extern function msUnownedLoad(p: Ptr<void>): Ptr<void>;
-
-@compilerFunc
 extern function msUnownedPeek(p: Ptr<void>): Ptr<void>;
 
 @compilerFunc
@@ -429,9 +426,6 @@ extern function msUnownedTakeRo(p: Ptr<void>): Ptr<void>;
 
 @compilerFunc
 extern function msUnownedGiveRo(sink p: Ptr<void>): Ptr<void>;
-
-@compilerFunc
-extern function msUnownedLoadRo(p: Ptr<void>): Ptr<void>;
 
 @compilerFunc
 extern function msUnownedPeekRo(p: Ptr<void>): Ptr<void>;

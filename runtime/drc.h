@@ -493,14 +493,6 @@ static inline void* msUnownedTake(void* p) {
 	return p;
 }
 
-static inline void* msUnownedLoad(void* p) {
-	if (p != NULL) {
-		msUnownedCheckLive(p);
-		msIncRef(p);
-	}
-	return p;
-}
-
 #define msUnownedPeek(p) ({ \
 	__typeof__(p) __msPeekP = (p); \
 	if (__msPeekP != NULL) msUnownedCheckLive((void*)__msPeekP); \
