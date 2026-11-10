@@ -19,6 +19,28 @@ export { CryptoError, CryptoErrorKind } from "../errors";
 
 extern function newWords(count: number): uint32[] from "new Uint32Array(#)";
 
+when (nodejs) {
+	// node:crypto gained argon2Sync in node 24.7; a named import of it fails to link on an older node.
+	@emit(`function msArgon2Node() {
+	const f = globalThis.process.getBuiltinModule("node:crypto").argon2Sync;
+	return typeof f === "function" ? f : null;
+}
+function msArgon2NodeHash(password, salt, passes, memory, parallelism, tagLength) {
+	try {
+		const out = msArgon2Node()("argon2id", { message: Uint8Array.from(password), nonce: Uint8Array.from(salt), passes, memory, parallelism, tagLength });
+		const n = out.length;
+		const bytes = new Array(n);
+		for (let i = 0; i < n; i++) bytes[i] = out[i];
+		return bytes;
+	} catch (e) {
+		return null;
+	}
+}`);
+
+	extern function nodeHasArgon2(): boolean from "msArgon2Node() !== null";
+	extern function nodeArgon2(password: Buffer, salt: Buffer, timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): Buffer | null from "msArgon2NodeHash(#, #, #, #, #, #)";
+}
+
 // ===== Parameters =====
 
 const DEFAULT_TIME_COST: int32 = 3;
@@ -44,6 +66,9 @@ export const defaultArgon2Limits: Argon2Limits = freshDefaultLimits();
 
 /** The raw hash, or null when the platform could not allocate the memory the parameters ask for. */
 function hashRaw(password: Buffer, salt: Buffer, timeCost: int32, memoryCost: int32, parallelism: int32, version: int32, hashLen: int32): Buffer | null {
+	when (nodejs) {
+		if (version == 0x13 && nodeHasArgon2()) return nodeArgon2(password, salt, timeCost, memoryCost, parallelism, hashLen);
+	}
 	const words = argon2Words(memoryCost, parallelism);
 	if (words > 2147483647) return null;
 	try {
