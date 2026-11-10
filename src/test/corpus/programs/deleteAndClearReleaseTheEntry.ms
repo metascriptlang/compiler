@@ -7,7 +7,8 @@
 // @stdout: Map clear: 40 released at once, 0 alive
 // @stdout: Set delete: 40 of 40 released at once, 40 alive
 // @stdout: Set clear: 40 released at once, 0 alive
-// note: delete releases the removed key or value before the statement ends, the moved-back neighbours of a collision run included, and clear releases every entry, so a value nothing else holds is destroyed by that call, not when its slot is reused.
+// @stdout: fresh set values: 2 of 2 released at delete
+// note: delete releases the removed key or value before the statement ends, the moved-back neighbours of a collision run included, clear releases every entry, and set takes its key and value as sink so a fresh value has the map as its only holder: a value nothing else holds is destroyed by that call, not when its slot is reused or its storing scope ends.
 let destroyed = 0;
 
 class V {
@@ -102,7 +103,19 @@ function set(): void {
 	cleared("Set", before, s.size);
 }
 
+function freshValues(): void {
+	const m = new Map<int32, V>();
+	m.set(1, new V(1));
+	const h = new HashMap<int32, V>();
+	h.set(1, new V(2));
+	const before = destroyed;
+	m.delete(1);
+	h.delete(1);
+	console.log(`fresh set values: ${destroyed - before} of 2 released at delete`);
+}
+
 hashMap();
 hashSet();
 map();
 set();
+freshValues();

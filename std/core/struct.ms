@@ -424,7 +424,7 @@ function hashMapEnlarge<K, V>(m: HashMap<K, V>): void {
 	}
 }
 
-export function set<K, V>(this m: HashMap<K, V>, key: K, value: V): void {
+export function set<K, V>(this m: HashMap<K, V>, sink key: K, sink value: V): void {
 	if (m.writing) { msMapFatal("concurrent map writes"); }
 	m.writing = true;
 	defer hashMapEndWrite(m);
@@ -819,7 +819,7 @@ function orderedMapCompact<K, V>(m: Map<K, V>): void {
 	}
 }
 
-export function set<K, V>(this m: Map<K, V>, key: K, value: V): void {
+export function set<K, V>(this m: Map<K, V>, sink key: K, sink value: V): void {
 	if (m.writing) { msMapFatal("concurrent map writes"); }
 	m.writing = true;
 	defer mapEndWrite(m);
