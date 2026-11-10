@@ -1292,6 +1292,8 @@ function typeCheckQuery(db: TransAmDb, filePath: string): CheckerContext | null 
 			popFrame(db.depStack);
 			db.checkInProgress.delete(filePath);
 			forgetClientsOfDiscardedUnit(db, fileId);
+			db.contexts.delete(checkCtxKey(fileId));
+			db.trees.delete(checkNodeKey(fileId));
 			return checkerCtx;
 		}
 
