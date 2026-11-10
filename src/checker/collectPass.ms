@@ -2271,7 +2271,7 @@ test "re-export preserves original location and records sgSymRecord" {
 	defining.modulePath = "/test/hub/accessors";
 	defining.location = origLoc;
 	const fakeExport: ExportedSymInfo = {
-		name: "get", sym: defining, ext: null, overloadExts: [],
+		name: "get", sym: defining, ext: null, overloadExts: [], keep: [],
 	};
 	registerModuleExports(ctx.exportRegistry, "/test/hub/accessors", [fakeExport]);
 

@@ -790,6 +790,7 @@ function registerImportExports(db: TransAmDb, fileId: int32, visited: HashSet<st
 		depMod.imports = buildImportEntries(db, depPath);
 		tmpCtx.currentModule = depMod;
 		const collected = cloneNodeForCheck(depParse.program);
+		tmpCtx.outOfTree.push(collected);
 		const adoption = earlyAdoptions(db, depPath);
 		tmpCtx.adoptedDecls = adoption.decls;
 		tmpCtx.adoptStmt = (stmt: Node): void => adoptStmt(adoption, stmt);
@@ -937,6 +938,7 @@ export function dbEnsureModuleExports(db: TransAmDb, filePath: string): void {
 	depMod.imports = buildImportEntries(db, filePath);
 	tmpCtx.currentModule = depMod;
 	const collected = cloneNodeForCheck(parsed.program);
+	tmpCtx.outOfTree.push(collected);
 	const adoption = earlyAdoptions(db, filePath);
 	tmpCtx.adoptedDecls = adoption.decls;
 	tmpCtx.adoptStmt = (stmt: Node): void => adoptStmt(adoption, stmt);

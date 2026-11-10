@@ -3744,6 +3744,7 @@ function bindProgram(ctx: CheckerContext, program: Node): Node[] {
 	resolveDeclarations(ctx, program);
 	bindTemplateBodies(ctx, program);
 	const _c2 = performance.now();
+	ctx.outOfTree.push(program);
 	bindFlowGraph(program, ctx.outOfTree);  // Phase 1: build the CFG (unused by checker yet — Phase 2 will query)
 	const moduleNames = bindModuleNames(ctx, program);
 	const _c3 = performance.now();

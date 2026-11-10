@@ -273,6 +273,7 @@ export const EXPORTED_SYM_INFO_FIELD_ROLES: { [K in keyof ExportedSymInfo]-?: Fi
 	ext: encodedAs("row Y: an index into the extension rows"),
 	overloadExts: encodedAs("row Y: indexes into the extension rows"),
 	converterTargetType: encodedAs("row Y"),
+	keep: derivedAs("the reader's node table, as each restored context's outOfTree"),
 };
 
 export const DISPATCH_REGISTRY_FIELD_ROLES: { [K in keyof DispatchRegistry]-?: FieldRole } = {
@@ -2125,7 +2126,7 @@ function readExports(u: UnitIn, out: StdUnitLoaded): void {
 			for (const k of u.getIntList()) overloadExts.push(extAt(u, k));
 			const converterTargetType = u.getType();
 			if (sym == null) u.miss(`an export '${name}' of ${modulePath} has no symbol`);
-			symbols.push({ name, sym: sym as Symbol, ext, overloadExts, converterTargetType });
+			symbols.push({ name, sym: sym as Symbol, ext, overloadExts, converterTargetType, keep: u.objs.nodes });
 			u.close();
 		}
 		out.exportEntries.push({ modulePath, symbols });

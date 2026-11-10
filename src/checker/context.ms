@@ -30,6 +30,7 @@ export interface ExportedSymInfo {
 	ext: ExtensionMethod | null;
 	overloadExts: (ExtensionMethod | null)[];
 	converterTargetType: Type | null;
+	keep: Node[];                     // the declaring context's out-of-tree holder, which keeps the declaration `sym` names once that context is gone
 }
 
 export interface ModuleExports {
@@ -141,6 +142,7 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		name: exportedName != "" ? exportedName : sym.name, sym,
 		ext: primaryExt, overloadExts: ovExts,
 		converterTargetType: mConverterTargetType,
+		keep: ctx != null ? ctx.outOfTree : [],
 	};
 }
 
@@ -2239,7 +2241,7 @@ test "create empty registry" {
 test "register and find exports" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", sym: makeSymbol("foo", SymbolKind.Function, noneType(), false), ext: null, overloadExts: [] };
+	const info: ExportedSymInfo = { name: "foo", sym: makeSymbol("foo", SymbolKind.Function, noneType(), false), ext: null, overloadExts: [], keep: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "foo");
@@ -2257,7 +2259,7 @@ test "missing module returns null" {
 test "missing symbol returns null" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", sym: makeSymbol("foo", SymbolKind.Function, noneType(), false), ext: null, overloadExts: [] };
+	const info: ExportedSymInfo = { name: "foo", sym: makeSymbol("foo", SymbolKind.Function, noneType(), false), ext: null, overloadExts: [], keep: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "bar");
