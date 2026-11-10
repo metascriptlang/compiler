@@ -6,7 +6,12 @@ import { ensureDir, exists, readDir, readFile, removeAll } from "std/fs";
 
 const ROOT_PREFIX = "emitModuleJob__";
 const ROOT_SUFFIX = "compileOms_u0";
-const RC_OPS = ["msIncrefCyclic(", "msDecrefCyclic(", "msIncref(", "msDecref(", "msDecrefFuture("];
+const RC_OPS = [
+	"msIncrefCyclic(", "msDecrefCyclic(", "msIncref(", "msDecref(", "msDecrefFuture(",
+	"msIncrefCyclicRo(", "msDecrefCyclicRo(", "msIncrefRo(", "msDecrefRo(",
+	"msUnownedIncref(", "msUnownedDecref(", "msUnownedIncrefRo(", "msUnownedDecrefRo(",
+	"msUnownedAssign(", "msUnownedAssignRo(", "msUnownedTake(", "msUnownedTakeRo(", "msUnownedGive(", "msUnownedGiveRo(",
+];
 const PROGRAM_CELLS = ["Node__", "Type__", "Symbol__", "CheckerContext__"];
 const JOB_INPUTS = ["ModuleEmissionJob__", "AliveSet__", "CEmissionFacts__"];
 const CLOSURE_LITERAL = " = (msClosure){ .fn = (void*)";
@@ -212,8 +217,8 @@ function rcOpArgument(line: string): string | null {
 	for (const op of RC_OPS) {
 		const at = line.indexOf(op);
 		if (at < 0 || (at > 0 && isIdentChar(line.charAt(at - 1)))) continue;
-		const close = line.lastIndexOf(");");
-		return close < at + op.length ? "" : line.slice(at + op.length, close);
+		const args = callArguments(line, at + op.length - 1);
+		return args.length > 0 ? args[args.length - 1] : "";
 	}
 	return null;
 }
