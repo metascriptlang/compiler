@@ -778,6 +778,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		}
 		setFlag(sym, SymbolFlag.ComptimeNodeAlias);
 		sym.declNode = d.initializer;
+		ctx.outOfTree.push(d.initializer);
 		d.initializer = null as unknown as Node;
 		node.resolvedSym = sym;
 		varDecl(ctx.initTracker, d.declName);
