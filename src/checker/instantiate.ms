@@ -7,7 +7,7 @@
 import { membersOf } from "./unitsInCheck";
 import { methodOwnerClass } from "./visibility";
 import { isAsyncFunctionNode } from "./freestanding";
-import { Node, NodeKind, NodeData, NodeFlag, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, HiddenDerefData, HiddenStdConvData, CallExprData, NewExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeData, NodeFlag, TypeAssertionData, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ReturnStmtData, MethodDeclData as MethodDeclDataLocal, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, PropertyDeclData, IdentifierData, HiddenDerefData, HiddenStdConvData, CallExprData, NewExprData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { decideInstanceTypeTests, decideParameterTypeTests, decideSignatureTypeTests } from "./instanceTypeTest";
 import { boxedCountedReference, boxedReferenceRefusal, boundParamName, getAttachedOp, setAttachedOp, isMaybeType, createGenericParam, inferredType, isUnresolvedType, createFunction, createRef, createStruct, isStructType, typeDisplayName, voidType, createEnum, createEnumLiteral, int32Type, createUnifyBindings, unifyType, hasGenericParams, createGenericInstance, isAwaitable, unwrapRef, genericParamsOf, instantiateGenericBody, symGenericParams, isReadonlyView, peelTransparentInstance, classParentOf, runtimeClassSym, genericParamNamesOf, substituteParams, substituteBound, declaredTypeParams, TypeVisitSet, typeVisitAdd, isDeclaredStruct, UnifyBindings, bindParam, bindAt, boundSlot, isBrandDistinct } from "./types";
@@ -972,6 +972,7 @@ const SYNTAX_NODE_FLAGS: BitSet<NodeFlag> = NodeFlag.QuoteSplice | NodeFlag.Boun
 
 function isCheckerWrapper(node: Node): boolean {
 	if (node.kind == NodeKind.HiddenDeref) return !node.flags.has(NodeFlag.ExplicitDeref);
+	if (node.kind == NodeKind.TypeAssertion) return (node.data as TypeAssertionData).asType == "";
 	return node.kind == NodeKind.HiddenAddr || node.kind == NodeKind.HiddenStdConv || node.kind == NodeKind.HiddenSubConv;
 }
 
@@ -1004,6 +1005,8 @@ function clearStateKeepingOuterBindings(node: Node, redeclared: Symbol[]): void 
 	while (isCheckerWrapper(node)) {
 		const inner = node.kind == NodeKind.HiddenStdConv || node.kind == NodeKind.HiddenSubConv
 			? (node.data as HiddenStdConvData).convExpr
+			: node.kind == NodeKind.TypeAssertion
+			? (node.data as TypeAssertionData).asExpr
 			: (node.data as HiddenDerefData).expr;
 		if (inner == null) break;
 		node.kind = inner.kind;
@@ -1011,6 +1014,11 @@ function clearStateKeepingOuterBindings(node: Node, redeclared: Symbol[]): void 
 		node.nodeType = inner.nodeType;
 		node.resolvedSym = inner.resolvedSym;
 		node.flags = node.flags.union(inner.flags);
+		node.flowNode = inner.flowNode;
+		node.location = inner.location;
+		node.variantSlot = inner.variantSlot;
+		node.typeExpr = inner.typeExpr;
+		node.typeArg = inner.typeArg;
 	}
 	// Enum member access is a mangled Identifier ("E_M") whose name is never bound
 	// in scope — resolvedSym is its ONLY resolution path (checkExprPass honors it,
