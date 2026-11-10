@@ -110,6 +110,16 @@ test "a closure formed elsewhere does not enter an Owned closure slot" {
 	assert refused(head + "h.cb = (): void => { console.log(1); };\nconst g = h.cb;\nconst k = new H();\nk.cb = g;\nh.cb = null;\n") == "compiled";
 }
 
+test "a closure formed elsewhere does not enter an Owned closure parameter, however many calls it passes" {
+	const box = "class Box { cb: Owned<(b: Box) => void> | null = null; other: Box | null = null; }\nfunction take(cb: Owned<(b: Box) => void> | null): Box { const b = new Box(); b.cb = cb; return b; }\nfunction take2(cb: Owned<(b: Box) => void> | null): Box { return take(cb); }\nconst w = new Box();\n";
+	const formedElsewhere = "an Owned closure is formed from a function expression where it is stored";
+	assert refused(box + "const local = (b: Box): void => { w.other = b; };\nconst c = take(local);\n").contains(formedElsewhere);
+	assert refused(box + "const local = (b: Box): void => { w.other = b; };\nconst c = take2(local);\n").contains(formedElsewhere);
+	assert refused(box + "function named(b: Box): void { console.log(b.other == null); }\nconst c = take(named);\n").contains(formedElsewhere);
+	assert refused(box + "class Widget { onClick: (() => void) | null = null; }\nfunction hold(v: Widget): Box { return take((b: Box): void => { console.log(v.onClick == null); }); }\nconst c = hold(new Widget());\n").contains("cannot form an Owned closure: its environment can be part of a cycle through the captured 'v'");
+	assert refused(box + "const c = take((b: Box): void => { console.log(\"x\"); });\nconst d = take2(null);\n") == "compiled";
+}
+
 test "a Map or Set of owned values is acyclic like an array of them, nested, nullable or as struct data" {
 	assert verdict("class N { m: Map<string, Owned<N>> = new Map<string, Owned<N>>(); }\nconst n = new N();", "N") == "acyclic";
 	assert verdict("class N { s: Set<Owned<N>> = new Set<Owned<N>>(); }\nconst n = new N();", "N") == "acyclic";

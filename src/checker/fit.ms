@@ -3595,7 +3595,7 @@ export function fitNode(ctx: CheckerContext, expr: Node, formal: Type | null, ex
 
 // An owned closure is formed from a function expression where it is stored, which marks the expression so
 // lambda lifting checks its environment; a closure formed elsewhere was never checked and is refused.
-function formsOwnedClosure(ctx: CheckerContext, expr: Node, formal: Type | null, exprType: Type | null): boolean {
+export function formsOwnedClosure(ctx: CheckerContext, expr: Node, formal: Type | null, exprType: Type | null): boolean {
 	const owned = ownedClosureIn(formal);
 	if (owned == null || ownedClosureIn(exprType) != null) return true;
 	if (expr.kind == NodeKind.ArrowFunction || expr.kind == NodeKind.FunctionExpr) {
@@ -3603,7 +3603,7 @@ function formsOwnedClosure(ctx: CheckerContext, expr: Node, formal: Type | null,
 		return true;
 	}
 	if (expr.kind == NodeKind.NullLiteral || (exprType != null && exprType.kind == TypeKind.Null)) return true;
-	addError(ctx, "Type '" + typeDisplayName(exprType) + "' is not assignable to type '" + typeDisplayName(formal) + "' — an Owned closure is formed from a function expression where it is stored, so its captures can be checked; write the function expression here, or have the function that forms it return " + typeDisplayName(owned), expr.location.line, expr.location.column);
+	addError(ctx, "a closure formed elsewhere is not assignable to an Owned<" + typeDisplayName(withoutOwned(owned)) + "> slot — an Owned closure is formed from a function expression where it is stored, so its captures can be checked; write the function expression here, or have the function that forms it return Owned<" + typeDisplayName(withoutOwned(owned)) + ">", expr.location.line, expr.location.column);
 	return false;
 }
 
