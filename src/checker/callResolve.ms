@@ -3060,12 +3060,12 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 			// not directly assignable to Maybe<T> — we want a struct literal.
 			// Generic-containing formals never wrap here — deferred to the
 			// post-binding reconciliation (Nim implicitConv, sigmatch.nim:2179).
-			const carriedConstant = numericConstantForCarrier(args[pi], argTypes[pi], paramType);
+			const carriedConstant = numericConstantForCarrier(args[pi], argTypes[pi], peelSink(paramType));
 			if (carriedConstant != null) {
 				args[pi] = carriedConstant;
 				argTypes[pi] = carriedConstant.nodeType!;
 			}
-			const numericMember = fitNumericIntoUnion(ctx, args[pi], argTypes[pi], paramType);
+			const numericMember = fitNumericIntoUnion(ctx, args[pi], argTypes[pi], peelSink(paramType));
 			if (numericMember != null) {
 				args[pi] = numericMember;
 				argTypes[pi] = paramType;
