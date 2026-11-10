@@ -744,7 +744,7 @@ function shapedSourceCall(s: RaiserCompState, node: Node): int32 {
 	}
 	if (argCount != packed.paramTypes.length) throw new Error("internal: packed source arity mismatch");
 	const cells = reserveCells(s, d.arguments);
-	const closures = reserveClosureArgs(s, node, d.arguments);
+	const closures = reserveClosureArgs(s, node, d.arguments, -1, null, calleeParamTypes(sym));
 	const dest = allocShapedCall(s, packed.paramTypes, packed.resultType, packed.shape);
 	let lastRunner = -1;
 	for (let i = 0; i < d.arguments.length; i += 1) if (runsCode(d.arguments[i])) lastRunner = i;
@@ -2264,7 +2264,7 @@ function makesFreshCell(s: RaiserCompState, node: Node): boolean {
 	return materializesFramePlace(s, inner) || packedRvalue(s, inner) && vmLayoutOf(s.layouts, inner.nodeType!).kind == MemKind.Block;
 }
 
-// A closure literal passed to a call is a temporary pair the call borrows, and so is the object a
+// A closure literal passed for a parameter not declared `sink` is a temporary pair the call borrows, and so is the object a
 // packed frame value is materialized into for a declared non-sink parameter of a call that takes
 // objects. Its env is counted
 // once for the pair, so the pair is released after the call, as a stored copy of it would be;
@@ -2272,13 +2272,15 @@ function makesFreshCell(s: RaiserCompState, node: Node): boolean {
 // as a scope's final destroys a temporary on every exit. The callee's registers overlap the
 // registers allocated after the call block, so the registers that keep the pairs across the
 // call are reserved before the block.
-function reserveClosureArgs(s: RaiserCompState, call: Node, args: Node[], callee: int32 = -1, params: Type[] | null = null): ClosureArgs {
+function reserveClosureArgs(s: RaiserCompState, call: Node, args: Node[], callee: int32 = -1, params: Type[] | null = null, sinkParams: Type[] | null = null): ClosureArgs {
 	const held: int32[] = [];
 	let any = callee >= 0;
+	const declared = sinkParams ?? params;
 	for (let i = 0; i < args.length; i += 1) {
 		const a = args[i];
 		const borrowed = params != null && i < params.length && params[i].kind != TypeKind.Sink;
-		const reg = isClosureLiteral(a) || borrowed && materializesFramePlace(s, a) ? allocRef(s) : -1;
+		const sunk = declared != null && i < declared.length && declared[i].kind == TypeKind.Sink;
+		const reg = !sunk && isClosureLiteral(a) || borrowed && materializesFramePlace(s, a) ? allocRef(s) : -1;
 		held.push(reg);
 		if (reg >= 0) {
 			emitLoadConst(s, reg, raiserNil());
