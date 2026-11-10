@@ -256,8 +256,16 @@ merging by shape gives that result without intercepting calls (`keepOne`,
   `stage1` binary as the compiler (Zig `Compile.lto`, Rust bootstrap stages); `mscExe()` names the
   `msc` running the build (Zig `b.graph.zig_exe`).
 
-Each of these is pinned in `src/test/projectConfigCommands.ms` (54 tests, candidate of tree
-`b009bd13a`, rtx, 2026-11-10). A draft recompiler `build.ms` measured on that candidate: `msc`
+- `node.maxRss = 600e6` (or `executable({ maxRss })`) declares a node's memory bound, as Zig's
+  `max_rss`. `--maxrss=<size>` (`8G`, `512Mi`) caps the build, by default at `totalMem()`. A node
+  above the cap stops the build before anything runs (`huge: declares maxRss 953674316406 MiB,
+  above the 1000 bytes this build may use (--maxrss)`); nodes whose bounds together pass it run one
+  after the other; a command whose peak passes its own bound fails (`greedy: sh -c … peaked at 193 MiB, above
+  its declared maxRss of 19 MiB`). The peak is `ChildProcess.peakRss()`: `ru_maxrss` on POSIX,
+  `PeakWorkingSetSize` on Windows (compiled and linked with zig for x86_64-windows-gnu, not run).
+
+Each of these is pinned in `src/test/projectConfigCommands.ms` (59 tests, candidate of tree
+`f8042fd5e`, rtx, 2026-11-10). A draft recompiler `build.ms` measured on a candidate of `b009bd13a`: `msc`
 84 s then `Up to date` in 2.4 s; `stage2` built by `out/msc` in 68 s; `corpus` against `out/msc`;
 `test -- src/utils/color.ms --tests-in-dir` reran after an edit to `color.ms` and was reused after
 the revert. Not verified: Windows and macOS, a check over a whole suite.
