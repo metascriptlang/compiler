@@ -50,6 +50,7 @@ extern function msProcChildWait(h: int64, timeoutMs: int64): int32;
 extern function msProcChildKill(h: int64): int32;
 extern function msProcChildExitCode(h: int64): int32;
 extern function msProcChildSignal(h: int64): int32;
+extern function msProcChildPeakRss(h: int64): int64;
 extern function msProcChildClose(h: int64): void;
 extern function msProcChildFree(h: int64): void;
 
@@ -182,6 +183,12 @@ export class ChildProcess {
 	kill(): Result<ExitStatus, ProcessError> {
 		if (msProcChildKill(this.handle) == CHILD_OK) return Result.ok(this.status());
 		return Result.err(this.osError("kill"));
+	}
+
+	// The most memory the reaped child and the children it waited for held at once, in bytes; null before it is reaped or where the OS does not say.
+	peakRss(): number | null {
+		const peak = msProcChildPeakRss(this.handle);
+		return peak > 0 ? peak as number : null;
 	}
 
 	// Kills and reaps a child still running and closes every pipe. Idempotent.

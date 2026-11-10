@@ -618,6 +618,7 @@ extern function msProcChildWait(h: int64, timeoutMs: int64): int32;
 extern function msProcChildKill(h: int64): int32;
 extern function msProcChildExitCode(h: int64): int32;
 extern function msProcChildSignal(h: int64): int32;
+extern function msProcChildPeakRss(h: int64): int64;
 extern function msProcChildClose(h: int64): void;
 extern function msProcChildFree(h: int64): void;
 
@@ -720,6 +721,11 @@ function _bridgeMsProcChildExitCode(args: RaiserValue[]): RaiserValue {
 function _bridgeMsProcChildSignal(args: RaiserValue[]): RaiserValue {
 	const h = _childOf(args[0]);
 	return h == 0 ? raiserNil() : boxInt(msProcChildSignal(h));
+}
+
+function _bridgeMsProcChildPeakRss(args: RaiserValue[]): RaiserValue {
+	const h = _childOf(args[0]);
+	return h == 0 ? raiserNil() : boxInt(msProcChildPeakRss(h) as number);
 }
 
 function _bridgeMsProcChildClose(args: RaiserValue[]): RaiserValue {
@@ -1749,6 +1755,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msProcChildKill", _bridgeMsProcChildKill);
 	registerHostFn("msProcChildExitCode", _bridgeMsProcChildExitCode);
 	registerHostFn("msProcChildSignal", _bridgeMsProcChildSignal);
+	registerHostFn("msProcChildPeakRss", _bridgeMsProcChildPeakRss);
 	registerHostFn("msProcChildClose", _bridgeMsProcChildClose);
 	registerHostFn("msProcChildFree", _bridgeMsProcChildFree);
 	registerHostFn("msStdinDisableBuffering", _bridgeMsStdinDisableBuffering);

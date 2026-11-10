@@ -23,6 +23,7 @@
 #include <errno.h>
 #include <direct.h>
 #include <shellapi.h>
+#include <psapi.h>
 #elif MS_NO_SPAWN
 #include <sys/types.h>
 #include <unistd.h>
@@ -33,6 +34,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/resource.h>
 #include <errno.h>
 #include <string.h>
 #include <spawn.h>
@@ -1224,6 +1226,7 @@ typedef struct {
 	int closed;
 	int lastErrno;
 	int64_t written;
+	int64_t peakRss;
 } msProcChild;
 
 #define MS_PROC_CHILD_WRITE_CHUNK 1024
@@ -1529,6 +1532,8 @@ static inline msString msProcChildTake(int64_t h, int32_t stream) {
 static inline void _msProcChildRecordStatus(msProcChild* c, int killed) {
 	DWORD code = 0;
 	GetExitCodeProcess(c->proc, &code);
+	PROCESS_MEMORY_COUNTERS memory;
+	if (K32GetProcessMemoryInfo(c->proc, &memory, sizeof(memory))) c->peakRss = (int64_t)memory.PeakWorkingSetSize;
 	c->reaped = 1;
 	c->exitCode = killed ? 0 : (int32_t)code;
 	c->signal = killed ? 9 : 0;
@@ -1575,6 +1580,10 @@ static inline int32_t msProcChildKill(int64_t h) {
 
 static inline int32_t msProcChildExitCode(int64_t h) { return _msProcChildOf(h)->exitCode; }
 static inline int32_t msProcChildSignal(int64_t h) { return _msProcChildOf(h)->signal; }
+static inline int64_t msProcChildPeakRss(int64_t h) {
+	msProcChild* c = _msProcChildOf(h);
+	return c->reaped && c->peakRss > 0 ? c->peakRss : -1;
+}
 
 /* Idempotent: kills and reaps a child still running, closes every pipe, drops the buffers.
  * The exit status stays readable until msProcChildFree. */
@@ -1616,6 +1625,7 @@ typedef struct {
 	int closed;
 	int lastErrno;
 	int64_t written;
+	int64_t peakRss;
 } msProcChild;
 
 static inline double _msProcChildNowMs(void) {
@@ -1638,9 +1648,15 @@ static inline void _msProcChildCloseFd(int* fd) {
 	}
 }
 
-static inline void _msProcChildRecordStatus(msProcChild* c, int status) {
+/* ru_maxrss counts kilobytes on Linux and the BSDs, bytes on Darwin. */
+static inline void _msProcChildRecordStatus(msProcChild* c, int status, const struct rusage* usage) {
 	c->reaped = 1;
 	c->rawStatus = status;
+#if defined(__APPLE__)
+	c->peakRss = (int64_t)usage->ru_maxrss;
+#else
+	c->peakRss = (int64_t)usage->ru_maxrss * 1024;
+#endif
 }
 
 /* One read into the stream's buffer; the fd was reported ready, so it cannot block. */
@@ -1930,9 +1946,10 @@ static inline int32_t msProcChildWait(int64_t h, int64_t timeoutMs) {
 	int64_t delayUs = 50;
 	while (!c->reaped) {
 		int status = 0;
-		pid_t got = waitpid(c->pid, &status, WNOHANG);
+		struct rusage usage;
+		pid_t got = wait4(c->pid, &status, WNOHANG, &usage);
 		if (got == c->pid) {
-			_msProcChildRecordStatus(c, status);
+			_msProcChildRecordStatus(c, status, &usage);
 			_msProcChildDrainExited(c);
 			break;
 		}
@@ -1962,13 +1979,14 @@ static inline int32_t msProcChildKill(int64_t h) {
 	if (c->reaped) return MS_PROC_CHILD_OK;
 	kill(c->pid, SIGKILL);
 	int status = 0;
+	struct rusage usage;
 	pid_t got;
-	do { got = waitpid(c->pid, &status, 0); } while (got < 0 && errno == EINTR);
+	do { got = wait4(c->pid, &status, 0, &usage); } while (got < 0 && errno == EINTR);
 	if (got != c->pid) {
 		c->lastErrno = errno;
 		return MS_PROC_CHILD_ERROR;
 	}
-	_msProcChildRecordStatus(c, status);
+	_msProcChildRecordStatus(c, status, &usage);
 	return MS_PROC_CHILD_OK;
 }
 
@@ -1981,6 +1999,10 @@ static inline int32_t msProcChildExitCode(int64_t h) {
 static inline int32_t msProcChildSignal(int64_t h) {
 	int st = _msProcChildOf(h)->rawStatus;
 	return WIFSIGNALED(st) ? (int32_t)WTERMSIG(st) : 0;
+}
+static inline int64_t msProcChildPeakRss(int64_t h) {
+	msProcChild* c = _msProcChildOf(h);
+	return c->reaped && c->peakRss > 0 ? c->peakRss : -1;
 }
 
 /* Idempotent: kills and reaps a child still running, closes every pipe, drops the buffers.
@@ -2027,6 +2049,7 @@ static inline int32_t msProcChildWait(int64_t h, int64_t timeoutMs) { (void)h; (
 static inline int32_t msProcChildKill(int64_t h) { (void)h; return MS_PROC_CHILD_ERROR; }
 static inline int32_t msProcChildExitCode(int64_t h) { (void)h; return -1; }
 static inline int32_t msProcChildSignal(int64_t h) { (void)h; return 0; }
+static inline int64_t msProcChildPeakRss(int64_t h) { (void)h; return -1; }
 static inline void msProcChildClose(int64_t h) { (void)h; }
 static inline void msProcChildFree(int64_t h) { (void)h; }
 #endif
