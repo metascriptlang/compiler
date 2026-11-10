@@ -36,7 +36,7 @@ function refersToNode(t: string): boolean {
 		const after = i + 4;
 		if (after >= t.length) return true;
 		const c = t.slice(after, after + 1);
-		if (c == "[" || c == " " || c == ")" || c == "," || c == "|" || c == ";") return true;
+		if (c == "[" || c == " " || c == ")" || c == "," || c == "|" || c == ";" || c == ">") return true;
 		p = after;
 	}
 }
