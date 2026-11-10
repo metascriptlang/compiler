@@ -1,33 +1,37 @@
 import { CheckerContext, ExtensionRegistry, buildExportInfo, createExportRegistry, findExportedSymbol, registerModuleExports } from "../../checker/context";
 import { makeSymbol } from "../../checker/symbol";
-import { createNodeAt, NodeKind, SymbolKind, makeLoc, Symbol } from "../../ast/node";
+import { createNodeAt, Node, NodeKind, SymbolKind, makeLoc, Symbol } from "../../ast/node";
 import { inferredType } from "../../checker/types";
 import { compileProjectToC, compileProjectToJS, compileProjectToJSWithStd, MapEntry } from "../helpers";
 
-function declaringSymbol(name: string, kind: NodeKind): Result<Symbol, string> {
+function declaringSymbol(keep: Node[], name: string, kind: NodeKind): Result<Symbol, string> {
 	const loc = makeLoc(0, 0);
 	const sym = makeSymbol(name, SymbolKind.TypeAlias, inferredType(), false);
+	let decl: Node;
 	if (kind == NodeKind.InterfaceDecl) {
-		sym.declNode = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: [], interfaceFieldTypes: [], interfaceExtends: [], nameLocation: loc, interfaceFieldVisibility: [], interfaceFieldDecorators: [], interfaceOptionalFields: [], nativeName: "" }, loc);
+		decl = createNodeAt(NodeKind.InterfaceDecl, { interfaceName: name, interfaceFields: [], interfaceFieldTypes: [], interfaceExtends: [], nameLocation: loc, interfaceFieldVisibility: [], interfaceFieldDecorators: [], interfaceOptionalFields: [], nativeName: "" }, loc);
 	} else if (kind == NodeKind.TypeAliasDecl) {
-		sym.declNode = createNodeAt(NodeKind.TypeAliasDecl, { aliasName: name, aliasType: "", aliasGenericParams: "", discriminantName: "", discriminantType: "", variantKeys: [], variantTypes: [], nameLocation: loc }, loc);
+		decl = createNodeAt(NodeKind.TypeAliasDecl, { aliasName: name, aliasType: "", aliasGenericParams: "", discriminantName: "", discriminantType: "", variantKeys: [], variantTypes: [], nameLocation: loc }, loc);
 	} else if (kind == NodeKind.ClassDecl) {
-		sym.declNode = createNodeAt(NodeKind.ClassDecl, { className: name, classDisplayName: name, classBody: [], nameLocation: loc, classImplements: [] }, loc);
+		decl = createNodeAt(NodeKind.ClassDecl, { className: name, classDisplayName: name, classBody: [], nameLocation: loc, classImplements: [] }, loc);
 	} else if (kind == NodeKind.ActorDecl) {
-		sym.declNode = createNodeAt(NodeKind.ActorDecl, { actorName: name, actorBody: [], nameLocation: loc }, loc);
+		decl = createNodeAt(NodeKind.ActorDecl, { actorName: name, actorBody: [], nameLocation: loc }, loc);
 	} else if (kind == NodeKind.EnumDecl) {
-		sym.declNode = createNodeAt(NodeKind.EnumDecl, { enumName: name, enumMembers: [], enumValues: [], memberLocations: [], nameLocation: loc, enumInits: [] }, loc);
+		decl = createNodeAt(NodeKind.EnumDecl, { enumName: name, enumMembers: [], enumValues: [], memberLocations: [], nameLocation: loc, enumInits: [] }, loc);
 	} else {
 		return Result.err("unsupported declaration kind in export identity matrix: " + kind.toString());
 	}
+	keep.push(decl);
+	sym.declNode = decl;
 	return Result.ok(sym);
 }
 
 test "export identity: same-named declarations in different modules remain distinct" {
 	const kinds = [NodeKind.InterfaceDecl, NodeKind.TypeAliasDecl, NodeKind.ClassDecl, NodeKind.ActorDecl, NodeKind.EnumDecl];
 	for (const kind of kinds) {
-		const leftResult = declaringSymbol("Shared", kind);
-		const rightResult = declaringSymbol("Shared", kind);
+		const keep: Node[] = [];
+		const leftResult = declaringSymbol(keep, "Shared", kind);
+		const rightResult = declaringSymbol(keep, "Shared", kind);
 		assert leftResult.ok;
 		assert rightResult.ok;
 		const left = leftResult.value;
@@ -51,7 +55,8 @@ test "export identity: same-named declarations in different modules remain disti
 test "export identity: an exported alias does not rename or clone the defining symbol" {
 	const kinds = [NodeKind.InterfaceDecl, NodeKind.TypeAliasDecl, NodeKind.ClassDecl, NodeKind.ActorDecl, NodeKind.EnumDecl];
 	for (const kind of kinds) {
-		const result = declaringSymbol("Original", kind);
+		const keep: Node[] = [];
+		const result = declaringSymbol(keep, "Original", kind);
 		assert result.ok;
 		const original = result.value;
 		const registry = createExportRegistry();

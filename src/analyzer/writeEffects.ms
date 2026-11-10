@@ -1936,10 +1936,12 @@ test "a store into elements of a type matches a union slot only through a member
 	assert mayWrite(w, store, [slotOf(createUnion([int32Type(), createGenericParam("T")]))], null);
 }
 
-function loweredViewCall(returned: (param: Node, loc: SourceLocation) => Node, paramType: Type, loc: SourceLocation): Node {
+function loweredViewCall(keep: Node[], returned: (param: Node, loc: SourceLocation) => Node, paramType: Type, loc: SourceLocation): Node {
 	const param = makeSymbol("xs", SymbolKind.Parameter, paramType, false);
 	const fn = makeSymbol("lowered", SymbolKind.Function, createFunction([paramType], ["xs"], paramType), false);
-	fn.declNode = makeFnDecl("lowered", [param], [""], makeBlock([makeReturn(returned(makeIdentResolved(param, loc), loc), loc)], loc), "", "", loc);
+	const decl = makeFnDecl("lowered", [param], [""], makeBlock([makeReturn(returned(makeIdentResolved(param, loc), loc), loc)], loc), "", "", loc);
+	keep.push(decl);
+	fn.declNode = decl;
 	return makeCall(makeIdentResolved(fn, loc), [localOf("ys", paramType, loc)], loc);
 }
 
@@ -1947,40 +1949,46 @@ test "a view call's result is reached through the lowered accessor its callee re
 	const w = writeProbe();
 	const loc = makeLoc(0, 0);
 	const arrType = createArray(createArray(int32Type()));
-	const element = loweredViewCall((xs: Node, at: SourceLocation): Node => makeCall(generatedRef("msRefArrayAccess", at), [xs, makeNumber(0, at)], at), arrType, loc);
+	const keep: Node[] = [];
+	const element = loweredViewCall(keep, (xs: Node, at: SourceLocation): Node => makeCall(generatedRef("msRefArrayAccess", at), [xs, makeNumber(0, at)], at), arrType, loc);
 	const elementSlots = (viewReturnSlots(w, element) ?? ["unknown"]).join(",");
 	assert elementSlots == heldSlot(w, ELEMENT_SLOT, arrType), elementSlots;
-	const variant = loweredViewCall((u: Node, at: SourceLocation): Node => makeCall(generatedRef("msVariantAccess", at), [u, makeNumber(0, at), makeString("a", at), makeString("a|b", at)], at), arrType, loc);
+	const variant = loweredViewCall(keep, (u: Node, at: SourceLocation): Node => makeCall(generatedRef("msVariantAccess", at), [u, makeNumber(0, at), makeString("a", at), makeString("a|b", at)], at), arrType, loc);
 	const variantSlots = (viewReturnSlots(w, variant) ?? ["unknown"]).join(",");
 	assert variantSlots == "", variantSlots;
 }
 
-function callbackRoutine(name: string, flags: string, forwardTo: Symbol | null, loc: SourceLocation): Symbol {
+function callbackRoutine(keep: Node[], name: string, flags: string, forwardTo: Symbol | null, loc: SourceLocation): Symbol {
 	const callbackType = createFunction([], [], int32Type());
 	const f = makeSymbol("f", SymbolKind.Parameter, callbackType, false);
 	const use = forwardTo == null ? makeCall(makeIdentResolved(f, loc), [], loc) : makeCallResolved(makeIdentResolved(forwardTo, loc), [makeIdentResolved(f, loc)], forwardTo, loc);
 	const sym = makeSymbol(name, SymbolKind.Function, createFunction([callbackType], ["f"], int32Type()), false);
-	sym.declNode = makeFnDecl(name, [f], [""], makeBlock([makeExprStmt(use, loc)], loc), flags, "", loc);
+	const decl = makeFnDecl(name, [f], [""], makeBlock([makeExprStmt(use, loc)], loc), flags, "", loc);
+	keep.push(decl);
+	sym.declNode = decl;
 	if (flags == "async") setFlag(sym, SymbolFlag.Async);
 	return sym;
 }
 
 test "a callback only called by a plain routine is not retained" {
 	const w = writeProbe();
-	assert !retainsParam(w, callbackRoutine("plain", "", null, makeLoc(0, 0)), 0);
+	const keep: Node[] = [];
+	assert !retainsParam(w, callbackRoutine(keep, "plain", "", null, makeLoc(0, 0)), 0);
 }
 
 test "a suspending routine retains its callback whatever its body shows" {
 	const w = writeProbe();
 	const loc = makeLoc(0, 0);
-	assert retainsParam(w, callbackRoutine("later", "async", null, loc), 0);
-	assert retainsParam(w, callbackRoutine("ticks", "generator", null, loc), 0);
+	const keep: Node[] = [];
+	assert retainsParam(w, callbackRoutine(keep, "later", "async", null, loc), 0);
+	assert retainsParam(w, callbackRoutine(keep, "ticks", "generator", null, loc), 0);
 }
 
 test "a callback forwarded through a sync wrapper into a suspending routine is retained" {
 	const w = writeProbe();
 	const loc = makeLoc(0, 0);
-	const wrap = callbackRoutine("wrap", "", callbackRoutine("later", "async", null, loc), loc);
+	const keep: Node[] = [];
+	const wrap = callbackRoutine(keep, "wrap", "", callbackRoutine(keep, "later", "async", null, loc), loc);
 	assert retainsParam(w, wrap, 0);
 }
 
