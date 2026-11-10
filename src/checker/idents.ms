@@ -7,7 +7,7 @@ import { hashStringSigned } from "std/hash";
 export class IdentEntry {
 	name: string;
 	id: int32;
-	next: IdentEntry | null;
+	next: Owned<IdentEntry> | null;
 	hash: int32;
 }
 

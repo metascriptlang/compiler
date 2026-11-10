@@ -43,6 +43,13 @@ test "the compiler's own Node is acyclic: its owning edges are Owned and its edg
 	assert typeInfoOf(c, "Node").contains(".isCyclic = MS_FALSE"), typeInfoOf(c, "Node") != "" ? typeInfoOf(c, "Node") : c.slice(0, 400);
 }
 
+test "the compiler's inline frame and ident chains are acyclic: each link owns the one before it" {
+	const frames = builtModuleC("unownedEdge", "compilerFrame", "import { InlineFrame } from \"std/meta/node\";\nconst f = new InlineFrame(\"g\", new InlineFrame(\"f\", null, 1), 2);\nconsole.log(f.callLine);\n", ["--danger"], "node");
+	assert typeInfoOf(frames, "InlineFrame").contains(".isCyclic = MS_FALSE"), typeInfoOf(frames, "InlineFrame") != "" ? typeInfoOf(frames, "InlineFrame") : frames.slice(0, 400);
+	const idents = builtModuleC("unownedEdge", "compilerIdent", "import { createIdentCache, getIdentId } from \"../../../src/checker/idents\";\nconsole.log(getIdentId(createIdentCache(), \"x\"));\n", ["--danger"], "idents");
+	assert typeInfoOf(idents, "IdentEntry").contains(".isCyclic = MS_FALSE"), typeInfoOf(idents, "IdentEntry") != "" ? typeInfoOf(idents, "IdentEntry") : idents.slice(0, 400);
+}
+
 test "owned children with an Unowned parent edge are acyclic" {
 	assert verdict("class N { kids: Vec<Owned<N>> = []; up: Unowned<N> | null = null; }\nconst n = new N();", "N") == "acyclic";
 	assert verdict("class N { left: Owned<N> | null = null; up: Unowned<N> | null = null; }\nconst n = new N();", "N") == "acyclic";

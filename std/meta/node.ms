@@ -815,7 +815,7 @@ export class Node {
 // A routine whose call was replaced by its body; `parent` is the inlined routine that called it, `callLine` the line of that call.
 export class InlineFrame {
 	name: string;
-	parent: InlineFrame | null;
+	parent: Owned<InlineFrame> | null;
 	callLine: int32;
 	constructor(name: string, parent: InlineFrame | null, callLine: int32) {
 		this.name = name;
