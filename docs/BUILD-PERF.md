@@ -136,16 +136,28 @@ string parse, stringify and join loops that release no reference, and the json b
 1.3 KB while its release sites shrank, which points to code placement rather than the moved
 unregister; the next section measures that reading.
 
-Parked: a function's last `return` parks its value and falls into the finally that releases its
-locals, instead of emitting a second copy of that finally (Nim emits the copy too:
-`blockLeaveActions` at every return; `easyResultAsgn` handles only a first-statement return). msc
-`.text` 21,569,676 → 21,265,448 B at `--danger` and 19,652,659 → 19,382,075 B at `--lto=off`
-(−1.4%), corpus programs with a finally 290 pass on c/danger/js/raiser and 51 under SAN. A compiler
-carrying it aborts `msc build src/index.ms` with an M1 owner violation in 5 of 10 runs (0 of 5 with
-`--emit-jobs=1`; the control 0 of 8): parallel emission of inline copies counts a shared
-declaration on several workers. Compiler card
-`2026-11-09-parallel-emit-of-an-inline-copy-frees-a-shared-decl-node-on-a-worker.md`; the step lands
-after its fix.
+Rejected 2026-11-10 after it was unblocked: a function's last `return` parks its value and falls
+into the finally that releases its locals, instead of emitting a second copy of that finally (Nim
+emits the copy: `blockLeaveActions` at every return; `easyResultAsgn` handles only a first-statement
+return). Its M1 abort was the analyzer counting every view local of `genFunctionDecl` once the step
+stored a view into a `Cursor<Readonly<Node>>` field; fixed on main `fcb27e4fedd`. m1m (M1 Pro), arms
+are two compilers built by one g0 of `fcb27e4fedd`, each building the same source, 8 ld64 layouts ×
+2 rounds per arm, load median 1.40:
+
+| | d0 | d1 (the step) | d1 / d0 |
+|---|---|---|---|
+| msc `__text` `--danger` | 19,405,392 | 19,113,404 | −1.50% |
+| msc `__text` `--danger --lto=off` | 17,185,444 | 16,891,764 | −1.71% |
+| hello `__text` `--danger --strip` | 3,872 | 3,872 | 0 |
+| `check src/index.ms` instructions | | | +0.61%, d1 above every d0 layout (spread 0.1–0.2%) |
+| `check` cycles, round 1 / round 2 | | | +0.45% / +0.33% |
+| 28 bench rows | | | geomean 0.998, every row overlaps |
+
+The cost is the shared epilogue: the normal path now runs the finally's `if (msErr) goto BeforeRet_`
+that the copy returned before, one TLS-flag load and branch per return through a finally, because
+after one shared finally body the code must tell the raise path from the normal one. Pinned while it
+was built by `tailReturnFinallyEmit.ms` (red 3/3 without, green 3/3 with); the step and its pin are
+`~/metascript/.wt/handoff/runtime-dce-tailreturn.patch` and `runtime-dce-tailReturnFinallyEmit.ms`.
 
 ## Measured 2026-11-10 — the root unregister leaves the release site, over randomized layouts
 
@@ -174,9 +186,29 @@ are left out of the geomean above; their cause is not measured.
 
 Pinned by the unregister rows of `src/test/guard/releaseDisposeOutOfLine.ms`: red on the d0 runtime
 of `60ecbc206ed` (`msDecref`, `msDecrefAny`, `msDecrefCyclic` reference `msUnregisterCycle`), green
-on d1, macOS arm64. Not measured: Linux x86-64 over 8 layouts (rtx stayed loaded), Windows, and
-fixed loop alignment for every program, which would make single-layout runs comparable for +1.1%
-`.text` at `--lto=off`.
+on d1, macOS arm64. Not measured: Linux x86-64 over 8 layouts (rtx stayed loaded) and Windows.
+Fixed loop alignment for every program (`-falign-loops=32`, +1.1% `.text` at `--lto=off`) would make
+single-layout runs comparable; it stays off by default (the person, 2026-11-10), and layout-randomized
+runs are the measurement instead.
+
+## Measured 2026-11-10 — LTO and size flags of `--danger`, over randomized layouts
+
+m1m (M1 Pro), source main `c147fab0083` plus the analyzer fix of `fcb27e4fedd`, every arm `--danger
+--cc=clang` (thin LTO unless off), 8 ld64 layouts per arm, warm `check`, load median 1.54. Rows
+against O3 with thin LTO, the `--danger` default:
+
+| arm | msc `__text` | hello `__text` | `check` cycles | 28 bench rows |
+|---|---|---|---|---|
+| O3 + thin LTO | 19,358,528 | 3,872 | 1.000 | 1.000 |
+| O3, `--lto=off` | 17,143,984 (−11.4%) | 3,984 | 1.110 | 1.119, 22 rows beyond every LTO layout |
+| `--passC=-Os` + thin LTO | 15,897,420 (−17.9%) | 3,316 | 1.056 (median; one layout 1.44) | 1.078, 20 rows beyond; `array push 10k` 3.56× |
+| `--passC=-mllvm -inline-threshold=100` + thin LTO | 19,247,040 (−0.6%) | 4,048 | 1.002 | 0.999 |
+
+`-Os` and `-mllvm` reach the link line too (read through a `clang` wrapper: `-flto=thin -mllvm
+-inline-threshold=100` on the link). `array push 10k` is 3.56× without LTO as well, so its fast
+path needs O3 and LTO together; why is not measured. On Mach-O thin LTO adds 12.9% to msc, against
+37–42% measured on Linux before; Linux is not re-measured here.
+
 
 ## Measured 2026-11-08 — what a hello world links
 
