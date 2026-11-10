@@ -84,8 +84,14 @@ filled; the hash only names the file, and the full key text in its header is com
 
 - **Key**: the compiler (its binary, `runtime/`, `vendor/`), the std tree, the std path, backend,
   resolver search paths and aliases, target, memory mode, strict null checks, app mode, the define
-  table (which holds the project directory, so a unit serves one project), global imports, module
-  passes, module-name roots and the prelude module list.
+  table (which holds the `build.ms` directory when there is one, so such a project has its own
+  unit), global imports, module passes, the compiler and package name roots, and the prelude module
+  list with each module's rooted name. The project root is not in the key: it names only modules
+  outside the compiler and package roots, and a prelude module there brings its rooted name and
+  source hash. Programs without a `build.ms` in any directory share one unit.
+- **Collected** by age: a unit no build loaded or wrote for 24 hours is removed by the sweep that
+  runs when a unit is written (`collectUnusedStdUnits`; a load refreshes the unit's age through
+  `markUsed`). Read from the code, not measured.
 - **Written** only by a one-shot `msc build` or `msc check` in a fresh process whose prelude checked
   without an error or warning, ran no macro or compile-time code, read no file at compile time and
   left no check in flight; anything else is a counted refusal named on the `stdUnit:` line of
@@ -102,7 +108,11 @@ corpus program in one project, 2172 builds, 2167 loading the unit, `verify-diffe
 (the 5 others stop before the check; one, `derivedClassArgumentIsOneInstance`, fails the same way
 on `main`); the compiler itself, unit written then loaded, both `verify: 507 C units and 461
 diagnostics equal a cold build`. `src/test/ic/run.ms` check `stdUnit` pins writing, loading, a torn
-file, a foreign key and the off switch.
+file, a foreign key, two directories without a `build.ms` sharing one unit, and the off switch.
+RTX Linux, 2026-11-10, a candidate of `aca9dd8f231` with the project root out of the key: every
+10th single-file corpus program, each in its own directory, 220 builds wrote 1 unit and all 220
+loaded it, 219 `verify` equal; `numberTextComptime` fails its cold build whenever std is checked from
+source, with or without the unit (inbox `2026-10-31-raiser-prelude-function-reads-a-field-from-a-w-register`).
 
 Measured on the same host, which was shared and noisy (medians of 5): `msc check` of a hello world
 347 ms without the unit, 248 ms with it; `msc build --emit=c` of it 1090 ms and 962 ms
