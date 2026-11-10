@@ -29,3 +29,10 @@ int64_t probeResidentKb(void) {
 	return resident < 0 ? -1 : (int64_t)resident * (sysconf(_SC_PAGESIZE) / 1024);
 }
 #endif
+
+#if defined(_WIN32)
+void probeSleepMs(int32_t ms) { Sleep((DWORD)ms); }
+#else
+#include <unistd.h>
+void probeSleepMs(int32_t ms) { usleep((useconds_t)ms * 1000); }
+#endif

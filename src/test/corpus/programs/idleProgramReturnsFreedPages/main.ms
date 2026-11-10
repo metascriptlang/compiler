@@ -3,8 +3,8 @@
 // @xfail(san): the SAN build allocates through ASan's malloc, which keeps freed pages; this program measures the region heap
 // @skip-raiser: binds the C fixture resident.c, which has no Raiser host bridge
 // note: the region heap kept every page it took until this program exited (RSS stayed at its
-//   peak after the strings were freed); a thread whose loop idles 500 ms now returns the pages of
-//   its free big chunks.
+//   peak after the strings were freed); a thread now returns the pages of a free big chunk 10 to
+//   11 s after the chunk went unused, here from a loop asleep on a timer.
 @include("./resident.h")
 @compile("./resident.c")
 extern function probeResidentKb(): int64;
@@ -21,6 +21,6 @@ function idle(ms: int32): Promise<void> {
 
 const freed = churn();
 const afterFree = probeResidentKb();
-await idle(800);
+await idle(12500);
 const afterIdle = probeResidentKb();
 console.log(`freed ${freed} strings of 2 MiB, at least 100 MB returned while idle: ${afterFree - afterIdle >= 100 * 1024}`);
