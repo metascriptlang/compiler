@@ -306,6 +306,13 @@ function recordWrite(p: Partitions, site: Node): void {
 	writeTimes.push(p.abstractTime);
 }
 
+function holdsOnlyReadonlyViews(t: Type | null): boolean {
+	let bare = t != null && t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t;
+	if (bare != null && bare.kind == TypeKind.Cursor) bare = bare.typeReturn;
+	if (bare != null && bare.kind == TypeKind.Union) bare = unwrapRefNullUnion(bare);
+	return isReadonlyView(bare);
+}
+
 function connectStore(p: Partitions, targets: Symbol[], destType: Type | null, src: Node): void {
 	if (!containsPointer(destType, 0)) return;
 	const sources: Symbol[] = [];
@@ -930,7 +937,7 @@ function trav(w: WriteEffects, p: Partitions, node: Node | null): void {
 				if (d.left.kind != NodeKind.Identifier) {
 					for (const r of lhsRoots) { potentialMutation(p, r); }
 				}
-				connectStore(p, lhsRoots, d.left.nodeType, d.right);
+				if (d.left.kind == NodeKind.Identifier || !holdsOnlyReadonlyViews(d.left.nodeType)) connectStore(p, lhsRoots, d.left.nodeType, d.right);
 				recordWrite(p, node);
 
 				// Cursor deps for assignment
@@ -1654,6 +1661,28 @@ test "a store through a local aliasing the view's source ends the view" {
 
 test "a store that links a local to the view's source joins their partitions and ends the view" {
 	const body = inferredNamed(LINKS + "function f(n: Link): int32 { const v = n.next; const own = new Link(); own.next = n.next; own.next = new Link(); return v != null ? v.v : 0; }", "f");
+	assert !isCursorNamed(body, "v");
+}
+
+const VIEW_HOLDERS = LINKS + "class Hold { mark: Cursor<Readonly<Link>> | null = null; kept: Readonly<Link> | null = null; seen: Readonly<Link>[] = []; slot: int32 = 0; }\n";
+
+test "a view stored into a Readonly cursor field of a local keeps the view cursor" {
+	const body = inferredNamed(VIEW_HOLDERS + "function f(n: Readonly<Link>): int32 { const v = n.next; const own = new Hold(); own.mark = v; own.slot = 1; return v != null ? v.v : 0; }", "f");
+	assert isCursorNamed(body, "v");
+}
+
+test "a view stored into an owning Readonly field of a local keeps the view cursor" {
+	const body = inferredNamed(VIEW_HOLDERS + "function f(n: Readonly<Link>): int32 { const v = n.next; const own = new Hold(); own.kept = v; own.slot = 1; return v != null ? v.v : 0; }", "f");
+	assert isCursorNamed(body, "v");
+}
+
+test "a view stored into a Readonly element of a local keeps the view cursor" {
+	const body = inferredNamed(VIEW_HOLDERS + "function f(n: Readonly<Link>): int32 { const v = n.next; const own = new Hold(); own.seen.push(n); own.seen[0] = n; own.slot = 1; return v != null ? v.v : 0; }", "f");
+	assert isCursorNamed(body, "v");
+}
+
+test "a holder of a Readonly view that also stores the source through a writable field ends the view" {
+	const body = inferredNamed(VIEW_HOLDERS + "class Both { mark: Cursor<Readonly<Link>> | null = null; link: Link | null = null; }\nfunction f(n: Link): int32 { const v = n.next; const own = new Both(); own.mark = v; own.link = n; own.link!.next = new Link(); return v != null ? v.v : 0; }", "f");
 	assert !isCursorNamed(body, "v");
 }
 
