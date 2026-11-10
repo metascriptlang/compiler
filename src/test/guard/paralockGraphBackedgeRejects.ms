@@ -2,7 +2,7 @@
 //
 // INVARIANT (PARALOCK E24, ULTRALOCK V5): a value reached from a BORROW capture
 //   is a view however deep the chain goes, so the compiler's own graph edges
-//   Symbol.declNode and Type.sym lead to Unowned<Readonly<Node>>, and a write through
+//   Symbol.declNode and Type.sym lead to Readonly<Node>, and a write through
 //   that node is refused like any other write through a view.
 //
 // WHAT IT CATCHES: Readonly propagation stopping at the Type/Symbol graph again
@@ -12,8 +12,8 @@
 //
 // RED MEANS: one case below lost its refusal; the error count pins all five.
 //
-// GUARD-CHECK-FAIL cannot write through Unowned<Readonly<Node>>
-// GUARD-CHECK-FAIL cannot pass an argument to a 'ref' or 'out' parameter through Unowned<Readonly<Node>>
+// GUARD-CHECK-FAIL cannot write through Readonly<Node>
+// GUARD-CHECK-FAIL cannot pass an argument to a 'ref' or 'out' parameter through Readonly<Node>
 // GUARD-CHECK-FAIL 5 type error(s) found
 
 import { Symbol, Type } from "std/meta/node";
