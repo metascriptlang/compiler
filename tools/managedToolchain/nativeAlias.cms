@@ -2,6 +2,8 @@
 
 import { IoError, IoErrorKind, ioError, ioErrorFromErrno } from "std/io/errors";
 import { isLinkLike } from "std/fs";
+import { wellFormedPrefix } from "std/core/string/utf8Repair";
+import { wellFormedString } from "std/core/string/bytes";
 
 extern const EINVAL: int32;
 
@@ -137,6 +139,11 @@ when (windows) {
 		if (!equal) { return Result.err(mismatch(path)); }
 		return Result.ok(null);
 	}
+
+	function readSiblingKernel(path: string): Result<string, IoError> {
+		return Result.err(ioError(IoErrorKind.Unknown, path,
+			"reading a symlink's name is not implemented on Windows: " + path));
+	}
 } else {
 	@include("unistd.h");
 
@@ -158,6 +165,19 @@ when (windows) {
 		}
 		return Result.ok(null);
 	}
+
+	function readSiblingKernel(path: string): Result<string, IoError> {
+		const data = Buffer.alloc(4096);
+		const read = cReadlink(path as cstring,
+			data as Span<uint8> as Ptr<void>, data.length as uint64);
+		const error = errno;
+		if (read < 0) { return Result.err(ioErrorFromErrno(error, path)); }
+		const bytes = data[0..read];
+		if (wellFormedPrefix(bytes, 0, false) != read) {
+			return Result.err(ioErrorFromErrno(EINVAL, path));
+		}
+		return Result.ok(wellFormedString(bytes));
+	}
 }
 
 export function isSymbolicLink(path: string): Result<boolean, IoError> {
@@ -167,15 +187,28 @@ export function isSymbolicLink(path: string): Result<boolean, IoError> {
 	return linked;
 }
 
+function siblingName(target: string): boolean {
+	return target != "" && target != "." && target != ".." &&
+		target.indexOf("\0") < 0 && target.indexOf("/") < 0 &&
+		target.indexOf("\\") < 0 && target.indexOf(":") < 0;
+}
+
+export function readStoredSiblingName(path: string): Result<string, IoError> {
+	if (path.indexOf("\0") >= 0) {
+		return Result.err(ioErrorFromErrno(EINVAL, path));
+	}
+	const target = try readSiblingKernel(path);
+	if (!siblingName(target)) { return Result.err(mismatch(path)); }
+	return Result.ok(target);
+}
+
 export function verifyStoredRelativeTarget(
 	path: string, target: string,
 ): Result<void, IoError> {
 	if (path.indexOf("\0") >= 0) {
 		return Result.err(ioErrorFromErrno(EINVAL, path));
 	}
-	if (target == "" || target == "." || target == ".." ||
-		target.indexOf("\0") >= 0 || target.indexOf("/") >= 0 ||
-		target.indexOf("\\") >= 0 || target.indexOf(":") >= 0) {
+	if (!siblingName(target)) {
 		return Result.err(ioErrorFromErrno(EINVAL, path));
 	}
 	return verifyKernel(path, target);
