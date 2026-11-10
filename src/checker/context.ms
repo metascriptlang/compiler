@@ -6,7 +6,7 @@ import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cm
 import { isMetaBuiltin, Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, lookupStd, markUsed, makeSymbol, RoutineFlag, routineFlagSet, refuseRoutineFlagDecodeWhileSealed, decodeRoutineFlags } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
-import { Node, NodeKind, NodeFlag, SourceLocation, makeLoc, createNodeAt, DeclKind, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData, ArrowFunctionData, FunctionExprData, DecoratedDeclData, AttachedOp, BuiltinKind } from "../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, makeLoc, createNodeAt, DeclKind, Type, TypeKind, Symbol, SymbolKind, EnumDeclData, FunctionDeclData, MethodDeclData, ArrowFunctionData, FunctionExprData, DecoratedDeclData, AttachedOp, BuiltinKind, FlowNode } from "../ast/node";
 import { findChar, splitTopLevel } from "../utils/string";
 import { InitTracker, createInitTracker } from "./initTracker";
 import { AffineTracker, createAffineTracker } from "./spawnAffinity";
@@ -1718,6 +1718,7 @@ export class CheckerContext {
 	pendingHoisted: Node[];      // statements an expression-position macro emitted ahead of its value; a stack — each statement-list walk takes a high-water mark on entry and drains only what was queued above it, so a block nested in the value cannot take the call site's prefix
 	pendingTrailing: Node[];
 	outOfTree: Node[];           // nodes no module tree keeps that an Unowned edge still names (a prelude module's program, a declaration a pass took out, a symbol's synthetic declaration, every node the flow graph names): the context keeps them as long as its symbols and flow graph
+	flowNodes: FlowNode[];       // every flow node its binds made, which a label's antecedent list names Unowned
 	condEvalDepth: int32;        // >0 while checking a conditionally-evaluated position (&&/|| rhs, ternary arm, loop condition) — hoisting out of one would run it unconditionally
 	inGenericContext: int32;     // >0 while checking members of a generic class pre-monomorphization — unbound-param diagnostics defer to instantiation
 	stmtPosExpr: Node;           // the expression that IS a statement: a macro there emits statements outright, so the expression-position rules (last element is the value, empty is an error) must not apply
@@ -1833,6 +1834,7 @@ export function createContext(dispatchRegistry: DispatchRegistry = createDispatc
 		pendingHoisted: [],
 		pendingTrailing: [],
 		outOfTree: [],
+		flowNodes: [],
 		disambTable: new HashMap<string, int32>(),
 		disambAfterCheck: null,
 		itemModule: -1,

@@ -3745,7 +3745,7 @@ function bindProgram(ctx: CheckerContext, program: Node): Node[] {
 	bindTemplateBodies(ctx, program);
 	const _c2 = performance.now();
 	ctx.outOfTree.push(program);
-	bindFlowGraph(program, ctx.outOfTree);  // Phase 1: build the CFG (unused by checker yet — Phase 2 will query)
+	bindFlowGraph(program, ctx.outOfTree, ctx.flowNodes);  // Phase 1: build the CFG (unused by checker yet — Phase 2 will query)
 	const moduleNames = bindModuleNames(ctx, program);
 	const _c3 = performance.now();
 	_tCollect = _tCollect + (_c1 - _c0);
@@ -4416,6 +4416,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		// Compile sub-module in a temporary context (separate scope, shared cache)
 		const subCtx = createContextWithCache(ctx.table.identCache, ctx.dispatchRegistry);
 		subCtx.outOfTree = ctx.outOfTree;
+		subCtx.flowNodes = ctx.flowNodes;
 		subCtx.outOfTree.push(subPr.value);
 		subCtx.extensionRegistry = createExtensionRegistry();
 		subCtx.exportRegistry = ctx.exportRegistry;
@@ -4893,6 +4894,7 @@ function packContentView(shared: CheckerContext, dispatchRegistry: DispatchRegis
 	view.preludeDispatchRecords = shared.preludeDispatchRecords;
 	view.table = shared.table;
 	view.outOfTree = shared.outOfTree;
+	view.flowNodes = shared.flowNodes;
 	view.extensionRegistry = shared.extensionRegistry;
 	view.compilerFuncs = shared.compilerFuncs;
 	view.includeDirectives = shared.includeDirectives;

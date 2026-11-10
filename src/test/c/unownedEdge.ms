@@ -50,6 +50,13 @@ test "the compiler's inline frame and ident chains are acyclic: each link owns t
 	assert typeInfoOf(idents, "IdentEntry").contains(".isCyclic = MS_FALSE"), typeInfoOf(idents, "IdentEntry") != "" ? typeInfoOf(idents, "IdentEntry") : idents.slice(0, 400);
 }
 
+test "the compiler's flow graph is acyclic: a label's antecedent list and a reduce label's target name their flow node Unowned" {
+	const c = builtModuleC("unownedEdge", "compilerFlow", "import { FlowNode, FlowList, FlowReduceLabelData } from \"std/meta/node\";\nconst f = new FlowNode();\nconst l: FlowList = { flow: f, next: null };\nconst r: FlowReduceLabelData = { target: f, antecedents: l };\nf.reduceLabelData = r;\nconsole.log(r.antecedents.next == null);\n", ["--danger"], "node");
+	for (const name of ["FlowNode", "FlowList", "FlowReduceLabelData"]) {
+		assert typeInfoOf(c, name).contains(".isCyclic = MS_FALSE"), typeInfoOf(c, name) != "" ? typeInfoOf(c, name) : c.slice(0, 400);
+	}
+}
+
 test "owned children with an Unowned parent edge are acyclic" {
 	assert verdict("class N { kids: Vec<Owned<N>> = []; up: Unowned<N> | null = null; }\nconst n = new N();", "N") == "acyclic";
 	assert verdict("class N { left: Owned<N> | null = null; up: Unowned<N> | null = null; }\nconst n = new N();", "N") == "acyclic";

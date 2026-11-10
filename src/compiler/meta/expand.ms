@@ -2175,7 +2175,7 @@ export function expandMacroInvocation(node: Node, ctx: CheckerContext, depth: in
 	// the emitted code exactly as if it were source at that site: match arms
 	// the macro emitted get their own arm flows, guards narrow, and reads
 	// inside the arms resolve against the narrowed variant.
-	bindExpandedSubtree(result, node.flowNode, ctx.outOfTree);
+	bindExpandedSubtree(result, node.flowNode, ctx.outOfTree, ctx.flowNodes);
 
 	return result;
 }

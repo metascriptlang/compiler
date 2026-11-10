@@ -747,8 +747,8 @@ export enum FlowFlag {
 // FlowList — singly-linked list of FlowNode antecedents for join labels.
 // Duplicates are dropped at `addAntecedent` time (pointer-equality walk).
 export class FlowList {
-	flow: FlowNode;
-	next: FlowList | null;
+	flow: Unowned<FlowNode>;
+	next: Owned<FlowList> | null;
 }
 
 // Synthetic node stored in FlowNode.node when Flags contains SwitchClause.
@@ -764,14 +764,14 @@ export class FlowSwitchClauseData {
 // Used for try/finally re-routing: finally's antecedent set differs depending
 // on whether analysis is for normal exit, return exit, or exception exit.
 export class FlowReduceLabelData {
-	target: FlowNode;        // the LoopLabel/BranchLabel to re-route
+	target: Unowned<FlowNode>; // the LoopLabel/BranchLabel to re-route
 	antecedents: FlowList;   // alternate antecedent set for this query context
 }
 
 export class FlowNode {
 	flags: BitSet<FlowFlag>;
 	node: Unowned<Node> | null;       // associated AST node (variant-dependent meaning; may be synthetic FlowSwitchClauseData / FlowReduceLabelData holder)
-	antecedent: FlowNode | null;    // single parent (non-Label variants)
+	antecedent: Owned<FlowNode> | null; // single parent (non-Label variants)
 	antecedents: FlowList | null;   // list of parents (BranchLabel / LoopLabel only)
 	// Synthetic variant holders (null unless Flags has SwitchClause / ReduceLabel)
 	switchClauseData: FlowSwitchClauseData | null;

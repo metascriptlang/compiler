@@ -50,8 +50,17 @@ function restoreNamed(outer: Node[]): void {
 	flowNamed = outer;
 }
 
+// Every flow node a binding makes, kept by the caller's holder: a label's antecedent list and a reduce label's
+// target name their flow node Unowned, because a loop's back edge would otherwise make the graph a cycle.
+let flowHeld: FlowNode[] = [];
+
+function restoreHeld(outer: FlowNode[]): void {
+	flowHeld = outer;
+}
+
 function createFlowNode(flag: FlowFlag): FlowNode {
 	const f = new FlowNode();
+	flowHeld.push(f);
 	f.flags = (0 as BitSet<FlowFlag>).incl(flag);
 	f.node = null;
 	f.antecedent = null;
@@ -194,12 +203,15 @@ function createBinderState(): BinderState {
 
 // ===== Entry Point =====
 
-export function bindFlowGraph(program: Node, keep: Node[] = []): void {
+export function bindFlowGraph(program: Node, keep: Node[], flows: FlowNode[]): void {
 	if (program == null) return;
 	if (program.kind != NodeKind.Program) return;
 	const outer = flowNamed;
 	flowNamed = keep;
 	defer restoreNamed(outer);
+	const outerHeld = flowHeld;
+	flowHeld = flows;
+	defer restoreHeld(outerHeld);
 	const state = createBinderState();
 	state.currentFlow = createStartFlow(program);
 	const d = program.data as ProgramData;
@@ -212,10 +224,13 @@ export function bindFlowGraph(program: Node, keep: Node[] = []): void {
 // flowNode=null everywhere (createNodeAt), so narrowing queries in the
 // instantiation body re-check silently fall back to declared types unless the
 // clone gets its own flow graph.
-export function bindFunctionFlow(container: Node, body: Node, keep: Node[] = []): void {
+export function bindFunctionFlow(container: Node, body: Node, keep: Node[], flows: FlowNode[]): void {
 	const outer = flowNamed;
 	flowNamed = keep;
 	defer restoreNamed(outer);
+	const outerHeld = flowHeld;
+	flowHeld = flows;
+	defer restoreHeld(outerHeld);
 	const state = createBinderState();
 	bindContainer(state, container, body);
 }
@@ -225,11 +240,14 @@ export function bindFunctionFlow(container: Node, body: Node, keep: Node[] = [])
 // narrowing (match arms, assert guards, &&) cannot apply to macro-emitted
 // code even though the same code as source would narrow. bindStatement's
 // `_ =>` fallback dispatches expressions, so one entry covers both shapes.
-export function bindExpandedSubtree(subtree: Node | null, seed: FlowNode | null, keep: Node[] = []): void {
+export function bindExpandedSubtree(subtree: Node | null, seed: FlowNode | null, keep: Node[], flows: FlowNode[]): void {
 	if (subtree == null || seed == null) return;
 	const outer = flowNamed;
 	flowNamed = keep;
 	defer restoreNamed(outer);
+	const outerHeld = flowHeld;
+	flowHeld = flows;
+	defer restoreHeld(outerHeld);
 	const state = createBinderState();
 	state.currentFlow = seed;
 	bindStatement(state, subtree);
@@ -1085,11 +1103,14 @@ function bindCondition(state: BinderState, expr: Node, trueTarget: FlowNode, fal
 
 // ===== Tests =====
 
+const testKept: Node[] = [];
+const testFlows: FlowNode[] = [];
+
 function bindSource(input: string): Node {
 	const pr = parseSource(input);
 	if (!pr.ok) return null as unknown as Node;
 	const program = pr.value;
-	bindFlowGraph(program);
+	bindFlowGraph(program, testKept, testFlows);
 	return program;
 }
 

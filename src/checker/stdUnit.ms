@@ -197,6 +197,7 @@ export const CHECKER_CONTEXT_FIELD_ROLES: { [K in keyof CheckerContext]-?: Field
 	pendingLocalTypeDecls: encodedAs("node list row 2"),
 	liftedLocalTypeDecls: encodedAs("node list row 2"),
 	outOfTree: derivedAs("the reader's node table: every node the unit restores, which the restored symbols and flow graph name"),
+	flowNodes: derivedAs("empty: a unit writes no flow graph, and a clone of a restored body is bound again into its host"),
 	preludeCtx: derivedAs("module: the restored base (asserted at write); base: null"),
 	globalImportsCtx: refusedUnlessNull("no build.ms global import is visible to a std module"),
 	instantiatingCtx: encodedAs("reference row 1: a context of the unit, refused otherwise"),
