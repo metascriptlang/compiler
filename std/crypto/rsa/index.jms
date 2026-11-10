@@ -20,9 +20,12 @@ import { bytesOf } from "../pure/bytes";
 import { pemDecode, pemEncode } from "../pure/pem";
 import {
 	RsaPublicData, RsaPrivateData, rsaPublicFromPkcs1, rsaPublicFromSpki, rsaPublicToSpki, rsaPrivateFromPkcs1,
-	rsaPrivateFromPkcs8, rsaPrivateToPkcs1, rsaPrivateToPkcs8, rsaPublicOf, rsaGenerate, rsaSignPkcs1, rsaSignPss,
+	rsaPrivateFromPkcs8, rsaPrivateToPkcs1, rsaPrivateToPkcs8, rsaPublicOf, rsaSignPkcs1, rsaSignPss,
 	rsaVerifyPkcs1, rsaVerifyPss, rsaOaepEncrypt, rsaOaepDecrypt,
 } from "../pure/rsa";
+when (!nodejs) {
+	import { rsaGenerate } from "../pure/rsa";
+}
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
 
@@ -120,6 +123,111 @@ extern function wcGenerate(bits: number): Promise<Settled> from "msRsaGenerate(#
 
 export type RsaPadding = "pkcs1v15" | "pss";
 
+when (nodejs) {
+	import { NodeInput, nodeInput } from "../pure/nodeCrypto";
+
+	@emit(`const msRsaNode = globalThis.process.getBuiltinModule("node:crypto");
+function msRsaNodeKey(cache, slot, der, isPrivate) {
+	let key = cache.get(slot);
+	if (!key) {
+		const spec = { key: Uint8Array.from(der), format: "der", type: isPrivate ? "pkcs8" : "spki" };
+		key = isPrivate ? msRsaNode.createPrivateKey(spec) : msRsaNode.createPublicKey(spec);
+		cache.set(slot, key);
+	}
+	return key;
+}
+function msRsaNodeIn(x) {
+	return typeof x === "string" ? new TextEncoder().encode(x) : x;
+}
+function msRsaNodeSpec(key, pss, hash) {
+	return pss
+		? { key, padding: msRsaNode.constants.RSA_PKCS1_PSS_PADDING, saltLength: msRsaPkSalts[hash] }
+		: { key, padding: msRsaNode.constants.RSA_PKCS1_PADDING };
+}
+function msRsaNodeSign(cache, pkcs8, pss, hash, data) {
+	try {
+		const key = msRsaNodeKey(cache, "node-private", pkcs8, true);
+		return { value: msRsaBytes(msRsaNode.sign(hash, msRsaNodeIn(data), msRsaNodeSpec(key, pss, hash))), error: "" };
+	} catch (e) {
+		return { value: [], error: msRsaPkMessage(e) };
+	}
+}
+function msRsaNodeVerify(cache, spki, pss, hash, data, signature) {
+	try {
+		const key = msRsaNodeKey(cache, "node-public", spki, false);
+		return msRsaNode.verify(hash, msRsaNodeIn(data), msRsaNodeSpec(key, pss, hash), Uint8Array.from(signature));
+	} catch (e) {
+		return false;
+	}
+}
+function msRsaNodeEncrypt(cache, spki, data) {
+	try {
+		const key = msRsaNodeKey(cache, "node-public", spki, false);
+		return { value: msRsaBytes(msRsaNode.publicEncrypt({ key, padding: msRsaNode.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" }, msRsaNodeIn(data))), error: "" };
+	} catch (e) {
+		return { value: [], error: msRsaPkMessage(e) };
+	}
+}
+function msRsaNodeDecrypt(cache, pkcs8, data) {
+	try {
+		const key = msRsaNodeKey(cache, "node-private", pkcs8, true);
+		return { value: msRsaBytes(msRsaNode.privateDecrypt({ key, padding: msRsaNode.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" }, msRsaNodeIn(data))), error: "" };
+	} catch (e) {
+		return { value: [], error: msRsaPkMessage(e) };
+	}
+}
+function msRsaNodeGenerate(bits) {
+	try {
+		const pair = msRsaNode.generateKeyPairSync("rsa", { modulusLength: bits, publicExponent: 65537, privateKeyEncoding: { type: "pkcs8", format: "der" }, publicKeyEncoding: { type: "spki", format: "der" } });
+		return { value: msRsaBytes(pair.privateKey), error: "" };
+	} catch (e) {
+		return { value: [], error: msRsaPkMessage(e) };
+	}
+}`);
+
+	extern function nodeHashTable(hash: string): boolean from "(msRsaPkHashes[#] !== undefined)";
+
+	function nodeHashKnown(hash: string): boolean {
+		return nodeHashTable(hash);
+	}
+	extern function nodeSign(cache: unknown, pkcs8: Buffer, pss: boolean, hash: string, data: NodeInput): Settled from "msRsaNodeSign(#, #, #, #, #)";
+	extern function nodeVerify(cache: unknown, spki: Buffer, pss: boolean, hash: string, data: NodeInput, signature: Buffer): boolean from "msRsaNodeVerify(#, #, #, #, #, #)";
+	extern function nodeEncrypt(cache: unknown, spki: Buffer, data: NodeInput): Settled from "msRsaNodeEncrypt(#, #, #)";
+	extern function nodeDecrypt(cache: unknown, pkcs8: Buffer, data: NodeInput): Settled from "msRsaNodeDecrypt(#, #, #)";
+	extern function nodeGenerate(bits: number): Settled from "msRsaNodeGenerate(#)";
+
+	function signNode(key: RsaPrivateKey, data: NodeInput, hash: string, padding: RsaPadding): Result<Buffer, CryptoError> {
+		if (hash == "sha1" || !nodeHashKnown(hash)) return Result.err(signFailed(hash, padding, ""));
+		const done = nodeSign(key._cache, rsaPrivateToPkcs8(key._data) as Buffer, padding == "pss", hash, data);
+		if (done.error != "") return Result.err(signFailed(hash, padding, `: ${done.error}`));
+		return Result.ok(done.value);
+	}
+
+	function verifyNode(key: RsaPublicKey, data: NodeInput, signature: Buffer, hash: string, padding: RsaPadding): boolean {
+		return nodeVerify(key._cache, rsaPublicToSpki(key._data) as Buffer, padding == "pss", hash, data, signature);
+	}
+
+	function encryptNode(key: RsaPublicKey, data: NodeInput): Result<Buffer, CryptoError> {
+		const done = nodeEncrypt(key._cache, rsaPublicToSpki(key._data) as Buffer, data);
+		if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "rsa.encrypt", `RSA-OAEP encryption failed: ${done.error}`));
+		return Result.ok(done.value);
+	}
+
+	function decryptNode(key: RsaPrivateKey, data: NodeInput): Result<Buffer, CryptoError> {
+		const done = nodeDecrypt(key._cache, rsaPrivateToPkcs8(key._data) as Buffer, data);
+		if (done.error != "") return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "rsa.decrypt", "RSA-OAEP decryption failed"));
+		return Result.ok(done.value);
+	}
+
+	function generateNode(bits: int32): Result<RsaPrivateKey, CryptoError> {
+		const done = nodeGenerate(bits);
+		const data = done.error == "" ? rsaPrivateFromPkcs8(done.value) : null;
+		if (data == null) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "RsaPrivateKey.generate", done.error == "" ? "RSA key generation failed" : done.error));
+		return Result.ok({ _data: data, _cache: newCache() });
+	}
+}
+
+
 function publicOfPem(pem: string): RsaPublicData | null {
 	const block = pemDecode(pem);
 	if (block == null) return null;
@@ -167,15 +275,23 @@ export class RsaPrivateKey {
 		if (bits != 2048 && bits != 3072 && bits != 4096) {
 			return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "RsaPrivateKey.generate", "bits must be 2048, 3072, or 4096"));
 		}
-		return Result.ok({ _data: rsaGenerate(bits), _cache: newCache() });
+		when (nodejs) {
+			return generateNode(bits);
+		} else {
+			return Result.ok({ _data: rsaGenerate(bits), _cache: newCache() });
+		}
 	}
 
 	static async generate(bits: int32): Promise<Result<RsaPrivateKey, CryptoError>> {
-		if (!wcHasSubtle() || (bits != 2048 && bits != 3072 && bits != 4096)) return RsaPrivateKey.generateSync(bits);
-		const done = await wcGenerate(bits);
-		const data = done.error == "" ? rsaPrivateFromPkcs8(done.value) : null;
-		if (data == null) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "RsaPrivateKey.generate", done.error == "" ? "RSA key generation failed" : done.error));
-		return Result.ok({ _data: data, _cache: newCache() });
+		when (nodejs) {
+			return RsaPrivateKey.generateSync(bits);
+		} else {
+			if (!wcHasSubtle() || (bits != 2048 && bits != 3072 && bits != 4096)) return RsaPrivateKey.generateSync(bits);
+			const done = await wcGenerate(bits);
+			const data = done.error == "" ? rsaPrivateFromPkcs8(done.value) : null;
+			if (data == null) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "RsaPrivateKey.generate", done.error == "" ? "RSA key generation failed" : done.error));
+			return Result.ok({ _data: data, _cache: newCache() });
+		}
 	}
 
 	static importPemSync(pem: string): Result<RsaPrivateKey, CryptoError> {
@@ -199,7 +315,11 @@ export class RsaPrivateKey {
 
 // hash is sha256, sha384 or sha512; sha1 signatures are refused.
 export function signSync<D extends ByteInput>(key: RsaPrivateKey, data: D, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Result<Buffer, CryptoError> {
-	return signSyncOwned(key, bytesOf(data), hash, padding);
+	when (nodejs) {
+		return signNode(key, nodeInput(data), hash, padding);
+	} else {
+		return signSyncOwned(key, bytesOf(data), hash, padding);
+	}
 }
 
 function signSyncOwned(key: RsaPrivateKey, data: Buffer, hash: string, padding: RsaPadding): Result<Buffer, CryptoError> {
@@ -211,7 +331,11 @@ function signSyncOwned(key: RsaPrivateKey, data: Buffer, hash: string, padding: 
 }
 
 export function sign<D extends ByteInput>(key: RsaPrivateKey, data: D, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Promise<Result<Buffer, CryptoError>> {
-	return signOwned(key, bytesOf(data), hash, padding);
+	when (nodejs) {
+		return Promise.resolve(signNode(key, nodeInput(data), hash, padding));
+	} else {
+		return signOwned(key, bytesOf(data), hash, padding);
+	}
 }
 
 async function signOwned(key: RsaPrivateKey, data: Buffer, hash: string, padding: RsaPadding): Promise<Result<Buffer, CryptoError>> {
@@ -224,6 +348,9 @@ async function signOwned(key: RsaPrivateKey, data: Buffer, hash: string, padding
 
 // False on any failure: a bad signature, a malformed input or an unknown hash.
 export function verifySync<D extends ByteInput, S extends ByteInput>(key: RsaPublicKey, data: D, signature: S, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): boolean {
+	when (nodejs) {
+		if (nodeHashKnown(hash)) return verifyNode(key, nodeInput(data), bytesOf(signature), hash, padding);
+	}
 	return verifySyncOwned(key, bytesOf(data), bytesOf(signature), hash, padding);
 }
 
@@ -234,7 +361,11 @@ function verifySyncOwned(key: RsaPublicKey, data: Buffer, signature: Buffer, has
 }
 
 export function verify<D extends ByteInput, S extends ByteInput>(key: RsaPublicKey, data: D, signature: S, hash: string = "sha256", padding: RsaPadding = "pkcs1v15"): Promise<boolean> {
-	return verifyOwned(key, bytesOf(data), bytesOf(signature), hash, padding);
+	when (nodejs) {
+		return Promise.resolve(verifySync(key, data, signature, hash, padding));
+	} else {
+		return verifyOwned(key, bytesOf(data), bytesOf(signature), hash, padding);
+	}
 }
 
 async function verifyOwned(key: RsaPublicKey, data: Buffer, signature: Buffer, hash: string, padding: RsaPadding): Promise<boolean> {
@@ -244,7 +375,11 @@ async function verifyOwned(key: RsaPublicKey, data: Buffer, signature: Buffer, h
 
 // RSA-OAEP with SHA-256.
 export function encryptSync<D extends ByteInput>(key: RsaPublicKey, data: D): Result<Buffer, CryptoError> {
-	return encryptSyncOwned(key, bytesOf(data));
+	when (nodejs) {
+		return encryptNode(key, nodeInput(data));
+	} else {
+		return encryptSyncOwned(key, bytesOf(data));
+	}
 }
 
 function encryptSyncOwned(key: RsaPublicKey, data: Buffer): Result<Buffer, CryptoError> {
@@ -254,7 +389,11 @@ function encryptSyncOwned(key: RsaPublicKey, data: Buffer): Result<Buffer, Crypt
 }
 
 export function encrypt<D extends ByteInput>(key: RsaPublicKey, data: D): Promise<Result<Buffer, CryptoError>> {
-	return encryptOwned(key, bytesOf(data));
+	when (nodejs) {
+		return Promise.resolve(encryptNode(key, nodeInput(data)));
+	} else {
+		return encryptOwned(key, bytesOf(data));
+	}
 }
 
 async function encryptOwned(key: RsaPublicKey, data: Buffer): Promise<Result<Buffer, CryptoError>> {
@@ -265,7 +404,11 @@ async function encryptOwned(key: RsaPublicKey, data: Buffer): Promise<Result<Buf
 }
 
 export function decryptSync<D extends ByteInput>(key: RsaPrivateKey, data: D): Result<Buffer, CryptoError> {
-	return decryptSyncOwned(key, bytesOf(data));
+	when (nodejs) {
+		return decryptNode(key, nodeInput(data));
+	} else {
+		return decryptSyncOwned(key, bytesOf(data));
+	}
 }
 
 function decryptSyncOwned(key: RsaPrivateKey, data: Buffer): Result<Buffer, CryptoError> {
@@ -275,7 +418,11 @@ function decryptSyncOwned(key: RsaPrivateKey, data: Buffer): Result<Buffer, Cryp
 }
 
 export function decrypt<D extends ByteInput>(key: RsaPrivateKey, data: D): Promise<Result<Buffer, CryptoError>> {
-	return decryptOwned(key, bytesOf(data));
+	when (nodejs) {
+		return Promise.resolve(decryptNode(key, nodeInput(data)));
+	} else {
+		return decryptOwned(key, bytesOf(data));
+	}
 }
 
 async function decryptOwned(key: RsaPrivateKey, data: Buffer): Promise<Result<Buffer, CryptoError>> {
