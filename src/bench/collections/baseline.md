@@ -127,29 +127,43 @@ Why the three slower rows are slower (pinned to one core, `perf record` and `per
   the same in both arms (about 335M cycles each); the extra cycles show in `msStringConcatArr` and memmove. Moving
   the output string by 0, 8 or 64 cells does not change it, so it is not cell placement.
 
-## Memory after idle — rtx and m1m, 2026-11-10
+## Memory after idle — rtx and the gate Mac (Apple M3 Max, macOS 26.6.2), 2026-11-10
 
-Probe `idle.ms` (kept with the runtime-allocator card's probes, not in the repo): each round allocates 1M objects
-holding 16-216 B strings, 2000 strings of 4-68 KiB and 40 of 2 MiB, frees them all, then awaits a 2 s timer, so the
-loop idles. `main` is the region heap before idle return (`~/recompiler` main `5f707391f` on rtx, installed
-`cc97a2f5818` on m1m); `idle return` is that tree with it; `libc` is the same tree built with
-`-DMS_HEAP_USE_MALLOC=1`; node runs the same shape with `--expose-gc` and a `gc()` after each free. Resident memory
-is RSS on Linux and the task footprint on macOS, which is what the OS charges. One run per column, MB:
+Probe `burst.ms` (kept with the runtime-allocator card's probes, not in the repo): a burst allocates 1M objects
+holding 16-216 B strings, 2000 strings of 4-68 KiB and 40 of 2 MiB and frees them all; five bursts 0.6 s apart,
+five 2 s apart, five 5 s apart, each gap an awaited timer, then 12.5 s on a timer. `main` is the region heap
+before any return (rtx `~/recompiler` `2e3364dfd`, the Mac's installed `60ecbc206ed`); `500 ms` returned every
+dirty free big chunk once the thread's loop had idled 500 ms (the runtime of `ac60ce49206`, never landed); `10 s`
+returns a free big chunk 10 to 11 s after that chunk went unused (tree `f1d38a36964d`). Danger builds. Resident
+memory is RSS on Linux and the task footprint on macOS. MB after the last burst of each gap, and the fastest
+burst that followed a gap (rtx best of 3 runs under load 37-41, the Mac best of 2 under load 14-40):
 
-| host | column | peak | round 1 idle | round 2 idle | round 3 idle |
-|---|---|---|---|---|---|
-| rtx | main | 359.1 | 359.1 | 367.1 | 429.2 |
-| rtx | idle return | 358.3 | 255.0 | 216.3 | 243.4 |
-| rtx | libc | 414.5 | 252.9 | 258.8 | 258.8 |
-| rtx | node 24.1.0 | 449.0 | 426.1 | 429.6 | 434.1 |
-| m1m | main | 364.9 | 364.9 | 370.8 | 371.3 |
-| m1m | idle return | 358.0 | 256.9 | 218.8 | 245.7 |
-| m1m | libc | 404.4 | 132.0 | 114.6 | 207.8 |
-| m1m | node 24.1.0 | 444.1 | 421.1 | 425.7 | 426.8 |
+| host | runtime | MB at 0.6 s gaps | 2 s | 5 s | after 12.5 s | burst ms at 0.6 s gaps | 2 s | 5 s |
+|---|---|---|---|---|---|---|---|---|
+| rtx | main | 432 | 435 | 436 | 436 | 402 | 399 | 367 |
+| rtx | 500 ms | 238 | 234 | 234 | 234 | 426 | 400 | 407 |
+| rtx | 10 s | 368 | 368 | 370 | 199 | 359 | 337 | 353 |
+| Mac | main | 368 | 370 | 370 | 370 | 680 | 651 | 710 |
+| Mac | 500 ms | 240 | 237 | 237 | 237 | 663 | 683 | 711 |
+| Mac | 10 s | 368 | 368 | 368 | 213 | 611 | 667 | 663 |
 
-What stays after idle return is small chunks, which keep their pages (the 1M cells and their strings, about
-200 MB). The cost is paid by the first burst after an idle: rtx, best of 5 interleaved runs under load 14-47,
-churn time per round main 355 / 301 / 309 ms, idle return 359 / 339 / 336 ms (round 1 has no idle before it);
-the pages given back fault in again. m1m shows no such cost in one run (816 / 806 against 809 / 789 ms), because
-`MADV_FREE_REUSABLE` changes the footprint without unmapping. Not measured: Windows resident memory after idle
-(d87 passed `idleProgramReturnsFreedPages`, which asserts at least 100 MB returned), and a long-running server.
+Bursts closer than the age keep their pages, so they pay no fault for pages given back (the 500 ms runtime paid
+it on Linux: 426 against 402 ms and 407 against 367 ms; on macOS `MADV_FREE_REUSABLE` changes the footprint
+without unmapping, so no runtime shows it there). What stays after the return is small chunks, which keep their
+pages (the 1M cells and their strings). One of the three `main` runs on rtx fell from 436 to 368 MB during its
+5 s gaps; `main` returns nothing, and the cause was not looked for. Under the earlier probe (same burst, 2 s
+idle) `libc` (`-DMS_HEAP_USE_MALLOC=1`) settled at 253-259 MB on rtx and 115-208 MB on m1m, and node 24.1.0
+with `--expose-gc` at 421-434 MB.
+
+A loop its host drives (`msRunOnce(0)` every frame, the wait in the host: ion, Neon) never armed the 500 ms
+clock: 64 x 2 MiB freed stayed at 143 MB across 2.4 s of such turns on the Mac, against 4 MB after a waiting
+loop. The 10 s runtime checks on every turn; corpus `hostDrivenLoopReturnsFreedPages` holds it.
+
+Taking from a returned chunk, macOS footprint, one run each: one 96 MiB buffer freed and returned (1.2 MB), then
+120 frames each taking and freeing a 3 MiB buffer: 97.2 MB on the 500 ms runtime, which re-armed the whole
+chunk and macOS charges every re-armed page, 4.3 MB on the 10 s runtime, which re-arms the front it takes. After
+64 x 2 MiB strings freed and returned the same frames cost 12.8 MB on the 500 ms runtime and 18.2 MB on the 10 s
+one, whose dirty pieces no longer join returned neighbours; both are back near 2.4 MB 12.5 s later.
+
+Not measured: Windows resident memory (d87 passes both corpus programs, which assert at least 100 MB returned),
+a long-running server, and a quiet host for the burst times.
