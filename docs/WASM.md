@@ -35,7 +35,7 @@ unless its `@columns` says otherwise.
 | A callback's `Span<T>` parameter | a typed array over wasm memory for the call, so a write lands in place, also one made before a throw, and two Spans of one Vec see each other's writes; a `Span<boolean>` is a copy written back after the call, two of them sharing one copy; a boundary call while it is open throws | `spanCallback`, `callbackSpanViews`, `spanOverlap`, `spanReentry`, `exportsHeap`, `typedSet` |
 | `ref`, `out` and `sink` parameters | `ref`/`out` of a number, bool, exported enum, string or struct of those (nullable too): copied in from the caller's variable and written back after the call and when it throws; refused beside a callback, and at the call when two arguments reach one variable or one names an element a `Span` argument views; a kept callback called during the call throws. `sink` of a string, struct or `Vec`: the adopted copy is moved into the parameter. A `ref`/`out` `Vec`, `Span`, `Handle` or callback and a callback's own mode are refused naming the mode | `refOutScalars`, `refOutStructs`, `sinkCopies`, `refAliased`, `keptCallbackDuringRef`, `refForeign`, `refusedModes` |
 | Errors | a JS throw in a callback reaches the JS caller as the same object; a wasm throw reaches it as an Error; a trap ends the instance and every later call says so | `callbackThrow*`, `spanThrow`, `handleTrap` |
-| Owner `Handle<T>` of an exported class | wasm owns it, JS holds a counted reference: `release`, `retain`, `[Symbol.dispose]`; a release while a call lends it waits for that call. The JS side reaches the object as `h.value().member`: a method call, a getter or setter, a field read or write each run in wasm on the lent handle; `h.value()` used any other way, and a write or method call through a copied struct or `Vec` field, are refused | `handleBasic`, `handleRetain`, `handleMisuse`, `handleDestroy`, `handleMembers`, `refusedHandleRead`, `refusedHandleCopyWrite` |
+| Owner `Handle<T>` of an exported class | wasm owns it, JS holds a counted reference: `release`, `retain`, `[Symbol.dispose]`; a release while a call lends it waits for that call. The JS side reaches the object as `h.value().member`: a method call, a getter or setter, a field read or write each run in wasm on the handle; `h.value()` used any other way, and a write or method call through a copied struct or `Vec` field, are refused. `Handle.retain(new C(…))` written on the JS side builds the object in wasm; any other `Handle.retain`, `Handle.borrow` or `Handle.at` of the class there is refused, so a `Handle<C>` on the JS side always holds a wasm object | `handleBasic`, `handleRetain`, `handleMisuse`, `handleDestroy`, `handleMembers`, `handleConstruct`, `refusedHandleRead`, `refusedHandleCopyWrite`, `refusedHandleMake` |
 | `Handle<VecBox<T>>.view(f)` | a Span over wasm memory, no copy, only inside `f`; a boundary call while it is open throws (it could grow memory) | `handleView*`, `refusedKeptView*` |
 | Classes, unions, arrays, functions, module state shared by both halves | refused with a named reason at the declaration | `refused*` |
 
@@ -74,6 +74,15 @@ writes (`=`, `+=`, `++`, a struct field), a callback parameter, and a method nam
 stays the class's method and not the handle's. Not measured: an overloaded or inherited method, a
 member of a class two placed modules export, `--release`/`--danger`, and members for a foreign JS
 caller, which still gets only `release`, `retain` and `[Symbol.dispose]`.
+
+The constructor and the direct member calls were measured 2026-11-10 on m1m with a candidate of
+`wt/js-wasm-one-program` (base f0d98fca7d4): `WASMMIX_BROWSER=1 check.sh` passed all 97 programs
+of the tree on C, JS, mixed, the tree build and Chrome (its other 3 FAILs are deleted programs m1m
+still holds), units 192/192; `handleConstruct` and `refusedHandleMake` are red on the installed
+compiler 60ecbc206ed. `handleConstruct` builds a `Counter` with a default argument and with both,
+passes it to a `@wasm` function that reads it, and keeps a plain `new Counter(…)` on the JS side,
+which stays a JS object and prints the same. Not measured: an overloaded constructor, a generic
+class, a constructor with a callback parameter.
 
 Dev builds (default mode) add: argument type checks on the functions the entry re-exports, and
 the site in handle messages (`use of Handle<Counter> created at core.ms:8 after release`); at exit
@@ -152,6 +161,28 @@ three handle checks and drop the site.
   of a fresh local object later stored (`const l = new Listener(); l.visit = cb; owner = l`) and a
   push into a fresh local array later stored; the actor borrow check shares that search (inbox card
   `2026-10-26-a-call-receiver-writes-returns-or-outlives-its-borrowed-argument.md`).
+- **A wasm-owned object is released by the author, not at scope end, on the JS side** (traced
+  2026-11-10). The JS half has no destroy, and no reference supplies one for a class on a GC host:
+  Nim's JS backend never runs a `ref object`'s `=destroy`, and runs a value object's only for a
+  local, not for one in a `seq` (probe with `nim js`, Nim 2.2.2); wasm-bindgen asks for `free()`,
+  offers `[Symbol.dispose]` for TS `using`, and adds a `FinalizationRegistry` backstop. Releasing
+  at scope end as the all-C program does would mean counting every JS-side place a wasm object can
+  be stored. So `Handle.retain(new C(…))` builds it, `release()` or `defer h.release()` frees it,
+  and the dev leak report names what was never released. That the JS backend runs no struct
+  `onDestroy` while Nim's JS backend does is on compiler card
+  `2026-11-10-js-backend-runs-no-struct-ondestroy-where-nim-js-does`.
+- **A member call is a direct call of its wrapper.** The compiler rewrites `h.value().m(…)`,
+  `h.value().f` and `h.value().f = v` (as a statement) on the JS side into one call of the
+  member's wrapper, as wasm-bindgen's class method calls one shim; a compound assignment or `++`
+  goes through a proxy object that `value()` returns, one call per read and per write. A handle
+  argument of a call that runs no JS (no callback parameter, no kept callback in the program) is
+  only checked live, through the wasm pointer kept on the handle and zeroed at its release, as
+  wasm-bindgen keeps `__wbg_ptr`; with a callback it is lent, so a release from the callback waits
+  (RT-48). Measured on m1m 2026-11-10 (not quiet, 5 rounds): `method x1000` 20.11 → 3.84 ns per call on
+  Node (wasm-bindgen 12.97), `field x1000` 20.31 → 3.92 (wasm-bindgen 2.85); in Chrome 4.19 and 4.40
+  against 4.47 and 4.27. The Node field read stays about 1 ns above wasm-bindgen's getter: a
+  `@wasm` scalar call costs 2.9 ns here (`add x1000`) for the dead-instance check and the error
+  relay every call keeps.
 - **A release while a call lends the handle is deferred to the end of that call**, a deliberate
   divergence recorded as `paper/NIM-REF.md` RT-48.
 - **A `ref` or `out` parameter is a copy written back, through the result takers.** Wasm cannot

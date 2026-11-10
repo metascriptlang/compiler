@@ -205,3 +205,37 @@ in another). A Chrome CPU profile of the row early and late in one page (m1m, 2 
 wasm-bindgen's `.slice()` pays too, so no glue change within the copy contract reaches it. Probe:
 `--js-flags=--expose-gc` and `console.profile` around the rows, read through CDP
 `Profiler.consoleProfileFinished`.
+
+## 2026-11-10, m1m, members of a wasm-owned object
+
+Branch `wt/js-wasm-one-program` on main `f0d98fca7d4`, with the constructor, the direct member
+calls and the handle's pointer kept on it. New rows: `method x1000` (`h.value().bump(1)`),
+`field x1000` (`h.value().n`), `construct x1000` (`Handle.retain(new Counter(i))` then
+`release()`), against a `#[wasm_bindgen]` struct with a constructor, a `&mut self` method and a
+`pub` field. Not a quiet window. Median of 5 rounds, us/op.
+
+| row | mixed | wasmbindgen | mixed-chrome | wasmbindgen-chrome | neon (reference) |
+|---|---|---|---|---|---|
+| add x1000 | 2.89 | 11.875 | 2.933 | 3.601 | 40.894 |
+| add64 x1000 | 4.817 | 4.485 | 4.15 | 4.899 | 52.844 |
+| strLen16 x1000 | 23.997 | 25.94 | 24.24 | 26.058 | 73.13 |
+| echo16 x1000 | 129.078 | 153.505 | 136.393 | 215.087 | 87.49 |
+| mid x1000 | 53.009 | 330.062 | 58.583 | 214.943 | 372.567 |
+| sumVec 1k Array | 1.525 | 1.51 | 1.648 | 1.658 | 53.015 |
+| sumSpan 1k Float32Array | 1.056 | 1.035 | 1.059 | 1.038 | 1.068 |
+| scaleSpan 1k Float32Array | 0.285 | 0.424 | 0.278 | 0.437 | 0.16 |
+| scaleBox 1k held by callee | 0.112 | 0.192 | 0.117 | 0.197 | 0.098 |
+| makeVec 1k | 1.125 | 0.891 | 1.12 | 1.095 | 0.884 |
+| callback 1k | 6.906 | 117.683 | 8.646 | 121.502 | 50.339 |
+| method x1000 | 3.84 | 12.968 | 4.185 | 4.472 | - |
+| field x1000 | 3.917 | 2.849 | 4.397 | 4.268 | - |
+| construct x1000 | 49.826 | 157.296 | 45.491 | 97.385 | - |
+| primes 2M | 5920.51 | 5243.233 | 6174 | 6339.583 | 4527.603 |
+
+`accept node: 12/15 rows meet wasmbindgen, 1 slower row(s) parked on a card`, `accept chrome:
+15/15`. The Node misses: `field x1000`, 37% above, and `makeVec 1k`. `makeVec` is the garbage
+collection phase recorded above, not this change: run alone in 5 interleaved rounds with only
+the mixed arm, it measured 0.649 us (median) built by the installed compiler `60ecbc206ed`
+without the new rows, 0.646 by the candidate without them, and 0.655 by the candidate with
+them, one round of 1.023 at 42% spread. Before the direct calls, with each member call going
+through `value()` and a proxy, `method x1000` measured 20.11 and `field x1000` 20.31 on Node.
