@@ -314,10 +314,7 @@ export function applyDecoratedInfo(ctx: CheckerContext, node: Node): void {
 		else if (hasFlag(sym, SymbolFlag.Inline)) addError(ctx, `'${declName}' cannot be both @inline and @noinline`, node.location.line, node.location.column);
 		else setFlag(sym, SymbolFlag.NoInline);
 	}
-	if (info.acyclic) {
-		if (sym.symbolKind != SymbolKind.Class) addError(ctx, `@acyclic applies to a class, not to '${declName}'`, node.location.line, node.location.column);
-		else setFlag(sym, SymbolFlag.Acyclic);
-	}
+	if (info.acyclic) addError(ctx, `@acyclic is removed from the language: a class leaves the cycle collector when its owning edges are Owned<T> and its edges back are Unowned<T>; any other class stays with the collector`, node.location.line, node.location.column);
 	if (info.jsHost) {
 		if (sym.symbolKind != SymbolKind.Class) addError(ctx, `@jsHost applies to a class, not to '${declName}'`, node.location.line, node.location.column);
 		else if (ctx.modulePath != "" && isOutsideResolvedStd(ctx, ctx.modulePath)) addError(ctx, `@jsHost is reserved for the standard library, and '${ctx.modulePath}' is not one of its modules`, node.location.line, node.location.column);

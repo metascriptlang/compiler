@@ -122,7 +122,6 @@ function cfaAux(t: Type | null, origKey: string, withRef: boolean, sawPlainEdge:
 		TypeKind.Function => !isOwnedClosure(t),
 		TypeKind.Unknown => true,
 		TypeKind.Struct => {
-			if (t.typeFlags.has(TypeFlag.Acyclic)) return false;
 			if (extendedWithoutNotes(t)) return true;
 			const key = typeIdentity(t, marker);
 			if (withRef && key != "" && key == origKey) return sawPlainEdge;
@@ -240,7 +239,6 @@ function cfaInstanceBody(body: Type | null, origKey: string, withRef: boolean, s
 		return cfaInstanceBody(body.typeReturn, origKey, true, sawPlainEdge || !hopCounted, marker);
 	}
 	if (body.kind == TypeKind.Struct) {
-		if (body.typeFlags.has(TypeFlag.Acyclic)) return false;
 		if (extendedWithoutNotes(body)) return true;
 		return cfaStructFields(body, origKey, withRef, sawPlainEdge, marker);
 	}
@@ -274,7 +272,6 @@ export function canFormAcycle(t: Type | null, cyclicCache: NameSet, acyclicCache
 		subject = subject.typeReturn;
 	}
 	if (subject == null) return false;
-	if (subject.typeFlags.has(TypeFlag.Acyclic)) return false;
 	const key = typeIdentity(subject, cyclicCache);
 	if (key != "") {
 		if (nameSetContains(cyclicCache, key)) return true;

@@ -1,6 +1,5 @@
-// @acyclic prunes the cycle classification: a class that can reach itself registers for cycle
-// collection unless it is marked, an extended class is pruned too, and the decorator applies to a
-// class only. Runtime behaviour: corpus `acyclicClassFreedWithoutCollector`.
+// @acyclic is removed from the language: a class leaves the cycle collector only through Owned<T> and
+// Unowned<T> edges (c/ownedEdge.ms, c/unownedEdge.ms), so the decorator is refused wherever it is written.
 
 import { compileToC } from "../helpers";
 
@@ -19,34 +18,29 @@ a.next = new Node();
 console.log("ok");
 `;
 
+const REMOVED = "@acyclic is removed from the language: a class leaves the cycle collector when its owning edges are Owned<T> and its edges back are Unowned<T>";
+
 test "E2E C: a self-referencing class registers for cycle collection" {
 	const r = compileToC(NODE);
 	assert r.ok, r.ok ? "" : r.error;
 	assert typeInfoOf(r.ok ? r.value : "", "Node").contains(".isCyclic = MS_TRUE");
 }
 
-test "E2E C: an @acyclic class does not" {
+test "E2E C: @acyclic on a class is refused, naming Owned and Unowned" {
 	const r = compileToC("@acyclic\n" + NODE);
+	assert !r.ok;
+	assert (r.ok ? "" : r.error).contains(REMOVED);
+}
+
+test "E2E C: @acyclic on an extended class or a function is refused the same way" {
+	const base = compileToC("@acyclic\nclass Base { next: Base | null = null; }\nclass Leaf extends Base { tag: int32 = 0; }\nconst a = new Leaf();\nconsole.log(a.tag);\n");
+	assert !base.ok && (base.ok ? "" : base.error).contains(REMOVED);
+	const fn = compileToC("@acyclic\nfunction f(): int32 { return 1; }\nconsole.log(f());\n");
+	assert !fn.ok && (fn.ok ? "" : fn.error).contains(REMOVED);
+}
+
+test "E2E C: a class whose edge back is Unowned leaves the collector without a decorator" {
+	const r = compileToC("class Node {\n\tup: Unowned<Node> | null = null;\n\tv: int32 = 0;\n}\nconst a = new Node();\nconsole.log(a.v);\n");
 	assert r.ok, r.ok ? "" : r.error;
 	assert typeInfoOf(r.ok ? r.value : "", "Node").contains(".isCyclic = MS_FALSE");
-}
-
-test "E2E C: an extended @acyclic class is pruned too" {
-	const r = compileToC(`@acyclic
-class Base {
-	next: Base | null = null;
-}
-class Leaf extends Base { tag: int32 = 0; }
-const a = new Leaf();
-a.next = new Base();
-console.log("ok");
-`);
-	assert r.ok, r.ok ? "" : r.error;
-	assert typeInfoOf(r.ok ? r.value : "", "Base").contains(".isCyclic = MS_FALSE");
-}
-
-test "E2E C: @acyclic on a function is refused" {
-	const r = compileToC("@acyclic\nfunction f(): int32 { return 1; }\nconsole.log(f());\n");
-	assert !r.ok;
-	assert (r.ok ? "" : r.error).contains("@acyclic applies to a class, not to 'f'");
 }
