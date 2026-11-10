@@ -8,7 +8,7 @@ import { Node, NodeKind, NodeFlag, ObjectLiteralData, Symbol, SymbolKind, Source
 import { forEachChild } from "../ast/visitor";
 import { RoutineFlag, SymbolFlag, findOverloadImpl, hasFlag, makeSymbol, parentClassSymOf, routineFlagSet, setFlag } from "../checker/symbol";
 import { CheckerContext, DispatchRegistry, createDispatchRegistry, LIFECYCLE_HOOK_NAMES, dispatchEntryFor, routineSuspends, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, lifecycleHookOp, nominalTypeSym } from "../checker/context";
-import { calledRoutine, isViewCall, routineBody as declaredBody, receiverOf, viewCallSources } from "../checker/effects";
+import { calledRoutine, calledRoutineType, isViewCall, routineBody as declaredBody, receiverOf, viewCallSources } from "../checker/effects";
 import { lookupInstanceHook, pickBodyCtx } from "../checker/instantiate";
 import { isMutatingArrayMethod } from "../checker/paramMutationAnalysis";
 import { containsPointer } from "../checker/varPartitions";
@@ -1552,9 +1552,92 @@ export function borrowedArgsToCopy(w: WriteEffects, call: Node, defs: LocalDefs 
 			if (args[j] != null) keep = evaluationMayWrite(w, args[j], reads, defs);
 		}
 		if (!keep && lends) noteHeldAcrossCallbacks(w, reads);
-		flags[i] = keep;
+		flags[i] = keep || (holdsUnownedRead(args[i]) && unownedReadMayDie(w, call, args.slice(i + 1), args[i].nodeType, defs));
 	}
 	return flags;
+}
+
+const UNOWNED_EDGE_STORES = ["msUnownedAssign", "msUnownedAssignRo", "msUnownedTake", "msUnownedTakeRo"];
+
+// An Unowned<T> target's owner is a location the read never names (NIM-REF AN-41), so a read through
+// the edge stays a view only where nothing can release any value, not only where its slots stay unwritten.
+export function readsUnownedEdge(n: Node | null): boolean {
+	return n != null && n.kind == NodeKind.CallExpr && (isRuntimeProcSym(n.resolvedSym, "msUnownedPeek") || isRuntimeProcSym(n.resolvedSym, "msUnownedPeekRo"));
+}
+
+export function holdsUnownedRead(n: Node | null): boolean {
+	if (n == null || isRoutineNode(n)) return false;
+	if (readsUnownedEdge(n)) return true;
+	let hit = false;
+	forEachChild(n, (c: Node): void => { if (!hit) hit = holdsUnownedRead(c); });
+	return hit;
+}
+
+function namesExistingOwner(w: WriteEffects, n: Node | null, held: Type | null): boolean {
+	if (n == null) return false;
+	const t = skipConvDfa(n);
+	if (t.kind == NodeKind.HiddenAddr) return canAlias(w, held, (t.data as HiddenDerefData).expr.nodeType);
+	if (!w.rcOf(t.nodeType).needsCleanup || readsUnownedEdge(t) || !canAlias(w, held, t.nodeType)) return false;
+	return t.kind == NodeKind.Identifier || t.kind == NodeKind.MemberExpr || t.kind == NodeKind.ArrayAccess || t.kind == NodeKind.HiddenDeref
+		|| t.kind == NodeKind.MoveExpr || t.kind == NodeKind.ConditionalExpr || t.kind == NodeKind.BinaryExpr;
+}
+
+function takesOwnerOrAddress(w: WriteEffects, call: Node, held: Type | null): boolean {
+	const t = calledRoutineType(call);
+	const formals = t != null ? t.typeChildren : [];
+	const shift = call.flags.has(NodeFlag.ExtCall) ? 1 : 0;
+	const handsOver = (f: Type | null): boolean => t == null || (f != null && (isSinkTypeForParam(f) || f.kind == TypeKind.Var));
+	const recv = receiverOf(call);
+	if (recv != null && shift == 1 && formals.length > 0 && handsOver(formals[0]) && namesExistingOwner(w, recv, held)) return true;
+	const args = (call.data as CallExprData).arguments;
+	for (let i = 0; i < args.length; i += 1) {
+		const a = args[i];
+		if (a == null) continue;
+		if (a.kind == NodeKind.HiddenAddr && namesExistingOwner(w, a, held)) return true;
+		if (handsOver(i + shift < formals.length ? formals[i + shift] : null) && namesExistingOwner(w, a, held)) return true;
+	}
+	return false;
+}
+
+export function releasesAnything(w: WriteEffects, site: Node, held: Type | null, defs: LocalDefs | null): boolean {
+	if (site.kind == NodeKind.BinaryExpr) {
+		const target = (site.data as BinaryExprData).left;
+		return isAssign((site.data as BinaryExprData).operator) && w.rcOf(target.nodeType).needsCleanup && canAlias(w, held, target.nodeType);
+	}
+	if (site.kind == NodeKind.MoveExpr) return namesExistingOwner(w, (site.data as MoveExprData).moveArg, held);
+	if (site.kind == NodeKind.VariableDecl) return namesExistingOwner(w, (site.data as VariableDeclData).initializer, held);
+	if (site.kind == NodeKind.NewExpr) {
+		for (const a of (site.data as NewExprData).newArguments) {
+			if (namesExistingOwner(w, a, held)) return true;
+		}
+		return partsMayWrite(w, callWriteParts(w, site, defs), [ANY_HEAP_SLOT]);
+	}
+	if (site.kind != NodeKind.CallExpr || readsUnownedEdge(site) || UNOWNED_EDGE_STORES.some((name: string): boolean => isRuntimeProcSym(site.resolvedSym, name))) return false;
+	return takesOwnerOrAddress(w, site, held) || partsMayWrite(w, callWriteParts(w, site, defs), [ANY_HEAP_SLOT]);
+}
+
+function evaluationReleases(w: WriteEffects, n: Node | null, held: Type | null, defs: LocalDefs | null): boolean {
+	if (n == null || isRoutineNode(n)) return false;
+	const k = n.kind;
+	if ((k == NodeKind.CallExpr || k == NodeKind.NewExpr || k == NodeKind.BinaryExpr || k == NodeKind.MoveExpr) && releasesAnything(w, n, held, defs)) return true;
+	let hit = false;
+	forEachChild(n, (c: Node): void => { if (!hit) hit = evaluationReleases(w, c, held, defs); });
+	return hit;
+}
+
+function unownedReadMayDie(w: WriteEffects, call: Node, later: Node[], held: Type | null, defs: LocalDefs | null): boolean {
+	if (releasesAnything(w, call, held, defs)) return true;
+	for (const a of later) {
+		if (evaluationReleases(w, a, held, defs)) return true;
+	}
+	return false;
+}
+
+export function unownedReceiverToCopy(w: WriteEffects, call: Node, defs: LocalDefs | null): boolean {
+	const d = call.data as CallExprData;
+	if (d.callee.kind != NodeKind.MemberExpr) return false;
+	const receiver = (d.callee.data as MemberExprData).object;
+	return w.rcOf(receiver.nodeType).needsCleanup && holdsUnownedRead(receiver) && unownedReadMayDie(w, call, d.arguments, receiver.nodeType, defs);
 }
 
 // A receiver a builtin member call keeps under its callee is read before the arguments run, so

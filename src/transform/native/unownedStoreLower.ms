@@ -3,9 +3,10 @@
 // `{ slot: msUnownedTake(v) }`; both take `v` borrowed, so the analyzer keeps every strong
 // count of `v` as it is. An element is a slot too: `arr.push(v)` pushes `msUnownedTake(v)`, an
 // array literal takes each element, and `arr.pop()` becomes `msUnownedGive(arr.pop())`, a strong
-// value again. A read of a slot as a plain T becomes `msUnownedLoad(slot)`, which stops when the
-// target was destroyed and otherwise is a strong value the analyzer releases; a slot copied into
-// another slot is no read. Generated lifecycle ops keep their raw stores: destructorLifting
+// value again. A read of a slot as a plain T becomes `msUnownedPeek(slot)`, which stops when the
+// target was destroyed and otherwise reads the slot in place, so the analyzer counts it only where it
+// becomes an owner or cannot prove the target outlives the read; a slot copied into another slot is
+// no read. Generated lifecycle ops keep their raw stores: destructorLifting
 // already counts their Unowned fields.
 
 import { Node, NodeKind, Type, BinaryExprData, ObjectLiteralData, ArrayLiteralData, CallExprData, MemberExprData, ArrayAccessData, HiddenDerefData } from "../../ast/node";
@@ -55,13 +56,13 @@ function readSlotType(node: Node): Type | null {
 }
 
 function load(read: Node, slot: Type): Node {
-	const call = makeCall(runtimeRef(isReadonlyUnownedSlot(slot) ? "msUnownedLoadRo" : "msUnownedLoad", read.location), [read], read.location);
+	const call = makeCall(runtimeRef(isReadonlyUnownedSlot(slot) ? "msUnownedPeekRo" : "msUnownedPeek", read.location), [read], read.location);
 	call.nodeType = read.nodeType != null && isUnownedSlot(read.nodeType) ? withoutUnowned(read.nodeType) : read.nodeType;
 	return call;
 }
 
 function edgeOf(value: Node): Node {
-	if (!isRuntimeProcCall(value, "msUnownedLoad") && !isRuntimeProcCall(value, "msUnownedLoadRo")) return value;
+	if (!isRuntimeProcCall(value, "msUnownedPeek") && !isRuntimeProcCall(value, "msUnownedPeekRo")) return value;
 	return (value.data as CallExprData).arguments[0];
 }
 

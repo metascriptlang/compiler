@@ -68,14 +68,49 @@ test "the last read of an Unowned field is a copy, not a move" {
 	assert !c.contains("msPtrWasMoved(v_1_.at)"), c;
 }
 
-test "a read of an Unowned slot as a plain value is a checked strong load; a copy into another slot is not" {
+test "a read of an Unowned slot as a plain value is a checked load in place; a copy into another slot is not a read" {
 	const head = "class T { id: int32 = 4; }\nclass H { at: Unowned<T> | null = null; ups: Unowned<T>[] = []; }\n";
 	const field = emitted(head + "function f(h: H): int32 { const r = h.at; return r != null ? r.id : 0; }\nconst t = new T();\nconst h = new H();\nh.at = t;\nconsole.log(f(h));\n");
-	assert field.contains("msUnownedLoad((*h_p0).at)"), unownedLines(field);
+	assert field.contains("msUnownedPeek((*h_p0).at)"), unownedLines(field);
 	const element = emitted(head + "function f(h: H): int32 { return h.ups[0].id; }\nconst t = new T();\nconst h = new H();\nh.ups.push(t);\nconsole.log(f(h));\n");
-	assert element.contains("= msUnownedLoad("), unownedLines(element);
+	assert element.contains("msUnownedPeek("), unownedLines(element);
 	const copied = emitted(head + "function f(a: H, b: H): void { a.at = b.at; a.ups.push(b.ups[0]); }\nconst t = new T();\nconst a = new H();\nconst b = new H();\nb.at = t;\nb.ups.push(t);\nf(a, b);\nconsole.log(a.ups.length);\n");
-	assert !copied.contains("msUnownedLoad"), unownedLines(copied);
+	assert !copied.contains("msUnownedPeek"), unownedLines(copied);
+}
+
+function bodyOf(c: string, name: string): string {
+	const lines = c.split("\n");
+	for (let i = 0; i < lines.length; i += 1) {
+		if (!lines[i].endsWith(") {") || !lines[i].contains(` ${name}__`)) continue;
+		let j = i + 1;
+		while (j < lines.length && lines[j] != "}") j += 1;
+		return lines.slice(i, j).join("\n");
+	}
+	return `no function ${name} in\n${c}`;
+}
+
+const VIEWS_HEAD = "class T { id: int32 = 4; name: string = \"t\"; }\nclass H { at: Unowned<T> | null = null; }\nclass R { items: T[] = []; }\nfunction nameOf(t: Readonly<T>): int32 { return t.name.length; }\nfunction drop(r: R): int32 { r.items = []; return 0; }\n";
+const VIEWS_TAIL = "const t = new T();\nconst h = new H();\nh.at = t;\nconst r = new R();\nr.items.push(t);\nconsole.log(f(h, r));\n";
+
+test "an Unowned read that nothing can release before its last use takes no count" {
+	const tested = emitted(VIEWS_HEAD + "function f(h: H, r: R): int32 { return h.at != null ? 1 : 0; }\n" + VIEWS_TAIL);
+	assert !bodyOf(tested, "f").contains("msIncref"), bodyOf(tested, "f");
+	const read = emitted(VIEWS_HEAD + "function f(h: H, r: R): int32 { return h.at != null ? h.at.id + nameOf(h.at) : 0; }\n" + VIEWS_TAIL);
+	assert !bodyOf(read, "f").contains("msIncref"), bodyOf(read, "f");
+	const local = emitted(VIEWS_HEAD + "function f(h: H, r: R): int32 { const p = h.at; return p != null ? p.id + nameOf(p) : 0; }\n" + VIEWS_TAIL);
+	assert !bodyOf(local, "f").contains("msIncref"), bodyOf(local, "f");
+	assert !bodyOf(local, "f").contains("msDecref"), bodyOf(local, "f");
+}
+
+test "an Unowned read that becomes an owner, or outlives a call that may release, is counted" {
+	const stored = emitted(VIEWS_HEAD + "function f(h: H, r: R): int32 { const p = h.at; if (p != null) r.items.push(p); return 0; }\n" + VIEWS_TAIL);
+	assert bodyOf(stored, "f").contains("msIncref"), bodyOf(stored, "f");
+	const released = emitted(VIEWS_HEAD + "function f(h: H, r: R): int32 { const p = h.at; drop(r); return p != null ? p.id : 0; }\n" + VIEWS_TAIL);
+	assert bodyOf(released, "f").contains("msIncref"), bodyOf(released, "f");
+	const argument = emitted(VIEWS_HEAD + "function keep(t: T, r: R): int32 { r.items = []; return t.id; }\nfunction f(h: H, r: R): int32 { return h.at != null ? keep(h.at, r) : 0; }\n" + VIEWS_TAIL);
+	assert bodyOf(argument, "f").contains("msIncref"), bodyOf(argument, "f");
+	const owner = emitted(VIEWS_HEAD + "function f(h: H, r: R): int32 { let p = h.at; { const o = new T(); h.at = o; p = h.at; } return p != null ? p.id : 0; }\n" + VIEWS_TAIL);
+	assert bodyOf(owner, "f").contains("msIncref"), bodyOf(owner, "f");
 }
 
 test "an array of T and an array of Unowned<T> never stand for each other" {

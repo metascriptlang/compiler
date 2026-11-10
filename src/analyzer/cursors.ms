@@ -36,7 +36,7 @@ import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
 import { calledRoutineType, isImmutableModuleConst, isViewCall, receiverOf, routineBody, viewCallSources } from "../checker/effects";
-import { ANY_HEAP_SLOT, APPEND_SLOT, addressSlots, callerDefsOf, callsPlainRoutine, canAlias, collectsHeld, createRoutineDecls, createWriteSummaries, isAssign, LocalDefs, mayWrite, noteHeldAcrossCallbacks, reachesModuleState, retainsArg, runsCallbacks, runsHooks, stepSlot, valueFieldSlots, viewReturnSlots, WriteEffects } from "./writeEffects";
+import { ANY_HEAP_SLOT, APPEND_SLOT, addressSlots, callerDefsOf, callsPlainRoutine, canAlias, collectsHeld, createRoutineDecls, createWriteSummaries, holdsUnownedRead, isAssign, LocalDefs, mayWrite, noteHeldAcrossCallbacks, reachesModuleState, readsUnownedEdge, releasesAnything, retainsArg, runsCallbacks, runsHooks, stepSlot, valueFieldSlots, viewReturnSlots, WriteEffects } from "./writeEffects";
 import { makeCtx } from "../transform/testUtil";
 import { RcInfo, classifyType } from "./classify";
 import { isAwaitable, isReadonlyView, withoutReadonlyView, ownedEdgeOf, isSinkTypeForParam } from "../checker/types";
@@ -55,6 +55,10 @@ let borrowedSlots: string[][] = [];
 let viewSources: int32[][] = [];
 let writeSites: Node[] = [];
 let writeTimes: int32[] = [];
+let unownedViews: boolean[] = [];
+let restsOn: int32[][] = [];
+let bindSites: Node[] = [];
+let bindTimes: int32[] = [];
 let analysis: WriteEffects | null = null;
 let closureNames: HashMap<Node, Symbol[]> = new HashMap<Node, Symbol[]>();
 let holderNames: HashMap<Symbol, Symbol[]> = new HashMap<Symbol, Symbol[]>();
@@ -129,7 +133,9 @@ function allRoots(p: Partitions, node: Node, result: Symbol[]): void {
 		NodeKind.SpreadExpr => allRoots(p, (node.data as SpreadExprData).spreadArg, result),
 		NodeKind.NewExpr => { for (const a of (node.data as NewExprData).newArguments) { allRoots(p, a, result); } },
 		NodeKind.CallExpr => {
-			if (isViewCall(node)) {
+			if (readsUnownedEdge(node)) {
+				allRoots(p, (node.data as CallExprData).arguments[0], result);
+			} else if (isViewCall(node)) {
 				for (const a of lentSources(node)) { allRoots(p, a, result); }
 			} else if (containsPointer(node.nodeType, 0)) {
 				const formals = callFormals(node);
@@ -169,7 +175,10 @@ function sourceSlots(w: WriteEffects, p: Partitions, node: Node, out: string[]):
 		NodeKind.SpreadExpr => sourceSlots(w, p, (node.data as SpreadExprData).spreadArg, out),
 		NodeKind.NewExpr => { for (const a of (node.data as NewExprData).newArguments) { sourceSlots(w, p, a, out); } },
 		NodeKind.CallExpr => {
-			if (isViewCall(node)) {
+			if (readsUnownedEdge(node)) {
+				out.push(ANY_HEAP_SLOT);
+				sourceSlots(w, p, (node.data as CallExprData).arguments[0], out);
+			} else if (isViewCall(node)) {
 				const inner = viewReturnSlots(w, node);
 				if (inner == null) out.push(ANY_HEAP_SLOT);
 				else for (const slot of inner) out.push(slot);
@@ -296,7 +305,8 @@ function writtenWhileAlive(w: WriteEffects, p: Partitions, vid: int32, slots: st
 	const v = p.vars[vid];
 	const viewRoot = ufRoot(p, vid);
 	for (let k = 0; k < writeSites.length; k += 1) {
-		if (writeTimes[k] >= v.aliveStart && writeTimes[k] <= v.aliveEnd && mayWrite(w, writeSites[k], slots, defs) && !writesOtherPartition(w, p, writeSites[k], viewRoot, defs)) return true;
+		if (writeTimes[k] < v.aliveStart || writeTimes[k] > v.aliveEnd) continue;
+		if (mayWrite(w, writeSites[k], slots, defs) && !writesOtherPartition(w, p, writeSites[k], viewRoot, defs) && !(unownedViews[vid] && assignsUnownedView(p, vid, writeSites[k]))) return true;
 	}
 	return false;
 }
@@ -311,6 +321,79 @@ function holdsOnlyReadonlyViews(t: Type | null): boolean {
 	if (bare != null && bare.kind == TypeKind.Cursor) bare = bare.typeReturn;
 	if (bare != null && bare.kind == TypeKind.Union) bare = unwrapRefNullUnion(bare);
 	return isReadonlyView(bare);
+}
+
+function recordBind(p: Partitions, site: Node): void {
+	bindSites.push(site);
+	bindTimes.push(p.abstractTime);
+}
+
+function releasedWhileAlive(w: WriteEffects, p: Partitions, vid: int32, defs: LocalDefs): boolean {
+	const v = p.vars[vid];
+	const held = v.sym != null ? v.sym.symbolType : null;
+	const rebound = (v.flags & VF_ASSIGNED) != 0;
+	for (let k = 0; k < writeSites.length; k += 1) {
+		if (writeTimes[k] < v.aliveStart || writeTimes[k] > v.aliveEnd) continue;
+		if (releasesAnything(w, writeSites[k], held, defs) && !assignsUnownedView(p, vid, writeSites[k])) return true;
+	}
+	for (let k = 0; k < bindSites.length; k += 1) {
+		if (bindTimes[k] < v.aliveStart || bindTimes[k] > v.aliveEnd) continue;
+		const releases = releasesAnything(w, bindSites[k], held, defs) || (rebound && bindsOwnerThatCanHold(bindSites[k], held));
+		if (releases && !bindsLentValue(p, vid, bindSites[k])) return true;
+	}
+	return false;
+}
+
+// A view rebound after its declaration may point at a target owned only by a local bound later,
+// which its block's end releases while the view still reads it.
+function bindsOwnerThatCanHold(site: Node, held: Type | null): boolean {
+	if (site.kind != NodeKind.VariableDecl || site.resolvedSym == null) return false;
+	const init = (site.data as VariableDeclData).initializer;
+	if (init != null && readsUnownedEdge(skipConvDfa(init))) return false;
+	return analysis!.rcOf(site.resolvedSym.symbolType).needsCleanup && canAlias(analysis!, held, site.resolvedSym.symbolType);
+}
+
+function assignsUnownedView(p: Partitions, vid: int32, site: Node): boolean {
+	if (site.kind != NodeKind.BinaryExpr) return false;
+	const id = variableId(p, getIdentSym((site.data as BinaryExprData).left));
+	if (id < 0 || !unownedViews[id]) return false;
+	if (id != vid) restsOn[vid].push(id);
+	return true;
+}
+
+// A binding read through another Unowned view moves nothing only while that view is a cursor too,
+// so the decision rests on it and is dropped with it (dropViewsResting).
+function bindsLentValue(p: Partitions, vid: int32, site: Node): boolean {
+	if (site.kind != NodeKind.VariableDecl) return false;
+	const roots: Symbol[] = [];
+	allRoots(p, (site.data as VariableDeclData).initializer, roots);
+	if (roots.length == 0) return false;
+	const rests: int32[] = [];
+	for (const r of roots) {
+		const id = variableId(p, r);
+		if (id < 0) return false;
+		const lentParam = (p.vars[id].flags & VF_IS_PARAM) != 0 && r.symbolKind == SymbolKind.Parameter && borrowedParam(r);
+		if (!lentParam && !unownedViews[id]) return false;
+		if (!lentParam && id != vid) rests.push(id);
+	}
+	for (const id of rests) restsOn[vid].push(id);
+	return true;
+}
+
+function dropViewsResting(p: Partitions, chosen: Symbol[]): Symbol[] {
+	let kept = chosen;
+	let changed = true;
+	while (changed) {
+		changed = false;
+		const next: Symbol[] = [];
+		for (const sym of kept) {
+			const id = variableId(p, sym);
+			if (restsOn[id].some((r: int32): boolean => kept.indexOf(p.vars[r].sym) < 0)) changed = true;
+			else next.push(sym);
+		}
+		kept = next;
+	}
+	return kept;
 }
 
 function connectStore(p: Partitions, targets: Symbol[], destType: Type | null, src: Node): void {
@@ -429,7 +512,9 @@ function destMightOwn(w: WriteEffects, p: Partitions, destIdx: int32, src: Node)
 
 		// Calls: return value is constructed → dest owns data
 		NodeKind.CallExpr | NodeKind.NewExpr => {
-			if (isViewCall(src)) {
+			if (readsUnownedEdge(src)) {
+				destMightOwn(w, p, destIdx, (src.data as CallExprData).arguments[0]);
+			} else if (isViewCall(src)) {
 				for (const a of lentSources(src)) { destMightOwn(w, p, destIdx, a); }
 			} else {
 				p.vars[destIdx].flags = p.vars[destIdx].flags | VF_OWNS_DATA;
@@ -874,12 +959,16 @@ function deps(w: WriteEffects, p: Partitions, dest: Symbol | null, src: Node): v
 	// Classify: does dest own data or borrow?
 	destMightOwn(w, p, destId, src);
 	sourceSlots(w, p, src, borrowedSlots[destId]);
+	const viewsThroughEdges = containsPointer(dest!.symbolType, 0);
+	if (viewsThroughEdges && holdsUnownedRead(src)) unownedViews[destId] = true;
 
 	// Source checks: prevent cursor when borrowing from unsafe sources
 	const srcRoots: Symbol[] = [];
 	allRoots(p, src, srcRoots);
 	for (const srcSym of srcRoots) {
 		if (srcSym == dest) continue; // self-assign ok (it = it.next)
+		const viewedId = variableId(p, srcSym);
+		if (viewsThroughEdges && viewedId >= 0 && unownedViews[viewedId]) unownedViews[destId] = true;
 		if (hasFlag(srcSym, SymbolFlag.Global)) {
 			if (!isImmutableModuleConst(w.tables.dispatchRegistry, srcSym) && !lentOwnedElement(dest!)) p.vars[destId].flags = p.vars[destId].flags | VF_PREVENT_CURSOR;
 			continue;
@@ -922,6 +1011,7 @@ function trav(w: WriteEffects, p: Partitions, node: Node | null): void {
 				connectStore(p, [node.resolvedSym], node.resolvedSym.symbolType, d.initializer);
 			}
 			deps(w, p, node.resolvedSym, d.initializer);
+			recordBind(p, node);
 		},
 
 		NodeKind.BinaryExpr => {
@@ -957,6 +1047,7 @@ function trav(w: WriteEffects, p: Partitions, node: Node | null): void {
 			const d = node.data as CallExprData;
 			trav(w, p, d.callee);
 			for (const arg of d.arguments) { trav(w, p, arg); }
+			if (readsUnownedEdge(node)) return;
 
 			const keptRoots: Symbol[] = [];
 			const leavesGraph = callLeavesGraphAlone(w, p, node, keptRoots);
@@ -1046,6 +1137,7 @@ function trav(w: WriteEffects, p: Partitions, node: Node | null): void {
 		// Move prevents cursoring of source
 		NodeKind.MoveExpr => {
 			trav(w, p, (node.data as MoveExprData).moveArg);
+			recordBind(p, node);
 			const mid = variableId(p, getIdentSym((node.data as MoveExprData).moveArg));
 			if (mid >= 0) p.vars[mid].flags = p.vars[mid].flags | VF_PREVENT_CURSOR | VF_ASSIGNED;
 		},
@@ -1154,11 +1246,18 @@ function computeCursorDecisions(w: WriteEffects, p: Partitions, defs: LocalDefs)
 		const slots = holdsAddress(v.sym) ? addressSlots(borrowedSlots[i]) : borrowedSlots[i].slice(0);
 		if (borrowedSlots[i].length > 0) valueFieldSlots(w, v.sym != null ? v.sym.symbolType : null, slots);
 		if (writtenWhileAlive(w, p, i, slots, defs)) { i += 1; continue; }
+		if (unownedViews[i] && releasedWhileAlive(w, p, i, defs)) { i += 1; continue; }
 
 		result.push(v.sym);
 		i += 1;
 	}
-	return dropViewsOfOwners(p, result);
+	let kept = result;
+	let before = -1;
+	while (kept.length != before) {
+		before = kept.length;
+		kept = dropViewsResting(p, dropViewsOfOwners(p, kept));
+	}
+	return kept;
 }
 
 function dropViewsOfOwners(p: Partitions, chosen: Symbol[]): Symbol[] {
@@ -1247,12 +1346,18 @@ function inferCursorsIn(w: WriteEffects, body: Node, defs: LocalDefs): Symbol[] 
 	p.abstractTime = 0;
 	borrowedSlots = [];
 	viewSources = [];
+	unownedViews = [];
+	restsOn = [];
 	for (let i = 0; i < p.vars.length; i += 1) {
 		borrowedSlots.push([]);
 		viewSources.push([]);
+		unownedViews.push(false);
+		restsOn.push([]);
 	}
 	writeSites = [];
 	writeTimes = [];
+	bindSites = [];
+	bindTimes = [];
 	callerDefs = defs;
 
 	// Pass 2: build union-find graphs and track mutations

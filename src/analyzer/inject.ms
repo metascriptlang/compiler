@@ -38,7 +38,7 @@ import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym, i
 import { inferCursors } from "./cursors";
 import { calledRoutineType, isViewCall, returnsView } from "../checker/effects";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
-import { LocalDefs, holderType, borrowedArgsToCopy, borrowedReceiverToCopy, callerDefsOf, cloneForCall, createRoutineDecls, createWriteSummaries, enterRoutineLending, leaveRoutineLending } from "./writeEffects";
+import { LocalDefs, holderType, borrowedArgsToCopy, borrowedReceiverToCopy, unownedReceiverToCopy, readsUnownedEdge, callerDefsOf, cloneForCall, createRoutineDecls, createWriteSummaries, enterRoutineLending, leaveRoutineLending } from "./writeEffects";
 import { cstringSource } from "../transform/native/cstringConvLower";
 import { cloneIfPure } from "../transform/place";
 import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
@@ -267,7 +267,7 @@ function readsCheckedLocation(node: Node, dctx: DrcContext): boolean {
 }
 
 export function readsMemberInPlace(node: Node): boolean {
-	return isRuntimeProcCall(node, "msMaybeGet") || isRuntimeProcCall(node, "msUnionRead") || isRuntimeProcCall(node, "msUnionReadMaybe");
+	return isRuntimeProcCall(node, "msMaybeGet") || isRuntimeProcCall(node, "msUnionRead") || isRuntimeProcCall(node, "msUnionReadMaybe") || readsUnownedEdge(node);
 }
 
 function rhsMode(rhs: Node): DrcMode {
@@ -543,7 +543,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const cd = node.data as CallExprData;
 	// Recurse on callee
 	cd.callee = processNode(cd.callee, dctx, DrcMode.Normal);
-	if (dctx.ctx.raiserBackend && borrowedReceiverToCopy(dctx.writes, node, dctx.callerDefs)) {
+	if ((dctx.ctx.raiserBackend && borrowedReceiverToCopy(dctx.writes, node, dctx.callerDefs)) || unownedReceiverToCopy(dctx.writes, node, dctx.callerDefs)) {
 		const md = cd.callee.data as MemberExprData;
 		md.object = keepArgumentAlive(md.object, dctx);
 	}

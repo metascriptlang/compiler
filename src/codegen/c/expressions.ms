@@ -368,6 +368,7 @@ function isRefArrayAccessCall(g: CGen, node: Readonly<Node>): boolean {
 	}
 	if (node.kind != NodeKind.CallExpr) return false;
 	const callee = (node.data as CallExprData).callee;
+	if (isRuntimeProcSym(callee.resolvedSym, "msUnownedPeek") || isRuntimeProcSym(callee.resolvedSym, "msUnownedPeekRo")) return isRefArrayAccessCall(g, (node.data as CallExprData).arguments[0]);
 	return isRuntimeProcSym(callee.resolvedSym, "msRefArrayAccess")
 		|| isRuntimeProcSym(callee.resolvedSym, "msRefArrayAccessUnchecked");
 }
