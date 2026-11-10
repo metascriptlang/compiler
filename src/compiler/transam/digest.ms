@@ -1,4 +1,4 @@
-import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind, TypeFlag } from "../../ast/node";
+import { Node, Symbol, SymbolKind, SymbolFlag, Type, TypeKind, TypeFlag, strongNodes } from "../../ast/node";
 import { makeSymbol, symbolKey, builtinKindName } from "../../checker/symbol";
 import { createStruct } from "../../checker/types";
 import { CheckerContext, buildExportInfo, errorCount, ExtensionMethod, DispMethodEntry } from "../../checker/context";
@@ -108,13 +108,13 @@ function putRoutine(st: DigestState, out: TaText, sym: Symbol): TaText {
 	out = putString(out, sym.headerPath);
 	out = putString(out, sym.jsModulePath);
 	out = putInt(out, sym.mutatedParams);
-	out = putNodes(out, sym.defaultParams);
+	out = putNodes(out, strongNodes(sym.defaultParams));
 	out = putTypes(st, out, sym.typeParams);
 	out = putStrings(out, sym.fieldDecoratorNames);
 	out = putInt(out, sym.fieldDecorators.length);
-	for (const row of sym.fieldDecorators) out = putNodes(out, row);
+	for (const row of sym.fieldDecorators) out = putNodes(out, strongNodes(row));
 	out = putStrings(out, sym.metaKeys);
-	out = putNodes(out, sym.metaValues);
+	out = putNodes(out, strongNodes(sym.metaValues));
 	out = putStrings(out, sym.nonisolatedFields);
 	out = putInt(out, sym.duVariantSlot);
 	out = putInt(out, sym.staticFields.length);

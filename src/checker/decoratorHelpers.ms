@@ -1,6 +1,6 @@
 // Decorator accessor helpers — returns only primitives to avoid DRC cross-module Node lifecycle bugs.
 
-import { Node, NodeKind, Symbol, SymbolKind, DecoratedDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, FunctionDeclData, ExternDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, PropertyDeclData, BuiltinKind } from "../ast/node";
+import { Node, NodeKind, Symbol, SymbolKind, DecoratedDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, FunctionDeclData, ExternDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, PropertyDeclData, BuiltinKind, backEdges } from "../ast/node";
 import { markUsedIn, CheckerContext, sgRecordSym, addError, findExportedSymbol } from "./context";
 import { lookupSymbol, routineFlagSet, RoutineFlag } from "./symbol";
 import { findChar } from "../utils/string";
@@ -107,7 +107,7 @@ export function checkFieldDecoratorNames(ctx: CheckerContext, rows: Node[][]): v
 	}
 }
 
-export function recordFieldDecorators(sym: Symbol, dd: DecoratedDeclData): void {
+export function recordFieldDecorators(ctx: CheckerContext, sym: Symbol, dd: DecoratedDeclData): void {
 	const inner = dd.decoratedNode;
 	if (sym == null || inner == null || inner.kind != NodeKind.PropertyDecl) return;
 	const pd = inner.data as PropertyDeclData;
@@ -116,7 +116,8 @@ export function recordFieldDecorators(sym: Symbol, dd: DecoratedDeclData): void 
 		if (recorded == pd.propName) return;
 	}
 	sym.fieldDecoratorNames.push(pd.propName);
-	sym.fieldDecorators.push(dd.decorators);
+	for (const dec of dd.decorators) ctx.outOfTree.push(dec);
+	sym.fieldDecorators.push(backEdges(dd.decorators));
 }
 
 export function stripIntrinsicMemberWrappers(ctx: CheckerContext, sym: Symbol, body: Node[]): void {
@@ -125,7 +126,7 @@ export function stripIntrinsicMemberWrappers(ctx: CheckerContext, sym: Symbol, b
 		if (member.kind != NodeKind.DecoratedDecl) continue;
 		const dd = member.data as DecoratedDeclData;
 		if (dd.decoratedNode == null || !allIntrinsic(ctx, dd.decorators)) continue;
-		recordFieldDecorators(sym, dd);
+		recordFieldDecorators(ctx, sym, dd);
 		body[i] = dd.decoratedNode;
 	}
 }

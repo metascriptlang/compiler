@@ -23,7 +23,7 @@
 
 import { Node, NodeKind, DeclKind, SourceLocation, NodeFlag, SymbolKind, Symbol, createNode, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ExprStmtData, ReturnStmtData, BinaryExprData, CallExprData, UnaryExprData, ObjectLiteralData, ArrayLiteralData, TestDeclData, Type, TypeKind } from "../../ast/node";
 import {
-	TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError, mintSym,
+	TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, reportTransformError, mintSym, keepOutOfTree,
 } from "../context";
 import { canFormAcycleInRelease } from "../cycles";
 import { mapChildren, isFuncBoundary } from "../walker";
@@ -506,6 +506,7 @@ function walkLiftStmtList(stmts: Node[], state: LiftState, isTopLevel: boolean):
 			drainPendingRewrites(state, pendingBefore, result);
 		}
 		if (buildRoutineClosuresAtUse(state, stmts, si)) {
+			keepOutOfTree(state.ctx, stmts[si]);
 			si += 1;
 			continue;
 		}
@@ -513,6 +514,7 @@ function walkLiftStmtList(stmts: Node[], state: LiftState, isTopLevel: boolean):
 			const vd = stmts[si].data as VariableDeclData;
 			const declSym = stmts[si].resolvedSym;
 			const loopEnv = loopEnvOf(state, declSym);
+			if (loopEnv != null) keepOutOfTree(state.ctx, stmts[si]);
 			if (loopEnv != null && vd.initializer == null) {
 				stmts[si] = makeBlock([], stmts[si].location);
 			} else if (loopEnv != null) {
@@ -557,6 +559,7 @@ function walkLiftStmtList(stmts: Node[], state: LiftState, isTopLevel: boolean):
 				if (held != null && held.kind == TypeKind.Cursor) lhs.nodeType = held;
 				else if (stmts[si].nodeType != null) lhs.nodeType = stmts[si].nodeType;
 				const init = (vd.initializer != null) ? vd.initializer : makeDefaultValue(declSym.symbolType, stmtLoc);
+				keepOutOfTree(state.ctx, stmts[si]);
 				stmts[si] = makeExprStmt(makeAssign(lhs, init, stmtLoc), stmtLoc);
 			}
 		}

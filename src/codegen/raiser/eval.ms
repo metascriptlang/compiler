@@ -115,6 +115,7 @@ function transformForEngine(program: Node, lifted: LiftedOpsState, dispatchRegis
 		_lastEngineCheckErrors = checkerCtx.errors;
 		keepEngineInstances(checkerCtx);
 		transformed = lowerForRaiser(program, checkerCtx, lifted);
+		keepEngineNodes(checkerCtx, transformed);
 	} finally {
 		setEngineCheckMode(prevEngineMode);
 		if (saved != null) setComptimeOuterCtx(saved);
@@ -128,7 +129,9 @@ function transformCheckedForEngine(program: Node, bodyCtx: CheckerContext): Node
 	ensureHostTableLoaded();
 	registerTypeQueryHostFns();
 	_lastEngineCheckErrors = [];
-	return lowerForRaiser(program, bodyCtx, _engine != null ? _engine.lifted : null);
+	const transformed = lowerForRaiser(program, bodyCtx, _engine != null ? _engine.lifted : null);
+	if (_engine != null) _engine.kept.push(transformed);
+	return transformed;
 }
 
 function isCheckedRoutineDecl(decl: Node): boolean {
@@ -206,6 +209,7 @@ interface ComptimeEngine {
 	instanceCtxs: HashMap<Symbol, CheckerContext>;
 	lifted: LiftedOpsState;
 	owners: HashMap<int32, EngineOwner>;
+	kept: Node[];                // what the image's symbols still name once a compile's checker context and transformed program are gone
 }
 
 // The routine (null for a fold or macro body) and module whose source a function of the image was compiled from.
@@ -239,7 +243,7 @@ function freshEngine(dispatchRegistry: DispatchRegistry): ComptimeEngine {
 	vm.printSink = (text: string): void => { writeStderr(text + "\n"); };
 	const bodyCtxs = new HashMap<CheckerContext, CheckerContext>();
 	const instanceCtxs = new HashMap<Symbol, CheckerContext>();
-	return { image, funcMap, vm, bodyCtxs, sources: new HashMap<string, Node>(), metaSeeds: null, instanceCtxs, lifted: freshLiftedOps(), owners: new HashMap<int32, EngineOwner>() };
+	return { image, funcMap, vm, bodyCtxs, sources: new HashMap<string, Node>(), metaSeeds: null, instanceCtxs, lifted: freshLiftedOps(), owners: new HashMap<int32, EngineOwner>(), kept: [] };
 }
 
 function withMetaSeeds(seeds: NamedSymbol[]): NamedSymbol[] {
@@ -252,6 +256,12 @@ function withMetaSeeds(seeds: NamedSymbol[]): NamedSymbol[] {
 	for (const s of meta) all.push(s);
 	for (const s of seeds) all.push(s);
 	return all;
+}
+
+function keepEngineNodes(checkerCtx: CheckerContext, transformed: Node): void {
+	if (_engine == null) return;
+	_engine.kept.push(transformed);
+	for (const node of checkerCtx.outOfTree) _engine.kept.push(node);
 }
 
 function keepEngineInstances(checkerCtx: CheckerContext): void {
@@ -1038,10 +1048,11 @@ function heldStdRoutine(path: string, name: string): Symbol {
 	return null as unknown as Symbol;
 }
 
-function buildRoutineBeside(held: Symbol, source: string): Symbol {
+function buildRoutineBeside(keep: Node[], held: Symbol, source: string): Symbol {
 	const parsed = parseSource(source);
 	if (!parsed.ok) { unreachable; }
 	const sym = makeSymbolState(held.name, SymbolKind.Function, null, false, SymbolState.Shaped);
+	keep.push(parsed.value);
 	sym.declNode = (parsed.value.data as ProgramData).programStmts[0];
 	sym.modulePath = held.modulePath.slice(0, held.modulePath.length - 4) + ".cms";
 	return sym;
@@ -1049,7 +1060,8 @@ function buildRoutineBeside(held: Symbol, source: string): Symbol {
 
 test "engine: a build routine binds to the Raiser variant of its name only when both declare the same signature" {
 	const held = heldStdRoutine("std/core/string/bytes.rms", "utf8Text");
-	const same = buildRoutineBeside(held, "function utf8Text(raw: string, surrogates: boolean): string { return raw; }");
+	const keep: Node[] = [];
+	const same = buildRoutineBeside(keep, held, "function utf8Text(raw: string, surrogates: boolean): string { return raw; }");
 	assert raiserCounterpart(same) == held, "the same signature does not bind its Raiser variant";
 	const others = [
 		"function utf8Text(raw: string): string { return raw; }",
@@ -1058,7 +1070,7 @@ test "engine: a build routine binds to the Raiser variant of its name only when 
 		"function utf8Text(this typeof Buffer, raw: string, surrogates: boolean): string { return raw; }",
 	];
 	for (const source of others) {
-		const own = buildRoutineBeside(held, source);
+		const own = buildRoutineBeside(keep, held, source);
 		assert raiserCounterpart(own) == own, `bound to a Raiser variant of another signature: ${source}`;
 	}
 }

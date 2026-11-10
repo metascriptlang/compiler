@@ -1,4 +1,4 @@
-import { Symbol, SymbolFlag, NodeFlag, SymbolKind, SymbolState, Type, TypeKind, TypeFlag, Node, NodeData, NodeKind, SourceLocation, CallingConvention, makeLoc, makeLocRange, createNodeAt, DeclKind, ExternKind, BuiltinKind, FlowNode, InlineFrame, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, InterfaceDeclData, EnumDeclData } from "../ast/node";
+import { Symbol, SymbolFlag, NodeFlag, SymbolKind, SymbolState, Type, TypeKind, TypeFlag, Node, NodeData, NodeKind, SourceLocation, CallingConvention, makeLoc, makeLocRange, createNodeAt, DeclKind, ExternKind, BuiltinKind, FlowNode, InlineFrame, backEdges, strongNodes, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, InterfaceDeclData, EnumDeclData } from "../ast/node";
 import { FieldSink, nodeFields } from "../ast/fieldspec";
 import { emptyType, wellKnownTypes, getSysType, createResult } from "./types";
 import { makeSymbolState, builtinKindName, builtinKindNamed } from "./symbol";
@@ -198,7 +198,17 @@ function nestedIdxsP(rows: Node[][]): string {
 	return `${parts.length}:${parts.join(";")}`;
 }
 
-function nullRowPath(rows: Node[][] | null): string | null {
+function strongOrNull(arr: Unowned<Node>[] | null): Node[] | null {
+	return arr == null ? null : strongNodes(arr);
+}
+
+function strongRows(rows: Unowned<Node>[][]): Node[][] {
+	const out: Node[][] = [];
+	for (const row of rows) out.push(strongNodes(row));
+	return out;
+}
+
+function nullRowPath<T>(rows: T[][] | null): string | null {
 	if (rows == null) return "";
 	for (let k = 0; k < rows.length; k += 1) {
 		if (rows[k] == null) return `[${k}]`;
@@ -1115,7 +1125,7 @@ export function emitObjectRows(this w: RowWriter, lines: string[]): void {
 		const nullList = symbolNullList(s);
 		if (nullList != "") throw nullListError(`symbol ${i} (${s.name})`, nullList);
 		const loc = s.location;
-		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint64}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${w.roots.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(builtinKindName(s.builtinKind))}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${w.idxType(s.symbolType)}\t${w.symIdxs(s.overloads)}\t${w.symIdxs(s.staticFields)}\t${w.idxNode(s.declNode)}\t${w.idxs(s.defaultParams)}\t${s.disamb}\t${escapeP(s.exportName)}\t${w.idxSym(s.staticOwner)}\t${w.typeIdxs(s.typeParams)}\t${w.idxSym(s.instantiatedFrom)}\t${w.idxSym(s.typeParamOwner)}\t${w.typeIdxs(s.instanceArgs)}\t${w.typeIdxs(s.instanceParams)}\t${strListText(s.fieldDecoratorNames)}\t${nestedIdxsP(s.fieldDecorators)}\t${strListText(s.metaKeys)}\t${w.idxs(s.metaValues)}\t${strListText(s.nonisolatedFields)}\t${s.itemModule}\t${s.item}\t${w.idxSym(s.ctorRoutine)}\t${w.idxSym(s.ctorOwner)}\t${w.idxSym(s.borrowedFrom)}\t${w.typeIdxs(s.subclasses)}`);
+		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint64}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${w.roots.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(builtinKindName(s.builtinKind))}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${w.idxType(s.symbolType)}\t${w.symIdxs(s.overloads)}\t${w.symIdxs(s.staticFields)}\t${w.idxNode(s.declNode)}\t${w.idxs(strongOrNull(s.defaultParams))}\t${s.disamb}\t${escapeP(s.exportName)}\t${w.idxSym(s.staticOwner)}\t${w.typeIdxs(s.typeParams)}\t${w.idxSym(s.instantiatedFrom)}\t${w.idxSym(s.typeParamOwner)}\t${w.typeIdxs(s.instanceArgs)}\t${w.typeIdxs(s.instanceParams)}\t${strListText(s.fieldDecoratorNames)}\t${nestedIdxsP(strongRows(s.fieldDecorators))}\t${strListText(s.metaKeys)}\t${w.idxs(strongOrNull(s.metaValues))}\t${strListText(s.nonisolatedFields)}\t${s.itemModule}\t${s.item}\t${w.idxSym(s.ctorRoutine)}\t${w.idxSym(s.ctorOwner)}\t${w.idxSym(s.borrowedFrom)}\t${w.typeIdxs(s.subclasses)}`);
 	}
 }
 
@@ -1352,11 +1362,11 @@ export function linkTypesAndSymbols(this a: RowReader): boolean {
 		s.instantiatedFrom = a.symOriginIdx[i] >= 0 && a.symOriginIdx[i] < syms.length ? syms[a.symOriginIdx[i]] : null;
 		s.typeParamOwner = a.symParamOwnerIdx[i] >= 0 && a.symParamOwnerIdx[i] < syms.length ? syms[a.symParamOwnerIdx[i]] : null;
 		s.declNode = a.symDeclIdx[i] >= 0 && a.symDeclIdx[i] < nodes.length ? nodes[a.symDeclIdx[i]] : null as unknown as Node;
-		s.defaultParams = nodesAt(a.symDpIdx[i], nodes);
-		const decorators: Node[][] = [];
-		for (const row of a.symFieldDecoratorsIdx[i]) decorators.push(nodesAt(row, nodes));
+		s.defaultParams = backEdges(nodesAt(a.symDpIdx[i], nodes));
+		const decorators: Unowned<Node>[][] = [];
+		for (const row of a.symFieldDecoratorsIdx[i]) decorators.push(backEdges(nodesAt(row, nodes)));
 		s.fieldDecorators = decorators;
-		s.metaValues = nodesAt(a.symMetaValuesIdx[i], nodes);
+		s.metaValues = backEdges(nodesAt(a.symMetaValuesIdx[i], nodes));
 		if (badRef(a.symCtorRoutineIdx[i], syms.length) || badRef(a.symCtorOwnerIdx[i], syms.length) || badRef(a.symBorrowedFromIdx[i], syms.length)) return false;
 		s.ctorRoutine = a.symCtorRoutineIdx[i] >= 0 ? syms[a.symCtorRoutineIdx[i]] : null;
 		s.ctorOwner = a.symCtorOwnerIdx[i] >= 0 ? syms[a.symCtorOwnerIdx[i]] : null;

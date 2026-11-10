@@ -1,5 +1,5 @@
 import { membersOf } from "./unitsInCheck";
-import { Node, NodeKind, ActorDeclData, DecoratedDeclData, ConstructorDeclData, Symbol, SymbolKind, Type, TypeKind } from "../ast/node";
+import { Node, NodeKind, ActorDeclData, DecoratedDeclData, ConstructorDeclData, Symbol, SymbolKind, Type, TypeKind, backEdges } from "../ast/node";
 import { CheckerContext, addError, newSym } from "./context";
 import { RoutineFlag, SymbolFlag, classDeclNodeOf, hasFlag, initFnName, routineFlagSet, setFlag } from "./symbol";
 import { createFunction, setMinArity, voidType } from "./types";
@@ -70,7 +70,7 @@ function newCtorRoutine(ctx: CheckerContext, owner: Symbol, ownerName: string, t
 		routine.location = declNode.location;
 		declNode.resolvedSym = routine;
 	}
-	routine.defaultParams = defaults;
+	routine.defaultParams = backEdges(defaults);
 	return routine;
 }
 

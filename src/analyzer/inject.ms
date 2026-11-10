@@ -20,7 +20,7 @@ import { holdsNonNullRef } from "../checker/visibility";
 import { declaredTypeOfLocation } from "../checker/fit";
 import { getOpByKey } from "../codegen/c/types";
 import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol, RoutineFlag, routineFlagSet } from "../checker/symbol";
-import { TransformContext, createTransformContext, freshTempSym, reportTransformError } from "../transform/context";
+import { TransformContext, createTransformContext, freshTempSym, reportTransformError, keepOutOfTree } from "../transform/context";
 import {
 	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
 	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeConditional, makeHiddenAddr, makeHiddenDeref, makeIf, makeFnDecl, runtimeRef, makeCallResolved, makeBool, isRuntimeProcCall,
@@ -2176,6 +2176,7 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 	dctx.cfgCache = outerCache;
 	dctx.resultIsCursor = outerResultIsCursor;
 
+	keepOutOfTree(dctx.ctx, body);
 	return makeBlock(assembleScope(processed, cleanup, scope, loc), loc);
 }
 

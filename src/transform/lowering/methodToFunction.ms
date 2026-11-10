@@ -1,5 +1,5 @@
 import { Node, NodeKind, NodeData, createNodeAt, ProgramData, ClassDeclData, MethodDeclData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ActorDeclData, SymbolKind, Type } from "../../ast/node";
-import { TransformContext } from "../context";
+import { TransformContext, keepOutOfTree } from "../context";
 import { setFlag, SymbolFlag, initFnName, makeSymbol } from "../../checker/symbol";
 import { newSym, isGenericFn } from "../../checker/context";
 import { createFunction, voidType, noneType } from "../../checker/types";
@@ -150,6 +150,7 @@ function liftMethodsFromClassBody(classNode: Node, body: Node[], ctx: TransformC
 	for (const member of body) {
 		match (member.kind) {
 			NodeKind.MethodDecl => {
+				keepOutOfTree(ctx, member);
 				lifted.push(methodToFunctionDecl(member, classGenerics));
 			},
 			NodeKind.ConstructorDecl => {
@@ -159,6 +160,7 @@ function liftMethodsFromClassBody(classNode: Node, body: Node[], ctx: TransformC
 				const dd = member.data as DecoratedDeclData;
 				const inner = dd.decoratedNode;
 				if (inner != null && inner.kind == NodeKind.MethodDecl) {
+					keepOutOfTree(ctx, member);
 					lifted.push(rewrapDecorated(member, dd, methodToFunctionDecl(inner, classGenerics)));
 				} else if (inner != null && inner.kind == NodeKind.ConstructorDecl) {
 					lifted.push(rewrapDecorated(member, dd, ctorToInitFunction(classNode, classGenerics, inner, ctx)));

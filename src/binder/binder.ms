@@ -11,7 +11,7 @@
 import { parseSource } from "../parser/statements/validation";
 import { isAssignOp, isLogicalAssignOp } from "../ast/operators";
 import {
-	Node, NodeKind, NodeFlag, createNodeAt,
+	Node, NodeKind, NodeFlag,
 	FlowNode, FlowFlag, FlowList,
 	FlowSwitchClauseData, FlowReduceLabelData,
 	// NodeData variants
@@ -37,6 +37,19 @@ import {
 
 // ===== FlowNode Constructors =====
 
+// A flow node names its AST node without owning it; the binding's caller keeps every named node for as long
+// as the graph lives, so a pass that later rewrites the tree leaves the graph pointing at a live node.
+let flowNamed: Node[] = [];
+
+function named(node: Node): Node {
+	flowNamed.push(node);
+	return node;
+}
+
+function restoreNamed(outer: Node[]): void {
+	flowNamed = outer;
+}
+
 function createFlowNode(flag: FlowFlag): FlowNode {
 	const f = new FlowNode();
 	f.flags = (0 as BitSet<FlowFlag>).incl(flag);
@@ -54,7 +67,7 @@ function createUnreachableFlow(): FlowNode {
 
 function createStartFlow(container: Node): FlowNode {
 	const f = createFlowNode(FlowFlag.Start);
-	f.node = container;
+	f.node = named(container);
 	return f;
 }
 
@@ -76,7 +89,7 @@ function createFlowCondition(flag: FlowFlag, antecedent: FlowNode, expr: Node): 
 	}
 	const f = createFlowNode(flag);
 	f.antecedent = antecedent;
-	f.node = expr;
+	f.node = named(expr);
 	setFlowNodeReferenced(antecedent);
 	return f;
 }
@@ -88,7 +101,7 @@ function createFlowMutation(state: BinderState, flag: FlowFlag, antecedent: Flow
 	if (antecedent.flags.has(FlowFlag.Unreachable)) return antecedent;
 	const f = createFlowNode(flag);
 	f.antecedent = antecedent;
-	f.node = node;
+	f.node = named(node);
 	setFlowNodeReferenced(antecedent);
 	addAntecedent(state.currentExceptionTarget, f);
 	return f;
@@ -110,7 +123,7 @@ function createFlowSwitchClause(antecedent: FlowNode, switchStmt: Node, clauseSt
 	if (antecedent == null) return antecedent;
 	const f = createFlowNode(FlowFlag.SwitchClause);
 	f.antecedent = antecedent;
-	const data: FlowSwitchClauseData = { switchStatement: switchStmt, clauseStart, clauseEnd };
+	const data: FlowSwitchClauseData = { switchStatement: named(switchStmt), clauseStart, clauseEnd };
 	f.switchClauseData = data;
 	setFlowNodeReferenced(antecedent);
 	return f;
@@ -181,9 +194,12 @@ function createBinderState(): BinderState {
 
 // ===== Entry Point =====
 
-export function bindFlowGraph(program: Node): void {
+export function bindFlowGraph(program: Node, keep: Node[] = []): void {
 	if (program == null) return;
 	if (program.kind != NodeKind.Program) return;
+	const outer = flowNamed;
+	flowNamed = keep;
+	defer restoreNamed(outer);
 	const state = createBinderState();
 	state.currentFlow = createStartFlow(program);
 	const d = program.data as ProgramData;
@@ -196,7 +212,10 @@ export function bindFlowGraph(program: Node): void {
 // flowNode=null everywhere (createNodeAt), so narrowing queries in the
 // instantiation body re-check silently fall back to declared types unless the
 // clone gets its own flow graph.
-export function bindFunctionFlow(container: Node, body: Node): void {
+export function bindFunctionFlow(container: Node, body: Node, keep: Node[] = []): void {
+	const outer = flowNamed;
+	flowNamed = keep;
+	defer restoreNamed(outer);
 	const state = createBinderState();
 	bindContainer(state, container, body);
 }
@@ -206,8 +225,11 @@ export function bindFunctionFlow(container: Node, body: Node): void {
 // narrowing (match arms, assert guards, &&) cannot apply to macro-emitted
 // code even though the same code as source would narrow. bindStatement's
 // `_ =>` fallback dispatches expressions, so one entry covers both shapes.
-export function bindExpandedSubtree(subtree: Node | null, seed: FlowNode | null): void {
+export function bindExpandedSubtree(subtree: Node | null, seed: FlowNode | null, keep: Node[] = []): void {
 	if (subtree == null || seed == null) return;
+	const outer = flowNamed;
+	flowNamed = keep;
+	defer restoreNamed(outer);
 	const state = createBinderState();
 	state.currentFlow = seed;
 	bindStatement(state, subtree);
@@ -509,8 +531,7 @@ function bindMatchStmt(state: BinderState, node: Node): void {
 	let i = 0;
 	while (i < d.matchStmtCases.length) {
 		const caseNode = d.matchStmtCases[i];
-		const cd = caseNode.data as MatchCaseData;
-		state.currentFlow = synthesizeMatchArmFlow(preMatch, d.matchStmtDisc, cd);
+		state.currentFlow = matchArmFlow(preMatch, node, d.matchStmtDisc, i);
 		bindMatchCase(state, caseNode);
 		addAntecedent(postLabel, state.currentFlow);
 		i = i + 1;
@@ -527,17 +548,24 @@ function bindMatchCase(state: BinderState, caseNode: Node): void {
 	if (d.caseBody != null) bindStatement(state, d.caseBody);
 }
 
-function synthesizeMatchArmFlow(preMatch: FlowNode, disc: Node, cd: MatchCaseData): FlowNode {
-	if (disc == null) return preMatch;
-	if (cd.caseGuard != null) return preMatch;
-	let test: Node | null = null;
+// An arm whose patterns are all values holds when the discriminant equals one of them: a true condition
+// over the arm, read by the narrowing through the match and the arm's index, as a switch clause is.
+function matchArmFlow(preMatch: FlowNode, match: Node, disc: Node | null, arm: int32): FlowNode {
+	if (disc == null || preMatch == null || preMatch.flags.has(FlowFlag.Unreachable)) return preMatch;
+	const cases = match.kind == NodeKind.MatchStmt ? (match.data as MatchStmtData).matchStmtCases : (match.data as MatchExprData).matchCases;
+	const caseNode = cases[arm];
+	const cd = caseNode.data as MatchCaseData;
+	if (cd.caseGuard != null || cd.casePatterns.length == 0) return preMatch;
 	for (const pat of cd.casePatterns) {
 		if (pat == null || pat.kind == NodeKind.Identifier) return preMatch;
-		const equality = createNodeAt(NodeKind.BinaryExpr, { operator: "===", left: disc, right: pat }, pat.location);
-		test = test == null ? equality : createNodeAt(NodeKind.BinaryExpr, { operator: "||", left: test, right: equality }, pat.location);
 	}
-	if (test == null) return preMatch;
-	return createFlowCondition(FlowFlag.TrueCondition, preMatch, test);
+	const f = createFlowNode(FlowFlag.TrueCondition);
+	f.antecedent = preMatch;
+	f.node = named(caseNode);
+	const data: FlowSwitchClauseData = { switchStatement: named(match), clauseStart: arm, clauseEnd: arm + 1 };
+	f.switchClauseData = data;
+	setFlowNodeReferenced(preMatch);
+	return f;
 }
 
 function bindReturnStmt(state: BinderState, node: Node): void {
@@ -997,7 +1025,7 @@ function bindMatchExpr(state: BinderState, node: Node): void {
 	while (i < d.matchCases.length) {
 		const caseNode = d.matchCases[i];
 		const cd = caseNode.data as MatchCaseData;
-		state.currentFlow = synthesizeMatchArmFlow(preMatch, d.matchDisc, cd);
+		state.currentFlow = matchArmFlow(preMatch, node, d.matchDisc, i);
 		let pi = 0;
 		while (pi < cd.casePatterns.length) {
 			bindExpression(state, cd.casePatterns[pi]);

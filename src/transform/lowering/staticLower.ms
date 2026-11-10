@@ -2,7 +2,7 @@ import {
 	Node, NodeKind, createNodeAt, ClassDeclData, ActorDeclData, PropertyDeclData, BlockStmtData,
 	ExportDeclData, DecoratedDeclData, ExprStmtData, ProgramData, SymbolFlag, SymbolKind, MemberExprData,
 } from "../../ast/node";
-import { TransformContext } from "../context";
+import { TransformContext, keepOutOfTree } from "../context";
 import { walkExpandBlocks, walkNode } from "../walker";
 import { literalTakesType } from "../../checker/constFold";
 import { makeAssign, makeMember, makeIdentResolved, makeExprStmt } from "../util";
@@ -56,7 +56,7 @@ function staticRunBlock(declNode: Node, stmts: Node[]): Node {
 	return createNodeAt(NodeKind.BlockStmt, { statements: stmts }, declNode.location);
 }
 
-function lowerBodyStaticsInPlace(declNode: Node, ownerName: string, body: Node[], out: Node[], reevaluated: boolean, reloadable: string[], everyInitializerRuns: boolean): void {
+function lowerBodyStaticsInPlace(declNode: Node, ownerName: string, body: Node[], out: Node[], reevaluated: boolean, reloadable: string[], everyInitializerRuns: boolean, ctx: TransformContext): void {
 	let write: int32 = 0;
 	for (let read: int32 = 0; read < body.length; read += 1) {
 		const m = body[read];
@@ -65,7 +65,10 @@ function lowerBodyStaticsInPlace(declNode: Node, ownerName: string, body: Node[]
 			continue;
 		}
 		const member = bareMember(m);
-		if (m.kind == NodeKind.PropertyDecl && isInlinedReadonlyScalar(member, reloadable)) continue;
+		if (m.kind == NodeKind.PropertyDecl && isInlinedReadonlyScalar(member, reloadable)) {
+			keepOutOfTree(ctx, m);
+			continue;
+		}
 		body[write] = m;
 		write += 1;
 		if (member.kind != NodeKind.PropertyDecl) continue;
@@ -78,7 +81,7 @@ function lowerBodyStaticsInPlace(declNode: Node, ownerName: string, body: Node[]
 	body.shrink(write);
 }
 
-function expandClassStmt(stmt: Node, lifted: Node[], reloadable: string[], everyInitializerRuns: boolean): Node[] {
+function expandClassStmt(stmt: Node, lifted: Node[], reloadable: string[], everyInitializerRuns: boolean, ctx: TransformContext): Node[] {
 	let target = stmt;
 	if (target.kind == NodeKind.ExportDecl) {
 		target = (target.data as ExportDeclData).exportedDecl;
@@ -88,10 +91,10 @@ function expandClassStmt(stmt: Node, lifted: Node[], reloadable: string[], every
 	const local = lifted.indexOf(target) >= 0;
 	if (target.kind == NodeKind.ClassDecl) {
 		const cd = target.data as ClassDeclData;
-		lowerBodyStaticsInPlace(target, cd.className, cd.classBody, out, local, reloadable, everyInitializerRuns);
+		lowerBodyStaticsInPlace(target, cd.className, cd.classBody, out, local, reloadable, everyInitializerRuns, ctx);
 	} else if (target.kind == NodeKind.ActorDecl) {
 		const ad = target.data as ActorDeclData;
-		lowerBodyStaticsInPlace(target, ad.actorName, ad.actorBody, out, local, reloadable, everyInitializerRuns);
+		lowerBodyStaticsInPlace(target, ad.actorName, ad.actorBody, out, local, reloadable, everyInitializerRuns, ctx);
 	}
 	return out;
 }
@@ -120,7 +123,7 @@ export function lowerStaticInit(program: Node, ctx: TransformContext): Node {
 	const lifted: Node[] = ctx != null && ctx.checkerCtx != null ? ctx.checkerCtx.liftedLocalTypeDecls : [];
 	const reloadable: string[] = ctx != null ? ctx.reloadableModules : [];
 	const everyInitializerRuns = ctx != null && ctx.raiserBackend;
-	const expand = (stmt: Node, c: TransformContext): Node[] => expandClassStmt(stmt, lifted, reloadable, everyInitializerRuns);
+	const expand = (stmt: Node, c: TransformContext): Node[] => expandClassStmt(stmt, lifted, reloadable, everyInitializerRuns, c);
 	const kept: Node[] = [];
 	for (const s of (program.data as ProgramData).programStmts) {
 		if (lifted.indexOf(s) >= 0) {

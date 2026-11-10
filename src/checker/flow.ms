@@ -18,7 +18,7 @@ import {
 	ArrayLiteralData, ObjectLiteralData, SpreadExprData, SymbolFlag,
 	Symbol, SymbolKind, DestructuringDeclData, MoveExprData,
 	FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData,
-	BlockStmtData,
+	BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { isLogicalAssignOp } from "../ast/operators";
@@ -594,6 +594,8 @@ function getTypeAtFlowNode(state: FlowState, flow: FlowNode | null): FlowType {
 		const cnode = pending![pi];
 		const narrowed = cnode.flags.has(FlowFlag.Call)
 			? narrowTypeByAssertion(result.t, cnode.node!, state.reference)
+			: cnode.switchClauseData != null
+			? narrowTypeByMatchArm(result.t, cnode.switchClauseData, state.reference)
 			: narrowType(result.t, cnode.node, state.reference, cnode.flags.has(FlowFlag.TrueCondition));
 		result = flowType(narrowed, result.incomplete);
 		pi = pi - 1;
@@ -695,6 +697,37 @@ function getTypeAtSwitchClause(state: FlowState, flow: FlowNode): FlowType {
 	// Phase 6 will negate the covered cases to produce the correct remainder.
 	if (anyDefault || narrowed == null) return parent;
 	return flowType(narrowed, parent.incomplete);
+}
+
+// A match arm holds when the discriminant equals one of its patterns: the narrowing of
+// `disc === p1 || disc === p2 || ...` assumed true, the union of each equality's narrowing.
+function narrowTypeByMatchArm(t: Type | null, arm: FlowSwitchClauseData, refNode: Node): Type | null {
+	if (t == null || refNode == null) return t;
+	if (_narrowDepth >= NARROW_DEPTH_LIMIT) return t;
+	const match = arm.switchStatement;
+	const disc = match.kind == NodeKind.MatchStmt ? (match.data as MatchStmtData).matchStmtDisc : (match.data as MatchExprData).matchDisc;
+	const cases = match.kind == NodeKind.MatchStmt ? (match.data as MatchStmtData).matchStmtCases : (match.data as MatchExprData).matchCases;
+	const patterns = (cases[arm.clauseStart].data as MatchCaseData).casePatterns;
+	_narrowDepth = _narrowDepth + 1;
+	const peeled = peelTransparentInstance(t);
+	let acc: Type | null = null;
+	for (let i = 0; i < patterns.length; i += 1) {
+		const one = narrowTypeByEqualityAt(peeled, disc, patterns[i], refNode);
+		if (i == 0) { acc = one; continue; }
+		if (acc == null || one == null || acc == peeled || one == peeled) { acc = peeled; continue; }
+		if (acc != one) acc = createUnion([acc, one]);
+	}
+	_narrowDepth = _narrowDepth - 1;
+	return acc == peeled ? t : acc;
+}
+
+function narrowTypeByEqualityAt(t: Type, disc: Node, pattern: Node, refNode: Node): Type | null {
+	if (_narrowDepth >= NARROW_DEPTH_LIMIT) return t;
+	_narrowDepth = _narrowDepth + 1;
+	const peeled = peelTransparentInstance(t);
+	const result = narrowTypeByEquality(peeled, disc, pattern, "===", refNode, true);
+	_narrowDepth = _narrowDepth - 1;
+	return result == peeled ? t : result;
 }
 
 // A case narrows by its own tests; a default narrows by excluding every other case.

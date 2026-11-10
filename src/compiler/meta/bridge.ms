@@ -59,7 +59,7 @@ import {
 	// SERIALIZE A2 — macro multi-decl emission
 	SpliceManyData,
 	// JSX (compile-time only — needs round-trip through macro VM)
-	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData, BuiltinKind } from "../../ast/node";
+	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData, BuiltinKind, backEdges, strongNodes } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
 import { actorHandleIndex, instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase, skipModifier, peelToRepr, unwrapMaybeType, isFloatType, numberLiteralBase } from "../../checker/types";
 import { isUnsignedIntegerType } from "../../checker/compat";
@@ -229,7 +229,7 @@ function collectFieldDecorators(t: Type): Node[][] {
 	for (let j = 0; j < t.typeNames.length; j = j + 1) {
 		for (let k = 0; k < t.sym.fieldDecoratorNames.length; k = k + 1) {
 			if (t.sym.fieldDecoratorNames[k] == t.typeNames[j]) {
-				out[j] = t.sym.fieldDecorators[k];
+				out[j] = strongNodes(t.sym.fieldDecorators[k]);
 				break;
 			}
 		}
@@ -3551,7 +3551,7 @@ function makeClassWithDecoratedFields(name: string, fieldNames: string[], fieldD
 	t.typeChildren = fieldTypes;
 	t.sym = makeSymbol(name, SymbolKind.Class);
 	t.sym.fieldDecoratorNames = fieldNames;
-	t.sym.fieldDecorators = fieldDecorators;
+	t.sym.fieldDecorators = fieldDecorators.map((row: Node[]): Unowned<Node>[] => backEdges(row));
 	return t;
 }
 

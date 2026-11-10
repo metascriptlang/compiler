@@ -4,7 +4,7 @@ import {
 	ProgramData, ExportDeclData, ClassDeclData, ActorDeclData, DecoratedDeclData,
 	MacroInvocationData, MacroDeclData, MethodDeclData, PropertyDeclData, FunctionDeclData,
 	BlockStmtData, VariableDeclData, ArrowFunctionData, CallExprData, IdentifierData,
-	ConstructorDeclData, ExprStmtData, BinaryExprData, MemberExprData, BuiltinKind } from "../../ast/node";
+	ConstructorDeclData, ExprStmtData, BinaryExprData, MemberExprData, BuiltinKind, backEdges } from "../../ast/node";
 import { markUsedIn, CheckerContext, Severity, addError, createContext, sgSortRecords } from "../../checker/context";
 import { lookupSymbol, makeSymbol, hasFlag, SymbolFlag, ScopeKind } from "../../checker/symbol";
 import { collectOneDirective } from "../../checker/checkPass";
@@ -383,7 +383,7 @@ function applyToMembers(ctx: CheckerContext, plan: ClassPlan): void {
 			if (inner == null || memberCategory(inner) != category) continue;
 			const accessor = isAutoAccessorField(inner);
 			if (accessor) plan.accessorParts = expandAutoAccessor(inner);
-			else recordFieldDecorators(planClassSymbol(plan), dd);
+			else recordFieldDecorators(ctx, planClassSymbol(plan), dd);
 			const stmts: Node[] = [];
 			const initsField = accessor ? autoAccessorStorageName((inner.data as PropertyDeclData).propName)
 				: inner.kind == NodeKind.PropertyDecl ? (inner.data as PropertyDeclData).propName : "";
@@ -979,7 +979,8 @@ function finishPlan(ctx: CheckerContext, plan: ClassPlan, after: Node[]): void {
 		const sym = planClassSymbol(plan);
 		if (sym != null) {
 			sym.metaKeys = plan.metaKeys;
-			sym.metaValues = plan.metaValues;
+			for (const value of plan.metaValues) ctx.outOfTree.push(value);
+			sym.metaValues = backEdges(plan.metaValues);
 		}
 	}
 	if (plan.memberInits.length > 0) {

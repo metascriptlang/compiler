@@ -1,4 +1,4 @@
-import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData, NumberLiteralData, UnaryExprData, BinaryExprData, MemberExprData, IdentifierData, TypeKind, AttachedOp, BuiltinKind } from "../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, Symbol, SymbolKind, SymbolState, TestDeclData, BlockStmtData, NumberLiteralData, UnaryExprData, BinaryExprData, MemberExprData, IdentifierData, TypeKind, AttachedOp, BuiltinKind, backEdges } from "../ast/node";
 import { ITERATOR_HELPER_NEEDS_SOURCE } from "./iteratorHelperTexts";
 import { extractDecoratorInfo, intrinsicBuiltinOf, hasIntrinsicDecorator, stripIntrinsicMemberWrappers, decoratorNamed, exportedFunctionOf, reloadHandlerDecorator, inlineMemberMisuse } from "./decoratorHelpers";
 import { expandAutoAccessors, isAutoAccessorField } from "./autoAccessor";
@@ -1065,7 +1065,7 @@ function collectClassMethod(ctx: CheckerContext, classSym: Symbol, className: st
 	// the MethodDecl branch, so the method symbol's defaultParams stays empty unless
 	// we set it here. (Pairs with the methodDefaults shift above for non-static methods.)
 	if (md.methodDefaults != null && md.methodDefaults.length > 0) {
-		methodSym.defaultParams = md.methodDefaults;
+		methodSym.defaultParams = backEdges(md.methodDefaults);
 	}
 	if (md.methodIsStatic) methodSym.staticOwner = classSym;
 	registerExtension(ctx.extensionRegistry, createExtMethod(md.methodName, "", md.methodIsStatic, methodSym, 1));
@@ -1224,6 +1224,7 @@ function defineEnumMemberConst(ctx: CheckerContext, name: string, value: int64, 
 	decl.nodeType = slotType;
 	const sym = makeSymbolState(name, SymbolKind.Variable, slotType, false, SymbolState.Checked);
 	setFlag(sym, SymbolFlag.Global);
+	ctx.outOfTree.push(decl);
 	sym.declNode = decl;
 	sym.location = loc;
 	defineSymbol(ctx.table, sym);

@@ -576,6 +576,7 @@ function tryLoadPreludePackBody(body: string, dispatchRegistry: DispatchRegistry
 
 	const cache = createIdentCache();
 	const ctx = createContextWithCache(cache, dispatchRegistry);
+	ctx.outOfTree = objects.nodes;
 	ctx.extensionRegistry = createExtensionRegistry();
 	for (let i = 0; i < syms.length; i += 1) {
 		const s = syms[i];
@@ -810,7 +811,8 @@ test "preludePack: a macro symbol keeps its MacroDecl declaration node" {
 		(ctx.table.current.symbols as Map<int32, Symbol>).set(sym.nameId, sym);
 		const noStmts: Node[] = [];
 		const body = createNodeAt(NodeKind.BlockStmt, { statements: noStmts } as NodeData, makeLoc(3, 1));
-		sym.declNode = createNodeAt(NodeKind.MacroDecl, { macroDeclName: "pkMacro", macroDeclParams: ["value"], macroDeclParamTypes: ["Node"], macroDeclReturnType: "Node", macroDeclBody: body } as NodeData, makeLoc(2, 1));
+		const decl = createNodeAt(NodeKind.MacroDecl, { macroDeclName: "pkMacro", macroDeclParams: ["value"], macroDeclParamTypes: ["Node"], macroDeclReturnType: "Node", macroDeclBody: body } as NodeData, makeLoc(2, 1));
+		sym.declNode = decl;
 		const key = preludePackKey("macro-decl", ".test");
 		writePreludePack(key, PK_STAMP, ctx, emptyPreludeTables());
 		const loaded = tryLoadPreludePack(key, PK_STAMP);

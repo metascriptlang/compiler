@@ -385,13 +385,13 @@ export class Symbol {
 	symbolType: Type;
 	state: SymbolState;
 	location: SourceLocation;
-	declNode: Node;
+	declNode: Unowned<Node>;
 	overloads: Symbol[];
 	nativeName: string;
 	exportName: string;
 	builtinKind: BuiltinKind;
 	symFlags: BitSet<SymbolFlag>;
-	defaultParams: Node[];
+	defaultParams: Unowned<Node>[];
 	modulePath: string;
 	headerPath: string;    // @include header for this extern symbol
 	jsModulePath: string;  // @import JS module for this extern symbol
@@ -400,9 +400,9 @@ export class Symbol {
 	mutatedParams: int32;  // Bitfield: bit i = param i is mutated in body (gates const-ptr promotion)
 	staticFields: Symbol[];  // Static properties (only for class symbols)
 	fieldDecoratorNames: string[];
-	fieldDecorators: Node[][];
+	fieldDecorators: Unowned<Node>[][];
 	metaKeys: string[];
-	metaValues: Node[];
+	metaValues: Unowned<Node>[];
 	nonisolatedFields: string[];
 	duVariantSlot: int32;  // Narrowed DU field access: 0 = none, N = union variant N-1 (checker stamps on the property sym; C codegen routes .v<N-1>)
 	itemModule: int32;     // Identity within one compilation: the owning module's index and the ordinal of this symbol in it
@@ -603,108 +603,108 @@ export type NodeData =
 	// Identifier
 	| { name: string }                                             // Identifier
 	// Expression variants
-	| { operator: string, left: Node, right: Node }                // BinaryExpr
-	| { unaryOp: string, operand: Node }                           // UnaryExpr
-	| { updateOp: string, updateArg: Node, isPrefix: boolean }     // UpdateExpr (i++, ++i)
-	| { callee: Node, arguments: Node[], isDirectCall: boolean, resolvedOverloadIdx: number }  // CallExpr
-	| { object: Node, property: string, isOptional: boolean }      // MemberExpr
-	| { array: Node, index: Node }                                 // ArrayAccess
-	| { properties: Node[], keys: string[], keyLocations: SourceLocation[] } // ObjectLiteral
-	| { elements: Node[] }                                         // ArrayLiteral
-	| { arrowParams: string[], arrowParamTypes: string[], arrowBody: Node, arrowFlags: string, arrowReturnType: string, arrowDefaults: Node[] } // ArrowFunction
-	| { funcExprParams: string[], funcExprParamTypes: string[], funcExprBody: Node, funcExprFlags: string, funcExprReturnType: string } // FunctionExpr
-	| { asExpr: Node, asType: string }                              // TypeAssertion
-	| { ternaryCondition: Node, ternaryConsequent: Node, ternaryAlternate: Node } // ConditionalExpr
-	| { spreadArg: Node }                                          // SpreadExpr
-	| { newCallee: Node, newArguments: Node[] }                    // NewExpr
-	| { tryArg: Node, hasCatch: boolean, catchVal: Node }          // TryExpr
-	| { matchDisc: Node, matchCases: Node[] }                      // MatchExpr
-	| { casePatterns: Node[], caseGuard: Node | null, caseBody: Node }    // MatchCase
-	| { awaitArg: Node }                                           // AwaitExpr
-	| { yieldArg: Node, isDelegate: boolean }                      // YieldExpr
-	| { moveArg: Node }                                            // MoveExpr
-	| { outArg: Node }                                             // OutExpr
+	| { operator: string, left: Owned<Node>, right: Owned<Node> }                // BinaryExpr
+	| { unaryOp: string, operand: Owned<Node> }                           // UnaryExpr
+	| { updateOp: string, updateArg: Owned<Node>, isPrefix: boolean }     // UpdateExpr (i++, ++i)
+	| { callee: Owned<Node>, arguments: Owned<Node>[], isDirectCall: boolean, resolvedOverloadIdx: number }  // CallExpr
+	| { object: Owned<Node>, property: string, isOptional: boolean }      // MemberExpr
+	| { array: Owned<Node>, index: Owned<Node> }                                 // ArrayAccess
+	| { properties: Owned<Node>[], keys: string[], keyLocations: SourceLocation[] } // ObjectLiteral
+	| { elements: Owned<Node>[] }                                         // ArrayLiteral
+	| { arrowParams: string[], arrowParamTypes: string[], arrowBody: Owned<Node>, arrowFlags: string, arrowReturnType: string, arrowDefaults: Owned<Node>[] } // ArrowFunction
+	| { funcExprParams: string[], funcExprParamTypes: string[], funcExprBody: Owned<Node>, funcExprFlags: string, funcExprReturnType: string } // FunctionExpr
+	| { asExpr: Owned<Node>, asType: string }                              // TypeAssertion
+	| { ternaryCondition: Owned<Node>, ternaryConsequent: Owned<Node>, ternaryAlternate: Owned<Node> } // ConditionalExpr
+	| { spreadArg: Owned<Node> }                                          // SpreadExpr
+	| { newCallee: Owned<Node>, newArguments: Owned<Node>[] }                    // NewExpr
+	| { tryArg: Owned<Node>, hasCatch: boolean, catchVal: Owned<Node> }          // TryExpr
+	| { matchDisc: Owned<Node>, matchCases: Owned<Node>[] }                      // MatchExpr
+	| { casePatterns: Owned<Node>[], caseGuard: Owned<Node> | null, caseBody: Owned<Node> }    // MatchCase
+	| { awaitArg: Owned<Node> }                                           // AwaitExpr
+	| { yieldArg: Owned<Node>, isDelegate: boolean }                      // YieldExpr
+	| { moveArg: Owned<Node> }                                            // MoveExpr
+	| { outArg: Owned<Node> }                                             // OutExpr
 	| { sizeofType: string, sizeofResolved: Type | null }                 // SizeofExpr
-	| { convExpr: Node, convType: Type }                           // HiddenStdConv, HiddenSubConv
-	| { expr: Node }                                               // HiddenDeref, HiddenAddr
+	| { convExpr: Owned<Node>, convType: Type }                           // HiddenStdConv, HiddenSubConv
+	| { expr: Owned<Node> }                                               // HiddenDeref, HiddenAddr
 	| { annotationType: string }                                   // TypeAnnotation
 	// Pattern variants
-	| { patternElements: Node[], hasRestElement: boolean, patternDefaults: Node[] } // ArrayPattern
-	| { patternProps: Node[], hasRestProp: boolean }               // ObjectPattern
-	| { propKey: string, propAlias: Node, propDefault: Node | null } // ObjectPatternProp
-	| { destrPattern: Node, destrInit: Node, destrIsConst: boolean, destrType: string } // DestructuringDecl
+	| { patternElements: Owned<Node>[], hasRestElement: boolean, patternDefaults: Owned<Node>[] } // ArrayPattern
+	| { patternProps: Owned<Node>[], hasRestProp: boolean }               // ObjectPattern
+	| { propKey: string, propAlias: Owned<Node>, propDefault: Owned<Node> | null } // ObjectPatternProp
+	| { destrPattern: Owned<Node>, destrInit: Owned<Node>, destrIsConst: boolean, destrType: string } // DestructuringDecl
 	// Statement variants
-	| { declName: string, declType: string, initializer: Node, declKind: DeclKind, nameLocation: SourceLocation }  // VariableDecl
-	| { condition: Node, consequent: Node, alternate: Node }       // IfStmt
-	| { whileCondition: Node, whileBody: Node, whileLabel: string } // WhileStmt
-	| { forInit: Node, forCondition: Node, forUpdate: Node, forBody: Node, forLabel: string } // ForStmt
-	| { forOfBinding: string, forOfIsConst: boolean, forOfIterable: Node, forOfBody: Node, forOfPattern: Node, bindingLocation: SourceLocation, forOfLabel: string } // ForOfStmt
-	| { forInBinding: string, forInIsConst: boolean, forInObject: Node, forInBody: Node, forInLabel: string } // ForInStmt
-	| { statements: Node[] }                                       // BlockStmt
-	| { expr: Node }                                               // ExprStmt
-	| { argument: Node | null }                                    // ReturnStmt
+	| { declName: string, declType: string, initializer: Owned<Node>, declKind: DeclKind, nameLocation: SourceLocation }  // VariableDecl
+	| { condition: Owned<Node>, consequent: Owned<Node>, alternate: Owned<Node> }       // IfStmt
+	| { whileCondition: Owned<Node>, whileBody: Owned<Node>, whileLabel: string } // WhileStmt
+	| { forInit: Owned<Node>, forCondition: Owned<Node>, forUpdate: Owned<Node>, forBody: Owned<Node>, forLabel: string } // ForStmt
+	| { forOfBinding: string, forOfIsConst: boolean, forOfIterable: Owned<Node>, forOfBody: Owned<Node>, forOfPattern: Owned<Node>, bindingLocation: SourceLocation, forOfLabel: string } // ForOfStmt
+	| { forInBinding: string, forInIsConst: boolean, forInObject: Owned<Node>, forInBody: Owned<Node>, forInLabel: string } // ForInStmt
+	| { statements: Owned<Node>[] }                                       // BlockStmt
+	| { expr: Owned<Node> }                                               // ExprStmt
+	| { argument: Owned<Node> | null }                                    // ReturnStmt
 	| { breakLabel: string }                                       // BreakStmt
 	| { continueLabel: string }                                    // ContinueStmt
-	| { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string, fnDefaults: Node[], nativeName: string, nameLocation: SourceLocation } // FunctionDecl
-	| { doBody: Node, doCondition: Node, dwLabel: string, dwSwitchWrapper: boolean } // DoWhileStmt
-	| { switchDisc: Node, switchCases: Node[], switchLowered: boolean } // SwitchStmt
-	| { caseTests: Node[], caseStmts: Node[], isDefault: boolean } // SwitchCase
+	| { fnName: string, params: string[], fnParamTypes: string[], fnBody: Owned<Node>, fnFlags: string, fnReturnType: string, fnDefaults: Owned<Node>[], nativeName: string, nameLocation: SourceLocation } // FunctionDecl
+	| { doBody: Owned<Node>, doCondition: Owned<Node>, dwLabel: string, dwSwitchWrapper: boolean } // DoWhileStmt
+	| { switchDisc: Owned<Node>, switchCases: Owned<Node>[], switchLowered: boolean } // SwitchStmt
+	| { caseTests: Owned<Node>[], caseStmts: Owned<Node>[], isDefault: boolean } // SwitchCase
 	| { unreachableMsg: string }                                   // UnreachableStmt
-	| { matchStmtDisc: Node, matchStmtCases: Node[] }              // MatchStmt
+	| { matchStmtDisc: Owned<Node>, matchStmtCases: Owned<Node>[] }              // MatchStmt
 	// Declaration variants
 	| { importNames: string[], importAliases: string[], importSource: string, nameLocations: SourceLocation[], aliasLocations: SourceLocation[], importTypeNames: string[] }  // ImportDecl
-	| { exportedDecl: Node }                                       // ExportDecl
+	| { exportedDecl: Owned<Node> }                                       // ExportDecl
 	| { aliasName: string, aliasType: string, aliasIsDistinct: boolean, aliasGenericParams: string, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation } // TypeAliasDecl
-	| { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[], enumInits: Node[] } // EnumDecl
-	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][], interfaceOptionalFields: string[], nativeName: string } // InterfaceDecl
-	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][], interfaceOptionalFields: string[], nativeName: string } // StructDecl
-	| { className: string, classDisplayName: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation, classImplements: string[] } // ClassDecl
-	| { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Node }  // PropertyDecl
-	| { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Node[], nativeName: string, nameLocation: SourceLocation } // MethodDecl
-	| { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[], ctorVisibility: string, ctorParamProps: Node[], ctorFlags: string } // ConstructorDecl
+	| { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[], enumInits: Owned<Node>[] } // EnumDecl
+	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Owned<Node>[][], interfaceOptionalFields: string[], nativeName: string } // InterfaceDecl
+	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Owned<Node>[][], interfaceOptionalFields: string[], nativeName: string } // StructDecl
+	| { className: string, classDisplayName: string, classExtends: string, classBody: Owned<Node>[], nameLocation: SourceLocation, classImplements: string[] } // ClassDecl
+	| { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Owned<Node> }  // PropertyDecl
+	| { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Owned<Node>, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Owned<Node>[], nativeName: string, nameLocation: SourceLocation } // MethodDecl
+	| { ctorParams: string[], ctorParamTypes: string[], ctorBody: Owned<Node>, ctorDefaults: Owned<Node>[], ctorVisibility: string, ctorParamProps: Owned<Node>[], ctorFlags: string } // ConstructorDecl
 	// Error handling variants
-	| { throwArg: Node }                                           // ThrowStmt
-	| { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node, catchBindingLocation: SourceLocation, hasCatchClause: boolean } // TryCatchStmt
+	| { throwArg: Owned<Node> }                                           // ThrowStmt
+	| { tryBody: Owned<Node>, catchName: string, catchBody: Owned<Node>, finallyBody: Owned<Node>, catchBindingLocation: SourceLocation, hasCatchClause: boolean } // TryCatchStmt
 	// Decorator variants
-	| { macroName: string, macroArgs: Node[], macroHasParens: boolean }  // MacroInvocation
-	| { decorators: Node[], decoratedNode: Node }                  // DecoratedDecl
-	| { deferExpr: Node }                                          // DeferStmt
+	| { macroName: string, macroArgs: Owned<Node>[], macroHasParens: boolean }  // MacroInvocation
+	| { decorators: Owned<Node>[], decoratedNode: Owned<Node> }                  // DecoratedDecl
+	| { deferExpr: Owned<Node> }                                          // DeferStmt
 	// Testing variants
-	| { testName: string, testBody: Node }                         // TestDecl
-	| { assertExpr: Node, assertSource: string, assertMessage: string, assertMessageExpr: Node | null } // AssertStmt
+	| { testName: string, testBody: Owned<Node> }                         // TestDecl
+	| { assertExpr: Owned<Node>, assertSource: string, assertMessage: string, assertMessageExpr: Owned<Node> | null } // AssertStmt
 	// Extern / Macro / Quote variants
 	| { externKind: ExternKind, externName: string, nativeName: string, externType: string } // ExternDecl
-	| { macroDeclName: string, macroDeclParams: string[], macroDeclParamTypes: string[], macroDeclReturnType: string, macroDeclBody: Node } // MacroDecl
-	| { quoteBody: Node }                                          // QuoteExpr
-	| { comptimeBody: Node }                                       // ComptimeBlock
+	| { macroDeclName: string, macroDeclParams: string[], macroDeclParamTypes: string[], macroDeclReturnType: string, macroDeclBody: Owned<Node> } // MacroDecl
+	| { quoteBody: Owned<Node> }                                          // QuoteExpr
+	| { comptimeBody: Owned<Node> }                                       // ComptimeBlock
 	// Type expression variants (positioned type AST — standard parity)
 	// TypeName uses NodeKind.Identifier with { name: string } — reuses expression kind for type leaf nodes
-	| { typExprBase: Node, typExprArgs: Node[] }                   // TypeGeneric
-	| { typExprElement: Node, typExprSize: number }                // TypeArray (-1 = unsized)
+	| { typExprBase: Owned<Node>, typExprArgs: Owned<Node>[] }                   // TypeGeneric
+	| { typExprElement: Owned<Node>, typExprSize: number }                // TypeArray (-1 = unsized)
 	// TypeUnion — discriminator metadata surfaced for tagged-union codecs (V3).
 	// discFieldName="" + variantKeys=[] + discKind="" mean "no detectable disc"
 	// (TS-style DUs auto-detected by codecs walking variants; match-type DUs
 	// have these populated by bridge from Type.typeNames + typeExtra).
 	// discKind ∈ {"boolean","enum",""} ("" = no disc / TS-style).
-	| { typExprMembers: Node[], discFieldName: string, variantKeys: string[], discKind: string }  // TypeUnion
+	| { typExprMembers: Owned<Node>[], discFieldName: string, variantKeys: string[], discKind: string }  // TypeUnion
 	// TypeIntersection — same Node[] shape, no disc info (intersections aren't DUs).
-	| { typExprMembers: Node[] }                                   // TypeIntersection
-	| { typExprParams: Node[], typExprReturn: Node, typExprParamNames: string[] } // TypeFunction
-	| { typExprFieldNames: string[], typExprFieldTypes: Node[], typExprIndexKey: Node, typExprIndexValue: Node, typExprFieldDecorators: Node[][], typExprTypeName: string, typExprOptionalFields: string[] }   // TypeObject
+	| { typExprMembers: Owned<Node>[] }                                   // TypeIntersection
+	| { typExprParams: Owned<Node>[], typExprReturn: Owned<Node>, typExprParamNames: string[] } // TypeFunction
+	| { typExprFieldNames: string[], typExprFieldTypes: Owned<Node>[], typExprIndexKey: Owned<Node>, typExprIndexValue: Owned<Node>, typExprFieldDecorators: Owned<Node>[][], typExprTypeName: string, typExprOptionalFields: string[] }   // TypeObject
 	// Program root
-	| { programStmts: Node[] }                                     // Program
+	| { programStmts: Owned<Node>[] }                                     // Program
 	// Actor (appended after Program to preserve union discriminant ordering)
-	| { actorName: string, actorBody: Node[], nameLocation: SourceLocation } // ActorDecl
+	| { actorName: string, actorBody: Owned<Node>[], nameLocation: SourceLocation } // ActorDecl
 	// SERIALIZE A2 — macro multi-decl emission
-	| { spliceNodes: Node[] }                                      // SpliceMany
+	| { spliceNodes: Owned<Node>[] }                                      // SpliceMany
 	// JSX (appended at end to preserve union discriminant ordering)
-	| { jsxTag: string, jsxAttrs: Node[], jsxChildren: Node[], jsxSelfClosing: boolean } // JSXElement
-	| { jsxFragChildren: Node[] }                                  // JSXFragment
+	| { jsxTag: string, jsxAttrs: Owned<Node>[], jsxChildren: Owned<Node>[], jsxSelfClosing: boolean } // JSXElement
+	| { jsxFragChildren: Owned<Node>[] }                                  // JSXFragment
 	| { jsxText: string }                                          // JSXText
-	| { jsxExpr: Node }                                            // JSXExpressionContainer
-	| { jsxAttrName: string, jsxAttrValue: Node }                  // JSXAttribute
-	| { jsxSpreadArg: Node }                                       // JSXSpreadAttribute
-	| { computedKey: Node, computedValue: Node }                  // ComputedProperty
+	| { jsxExpr: Owned<Node> }                                            // JSXExpressionContainer
+	| { jsxAttrName: string, jsxAttrValue: Owned<Node> }                  // JSXAttribute
+	| { jsxSpreadArg: Owned<Node> }                                       // JSXSpreadAttribute
+	| { computedKey: Owned<Node>, computedValue: Owned<Node> }                  // ComputedProperty
 
 // ===== Flow Graph =====
 //
@@ -756,7 +756,7 @@ export class FlowList {
 // Represents a half-open range of switch case clauses [clauseStart, clauseEnd).
 // Coalesces empty-fallthrough clauses into one range for efficiency.
 export class FlowSwitchClauseData {
-	switchStatement: Node; // the SwitchStmt AST node
+	switchStatement: Unowned<Node>; // the SwitchStmt AST node
 	clauseStart: int32;
 	clauseEnd: int32;
 }
@@ -771,7 +771,7 @@ export class FlowReduceLabelData {
 
 export class FlowNode {
 	flags: BitSet<FlowFlag>;
-	node: Node | null;       // associated AST node (variant-dependent meaning; may be synthetic FlowSwitchClauseData / FlowReduceLabelData holder)
+	node: Unowned<Node> | null;       // associated AST node (variant-dependent meaning; may be synthetic FlowSwitchClauseData / FlowReduceLabelData holder)
 	antecedent: FlowNode | null;    // single parent (non-Label variants)
 	antecedents: FlowList | null;   // list of parents (BranchLabel / LoopLabel only)
 	// Synthetic variant holders (null unless Flags has SwitchClause / ReduceLabel)
@@ -785,7 +785,7 @@ export class FlowNode {
 export class Node {
 	kind: NodeKind;
 	location: SourceLocation;
-	data: NodeData;
+	data: Owned<NodeData>;
 	// Compiler-internal: the checker's resolved Type. MACRO BODIES see a
 	// different shape here — the VM wire carries a type-AST Node tree
 	// (TypeObject/TypeUnion/TypeArray/TypeGeneric/Identifier/literal kinds,
@@ -796,10 +796,10 @@ export class Node {
 	resolvedSym: Symbol | null;
 	flags: BitSet<NodeFlag>;
 	variantSlot: int32;
-	typeExpr: Node | null;    // Positioned type annotation AST (standard parity: PNode type tree alongside string fields)
-	typeExprs: Node[] | null; // Per-param/per-field type annotation ASTs (parallel to string[] type fields). null entry = no annotation for that param.
-	genericDefaults: (Node | null)[] | null; // Aligned declaration TypeAnnotation wrappers; null entry means no default.
-	baseExprs: Node[] | null; // StructDecl/InterfaceDecl: one node per interfaceExtends entry, typed with the parent resolved in the declaring scope
+	typeExpr: Owned<Node> | null;    // Positioned type annotation AST (standard parity: PNode type tree alongside string fields)
+	typeExprs: Owned<Node>[] | null; // Per-param/per-field type annotation ASTs (parallel to string[] type fields). null entry = no annotation for that param.
+	genericDefaults: (Owned<Node> | null)[] | null; // Aligned declaration TypeAnnotation wrappers; null entry means no default.
+	baseExprs: Owned<Node>[] | null; // StructDecl/InterfaceDecl: one node per interfaceExtends entry, typed with the parent resolved in the declaring scope
 	paramLocations: SourceLocation[] | null; // Per-param source locations for DEF recording
 	paramSyms: Symbol[] | null;
 	typeArg: string; // Use site: explicit generic args ("Person" from parse<Person>()); class/interface/struct/actor/extern decl: its generic params ("K,V")
@@ -809,7 +809,7 @@ export class Node {
 	// reconstructed type-AST in nodeTypeAst and nodeToASTLiteral falls back to it
 	// for nested re-expansion. Macro bodies should read nodeType (above) — in the
 	// VM heap that key always carries the type-AST Node.
-	nodeTypeAst: Node | null;
+	nodeTypeAst: Owned<Node> | null;
 	inlineFrame: InlineFrame | null; // Compiler-side: the routine this node was copied from when a call to it was inlined; null for the routine's own code.
 }
 
@@ -843,113 +843,113 @@ export type BigIntLiteralData = { bigintValue: string };
 
 // Expressions
 export type IdentifierData = { name: string };
-export type BinaryExprData = { operator: string, left: Node, right: Node };
-export type UnaryExprData = { unaryOp: string, operand: Node };
-export type UpdateExprData = { updateOp: string, updateArg: Node, isPrefix: boolean };
-export type CallExprData = { callee: Node, arguments: Node[], isDirectCall: boolean, resolvedOverloadIdx: number };
-export type MemberExprData = { object: Node, property: string, isOptional: boolean };
-export type ArrayAccessData = { array: Node, index: Node };
-export type ObjectLiteralData = { properties: Node[], keys: string[], keyLocations: SourceLocation[] };
-export type ArrayLiteralData = { elements: Node[] };
-export type ArrowFunctionData = { arrowParams: string[], arrowParamTypes: string[], arrowBody: Node, arrowFlags: string, arrowReturnType: string, arrowDefaults: Node[] };
-export type FunctionExprData = { funcExprParams: string[], funcExprParamTypes: string[], funcExprBody: Node, funcExprFlags: string, funcExprReturnType: string };
-export type TypeAssertionData = { asExpr: Node, asType: string };
-export type ConditionalExprData = { ternaryCondition: Node, ternaryConsequent: Node, ternaryAlternate: Node };
-export type SpreadExprData = { spreadArg: Node };
-export type NewExprData = { newCallee: Node, newArguments: Node[] };
-export type TryExprData = { tryArg: Node, hasCatch: boolean, catchVal: Node };
-export type MatchExprData = { matchDisc: Node, matchCases: Node[] };
-export type MatchCaseData = { casePatterns: Node[], caseGuard: Node | null, caseBody: Node };
-export type AwaitExprData = { awaitArg: Node };
-export type YieldExprData = { yieldArg: Node, isDelegate: boolean };
-export type MoveExprData = { moveArg: Node };
-export type OutExprData = { outArg: Node };
+export type BinaryExprData = { operator: string, left: Owned<Node>, right: Owned<Node> };
+export type UnaryExprData = { unaryOp: string, operand: Owned<Node> };
+export type UpdateExprData = { updateOp: string, updateArg: Owned<Node>, isPrefix: boolean };
+export type CallExprData = { callee: Owned<Node>, arguments: Owned<Node>[], isDirectCall: boolean, resolvedOverloadIdx: number };
+export type MemberExprData = { object: Owned<Node>, property: string, isOptional: boolean };
+export type ArrayAccessData = { array: Owned<Node>, index: Owned<Node> };
+export type ObjectLiteralData = { properties: Owned<Node>[], keys: string[], keyLocations: SourceLocation[] };
+export type ArrayLiteralData = { elements: Owned<Node>[] };
+export type ArrowFunctionData = { arrowParams: string[], arrowParamTypes: string[], arrowBody: Owned<Node>, arrowFlags: string, arrowReturnType: string, arrowDefaults: Owned<Node>[] };
+export type FunctionExprData = { funcExprParams: string[], funcExprParamTypes: string[], funcExprBody: Owned<Node>, funcExprFlags: string, funcExprReturnType: string };
+export type TypeAssertionData = { asExpr: Owned<Node>, asType: string };
+export type ConditionalExprData = { ternaryCondition: Owned<Node>, ternaryConsequent: Owned<Node>, ternaryAlternate: Owned<Node> };
+export type SpreadExprData = { spreadArg: Owned<Node> };
+export type NewExprData = { newCallee: Owned<Node>, newArguments: Owned<Node>[] };
+export type TryExprData = { tryArg: Owned<Node>, hasCatch: boolean, catchVal: Owned<Node> };
+export type MatchExprData = { matchDisc: Owned<Node>, matchCases: Owned<Node>[] };
+export type MatchCaseData = { casePatterns: Owned<Node>[], caseGuard: Owned<Node> | null, caseBody: Owned<Node> };
+export type AwaitExprData = { awaitArg: Owned<Node> };
+export type YieldExprData = { yieldArg: Owned<Node>, isDelegate: boolean };
+export type MoveExprData = { moveArg: Owned<Node> };
+export type OutExprData = { outArg: Owned<Node> };
 export type SizeofExprData = { sizeofType: string, sizeofResolved: Type | null };
-export type HiddenStdConvData = { convExpr: Node, convType: Type };
+export type HiddenStdConvData = { convExpr: Owned<Node>, convType: Type };
 export type TypeAnnotationData = { annotationType: string };
 
 // Patterns
-export type ArrayPatternData = { patternElements: Node[], hasRestElement: boolean, patternDefaults: Node[] };
-export type ObjectPatternData = { patternProps: Node[], hasRestProp: boolean };
-export type ObjectPatternPropData = { propKey: string, propAlias: Node, propDefault: Node | null };
-export type DestructuringDeclData = { destrPattern: Node, destrInit: Node, destrIsConst: boolean, destrType: string };
+export type ArrayPatternData = { patternElements: Owned<Node>[], hasRestElement: boolean, patternDefaults: Owned<Node>[] };
+export type ObjectPatternData = { patternProps: Owned<Node>[], hasRestProp: boolean };
+export type ObjectPatternPropData = { propKey: string, propAlias: Owned<Node>, propDefault: Owned<Node> | null };
+export type DestructuringDeclData = { destrPattern: Owned<Node>, destrInit: Owned<Node>, destrIsConst: boolean, destrType: string };
 
 // Statements
-export type VariableDeclData = { declName: string, declType: string, initializer: Node, declKind: DeclKind, nameLocation: SourceLocation };
-export type IfStmtData = { condition: Node, consequent: Node, alternate: Node };
-export type WhileStmtData = { whileCondition: Node, whileBody: Node, whileLabel: string };
-export type ForStmtData = { forInit: Node, forCondition: Node, forUpdate: Node, forBody: Node, forLabel: string };
-export type ForOfStmtData = { forOfBinding: string, forOfIsConst: boolean, forOfIterable: Node, forOfBody: Node, forOfPattern: Node, bindingLocation: SourceLocation, forOfLabel: string };
-export type ForInStmtData = { forInBinding: string, forInIsConst: boolean, forInObject: Node, forInBody: Node, forInLabel: string };
-export type BlockStmtData = { statements: Node[] };
-export type ExprStmtData = { expr: Node };
-export type ReturnStmtData = { argument: Node | null };
+export type VariableDeclData = { declName: string, declType: string, initializer: Owned<Node>, declKind: DeclKind, nameLocation: SourceLocation };
+export type IfStmtData = { condition: Owned<Node>, consequent: Owned<Node>, alternate: Owned<Node> };
+export type WhileStmtData = { whileCondition: Owned<Node>, whileBody: Owned<Node>, whileLabel: string };
+export type ForStmtData = { forInit: Owned<Node>, forCondition: Owned<Node>, forUpdate: Owned<Node>, forBody: Owned<Node>, forLabel: string };
+export type ForOfStmtData = { forOfBinding: string, forOfIsConst: boolean, forOfIterable: Owned<Node>, forOfBody: Owned<Node>, forOfPattern: Owned<Node>, bindingLocation: SourceLocation, forOfLabel: string };
+export type ForInStmtData = { forInBinding: string, forInIsConst: boolean, forInObject: Owned<Node>, forInBody: Owned<Node>, forInLabel: string };
+export type BlockStmtData = { statements: Owned<Node>[] };
+export type ExprStmtData = { expr: Owned<Node> };
+export type ReturnStmtData = { argument: Owned<Node> | null };
 export type BreakStmtData = { breakLabel: string };
 export type ContinueStmtData = { continueLabel: string };
-export type FunctionDeclData = { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string, fnDefaults: Node[], nativeName: string, nameLocation: SourceLocation };
-export type DoWhileStmtData = { doBody: Node, doCondition: Node, dwLabel: string, dwSwitchWrapper: boolean };
-export type SwitchStmtData = { switchDisc: Node, switchCases: Node[], switchLowered: boolean };
-export type SwitchCaseData = { caseTests: Node[], caseStmts: Node[], isDefault: boolean };
+export type FunctionDeclData = { fnName: string, params: string[], fnParamTypes: string[], fnBody: Owned<Node>, fnFlags: string, fnReturnType: string, fnDefaults: Owned<Node>[], nativeName: string, nameLocation: SourceLocation };
+export type DoWhileStmtData = { doBody: Owned<Node>, doCondition: Owned<Node>, dwLabel: string, dwSwitchWrapper: boolean };
+export type SwitchStmtData = { switchDisc: Owned<Node>, switchCases: Owned<Node>[], switchLowered: boolean };
+export type SwitchCaseData = { caseTests: Owned<Node>[], caseStmts: Owned<Node>[], isDefault: boolean };
 export type UnreachableStmtData = { unreachableMsg: string };
-export type MatchStmtData = { matchStmtDisc: Node, matchStmtCases: Node[] };
+export type MatchStmtData = { matchStmtDisc: Owned<Node>, matchStmtCases: Owned<Node>[] };
 
 // Declarations
 export type ImportDeclData = { importNames: string[], importAliases: string[], importSource: string, nameLocations: SourceLocation[], aliasLocations: SourceLocation[], importTypeNames: string[] };
-export type ExportDeclData = { exportedDecl: Node };
+export type ExportDeclData = { exportedDecl: Owned<Node> };
 export type TypeAliasDeclData = { aliasName: string, aliasType: string, aliasIsDistinct: boolean, aliasGenericParams: string, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation };
-export type EnumDeclData = { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[], enumInits: Node[] };
-export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][], interfaceOptionalFields: string[], nativeName: string };
-export type StructDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Node[][], interfaceOptionalFields: string[], nativeName: string };
-export type ClassDeclData = { className: string, classDisplayName: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation, classImplements: string[] };
-export type ActorDeclData = { actorName: string, actorBody: Node[], nameLocation: SourceLocation };
-export type PropertyDeclData = { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Node }; // propVisibility: "" | "public" | "private" | "protected"
-export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Node[], nativeName: string, nameLocation: SourceLocation };
-export type ConstructorDeclData = { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[], ctorVisibility: string, ctorParamProps: Node[], ctorFlags: string }; // ctorParamProps: per parameter, the PropertyDecl a parameter property declares (propVisibility, propIsReadonly as written), null for a plain parameter
+export type EnumDeclData = { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[], enumInits: Owned<Node>[] };
+export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Owned<Node>[][], interfaceOptionalFields: string[], nativeName: string };
+export type StructDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], interfaceExtends: string[], nameLocation: SourceLocation, interfaceFieldVisibility: string[], interfaceFieldDecorators: Owned<Node>[][], interfaceOptionalFields: string[], nativeName: string };
+export type ClassDeclData = { className: string, classDisplayName: string, classExtends: string, classBody: Owned<Node>[], nameLocation: SourceLocation, classImplements: string[] };
+export type ActorDeclData = { actorName: string, actorBody: Owned<Node>[], nameLocation: SourceLocation };
+export type PropertyDeclData = { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propVisibility: string, propInitializer: Owned<Node> }; // propVisibility: "" | "public" | "private" | "protected"
+export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Owned<Node>, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Owned<Node>[], nativeName: string, nameLocation: SourceLocation };
+export type ConstructorDeclData = { ctorParams: string[], ctorParamTypes: string[], ctorBody: Owned<Node>, ctorDefaults: Owned<Node>[], ctorVisibility: string, ctorParamProps: Owned<Node>[], ctorFlags: string }; // ctorParamProps: per parameter, the PropertyDecl a parameter property declares (propVisibility, propIsReadonly as written), null for a plain parameter
 export type ExternDeclData = { externKind: ExternKind, externName: string, nativeName: string, externType: string };
-export type MacroDeclData = { macroDeclName: string, macroDeclParams: string[], macroDeclParamTypes: string[], macroDeclReturnType: string, macroDeclBody: Node };
-export type DecoratedDeclData = { decorators: Node[], decoratedNode: Node };
-export type ProgramData = { programStmts: Node[] };
-export type SpliceManyData = { spliceNodes: Node[] };
-export type DeferStmtData = { deferExpr: Node };
-export type ThrowStmtData = { throwArg: Node };
-export type TryCatchStmtData = { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node, catchBindingLocation: SourceLocation, hasCatchClause: boolean };
-export type MacroInvocationData = { macroName: string, macroArgs: Node[], macroHasParens: boolean };
-export type HiddenDerefData = { expr: Node };
-export type TestDeclData = { testName: string, testBody: Node };
-export type AssertStmtData = { assertExpr: Node, assertSource: string, assertMessage: string, assertMessageExpr: Node | null };
-export type QuoteExprData = { quoteBody: Node };
-export type ComptimeBlockData = { comptimeBody: Node };
+export type MacroDeclData = { macroDeclName: string, macroDeclParams: string[], macroDeclParamTypes: string[], macroDeclReturnType: string, macroDeclBody: Owned<Node> };
+export type DecoratedDeclData = { decorators: Owned<Node>[], decoratedNode: Owned<Node> };
+export type ProgramData = { programStmts: Owned<Node>[] };
+export type SpliceManyData = { spliceNodes: Owned<Node>[] };
+export type DeferStmtData = { deferExpr: Owned<Node> };
+export type ThrowStmtData = { throwArg: Owned<Node> };
+export type TryCatchStmtData = { tryBody: Owned<Node>, catchName: string, catchBody: Owned<Node>, finallyBody: Owned<Node>, catchBindingLocation: SourceLocation, hasCatchClause: boolean };
+export type MacroInvocationData = { macroName: string, macroArgs: Owned<Node>[], macroHasParens: boolean };
+export type HiddenDerefData = { expr: Owned<Node> };
+export type TestDeclData = { testName: string, testBody: Owned<Node> };
+export type AssertStmtData = { assertExpr: Owned<Node>, assertSource: string, assertMessage: string, assertMessageExpr: Owned<Node> | null };
+export type QuoteExprData = { quoteBody: Owned<Node> };
+export type ComptimeBlockData = { comptimeBody: Owned<Node> };
 
 // Type expression data types (positioned type AST — standard parity)
 // Leaf type names use IdentifierData (NodeKind.Identifier) — reuses expression kind for type leaf nodes
-export type TypeGenericData = { typExprBase: Node, typExprArgs: Node[] };
-export type TypeArrayData = { typExprElement: Node, typExprSize: number };
+export type TypeGenericData = { typExprBase: Owned<Node>, typExprArgs: Owned<Node>[] };
+export type TypeArrayData = { typExprElement: Owned<Node>, typExprSize: number };
 // TypeUnionData — variants + discriminator metadata (V3 tagged-union support).
 // discFieldName/variantKeys/discKind populated only for match-type DUs (where
 // disc info pre-stored in Type.typeNames + typeExtra). TS-style DUs leave them
 // empty — codecs detect by walking variants (each variant struct has disc field).
 export type TypeUnionData = {
-	typExprMembers: Node[],
+	typExprMembers: Owned<Node>[],
 	discFieldName: string,
 	variantKeys: string[],
 	discKind: string,
 };
 // TypeIntersectionData — same Node[] shape, no disc info (intersections aren't DUs).
-export type TypeIntersectionData = { typExprMembers: Node[] };
-export type TypeFunctionData = { typExprParams: Node[], typExprReturn: Node, typExprParamNames: string[] };
+export type TypeIntersectionData = { typExprMembers: Owned<Node>[] };
+export type TypeFunctionData = { typExprParams: Owned<Node>[], typExprReturn: Owned<Node>, typExprParamNames: string[] };
 // typExprIndexKey / typExprIndexValue are non-null ONLY when the type is an index signature
 // like { [key: K]: V }. After checker normalization this becomes Map<K, V>. Mixed (named fields
 // + index signature in the same type) is rejected by the parser. See docs and plan for details.
-export type TypeObjectData = { typExprFieldNames: string[], typExprFieldTypes: Node[], typExprIndexKey: Node, typExprIndexValue: Node, typExprFieldDecorators: Node[][], typExprTypeName: string, typExprOptionalFields: string[] };
+export type TypeObjectData = { typExprFieldNames: string[], typExprFieldTypes: Owned<Node>[], typExprIndexKey: Owned<Node>, typExprIndexValue: Owned<Node>, typExprFieldDecorators: Owned<Node>[][], typExprTypeName: string, typExprOptionalFields: string[] };
 
 // JSX (compile-time only — erased by consuming macro before codegen)
-export type JSXElementData = { jsxTag: string, jsxAttrs: Node[], jsxChildren: Node[], jsxSelfClosing: boolean };
-export type JSXFragmentData = { jsxFragChildren: Node[] };
+export type JSXElementData = { jsxTag: string, jsxAttrs: Owned<Node>[], jsxChildren: Owned<Node>[], jsxSelfClosing: boolean };
+export type JSXFragmentData = { jsxFragChildren: Owned<Node>[] };
 export type JSXTextData = { jsxText: string };
-export type JSXExpressionContainerData = { jsxExpr: Node };
-export type JSXAttributeData = { jsxAttrName: string, jsxAttrValue: Node };
-export type JSXSpreadAttributeData = { jsxSpreadArg: Node };
-export type ComputedPropertyData = { computedKey: Node, computedValue: Node };
+export type JSXExpressionContainerData = { jsxExpr: Owned<Node> };
+export type JSXAttributeData = { jsxAttrName: string, jsxAttrValue: Owned<Node> };
+export type JSXSpreadAttributeData = { jsxSpreadArg: Owned<Node> };
+export type ComputedPropertyData = { computedKey: Owned<Node>, computedValue: Owned<Node> };
 
 // ===== Constructors =====
 
@@ -1145,4 +1145,17 @@ export function collectConcatParts(node: Node): Node[] {
 		result.push(cur);
 	}
 	return result;
+}
+
+// A symbol points back at nodes its declaration owns (its default values, decorators, meta values).
+export function backEdges(nodes: Node[]): Unowned<Node>[] {
+	const out: Unowned<Node>[] = [];
+	for (const n of nodes) out.push(n);
+	return out;
+}
+
+export function strongNodes(nodes: Unowned<Node>[]): Node[] {
+	const out: Node[] = [];
+	for (const n of nodes) out.push(n);
+	return out;
 }

@@ -23,7 +23,7 @@ import { Node, NodeKind, NodeFlag, DeclKind, createNode, SourceLocation, BlockSt
 import { mapChildren, isFuncBoundary } from "../walker";
 import { forEachChild } from "../../ast/visitor";
 import { setFlag, SymbolFlag } from "../../checker/symbol";
-import { TransformContext, mintSym } from "../context";
+import { TransformContext, mintSym, keepOutOfTree } from "../context";
 import {
 	makeTypedIdentResolved, makeVarDecl, makeExprStmt, makeReturn,
 	makeCall, makeBlock, makeNull, makeDefaultValue, makeIf, makeUnary, makeWhile, makeBool, makeNumber, makeString,
@@ -849,6 +849,7 @@ function rewriteAsyncFnBody(body: Node, fnReturnInner: Type | null, ctx: Transfo
 	if (body != null && body.kind != NodeKind.BlockStmt) {
 		throw "internal: async fn body reached asyncBridge un-normalized (expected BlockStmt)";
 	}
+	if (body != null) keepOutOfTree(ctx, body);
 	if (!containsYield(body)) {
 		return rewriteSimpleAsyncBody(body, fnReturnInner, ctx);
 	}

@@ -1715,6 +1715,7 @@ export class CheckerContext {
 	typeInstCache: HashMap<Symbol, CheckedInstantiation[]>;
 	pendingHoisted: Node[];      // statements an expression-position macro emitted ahead of its value; a stack — each statement-list walk takes a high-water mark on entry and drains only what was queued above it, so a block nested in the value cannot take the call site's prefix
 	pendingTrailing: Node[];
+	outOfTree: Node[];           // nodes no module tree keeps that an Unowned edge still names (a prelude module's program, a declaration a pass took out, a symbol's synthetic declaration, every node the flow graph names): the context keeps them as long as its symbols and flow graph
 	condEvalDepth: int32;        // >0 while checking a conditionally-evaluated position (&&/|| rhs, ternary arm, loop condition) — hoisting out of one would run it unconditionally
 	inGenericContext: int32;     // >0 while checking members of a generic class pre-monomorphization — unbound-param diagnostics defer to instantiation
 	stmtPosExpr: Node;           // the expression that IS a statement: a macro there emits statements outright, so the expression-position rules (last element is the value, empty is an error) must not apply
@@ -1829,6 +1830,7 @@ export function createContext(dispatchRegistry: DispatchRegistry = createDispatc
 		typeInstCache: new HashMap<Symbol, CheckedInstantiation[]>(),
 		pendingHoisted: [],
 		pendingTrailing: [],
+		outOfTree: [],
 		disambTable: new HashMap<string, int32>(),
 		disambAfterCheck: null,
 		itemModule: -1,

@@ -81,6 +81,12 @@ export function mayContain(ctx: TransformContext, need: BitSet<ModuleFact>): boo
 	return !ctx.factsCollected || !ctx.facts.isDisjointFrom(need);
 }
 
+// A node a pass takes out of the tree while its symbol still names it stays with the module, as the
+// symbol's declaration did before the pass.
+export function keepOutOfTree(ctx: TransformContext, node: Node): void {
+	if (ctx != null && ctx.checkerCtx != null) ctx.checkerCtx.outOfTree.push(node);
+}
+
 export function reportTransformError(ctx: TransformContext, msg: string, loc: SourceLocation): void {
 	if (ctx.checkerCtx == null) throw new Error(`internal: a transform without a checker context has nowhere to report: ${msg}`);
 	addError(ctx.checkerCtx, msg, loc.line, loc.column);

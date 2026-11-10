@@ -196,6 +196,7 @@ export const CHECKER_CONTEXT_FIELD_ROLES: { [K in keyof CheckerContext]-?: Field
 	localTypeNames: encodedAs("row s"),
 	pendingLocalTypeDecls: encodedAs("node list row 2"),
 	liftedLocalTypeDecls: encodedAs("node list row 2"),
+	outOfTree: derivedAs("the reader's node table: every node the unit restores, which the restored symbols and flow graph name"),
 	preludeCtx: derivedAs("module: the restored base (asserted at write); base: null"),
 	globalImportsCtx: refusedUnlessNull("no build.ms global import is visible to a std module"),
 	instantiatingCtx: encodedAs("reference row 1: a context of the unit, refused otherwise"),
@@ -2638,6 +2639,7 @@ function decodeUnit(u: UnitIn, db: TransAmDb, graph: ModuleGraph): StdUnitLoaded
 		m.ctx = ctx;
 		u.ctxs.push(ctx);
 	}
+	for (const ctx of u.ctxs) ctx.outOfTree = u.objs.nodes;
 	for (let i = 0; i < u.ctxs.length && u.problem == ""; i += 1) readContext(u, u.ctxs[i], cache);
 	for (const alias of u.aliases) {
 		const owner = alias.owner >= 0 && alias.owner < u.ctxs.length ? u.ctxs[alias.owner as int32] : null;

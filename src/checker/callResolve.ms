@@ -3,7 +3,7 @@
 
 import { membersOf } from "./unitsInCheck";
 import { fieldDeclarer, refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, refuseHiddenConstructor, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, refuseHookCall, abstractMethodOwnerName, befriend, unfriend, expansionOf, markExpansion, unwrapDecl } from "./visibility";
-import { AwaitExprData, HiddenStdConvData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, ConditionalExprData, ExprStmtData, IfStmtData, isEmptyBlock, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, ConstructorDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt, BuiltinKind } from "../ast/node";
+import { AwaitExprData, HiddenStdConvData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, ConditionalExprData, ExprStmtData, IfStmtData, isEmptyBlock, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, ConstructorDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt, BuiltinKind, strongNodes } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
 import { monoBaseName, monoInstanceName } from "../monomorphize/registry";
@@ -777,7 +777,7 @@ function fillNullableTail(ctx: CheckerContext, args: Node[], paramTypes: Type[],
 // fnDefaults[0] = receiver (no default), so call arg index N maps to fnDefaults[N + offset].
 export function declaredDefaults(defSym: Symbol | null): Node[] | null {
 	if (defSym == null) return null;
-	if (defSym.defaultParams.length > 0) return defSym.defaultParams;
+	if (defSym.defaultParams.length > 0) return strongNodes(defSym.defaultParams);
 	if (defSym.declNode != null && defSym.declNode.kind == NodeKind.FunctionDecl) {
 		const declData = defSym.declNode.data as FunctionDeclData;
 		if (declData.fnDefaults != null) return declData.fnDefaults;
@@ -1307,7 +1307,7 @@ export function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type | n
 	const declaring = hasCtor && ctorOwner != null ? constructorDeclaringClass(ctorOwner) : null;
 	if (hasCtor && ctorOwner != null) refuseHiddenConstructor(ctx, declaring != null ? declaring : ctorOwner, node.location.line, node.location.column);
 	const defaultsFrom = declaring != null ? ctorRoutineOf(declaring) : ctorRoutine;
-	const ctorDefaults = defaultsFrom == null ? null : pickedSig != null ? defaultsThroughSignature(defaultsFrom, pickedSig) : defaultsFrom.defaultParams;
+	const ctorDefaults = defaultsFrom == null ? null : pickedSig != null ? defaultsThroughSignature(defaultsFrom, pickedSig) : strongNodes(defaultsFrom.defaultParams);
 	const routineFormals = hasCtor && ctorRoutine != null ? ctorFormalTypes(ctorRoutine) : null;
 	let ctorSpread: SpreadTake = { spread: null, at: -1, taken: false };
 	if (routineFormals != null && defaultsFrom != null) {
@@ -2130,7 +2130,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			const owner = constructorDeclaringClass(parentSym) ?? parentSym;
 			const defaultsFrom = owner == parentSym ? parentCtor : ctorRoutineOf(owner);
 			if (defaultsFrom != null && defaultsFrom.defaultParams.length > 0) {
-				fillDefaults(ctx, d.arguments, defaultsFrom.defaultParams, fixedCount, 0, ctorParamTypes!, defaultsFrom.modulePath, defaultsFrom.symbolType.typeNames.slice(1));
+				fillDefaults(ctx, d.arguments, strongNodes(defaultsFrom.defaultParams), fixedCount, 0, ctorParamTypes!, defaultsFrom.modulePath, defaultsFrom.symbolType.typeNames.slice(1));
 			}
 		}
 		if (restAt >= 0 ? d.arguments.length < fixedCount : d.arguments.length != expectedCount) {
@@ -4339,7 +4339,7 @@ function overloadSigsHold(ctx: CheckerContext, members: Symbol[], impl: Symbol, 
 				at.line, at.column);
 			return false;
 		}
-		const implRequired = s.declNode != null && s.declNode.kind == NodeKind.ConstructorDecl ? requiredCtorArgs(ctorFormalTypes(impl) ?? [], impl.defaultParams) + receiver : getMinArity(implFnType);
+		const implRequired = s.declNode != null && s.declNode.kind == NodeKind.ConstructorDecl ? requiredCtorArgs(ctorFormalTypes(impl) ?? [], strongNodes(impl.defaultParams)) + receiver : getMinArity(implFnType);
 		if (sigType.typeChildren.length < implRequired) {
 			addError(ctx, `Overload signature for '${writtenName(sym)}' has ${sigType.typeChildren.length - receiver} parameter(s) but implementation requires ${implRequired - receiver}`,
 				at.line, at.column);

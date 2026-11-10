@@ -3743,7 +3743,7 @@ function bindProgram(ctx: CheckerContext, program: Node): Node[] {
 	resolveDeclarations(ctx, program);
 	bindTemplateBodies(ctx, program);
 	const _c2 = performance.now();
-	bindFlowGraph(program);  // Phase 1: build the CFG (unused by checker yet — Phase 2 will query)
+	bindFlowGraph(program, ctx.outOfTree);  // Phase 1: build the CFG (unused by checker yet — Phase 2 will query)
 	const moduleNames = bindModuleNames(ctx, program);
 	const _c3 = performance.now();
 	_tCollect = _tCollect + (_c1 - _c0);
@@ -4242,6 +4242,7 @@ function loadPreludeOne(ctx: CheckerContext, stdSpecifier: string, stdPath: stri
 	if (src.length > 0) {
 		const pr = parseSource(src);
 		if (pr.ok) {
+			ctx.outOfTree.push(pr.value);
 			// modulePath must be set BEFORE sub-module loading so relative
 			// imports inside this prelude resolve against the right directory.
 			const savedPath = ctx.modulePath;
@@ -4412,6 +4413,8 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 
 		// Compile sub-module in a temporary context (separate scope, shared cache)
 		const subCtx = createContextWithCache(ctx.table.identCache, ctx.dispatchRegistry);
+		subCtx.outOfTree = ctx.outOfTree;
+		subCtx.outOfTree.push(subPr.value);
 		subCtx.extensionRegistry = createExtensionRegistry();
 		subCtx.exportRegistry = ctx.exportRegistry;
 		subCtx.compilerFuncs = ctx.compilerFuncs;
@@ -4455,6 +4458,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 				}
 			}
 		}
+		forgetInstances(subCtx);
 	}
 }
 
@@ -4886,6 +4890,7 @@ function packContentView(shared: CheckerContext, dispatchRegistry: DispatchRegis
 	const view = createContextWithCache(shared.table.identCache, dispatchRegistry);
 	view.preludeDispatchRecords = shared.preludeDispatchRecords;
 	view.table = shared.table;
+	view.outOfTree = shared.outOfTree;
 	view.extensionRegistry = shared.extensionRegistry;
 	view.compilerFuncs = shared.compilerFuncs;
 	view.includeDirectives = shared.includeDirectives;

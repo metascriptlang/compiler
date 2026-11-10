@@ -157,6 +157,7 @@ export function preludeModuleCtx(ctx: CheckerContext, modulePath: string): Check
 	view.extensionRegistry = prelude.extensionRegistry;
 	view.exportRegistry = prelude.exportRegistry;
 	view.compilerFuncs = prelude.compilerFuncs;
+	view.outOfTree = prelude.outOfTree;
 	return view;
 }
 
@@ -566,13 +567,17 @@ export function drainPendingInstances(moduleCtxs: CheckerContext[]): Node[] {
 	for (const moduleCtx of moduleCtxs) {
 		if (drained.has(moduleCtx)) continue;
 		drained.add(moduleCtx);
-		for (const node of moduleCtx.generatedInstances) result.push(node);
+		for (const node of moduleCtx.generatedInstances) {
+			result.push(node);
+			moduleCtx.outOfTree.push(node);
+		}
 		moduleCtx.generatedInstances = [];
 	}
 	return result;
 }
 
 export function forgetInstances(ctx: CheckerContext): void {
+	for (const node of ctx.generatedInstances) ctx.outOfTree.push(node);
 	ctx.generatedInstances = [];
 	ctx.procInstCache = new HashMap<Symbol, CheckedInstantiation[]>();
 	ctx.typeInstCache = new HashMap<Symbol, CheckedInstantiation[]>();
@@ -1063,7 +1068,7 @@ function instantiateLocalGeneric(ctx: CheckerContext, sym: Symbol, name: string,
 	cd.fnName = name;
 	cd.fnFlags = stripGenFlag(cd.fnFlags);
 	clearCheckerState(cd.fnBody);
-	bindFunctionFlow(cloned, cd.fnBody);
+	bindFunctionFlow(cloned, cd.fnBody, host.outOfTree);
 	const callerScope = openInstanceScope(ctx, routine.b.params, routine.b.types, routine.outer, declScope);
 	const instSym = callCheckLocalInstance(ctx, cloned, (declared: Symbol): void => {
 		declared.instantiatedFrom = sym;
@@ -1219,7 +1224,7 @@ export function instantiateGenericFunction(sym: Symbol, params: Type[], concrete
 		// against concrete types — a class-method body already checked once (this: Class<T>
 		// is a Ref) otherwise keeps its deref and the re-check stacks a second one.
 		clearCheckerState(cd.fnBody);
-		bindFunctionFlow(cloned, cd.fnBody);
+		bindFunctionFlow(cloned, cd.fnBody, host.outOfTree);
 		// Mirror checkFunctionDecl's return-inference setup: seed inferredReturn
 		// from the instance type. checkFunctionBody does NOT reset it — without
 		// this the body's returns mutate a stale slot and an un-annotated return
@@ -1595,7 +1600,7 @@ function instanceCtorDecl(ctorNode: Node, classSym: Symbol, instSym: Symbol, nam
 		const savedModulePath = bodyCtx.modulePath;
 		bodyCtx.modulePath = classSym.modulePath != "" ? classSym.modulePath : ctx.modulePath;
 		clearCheckerState(clonedBody);
-		bindFunctionFlow(clonedBody, clonedBody);
+		bindFunctionFlow(clonedBody, clonedBody, ctx.outOfTree);
 		const instMark = markInstanceBody(bodyCtx);
 		const callerScope = openInstanceScope(bodyCtx, params, types);
 		bodyCtx.table.current.privateAccess = classSym;
