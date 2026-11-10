@@ -396,7 +396,7 @@ const HANDLE_METHODS = [
 	"\t\t\t}",
 	"\t\t\thk[i] = 2; hv[i] = p; hl[i] = 0; hr[i] = 1; hu[i] = hUid++;",
 	"\t\t\thn[i] = label || type; hc[i] = vec || null;",
-	"\t\t\treturn new __msbRef(i, hu[i], hn[i], cls || null);",
+	"\t\t\treturn new __msbRef(i, hu[i], hn[i], cls || null, p);",
 	"\t\t},",
 	"\t\tlive(r) { return hLive(r); },",
 	"\t\thandleLeaks(out) {",
@@ -404,6 +404,13 @@ const HANDLE_METHODS = [
 	"\t\t\t\tif (hk[i] === 2 || hk[i] === 3) out.push(\"msb leak: \" + hn[i] + "
 		+ "\" never released\");",
 	"\t\t\t}",
+	"\t\t},",
+	"\t\tat(r) {",
+	"\t\t\tconst p = r?.p;",
+	"\t\t\tif ((p | 0) !== 0) return p;",
+	"\t\t\tif (!(r instanceof __msbRef)) throw new TypeError(\"expected a Handle "
+		+ "returned by a @wasm function\");",
+	"\t\t\tthrow new Error(\"use of \" + r.name + \" after release\");",
 	"\t\t},",
 	"\t\tlend(r) {",
 	"\t\t\tif (!(r instanceof __msbRef)) throw new TypeError(\"expected a Handle "
@@ -437,6 +444,7 @@ const HANDLE_METHODS = [
 	"\t\t\tif (!hLive(r)) throw new Error(\"release of \" + r.name + \": "
 		+ "already released\");",
 	"\t\t\tif (--hr[r.i] !== 0) return;",
+	"\t\t\tr.p = 0;",
 	"\t\t\tif (hl[r.i] > 0) { hk[r.i] = 3; return; }",
 	"\t\t\tconst mb = __msbMod.HEAPU8.buffer;",
 	"\t\t\thFinish(r.i);",
@@ -447,7 +455,7 @@ const HANDLE_METHODS = [
 const HANDLE_GLUE = [
 	"const __msbSelf = Symbol(\"msb.self\");",
 	"class __msbRef {",
-	"\tconstructor(i, u, name, c) { this.i = i; this.u = u; this.name = name; this.c = c; this.o = null; }",
+	"\tconstructor(i, u, name, c, p) { this.i = i; this.u = u; this.name = name; this.c = c; this.o = null; this.p = p; }",
 	"\tobject() {",
 	"\t\tif (this.c === null) throw new Error(\"Handle.value() on a wasm-owned handle: pass it to a @wasm function\");",
 	"\t\treturn this.o ??= new this.c(this);",

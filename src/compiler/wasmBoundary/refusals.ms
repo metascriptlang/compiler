@@ -13,6 +13,7 @@ import {
 	UpdateExprData,
 	ArrayAccessData,
 	HiddenDerefData,
+	HiddenStdConvData,
 	ProgramData,
 } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
@@ -171,6 +172,8 @@ function noteUse(
 	member: Node,
 	access: MemberAccess,
 	method: Symbol | null,
+	site: Node | null,
+	receiver: Node | null,
 ): void {
 	const property = (member.data as MemberExprData).property;
 	const jsName = method != null ? jsMethodMemberName(property, method) : property;
@@ -183,6 +186,8 @@ function noteUse(
 		valueType: method != null ? null : member.nodeType,
 		file: s.path,
 		at: member.location,
+		site,
+		receiver,
 	});
 }
 
@@ -208,6 +213,7 @@ function memberUseAt(s: MemberScan, cls: Symbol, valueCall: Node, scope: Node[])
 	}
 	const member = parent!;
 	const grand = above.length > 1 ? above[above.length - 2] : null;
+	const handle = ((valueCall.data as CallExprData).callee.data as MemberExprData).object;
 	if (grand != null && isCallee(grand!, member)) {
 		const method = grand!.resolvedSym ?? member.resolvedSym;
 		if (method == null || method!.symbolKind != SymbolKind.Function) {
@@ -215,14 +221,16 @@ function memberUseAt(s: MemberScan, cls: Symbol, valueCall: Node, scope: Node[])
 				+ `wasm-owned ${shown} is not a method of it`);
 			return;
 		}
-		noteUse(s, cls, member, MemberAccess.Call, method);
+		noteUse(s, cls, member, MemberAccess.Call, method, grand!, handle);
 		return;
 	}
 	if (grand != null && isAssignTarget(grand!, member)) {
 		const plain = grand!.kind == NodeKind.BinaryExpr
 			&& (grand!.data as BinaryExprData).operator == "=";
-		if (!plain) noteUse(s, cls, member, MemberAccess.Get, null);
-		noteUse(s, cls, member, MemberAccess.Set, null);
+		const statement = above.length > 2 && above[above.length - 3].kind == NodeKind.ExprStmt;
+		if (!plain) noteUse(s, cls, member, MemberAccess.Get, null, null, null);
+		const direct = plain && statement;
+		noteUse(s, cls, member, MemberAccess.Set, null, direct ? grand! : null, direct ? handle : null);
 		return;
 	}
 	if (writesThroughCopy(member, above.slice(0, above.length - 1))) {
@@ -237,14 +245,59 @@ function memberUseAt(s: MemberScan, cls: Symbol, valueCall: Node, scope: Node[])
 		);
 		return;
 	}
-	noteUse(s, cls, member, MemberAccess.Get, null);
+	noteUse(s, cls, member, MemberAccess.Get, null, member, handle);
+}
+
+function handleMade(node: Node, handles: Symbol[]): Symbol | null {
+	if (node.kind != NodeKind.CallExpr) return null;
+	const d = node.data as CallExprData;
+	if (d.callee.kind != NodeKind.MemberExpr) return null;
+	const how = (d.callee.data as MemberExprData).property;
+	if (how != "retain" && how != "borrow" && how != "at") return null;
+	return wasmOwnedClass(node.nodeType, handles);
+}
+
+function constructionAt(s: MemberScan, cls: Symbol, call: Node): void {
+	const d = call.data as CallExprData;
+	const how = (d.callee.data as MemberExprData).property;
+	let made = d.arguments.length == 1 ? d.arguments[0] : null;
+	while (made != null && made!.kind == NodeKind.HiddenStdConv) {
+		made = (made!.data as HiddenStdConvData).convExpr;
+	}
+	if (how == "retain" && made != null && made!.kind == NodeKind.NewExpr
+			&& made!.resolvedSym != null) {
+		s.uses.push({
+			classSym: cls,
+			property: "constructor",
+			jsName: "new",
+			access: MemberAccess.New,
+			method: made!.resolvedSym,
+			valueType: null,
+			file: s.path,
+			at: made!.location,
+			site: made!,
+			receiver: null,
+		});
+		return;
+	}
+	refuseAtNode(
+		s,
+		call,
+		"handle-make",
+		`Handle.${how}(…) of ${cls.name}, which lives in wasm: the JS side makes `
+			+ `a Handle<${cls.name}> only as Handle.retain(new ${cls.name}(…)), which `
+			+ "builds the object in wasm, or takes it from a @wasm function",
+	);
 }
 
 function scanMembers(s: MemberScan, node: Node, above: Node[]): void {
 	if (s.inWasm.includes(node)) return;
 	const cls = ownedValueCall(node, s.handles);
+	const made = cls == null ? handleMade(node, s.handles) : null;
 	if (cls != null) {
 		memberUseAt(s, cls!, node, above);
+	} else if (made != null) {
+		constructionAt(s, made!, node);
 	} else if (isHandleRead(node, s.handles) && !(above.length > 0
 			&& isCallee(above[above.length - 1], node)
 			&& ownedValueCall(above[above.length - 1], s.handles) != null)) {

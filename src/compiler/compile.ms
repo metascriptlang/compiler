@@ -10,7 +10,7 @@ import { writeStderr, writeStdout, readLine, stdinHasData, stdinDisableBuffering
 import { spawn as spawnChild, ChildProcess, ChildStream, ExitStatus } from "std/process/child";
 import { ProcessErrorKind } from "std/process/errors";
 import { isAlphanumeric, isDigit } from "../lexer/chars";
-import { BinaryExprData, ClassDeclData, DecoratedDeclData, EnumDeclData, ExportDeclData, IdentifierData, ImportDeclData, InterfaceDeclData, MacroInvocationData, FunctionDeclData, UpdateExprData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
+import { BinaryExprData, CallExprData, NewExprData, ClassDeclData, DecoratedDeclData, EnumDeclData, ExportDeclData, IdentifierData, ImportDeclData, InterfaceDeclData, MacroInvocationData, FunctionDeclData, UpdateExprData, Node, NodeKind, ProgramData, StructDeclData, Symbol, SymbolKind, Type, VariableDeclData, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { exportedFunctionOf } from "../checker/decoratorHelpers";
 import { CheckerContext, ExportedSymInfo, GcMode, hasErrors, hasFatalErrors, errorCount, findModuleExports, isGenericFn, isOutsideResolvedStd, isStaticExtensionSym, Severity, ExportRegistry } from "../checker/context";
@@ -85,9 +85,9 @@ import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER, MODE_RELEASE, MODE_DEBUG } from "./options";
 import { emitDeclarations, DeclarationModule } from "./declarations";
-import { wasmFunctionNames, withoutWasmFunctions } from "./wasmBoundary/placement";
+import { callsWasmWrapper, wasmFunctionNames, withoutWasmFunctions } from "./wasmBoundary/placement";
 import { buildWasmHalf } from "./wasmBoundary/placementBuild";
-import { manifestFor, memberFunctions, BoundaryFunction, BoundaryRefusal, MemberUse } from "./wasmBoundary/manifest";
+import { manifestFor, memberFunctions, BoundaryFunction, BoundaryRefusal, MemberAccess, MemberUse } from "./wasmBoundary/manifest";
 import { wasmEntrySource } from "./wasmBoundary/wasmSide";
 import { jsBindings, JsBindings } from "./wasmBoundary/jsSide";
 import { placedModuleErrors, placedImportErrors, placedMemberUses } from "./wasmBoundary/refusals";
@@ -1894,6 +1894,20 @@ function notePlacedFunctions(
 	placed.names.push(names);
 }
 
+function wrapperPattern(f: BoundaryFunction): string {
+	return f.member!.access == MemberAccess.New ? `${f.exportSymbol}(@).ptr` : `${f.exportSymbol}(@)`;
+}
+
+function wrapperArgs(u: MemberUse): Node[] {
+	const site = u.site!;
+	return match (u.access) {
+		MemberAccess.New => (site.data as NewExprData).newArguments,
+		MemberAccess.Call => [u.receiver!, ...(site.data as CallExprData).arguments],
+		MemberAccess.Get => [u.receiver!],
+		MemberAccess.Set => [u.receiver!, (site.data as BinaryExprData).right],
+	};
+}
+
 function placeWasmModules(
 	placed: PlacedModules,
 	graph: ModuleGraph,
@@ -1904,6 +1918,7 @@ function placeWasmModules(
 	nameOf: (f: BoundaryFunction, sym: Symbol) => string,
 	reachableFromForeignJs: (bundleName: string) => boolean,
 	opts: CliOptions,
+	wrapperCalledIn: (file: string, wrapper: string) => void = (file: string, wrapper: string): void => {},
 ): JsBindings {
 	const errors = placedModuleErrors(placed.paths, entryPath, dynamicPlan.lazy);
 	const exportsOf = (path: string): ExportedSymInfo[] => {
@@ -1948,6 +1963,13 @@ function placeWasmModules(
 			const members = memberFunctions(path, entryPath, exportsOf(path), exported!.name, used);
 			for (const e of members.errors) errors.push(e);
 			for (const f of members.functions) functions.push(f);
+			for (const u of used) {
+				if (u.site == null) continue;
+				const f = members.functions.find((m) => m.member!.access == u.access && m.member!.jsName == u.jsName);
+				if (f == null) continue;
+				callsWasmWrapper(u.site!, wrapperPattern(f!), wrapperArgs(u));
+				wrapperCalledIn(u.file, f!.exportSymbol);
+			}
 			break;
 		}
 	}
@@ -5403,6 +5425,7 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		placedTreeNames.push([]);
 	}
 	const placedBoundRel = "_wasm/placed.bound.mjs";
+	const wrapperImports = new HashMap<string, string[]>();
 	if (placed.paths.length > 0) {
 		const dynamicPlan = planDynamicModules(graph, filePath, unitPaths, stdRoot);
 		const stem = `${outRoot}/_wasm/placed`;
@@ -5414,7 +5437,12 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 			placedTreeNames[at].push(treeName);
 			boundNames.push(bundleName);
 			return bundleName;
-		}, (bundleName: string): boolean => true, opts);
+		}, (bundleName: string): boolean => true, opts, (file: string, wrapper: string): void => {
+			const names = wrapperImports.get(file) ?? [];
+			if (!names.includes(wrapper)) names.push(wrapper);
+			wrapperImports.set(file, names);
+			if (!boundNames.includes(wrapper)) boundNames.push(wrapper);
+		});
 		let bound = bindings.prelude;
 		for (const m of bindings.modules) bound = bound + m.code;
 		bound = `${bound}export { ${boundNames.join(", ")} };\n`;
@@ -5560,6 +5588,10 @@ function emitJSModuleTree(filePath: string, opts: CliOptions, isTestBuild: boole
 		let code = fileResults[fi].code;
 		const forced = fileForced[fi];
 		const placedAt = placed.paths.indexOf(fileKeys[fi]);
+		const wrappers = wrapperImports.get(fileKeys[fi]);
+		if (wrappers != null) {
+			code = `${code}import { ${wrappers!.join(", ")} } from "${relSpecBetween(layout.outRelOf.get(fileKeys[fi])!, placedBoundRel)}";\n`;
+		}
 		if (placedAt >= 0) {
 			code = `${code}import { ${placedImports[placedAt].join(", ")} } from "${relSpecBetween(layout.outRelOf.get(fileKeys[fi])!, placedBoundRel)}";\n`;
 			for (const n of placedTreeNames[placedAt]) {

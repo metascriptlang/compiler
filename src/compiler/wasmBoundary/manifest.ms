@@ -98,6 +98,7 @@ export enum MemberAccess {
 	Call,
 	Get,
 	Set,
+	New,
 }
 
 export interface BoundaryMember {
@@ -1422,6 +1423,8 @@ export interface MemberUse {
 	valueType: Type | null;
 	file: string;
 	at: SourceLocation;
+	site: Node | null;
+	receiver: Node | null;
 }
 
 export function classKeyOf(cls: Symbol, entryPath: string): string {
@@ -1437,6 +1440,7 @@ function receiverParam(className: string): BoundaryParam {
 function memberSignature(
 	c: Collector,
 	use: MemberUse,
+	className: string,
 	params: BoundaryParam[],
 ): ValueShape | null {
 	if (use.access == MemberAccess.Get) return resultOf(c, use.valueType);
@@ -1447,6 +1451,22 @@ function memberSignature(
 		return plainShape(BoundaryKind.Void, false);
 	}
 	const method = use.method!;
+	if (use.access == MemberAccess.New) {
+		const ft = peeled(method.symbolType);
+		for (let i = 1; i < ft.typeChildren.length; i += 1) {
+			const p = paramOf(c, ft.typeNames[i], ft.typeChildren[i]);
+			if (p == null) return null;
+			if (p.kind == BoundaryKind.Callback) {
+				p.mode = BoundaryMode.Kept;
+				p.keptLabel = keptLabel(c, p.name, c.fnName, use.at);
+			}
+			params.push(p);
+		}
+		const shape = plainShape(BoundaryKind.Handle, false);
+		shape.handle = className;
+		shape.className = classKeyOf(use.classSym, c.entryPath);
+		return shape;
+	}
 	if (isGenericFn(fnFlagsOf(method)) || hasGenericParams(method.symbolType)) {
 		cannotCross(
 			c,
@@ -1480,6 +1500,7 @@ function accessTag(access: MemberAccess): string {
 		MemberAccess.Call => "m",
 		MemberAccess.Get => "g",
 		MemberAccess.Set => "s",
+		MemberAccess.New => "n",
 	};
 }
 
@@ -1508,8 +1529,8 @@ export function memberFunctions(
 		c.fnName = `${className}.${use.property}`;
 		c.modulePath = use.file;
 		c.at = use.at;
-		const params = [receiverParam(className)];
-		const result = memberSignature(c, use, params);
+		const params = use.access == MemberAccess.New ? [] : [receiverParam(className)];
+		const result = memberSignature(c, use, className, params);
 		if (result == null) continue;
 		const f = assembled(c, key, c.fnName, 0, exportSymbol, params, result!, use.at);
 		if (f == null) continue;

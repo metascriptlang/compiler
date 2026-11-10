@@ -528,7 +528,8 @@ function wrapperLines(
 		}
 	}
 	const sig = sigs.join(", ");
-	const call = f.member != null ? memberCall(f.member!, argList) : `${alias}(${argList.join(", ")})`;
+	const made = f.resultHandle != null ? handleAliasOf(modules, f, f.resultHandle!) : "";
+	const call = f.member != null ? memberCall(f.member!, argList, made) : `${alias}(${argList.join(", ")})`;
 	return match (f.result) {
 		BoundaryKind.Struct => {
 			const wires: string[] = [];
@@ -586,9 +587,10 @@ function wrapperLines(
 	};
 }
 
-function memberCall(m: BoundaryMember, args: string[]): string {
-	const target = `${args[0]}.value().${m.property}`;
+function memberCall(m: BoundaryMember, args: string[], made: string): string {
+	const target = args.length > 0 ? `${args[0]}.value().${m.property}` : "";
 	return match (m.access) {
+		MemberAccess.New => `Handle.retain(new ${made}(${args.join(", ")}))`,
 		MemberAccess.Call => `${target}(${args.slice(1).join(", ")})`,
 		MemberAccess.Get => target,
 		MemberAccess.Set => `${target} = ${args[1]}`,

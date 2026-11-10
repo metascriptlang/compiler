@@ -4,10 +4,13 @@ import {
 	ProgramData,
 	DecoratedDeclData,
 	FunctionDeclData,
+	CallExprData,
 	SymbolFlag,
+	SymbolKind,
 } from "../../ast/node";
 import { exportedFunctionOf } from "../../checker/decoratorHelpers";
-import { hasFlag } from "../../checker/symbol";
+import { hasFlag, makeSymbol } from "../../checker/symbol";
+import { makeTypedIdentResolved } from "../../transform/util";
 
 function wasmFunctionOf(stmt: Node): Node | null {
 	let decl = stmt;
@@ -39,4 +42,21 @@ export function withoutWasmFunctions(program: Node): Node {
 	}
 	pd.programStmts = kept;
 	return program;
+}
+
+export function callsWasmWrapper(site: Node, pattern: string, args: Node[]): void {
+	const sym = makeSymbol(pattern, SymbolKind.Function, null, false);
+	sym.nativeName = pattern;
+	const callee = makeTypedIdentResolved(sym, null, site.location);
+	const made = site.nodeType;
+	const call: CallExprData = {
+		callee,
+		arguments: args,
+		isDirectCall: true,
+		resolvedOverloadIdx: -1,
+	};
+	site.kind = NodeKind.CallExpr;
+	site.data = call;
+	site.resolvedSym = sym;
+	site.nodeType = made;
 }

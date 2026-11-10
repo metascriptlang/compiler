@@ -487,6 +487,7 @@ function wrapperLines(
 	const sigs: string[] = [];
 	const argList: string[] = [];
 	let wasmOwns = false;
+	const runsNoJs = !keeps && !f.params.some((p) => p.kind == BoundaryKind.Callback);
 	const shared = functionSharesViews(f);
 	const sharedNames: string[] = [];
 	const sharedViews: string[] = [];
@@ -613,9 +614,13 @@ function wrapperLines(
 				encodeView(`e${i}`, view, "", role, `parameter '${p.name}'`);
 			}
 			BoundaryKind.Handle => {
-				lines.push(`\tlet l${i} = null;`);
-				encodes.push(`\t\tconst p${i} = __msb.lend(a${i}.ptr); l${i} = a${i}.ptr;`);
-				cleanup.push(`if (l${i} !== null) __msb.unlend(l${i});`);
+				if (runsNoJs) {
+					lines.push(`\tconst p${i} = __msb.at(a${i}.ptr);`);
+				} else {
+					lines.push(`\tlet l${i} = null;`);
+					encodes.push(`\t\tconst p${i} = __msb.lend(a${i}.ptr); l${i} = a${i}.ptr;`);
+					cleanup.push(`if (l${i} !== null) __msb.unlend(l${i});`);
+				}
 				argList.push(`p${i}`);
 			}
 			_ => {
@@ -699,6 +704,7 @@ function wrapperLines(
 		return p.kind == BoundaryKind.Vec || p.kind == BoundaryKind.Span;
 	}) && !f.params.some((p) => p.kind == BoundaryKind.Handle);
 	if (cleanup.length == 0) {
+		for (const l of lines) out.push(l);
 		for (const l of body) out.push(`	${l}`);
 	} else if (viewed) {
 		const tail = body[body.length - 1].startsWith("return ")
@@ -767,8 +773,9 @@ function proxyClassLines(
 			MemberAccess.Call => `\t${m.jsName}(${args.join(", ")}) { return ${call}; }`,
 			MemberAccess.Get => `\tget ${m.jsName}() { return ${call}; }`,
 			MemberAccess.Set => `\tset ${m.jsName}(a1) { ${call}; }`,
+			MemberAccess.New => null,
 		};
-		out.push(line);
+		if (line != null) out.push(line!);
 	}
 	out.push("}");
 	return out;
