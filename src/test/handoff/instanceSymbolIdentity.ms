@@ -16,10 +16,6 @@ function checkedUnit(source: string): { program: Node, ctx: CheckerContext } {
 	return { program: pr.value, ctx };
 }
 
-function checkedProgram(source: string): Node {
-	return checkedUnit(source).program;
-}
-
 function instanceSyms(n: Node | null, out: Symbol[]): void {
 	if (n == null) return;
 	if (n.kind == NodeKind.NewExpr) {
@@ -42,7 +38,8 @@ test "instanceSymbolIdentity: the instance of a generic class carries its declar
 	];
 	for (const source of sources) {
 		const found: Symbol[] = [];
-		instanceSyms(checkedProgram(source), found);
+		const unit = checkedUnit(source);
+		instanceSyms(unit.program, found);
 		assert found.length == 1, `instance count ${found.length}: ${source}`;
 		assert found[0].item > 0, `instance item ${found[0].item}: ${source}`;
 		assert found[0].declNode != null && found[0].declNode.kind == NodeKind.ClassDecl, `instance declaration: ${source}`;
@@ -56,7 +53,8 @@ test "instanceSymbolIdentity: toString on a class and on an interface binds the 
 	];
 	for (const source of sources) {
 		const found: Symbol[] = [];
-		callSyms(checkedProgram(source), found);
+		const unit = checkedUnit(source);
+		callSyms(unit.program, found);
 		assert found.length == 1, `call count ${found.length}: ${source}`;
 		assert found[0].item > 0, `dump instance item ${found[0].item}: ${source}`;
 		const generic = found[0].instantiatedFrom;
