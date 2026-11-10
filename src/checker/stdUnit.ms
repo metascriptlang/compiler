@@ -346,11 +346,9 @@ export const LOCKED_MOVE_FIELD_ROLES: { [K in keyof LockedMove]-?: FieldRole } =
 };
 
 let _toolStampFn: (() => string) | null = null;
-let _stdStampFn: ((stdPath: string) => string) | null = null;
 
-export function registerStdUnitStamps(tool: () => string, std: (stdPath: string) => string): void {
+export function registerStdUnitStamps(tool: () => string): void {
 	_toolStampFn = tool;
-	_stdStampFn = std;
 }
 
 export function stdUnitRequested(): boolean {
@@ -430,28 +428,20 @@ export function engineMark(): string {
 	return `${macroPreprocessCount()}/${macroCompileCount()}/${engineCompiledNames().length}/${comptimeRunCount()}`;
 }
 
-function underTree(path: string, root: string): boolean {
-	return root != "" && path.startsWith(`${root}/`);
-}
-
 export function stdUnitKeyText(graph: ModuleGraph, config: ResolverConfig, targetOs: string, targetInfo: TargetInfo, gcMode: GcMode, strictNullChecks: boolean, appMode: string): string {
 	const toolFn = _toolStampFn;
-	const stdFn = _stdStampFn;
-	if (toolFn == null || stdFn == null || config.stdPath == "") return "";
+	if (toolFn == null || config.stdPath == "") return "";
 	const runtimeRoot = resolveRuntimeDir();
 	const roots = buildModuleNameRoots();
 	const modules: string[] = [];
 	for (const path of graph.loadOrder) {
 		const mod = findModule(graph, path);
 		if (mod == null || !mod.stdPrelude) continue;
-		const stamped = underTree(path, config.stdPath) || underTree(path, `${runtimeRoot}/runtime`) || underTree(path, `${runtimeRoot}/vendor`);
-		const named = `${path}=${rootedModuleKey(roots, path)}`;
-		modules.push(stamped ? named : `${named}#${hashContent(mod.rawSource)}`);
+		modules.push(`${path}=${rootedModuleKey(roots, path)}#${hashContent(mod.rawSource)}`);
 	}
 	const parts: string[] = [
 		STD_UNIT_MAGIC,
 		`tool=${toolFn()}`,
-		`std=${stdFn(config.stdPath)}`,
 		`stdPath=${config.stdPath}`,
 		`backend=${config.backend as int32}`,
 		`extensions=${config.extensions.join(",")}`,

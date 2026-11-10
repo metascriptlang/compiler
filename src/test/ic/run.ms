@@ -3,7 +3,7 @@
 // of the same sources, and its counts must match what the step declares. Format: cases/README.md.
 // Env: MSC=<path to msc> (default ./msc, else installed msc), IC_ONLY=<case,names> (stdUnit names the std unit check).
 import { execFileResult, ExecFileResult, exit, env, cwd } from "std/process";
-import { readFile, writeFile, readDir, exists, ensureDir, remove, removeAll } from "std/fs";
+import { readFile, writeFile, readDir, exists, ensureDir, remove, removeAll, copyFile, chmod } from "std/fs";
 import { parseJson } from "std/serialize/json/parser";
 import { at, length, getDynamicField } from "std/serialize/json/accessors";
 import { asString, asInt32 } from "std/serialize/json/types";
@@ -573,6 +573,68 @@ function runStdUnitSteps(dir: string, cache: string, project: string, reasons: s
 	if (lineWith(both(inert), "stdUnit: ") != "") reasons.push(`step 5 (MSC_NO_STD_UNIT=1): the unit is not inert:\n${lineWith(both(inert), "stdUnit: ")}`);
 }
 
+function mscPath(): string {
+	if (MSC.indexOf("/") >= 0) return MSC;
+	for (const dir of env.get("PATH").replaceAll(";", ":").split(":")) {
+		for (const name of [MSC, `${MSC}.exe`]) {
+			if (dir != "" && exists(`${slashes(dir)}/${name}`)) return `${slashes(dir)}/${name}`;
+		}
+	}
+	return "";
+}
+
+function installRoot(exe: string): string {
+	let base = exe.slice(0, exe.lastIndexOf("/"));
+	for (let i = 0; i < 4 && base != ""; i += 1) {
+		if (exists(`${base}/std/core/system/index.ms`)) return base;
+		base = base.slice(0, base.lastIndexOf("/"));
+	}
+	return "";
+}
+
+function copyTree(from: string, to: string): boolean {
+	ensureDir(to);
+	for (const e of readDir(from)) {
+		if (e.endsWith("/")) {
+			const name = e.slice(0, e.length - 1);
+			if (!copyTree(`${from}/${name}`, `${to}/${name}`)) return false;
+		} else if (!copyFile(`${from}/${e}`, `${to}/${e}`).ok) return false;
+	}
+	return true;
+}
+
+// A unit is keyed by the compiler binary and the source of each module it checked, so a support
+// file outside the prelude (a runtime C header) keeps it, and an edit to a prelude module misses it.
+function runStdUnitSupportSteps(dir: string, reasons: string[]): void {
+	const exe = mscPath();
+	const root = exe == "" ? "" : installRoot(exe);
+	if (root == "") {
+		reasons.push(`step 6 (support trees): no std tree beside ${MSC}`);
+		return;
+	}
+	const home = `${dir}/home`;
+	const homeExe = `${home}/${exe.slice(exe.lastIndexOf("/") + 1, exe.length)}`;
+	if (!copyTree(`${root}/std`, `${home}/std`) || !copyTree(`${root}/runtime`, `${home}/runtime`) || !copyFile(exe, homeExe).ok) {
+		reasons.push(`step 6 (support trees): cannot copy ${root} to ${home}`);
+		return;
+	}
+	chmod(homeExe, 0o755);
+	const work = `${dir}/support`;
+	put(`${work}/main.ms`, UNIT_PROGRAM_A);
+	const build = (localCache: string): ExecFileResult => {
+		env.set("MSC_CACHE_DIR", localCache);
+		env.delete("MSC_NO_STD_UNIT");
+		env.set("MSC_IC_VERIFY", "1");
+		return execFileResult(homeExe, ["build", "main.ms", "--force", "--emit=c", "--time"], work);
+	};
+	checkUnitStep("step 6 (a copied compiler, first build)", build(`${dir}/localCache6`), "written", "[miss: no unit]x1", reasons);
+	put(`${home}/runtime/unitProbe.h`, "// a header no prelude module reads\n");
+	checkUnitStep("step 7 (a runtime file outside the prelude added)", build(`${dir}/localCache7`), "hit", "", reasons);
+	const system = `${home}/std/core/system/index.ms`;
+	put(system, `${read(system)}\n// an edit to a prelude module\n`);
+	checkUnitStep("step 8 (a prelude module edited)", build(`${dir}/localCache8`), "written", "[miss: no unit]x1", reasons);
+}
+
 function runStdUnitCheck(): string[] {
 	const reasons: string[] = [];
 	const dir = `${TMP}/${STD_UNIT_CHECK}`;
@@ -587,6 +649,8 @@ function runStdUnitCheck(): string[] {
 	env.delete("MSC_NO_GLOBAL_CACHE");
 	env.set("MSC_GLOBAL_CACHE_DIR", cache);
 	runStdUnitSteps(dir, cache, project, reasons);
+	env.set("MSC_GLOBAL_CACHE_DIR", `${dir}/supportCache`);
+	runStdUnitSupportSteps(dir, reasons);
 	for (let i = 0; i < STD_UNIT_ENV.length; i += 1) restoreEnv(STD_UNIT_ENV[i], saved[i]);
 	return reasons;
 }

@@ -114,7 +114,7 @@ import { VERSION } from "./usage";
 // module load so every later build engages it without an init-order hazard.
 registerHeaderCache(headerModuleKey, lookupHeaderModule, storeHeaderModule);
 registerPreludeStampFn(compilerStamp, stdTreeStamp);
-registerStdUnitStamps(toolchainStamp, stdTreeStamp);
+registerStdUnitStamps(compilerStamp);
 
 // ===== Build Helpers =====
 
