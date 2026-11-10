@@ -1796,6 +1796,15 @@ export function dsymutilArgv(mode: number, targetOs: string, ccOption: number, c
 	return [tool, outBinary, "-o", `${outBinary}.dSYM`];
 }
 
+// ld64 and ld64.lld ignore `-s` as obsolete, so a macOS strip is a step after the link (the zig
+// driver strips inside its own linker). Returns the argv, or [] when the link needs no step.
+export function darwinStripArgv(flagArgs: string[], targetOs: string, ccOption: number, ccBinary: string, compilerPath: string, outBinary: string): string[] {
+	if ((targetOs != "macos" && targetOs != "darwin") || !flagArgs.includes("-s")) return [];
+	if (isZigCC(getCompilerName(ccOption, ccBinary))) return [];
+	const tool = ccOption == CC_PREPARED ? join(dirname(compilerPath), "llvm-strip") : "strip";
+	return flagArgs.includes("-shared") ? [tool, "-x", outBinary] : [tool, outBinary];
+}
+
 export function warmLinkPlan(outBinary: string, extraFlags: string, ccOption: number, ccBinary: string, targetOs: string): void {
 	const link = linkCommand(extraFlags, ccOption, ccBinary, targetOs);
 	if (link.ok) linkPlanFor(link.value.command, link.value.prefix, link.value.flagArgs, outBinary);
@@ -1810,6 +1819,8 @@ export function linkObjects(oFiles: string[], outBinary: string, extraFlags: str
 	const flagArgs = link.value.flagArgs;
 	const pdb = pdbLinkArg(mode, targetOs, ccOption, outBinary);
 	if (pdb != "") flagArgs.push(pdb);
+	const strip = darwinStripArgv(flagArgs, targetOs, ccOption, ccBinary, command.path, outBinary);
+	if (strip.length > 0) flagArgs.splice(flagArgs.indexOf("-s"), 1);
 	const bulk: string[] = [];
 	for (const oFile of oFiles) bulk.push(oFile);
 	for (const arg of flagArgs) bulk.push(arg);
@@ -1839,6 +1850,10 @@ export function linkObjects(oFiles: string[], outBinary: string, extraFlags: str
 	if (dsym.length > 0) {
 		const made = execFileCapture(dsym[0], dsym.slice(1, dsym.length));
 		if (!made.ok) return Result.err(made.error);
+	}
+	if (strip.length > 0) {
+		const stripped = execFileCapture(strip[0], strip.slice(1, strip.length));
+		if (!stripped.ok) return Result.err(stripped.error);
 	}
 	return Result.ok(null);
 }
@@ -2248,6 +2263,17 @@ test "a prepared debug link to macOS runs the bundle's dsymutil, release and oth
 	for (const mode of [1, 2]) assert dsymutilArgv(mode, "macos", CC_PREPARED, "/b/bin/clang", out).length == 0;
 	for (const os of ["linux", "windows", "wasm"]) assert dsymutilArgv(0, os, CC_PREPARED, "/b/bin/clang", out).length == 0;
 	assert dsymutilArgv(0, "macos", 0, "/usr/bin/clang", out).length == 0;
+}
+
+test "a macOS link strips after linking, unless zig strips inside its linker" {
+	const out = "/w/app";
+	const PREPARED_CLANG = "/b/bin/clang --no-default-config";
+	assert darwinStripArgv(["-s"], "macos", CC_PREPARED, PREPARED_CLANG, "/b/bin/clang", out).join(" ") == "/b/bin/llvm-strip /w/app";
+	assert darwinStripArgv(["-s", "-shared"], "darwin", CC_PREPARED, PREPARED_CLANG, "/b/bin/clang", out).join(" ") == "/b/bin/llvm-strip -x /w/app";
+	assert darwinStripArgv(["-s"], "macos", 1, "", "/usr/bin/clang", out).join(" ") == "strip /w/app";
+	assert darwinStripArgv(["-s"], "macos", 0, "zig cc", "zig", out).length == 0;
+	assert darwinStripArgv([], "macos", CC_PREPARED, PREPARED_CLANG, "/b/bin/clang", out).length == 0;
+	for (const os of ["linux", "windows"]) assert darwinStripArgv(["-s"], os, CC_PREPARED, PREPARED_CLANG, "/b/bin/clang", out).length == 0;
 }
 
 test "a prepared debug link to Windows asks for a PDB beside the image, nothing else does" {
