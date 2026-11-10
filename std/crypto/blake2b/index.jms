@@ -11,6 +11,10 @@ import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
 
 
+when (nodejs) {
+	import { nodeDigest, nodeInput } from "../pure/nodeCrypto";
+}
+
 function badHashSize(hashSize: int32, op: string): CryptoError | null {
 	if (hashSize < 1 || hashSize > 64) {
 		return cryptoError(CryptoErrorKind.InvalidInput, op, `hashSize must be 1-64, got ${hashSize}`);
@@ -21,6 +25,9 @@ function badHashSize(hashSize: int32, op: string): CryptoError | null {
 // ===== One-shot Hashing =====
 
 export function blake2bSync<D extends ByteInput>(data: D, hashSize: int32 = 32): Result<Buffer, CryptoError> {
+	when (nodejs) {
+		if (hashSize == 64) return Result.ok(nodeDigest("blake2b512", nodeInput(data)));
+	}
 	return blake2bSyncOwned(bytesOf(data), hashSize);
 }
 
@@ -45,6 +52,9 @@ function blake2bKeyedSyncOwned(keyBytes: Buffer, data: Buffer, hashSize: int32):
 }
 
 export function blake2b<D extends ByteInput>(data: D, hashSize: int32 = 32): Promise<Result<Buffer, CryptoError>> {
+	when (nodejs) {
+		if (hashSize == 64) return Promise.resolve(Result.ok(nodeDigest("blake2b512", nodeInput(data))));
+	}
 	return blake2bOwned(bytesOf(data), hashSize);
 }
 
