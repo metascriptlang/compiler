@@ -137,6 +137,13 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   on tree `939e207b0891` (Linux x86-64, rtx: `msPoolWorkerLoop` at both modes, reached through
   `msPoolWakeWorker` → `msPoolGet`), GREEN with the wake reading `gPool` (rtx, 2026-11-12); that
   program's `__text` at `--danger --lto=off` 54,032 → 47,968 B (macOS arm64).
+- **`caseDirectionLinksItsTablesOnly.ms`** — a program that calls only `toUpperCase` links no
+  lower-case table or Final_Sigma span, and one that calls only `toLowerCase` no upper-case table,
+  because the case kernels in `runtime/core/stringCase.c` are expanded once per direction, as Nim
+  expands its `convertRune` template per direction. Builds both at `--danger` and `--release` with
+  `--lto=off` and reads the symbol table. Proven RED on tree `939e207b0891` (Linux x86-64: the upper
+  program links `msLowerFull`, `msCasedSpans`, `msCaseIgnorableSpans`), GREEN on the fix (Linux
+  x86-64). On macOS arm64 at `--danger` the upper-only program's `__const` goes 15,072 → 7,192 B.
 - **`releaseDisposeOutOfLine.ms`** — every generic ref release macro (`msDecref`, `msDecrefAny`,
   `msDecrefCyclic`, `msAtomicDecref`, `msDecrefCyclicEdge`) decides inline and disposes through one
   out-of-line call, as Nim inlines only `nimDecRefIsLast` and calls `nimDestroyAndDispose`. Compiles
