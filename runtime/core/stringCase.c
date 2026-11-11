@@ -117,7 +117,7 @@ static int64_t msCpWidth(uint32_t cp) {
 }
 
 /* The converted bytes, written to dst when it is not NULL; the return value is their count. */
-static int64_t msConvertCase(const uint8_t* s, int64_t n, uint8_t* dst, bool upper) {
+static inline __attribute__((always_inline)) int64_t msConvertCase(const uint8_t* s, int64_t n, uint8_t* dst, bool upper) {
 	const uint8_t asciiLo = upper ? 'a' : 'A';
 	int64_t i = 0, o = 0;
 	while (i < n) {
@@ -159,7 +159,7 @@ static int64_t msConvertCase(const uint8_t* s, int64_t n, uint8_t* dst, bool upp
 	return o;
 }
 
-static msString msCaseOf(msString s, bool upper) {
+static inline __attribute__((always_inline)) msString msCaseOf(msString s, bool upper) {
 	if (msStrLen(s) == 0) return msStringNewUninit(0);
 	const uint8_t* src = (const uint8_t*)msStrData(&s);
 	if (msStringIsAscii(s)) {
