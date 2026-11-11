@@ -10,6 +10,9 @@ import { MINIMUM_MACOS_VERSION } from "./darwinConfig";
 const SOURCE_PREFIX = "llvm-project-";
 const SOURCE_SUFFIX = ".src.tar.xz";
 const DARWIN_SANITIZERS = "asan;tsan;ubsan_minimal";
+const INSTRUMENTED_STAGE = "BOOTSTRAP_";
+const ENGINE_STAGE = "BOOTSTRAP_BOOTSTRAP_";
+const ENGINE_TARGET = "stage2-install-distribution-stripped";
 
 export struct SourceTools {
 	cc: string;
@@ -94,13 +97,15 @@ export function configureCommand(
 		"-S", join(source, "llvm"), "-B", build, "-C", cache,
 		"-DCMAKE_C_COMPILER=" + tools.cc,
 		"-DCMAKE_CXX_COMPILER=" + tools.cxx,
-		"-DCMAKE_INSTALL_PREFIX=" + prefix,
+		"-D" + ENGINE_STAGE + "CMAKE_INSTALL_PREFIX=" + prefix,
 	];
 	if (tools.linker != "") { args.push("-DLLVM_USE_LINKER=" + tools.linker); }
 	if (hostOs == "darwin" || hostOs == "macos") {
-		args.push("-DLLVM_BUILD_STATIC=OFF");
-		args.push("-DCMAKE_OSX_DEPLOYMENT_TARGET=" + MINIMUM_MACOS_VERSION);
-		args.push("-DCOMPILER_RT_SANITIZERS_TO_BUILD=" + DARWIN_SANITIZERS);
+		args.push("-D" + ENGINE_STAGE + "LLVM_BUILD_STATIC=OFF");
+		for (const stage of ["", INSTRUMENTED_STAGE, ENGINE_STAGE]) {
+			args.push("-D" + stage + "CMAKE_OSX_DEPLOYMENT_TARGET=" + MINIMUM_MACOS_VERSION);
+		}
+		args.push("-D" + ENGINE_STAGE + "COMPILER_RT_SANITIZERS_TO_BUILD=" + DARWIN_SANITIZERS);
 	}
 	return { file: cmake, args };
 }
@@ -114,7 +119,7 @@ export function buildCommand(
 	if (jobs < 1) {
 		return Result.err("--jobs must be at least 1, got " + String(jobs));
 	}
-	const args = ["-C", build, "-j" + String(jobs), "install-distribution-stripped"];
+	const args = ["-C", build, "-j" + String(jobs), ENGINE_TARGET];
 	if (nice == null) { return Result.ok({ file: ninja, args }); }
 	return Result.ok({ file: nice, args: ["-n", "10", ninja, ...args] });
 }

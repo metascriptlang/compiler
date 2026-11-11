@@ -56,25 +56,27 @@ function commandCases(): void {
 	expect(args.contains("-B /w/build -C /t/llvmEngine.cmake"),
 		"configure names the build tree and the cache file");
 	expect(args.contains("-DLLVM_USE_LINKER=lld") &&
-		args.contains("-DCMAKE_INSTALL_PREFIX=/w/out"),
-		"configure names the linker and the install prefix");
+		args.contains("-DBOOTSTRAP_BOOTSTRAP_CMAKE_INSTALL_PREFIX=/w/out"),
+		"configure names the stage1 linker and the engine stage's install prefix");
 	expect(!args.contains("LLVM_BUILD_STATIC"),
 		"a Linux host keeps the cache's static engine");
 	const darwin = configureCommand("darwin", "/u/cmake", "/u/ninja", "/s",
 		"/b", "/o", "/c", { ...TOOLS, linker: "" }).args.join(" ");
 	expect(!darwin.contains("LLVM_USE_LINKER"),
 		"an empty linker leaves the system linker in place");
-	expect(darwin.contains("-DLLVM_BUILD_STATIC=OFF") &&
-		darwin.contains("-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0"),
-		"a macOS host links against the system libraries from macOS 11");
-	expect(darwin.contains("-DCOMPILER_RT_SANITIZERS_TO_BUILD=asan;tsan;ubsan_minimal") &&
+	expect(darwin.contains("-DBOOTSTRAP_BOOTSTRAP_LLVM_BUILD_STATIC=OFF") &&
+		darwin.contains("-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0") &&
+		darwin.contains("-DBOOTSTRAP_CMAKE_OSX_DEPLOYMENT_TARGET=11.0") &&
+		darwin.contains("-DBOOTSTRAP_BOOTSTRAP_CMAKE_OSX_DEPLOYMENT_TARGET=11.0"),
+		"every macOS stage targets macOS 11 and the engine links the system libraries");
+	expect(darwin.contains("-DBOOTSTRAP_BOOTSTRAP_COMPILER_RT_SANITIZERS_TO_BUILD=asan;tsan;ubsan_minimal") &&
 		!args.contains("COMPILER_RT_SANITIZERS_TO_BUILD"),
 		"only macOS builds the sanitizers its SDK builds link from the engine");
 	const posix = buildCommand("/u/ninja", "/w/build", 16, "/usr/bin/nice");
 	expect(posix.ok && posix.value.file == "/usr/bin/nice" &&
 		posix.value.args.join(" ") ==
-		"-n 10 /u/ninja -C /w/build -j16 install-distribution-stripped",
-		"a POSIX build installs the stripped distribution under nice");
+		"-n 10 /u/ninja -C /w/build -j16 stage2-install-distribution-stripped",
+		"a POSIX build installs the PGO stage's stripped distribution under nice");
 	const windows = buildCommand("C:/t/ninja.exe", "C:/w/build", 8, null);
 	expect(windows.ok && windows.value.file == "C:/t/ninja.exe",
 		"a build without nice runs ninja itself");
