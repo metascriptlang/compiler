@@ -529,10 +529,10 @@ void msSchedWakeUnregisterEngine(msIoEngine* e) {
 
 /* Wake a specific worker by scheduler ID (targeted: actors signal only their owner) */
 void msPoolWakeWorker(int schedulerID) {
-	msThreadPool* pool = msPoolGet();
-	if (pool == NULL) return;
 	int idx = schedulerID - 1;  /* scheduler 1 → workerConds[0] */
 	if (idx < 0 || idx >= atomic_load_explicit(&msPoolThreadCount, memory_order_acquire)) return;
+	msThreadPool* pool = gPool;
+	if (pool == NULL) return;
 	/* Set wake flag BEFORE signaling — survives if worker hasn't entered wait yet */
 	atomic_store_explicit(&msPoolActorWake[idx], true, memory_order_release);
 	MS_LOCK(pool);
@@ -568,7 +568,8 @@ bool msPoolQuiescentWith(bool (*mainIdle)(void)) {
 
 /* Wake all pool workers (shutdown, fallback) */
 void msPoolWakeWorkers(void) {
-	msThreadPool* pool = msPoolGet();
+	if (atomic_load_explicit(&msPoolThreadCount, memory_order_acquire) == 0) return;
+	msThreadPool* pool = gPool;
 	if (pool == NULL) return;
 	MS_LOCK(pool);
 	int count = atomic_load_explicit(&msPoolThreadCount, memory_order_relaxed);
