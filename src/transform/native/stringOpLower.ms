@@ -21,7 +21,7 @@
 // conservative syntactic match. Side-effecting indexes (arr[i++]) fall through.
 
 import { Node, NodeKind, SourceLocation, Symbol, BinaryExprData, ArrayAccessData, StringLiteralData, IdentifierData, MemberExprData, NumberLiteralData, CallExprData, HiddenDerefData, UpdateExprData, ExprStmtData, TypeKind } from "../../ast/node";
-import { isNumeric, isStringLike, isWideInteger, peelTransparentInstance, stringType } from "../../checker/types";
+import { isNumeric, isStringLike, isIntegerType, peelTransparentInstance, stringType } from "../../checker/types";
 import { TransformContext, reportTransformError } from "../context";
 import { walkNode, isFuncBoundary } from "../walker";
 import { makeCall, makeNumber, makeHiddenAddr, runtimeRef, isRuntimeProcCall } from "../util";
@@ -233,7 +233,7 @@ function coercePartToString(node: Node, loc: SourceLocation): Node {
 	if (node.nodeType != null && node.nodeType.kind == TypeKind.String) return node;
 	if (node.nodeType != null) {
 		if (isCharTyped(node)) return charToString(node, loc);
-		if (isWideInteger(node.nodeType)) {
+		if (isIntegerType(node.nodeType)) {
 			const fn = node.nodeType.kind == TypeKind.Uint64 ? "msUint64ToString" : "msIntToString";
 			return makeCall(runtimeRef(fn, loc), [node], loc);
 		}

@@ -2,7 +2,7 @@
 // arrives already converted by the checker's std dump call.
 
 import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, Symbol, SymbolKind, BuiltinKind } from "../../ast/node";
-import { getBuiltinKind, isNumeric, isWideInteger, stringType, booleanType, unwrapRef, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase, isStringLike, isNullableBigInt, createFunction, unwrapRefNullUnion } from "../../checker/types";
+import { getBuiltinKind, isNumeric, isIntegerType, stringType, booleanType, unwrapRef, isMaybeType, unwrapMaybeType, peelTransparentInstance, literalBase, isStringLike, isNullableBigInt, createFunction, unwrapRefNullUnion } from "../../checker/types";
 import { TransformContext, mintSym } from "../context";
 import { makeIdentResolved, makeTypedIdentResolved, compilerFuncSym, makeCall, makeString, makeBool, makeBinary, makeMember, makeConditional, enumToStringSym, runtimeRef, makeFnDecl, makeBlock, makeReturn, makeNull } from "../util";
 import { charToString } from "./stringOpLower";
@@ -14,7 +14,7 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 	const t = literalBase(peelTransparentInstance(arg.nodeType));
 	if (isStringLike(t) || arg.kind == NodeKind.StringLiteral) return arg;
 	if (t.kind == TypeKind.Char) return charToString(arg, loc);
-	if (isWideInteger(t)) {
+	if (isIntegerType(t)) {
 		const fn = t.kind == TypeKind.Uint64 ? "msUint64ToString" : "msIntToString";
 		const call = makeCall(runtimeRef(fn, loc), [arg], loc);
 		call.nodeType = stringType();

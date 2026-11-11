@@ -54,3 +54,28 @@ test "an int32 and a uint32 formatted in another radix take the integer kernel, 
 	assert c.contains("msIntToStringRadix");
 	assert !c.contains("msNumberToStringRadix");
 }
+
+test "console.log of an int8, a uint32 and an int32 | undefined formats through the integer path, never the double one" {
+	const c = emitFor(`
+		const a: int8 = -128;
+		const b: uint32 = 4294967295;
+		const m: int32 | undefined = 7;
+		console.log(a, b);
+		console.log(m);
+	`);
+	assert c != "";
+	assert c.contains("msIntToString(");
+	assert !c.contains("msNumberToString(");
+}
+
+test "appending an int32 to a string formats through the integer path" {
+	const c = emitFor(`
+		const a: int32 = -7;
+		let s = "n=";
+		s += a;
+		console.log(s);
+	`);
+	assert c != "";
+	assert c.contains("msIntToString(");
+	assert !c.contains("msNumberToString(");
+}
