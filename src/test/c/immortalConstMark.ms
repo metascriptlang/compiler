@@ -1,4 +1,6 @@
 import { compileToC } from "../helpers";
+import { execFileResult, cwd, env } from "std/process";
+import { writeFile, ensureDir, removeAll, readFile, readDir } from "std/fs";
 
 const SOURCE = `
 class Leaf { n: int32 = 1; }
@@ -126,4 +128,71 @@ test "immortalConstMark: a deep-Readonly module const built fresh is marked immo
 	assert !c.contains("msImmortalize(PLAIN__"), "a const typed mutable stays mortal";
 	assert !c.contains("msImmortalize(ALIAS__"), "a Readonly alias of a mutable const reaches cells the const does not own, so it stays mortal";
 	assert c.contains("Node__") && c.contains("Reach("), "the walk goes through a lifted reach hook";
+}
+
+const SHARED_WALKS = `
+class Leaf { n: int32 = 1; }
+class Ring { next: Ring | null = null; prev: Ring | null = null; }
+class Mixed { next: Mixed | null = null; leaf: Leaf = new Leaf(); }
+class Wrap { r: Ring | null = null; }
+class Outer { w: Wrap = new Wrap(); }
+struct Pair { a: Ring | null; b: Ring | null; }
+class Holder { p: Pair = { a: null, b: null }; }
+const R: Readonly<Ring> = new Ring();
+const M: Readonly<Mixed> = new Mixed();
+const O: Readonly<Outer> = new Outer();
+const H: Readonly<Holder> = new Holder();
+console.log(R.next == null, M.leaf.n, O.w.r == null, H.p.a == null);
+`;
+
+function emittedMain(name: string, source: string): string {
+	const root = cwd();
+	const msc = env.get("MSC") != "" ? env.get("MSC") : `${root}/msc`;
+	const dir = `${root}/out/immortalConstMark/${name}`;
+	removeAll(dir);
+	ensureDir(dir);
+	writeFile(`${dir}/main.ms`, source);
+	const r = execFileResult(msc, ["build", `${dir}/main.ms`, "--emit=c", "--output=prog"], dir);
+	if (r.exitCode != 0) return `BUILD-FAILED ${r.output}${r.errorOutput}`;
+	for (const file of readDir(`${dir}/out/debug`)) {
+		if (file != "mainOms.c" && !file.endsWith("ZmainOms.c")) continue;
+		const c = readFile(`${dir}/out/debug/${file}`);
+		if (c.ok) return c.value;
+	}
+	return `BUILD-FAILED no C for main in ${dir}/out/debug`;
+}
+
+function typeInfoOf(c: string, prefix: string): string {
+	for (const line of c.split("\n")) {
+		if (line.startsWith("msTypeInfo " + prefix) && line.contains("TypeInfo = {")) return line;
+	}
+	return "";
+}
+
+function typeInfoCName(info: string): string {
+	return info.substring("msTypeInfo ".length, info.indexOf("TypeInfo = {"));
+}
+
+test "immortalConstMark: a reach walk that makes the same calls as the type's trace or custody walk reuses that hook and its thunk" {
+	const c = emittedMain("sharedWalks", SHARED_WALKS);
+	assert !c.startsWith("BUILD-FAILED"), c;
+	const hooks = reachHooks(c);
+	for (const name of ["Ring__", "Wrap__", "Holder__", "Outer__"]) {
+		const info = typeInfoOf(c, name);
+		assert info != "", "no TypeInfo for " + name;
+		const cName = typeInfoCName(info);
+		const walk = name == "Outer__" ? "RttiCustody" : "RttiTrace";
+		assert info.contains(".reachFn = " + cName + walk), name + " keeps its own reach walk:\n" + info;
+		assert !hooks.has(cName + "Reach"), name + " still lifts a reach hook";
+		assert !c.contains(cName + "RttiReach"), name + " still emits a reach thunk";
+	}
+}
+
+test "immortalConstMark: a reach walk that also enters an acyclic field keeps its own hook and thunk" {
+	const c = emittedMain("sharedWalks", SHARED_WALKS);
+	assert !c.startsWith("BUILD-FAILED"), c;
+	const info = typeInfoOf(c, "Mixed__");
+	assert info.contains(".reachFn = " + typeInfoCName(info) + "RttiReach"), info;
+	const reach = hookBody(c, "Mixed__", "Reach(");
+	assert reach.contains(".next") && reach.contains(".leaf"), "the Mixed reach walk enters both fields:\n" + reach;
 }

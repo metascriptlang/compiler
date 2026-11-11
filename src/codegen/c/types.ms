@@ -395,18 +395,28 @@ export function liftedOp(t: Type, op: AttachedOp, name: string, fnType: Type | n
 		if (fnType != null && (_opModule == "" || _opWriting.keyOfSym.has(held))) held.symbolType = fnType;
 		return held;
 	}
+	const sym = newOp(key, op, name, fnType);
+	recordOp(key, sym, true);
+	return sym;
+}
+
+export function unrecordedOp(t: Type, op: AttachedOp, name: string): Symbol {
+	const key = opKey(t, op);
+	if (viewedOp(key) != null) throw new Error(`internal: type-bound op ${key} is already recorded`);
+	return newOp(key, op, name, null);
+}
+
+function newOp(key: string, op: AttachedOp, name: string, fnType: Type | null): Symbol {
 	if (_hookSymsSealed) throw new Error(`internal: type-bound op ${key} first requested while C modules are emitted in parallel`);
 	const reused = _reusedOps.get(key);
 	if (reused != null && reused.name == name) {
 		reused.symbolType = fnType!;
-		recordOp(key, reused, true);
 		return reused;
 	}
 	const sym = makeSymbol(name, SymbolKind.Function, fnType, false);
 	setFlag(sym, SymbolFlag.GeneratedOp);
 	if (op == AttachedOp.AttachedDestructor) setFlag(sym, SymbolFlag.DestroyOp);
 	else if (op == AttachedOp.AttachedWasMoved) setFlag(sym, SymbolFlag.WasMovedOp);
-	recordOp(key, sym, true);
 	return sym;
 }
 
@@ -1484,7 +1494,8 @@ function typeInfoFields(g: CGen, facts: Readonly<CEmissionFacts>, info: Readonly
 	let traceName = "NULL";
 	if (info.trace != null) traceName = emitRttiHook(g, info.cName + "RttiTrace", info.trace, true);
 	const custodyName = info.custody != null ? emitRttiHook(g, info.cName + "RttiCustody", info.custody, true) : traceName;
-	const reach = info.reach != null ? `, .reachFn = ${emitRttiHook(g, info.cName + "RttiReach", info.reach, true)}` : "";
+	const reachName = info.reach == null ? "" : info.reach == info.trace ? traceName : info.reach == info.custody ? custodyName : emitRttiHook(g, info.cName + "RttiReach", info.reach, true);
+	const reach = reachName != "" ? `, .reachFn = ${reachName}` : "";
 	const finalizer = info.finalize != null && info.release != null
 		? `, .finalizeFn = ${emitRttiHook(g, info.cName + "RttiFinalize", info.finalize, false)}, .releaseFn = ${emitRttiHook(g, info.cName + "RttiRelease", info.release, false)}`
 		: "";
