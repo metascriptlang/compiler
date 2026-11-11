@@ -1,5 +1,5 @@
-import { execFile, findOnPath, platform } from "std/process";
-import { basename, ensureDir, isDir, isFile, isLinkLike, join } from "std/fs";
+import { env, execFile, findOnPath, platform } from "std/process";
+import { basename, dirname, ensureDir, isDir, isFile, isLinkLike, join } from "std/fs";
 import { IoErrorKind } from "std/io/errors";
 import { jsonValueOf } from "std/serialize/json";
 import { stringifyPretty } from "std/serialize/json/stringify";
@@ -124,6 +124,11 @@ export function buildCommand(
 	return Result.ok({ file: nice, args: ["-n", "10", ninja, ...args] });
 }
 
+export function pathWithToolDir(tool: string, path: string, hostOs: string): string {
+	const separator = hostOs == "windows" ? ";" : ":";
+	return path == "" ? dirname(tool) : dirname(tool) + separator + path;
+}
+
 function hostTool(name: string): Result<string, string> {
 	const path = findOnPath(name);
 	if (path == "") { return Result.err(name + " is not on PATH"); }
@@ -191,6 +196,7 @@ export function prepareSourceEngine(
 	if (!isDir(source)) {
 		return Result.err(tarball + " did not extract to " + source);
 	}
+	env.set("PATH", pathWithToolDir(ninja, env.get("PATH") ?? "", platform));
 	try runCommand(configureCommand(platform, cmake, ninja, source, build,
 		output, cache, request.tools));
 	try runCommand(install);

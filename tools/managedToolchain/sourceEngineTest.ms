@@ -4,7 +4,7 @@ import { randomUUIDSync } from "std/crypto";
 import { sha256File } from "./fileDigest";
 import {
 	SourceEngineRequest, SourceTools,
-	buildCommand, configureCommand, isSha256Hex, llvmSourceVersion,
+	buildCommand, configureCommand, isSha256Hex, llvmSourceVersion, pathWithToolDir,
 	prepareSourceEngine,
 } from "./sourceEngine";
 
@@ -82,6 +82,10 @@ function commandCases(): void {
 		"a build without nice runs ninja itself");
 	expect(!buildCommand("/u/ninja", "/w/build", 0, null).ok,
 		"zero jobs are refused");
+	expect(pathWithToolDir("/p/bin/ninja", "/usr/bin:/bin", "linux") == "/p/bin:/usr/bin:/bin",
+		"the build's PATH starts with the given ninja's directory, as perf-training's cmake looks it up there");
+	expect(pathWithToolDir("C:/t/ninja.exe", "C:/w", "windows") == "C:/t;C:/w",
+		"a Windows PATH joins with a semicolon");
 }
 
 function scratch(): string {
