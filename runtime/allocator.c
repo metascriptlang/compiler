@@ -695,7 +695,7 @@ static msHeapBig* msHeapGetBig(msHeapRegion* a, size_t size) {
         if (rest->zeroed) msHeapInsertBig(a, rest);
         else msHeapInsertUnused(a, rest, *msHeapUnusedSince(chunk));
     }
-    chunk->base.prevSize = 1;
+    chunk->base.prevSize |= 1;
     msHeapInclude(a, (uintptr_t)chunk);
     return chunk;
 }
@@ -715,7 +715,8 @@ static void msHeapReleaseBig(msHeapRegion* a, msHeapBig* chunk) {
         uintptr_t address = (uintptr_t)chunk - prevSize;
         if (msHeapContains(a, address)) {
             msHeapBig* left = (msHeapBig*)address;
-            if (!(left->base.prevSize & 1) && !(left->zeroed & MS_HEAP_DISCARDED) && left->base.size < MS_HEAP_MAX_BIG) {
+            if (!(left->base.prevSize & 1) && left->base.size == prevSize && !(left->zeroed & MS_HEAP_DISCARDED) &&
+                left->base.size < MS_HEAP_MAX_BIG) {
                 msHeapRemoveBig(a, left);
                 since = msHeapJoinedSince(left, chunk->base.size, since);
                 left->base.size += chunk->base.size;
@@ -742,6 +743,7 @@ static void msHeapReleaseBig(msHeapRegion* a, msHeapBig* chunk) {
                 msHeapInsertUnused(a, msHeapSplit(a, chunk, MS_HEAP_MAX_BIG), since);
         }
     }
+    msHeapUpdateNext(a, chunk);
     msHeapInsertUnused(a, chunk, since);
 }
 
