@@ -357,6 +357,9 @@ put(`${bounded}/build.ms`, [
 	"export const huge = exclusive(\"huge\", 1e18);",
 	"export const greedy = systemCommand([\"sh\", \"-c\", \"held=$(head -c 100000000 /dev/zero | tr \\\\\\\\0 a); echo ${#held}\"]);",
 	"greedy.maxRss = 20e6;",
+	"export const crashed = systemCommand([\"sh\", \"-c\", \"kill -SEGV $$\"]);",
+	`export const crashedChecked = systemCommand([\"sh\", \"-c\", \"kill -SEGV $$; : ${bounded}\"]);`,
+	"crashedChecked.expectExitCode(0);",
 	"",
 ].join("\n"));
 function overlap(dir: string, args: string[]): string {
@@ -378,6 +381,10 @@ const greedy = errorLine(run(bounded, ["build", "--colors=off", "greedy"]));
 record("a command that peaks above its maxRss fails the build", "peaked above maxRss of 19 MiB", greedy.includes(" peaked at ") && greedy.endsWith("above its declared maxRss of 19 MiB") ? "peaked above maxRss of 19 MiB" : greedy);
 const aboveTotal = errorLine(run(bounded, ["build", "--colors=off", "huge"]));
 record("without --maxrss the bound is the machine's memory", "MiB this build may use", aboveTotal.endsWith("MiB this build may use (--maxrss)") ? "MiB this build may use" : aboveTotal);
+for (const name of ["crashed", "crashedChecked"]) {
+	const crash = errorLine(run(bounded, ["build", "--colors=off", name]));
+	record(`a ${name == "crashed" ? "" : "checked "}command killed by a signal fails the build`, "killed by signal 11", crash.includes("was killed by signal 11") ? "killed by signal 11" : crash);
+}
 
 const hostile = `${root}/hostile`;
 ensureDir(`${hostile}/src`);
