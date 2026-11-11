@@ -1,4 +1,4 @@
-import { env, execFile, findOnPath, platform } from "std/process";
+import { arch, env, execFile, findOnPath, platform } from "std/process";
 import { basename, dirname, ensureDir, isDir, isFile, isLinkLike, join } from "std/fs";
 import { IoErrorKind } from "std/io/errors";
 import { jsonValueOf } from "std/serialize/json";
@@ -84,6 +84,7 @@ export function isSha256Hex(text: string): boolean {
 
 export function configureCommand(
 	hostOs: string,
+	hostArch: string,
 	cmake: string,
 	ninja: string,
 	source: string,
@@ -106,6 +107,10 @@ export function configureCommand(
 			args.push("-D" + stage + "CMAKE_OSX_DEPLOYMENT_TARGET=" + MINIMUM_MACOS_VERSION);
 		}
 		args.push("-D" + ENGINE_STAGE + "COMPILER_RT_SANITIZERS_TO_BUILD=" + DARWIN_SANITIZERS);
+		if (hostArch == "arm64" || hostArch == "aarch64") {
+			args.push("-D" + ENGINE_STAGE + "DARWIN_osx_ARCHS=arm64");
+			args.push("-D" + ENGINE_STAGE + "DARWIN_osx_BUILTIN_ARCHS=arm64");
+		}
 	}
 	return { file: cmake, args };
 }
@@ -197,7 +202,7 @@ export function prepareSourceEngine(
 		return Result.err(tarball + " did not extract to " + source);
 	}
 	env.set("PATH", pathWithToolDir(ninja, env.get("PATH") ?? "", platform));
-	try runCommand(configureCommand(platform, cmake, ninja, source, build,
+	try runCommand(configureCommand(platform, arch, cmake, ninja, source, build,
 		output, cache, request.tools));
 	try runCommand(install);
 	const record: SourceProvenance = {
