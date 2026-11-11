@@ -12,7 +12,8 @@ import { readFile as readStdFile } from "std/fs";
 import { TaExternalReads, createExternalReads, noteExternalRead } from "./externalReads";
 import { installCompileTimeReadSink } from "../meta/compileTimeReads";
 import { TaAbsentProbes, createAbsentProbes, enterCheckProbes, leaveCheckProbes, knownAbsentAt, recordAbsentAt, recordDiskProbe } from "./absentProbes";
-import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend } from "../../module/resolver";
+import { ResolverConfig, createDefaultConfig, resolveImportWithConfig, Backend, backendName } from "../../module/resolver";
+import { parseAsBuildOf, getParserDefines, setParserDefines } from "../../parser/context";
 import { CheckerContext, CheckerError, CancelCtx, createContext, nextDisamb, extensionsOf, isCancelled } from "../../checker/context";
 import { SymbolFlag, hasFlag, lookupLocal, lookupSymbol, defineSymbolAs, builtinKindName } from "../../checker/symbol";
 import {
@@ -621,7 +622,8 @@ function adoptLoaderParse(db: TransAmDb, filePath: string, source: string): Pars
 	const loaded = takeGraphParse(db, filePath, source);
 	if (loaded != null) return loaded;
 	// Use lenient parse: LSP needs partial ASTs from incomplete code (e.g. "config.")
-	const parseResult = parseModuleSourceLenient(source);
+	const graphLoaded = db.graph != null && findModule(db.graph, filePath) != null;
+	const parseResult = graphLoaded ? parseAsBuildOf(backendName(db.resolverConfig.backend), () => parseModuleSourceLenient(source)) : parseModuleSourceLenient(source);
 	return parseResult.ok ? parseResult.value : null;
 }
 
@@ -3661,5 +3663,39 @@ test "an edit of a module in an import cycle answers as a fresh db" {
 		const fresh = cycleMessages(cycleDb(`${root}Fresh`, edit[1] as string), `${root}Fresh`);
 		assert after == fresh, `${edit[0]}: ${after} | ${fresh}`;
 		assert (after != before) == (edit[2] as boolean), `${edit[0]}: ${before} | ${after}`;
+	}
+}
+
+import { createDefineTable, initDefines } from "../defines";
+
+function firstStmtOf(db: TransAmDb, path: string): NodeKind {
+	const program = dbParse(db, path);
+	if (program == null) throw new Error(`no parse of ${path}`);
+	return (program.data as ProgramData).programStmts[0].kind;
+}
+
+test "a graph module the db parses again is read as a build of the graph's backend, not of the process defines" {
+	const source = "when (c) { function onC(): void {} } else { const notC = 1; }";
+	const saved = getParserDefines();
+	const onC = createDefineTable();
+	initDefines(onC, "c", "linux", "x86_64", "drc", 0);
+	setParserDefines(onC);
+	try {
+		for (const backend of [Backend.Raiser, Backend.JS]) {
+			const db = createTransAmDb(100);
+			dbSetResolverConfig(db, createDefaultConfig(backend, ""));
+			const graph = createModuleGraph();
+			const seeded = createModule("/seeded/m.ms");
+			seeded.rawSource = source;
+			seeded.source = source;
+			addModule(graph, seeded);
+			graph.loadOrder.push(seeded.path);
+			dbBindGraph(db, graph);
+			assert firstStmtOf(db, "/seeded/m.ms") == NodeKind.VariableDecl, "a seeded module parsed with the C branch";
+			dbSetFileText(db, "/edited/m.ms", source);
+			assert firstStmtOf(db, "/edited/m.ms") == NodeKind.FunctionDecl, "a file outside the graph keeps the process defines";
+		}
+	} finally {
+		setParserDefines(saved);
 	}
 }
