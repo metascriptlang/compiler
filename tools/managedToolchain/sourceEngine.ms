@@ -6,6 +6,7 @@ import { stringifyPretty } from "std/serialize/json/stringify";
 import { sha256File } from "./fileDigest";
 import { absoluteEnginePath, engineIo, writeEngineText } from "./engineFiles";
 import { MINIMUM_MACOS_VERSION } from "./darwinConfig";
+import { captureToolUtf8 } from "./processCapture";
 
 const SOURCE_PREFIX = "llvm-project-";
 const SOURCE_SUFFIX = ".src.tar.xz";
@@ -134,13 +135,13 @@ export function pathWithToolDir(tool: string, path: string, hostOs: string): str
 	return path == "" ? dirname(tool) : dirname(tool) + separator + path;
 }
 
-function hostTool(name: string): Result<string, string> {
+export function hostTool(name: string): Result<string, string> {
 	const path = findOnPath(name);
 	if (path == "") { return Result.err(name + " is not on PATH"); }
 	return Result.ok(path);
 }
 
-function runCommand(command: EngineCommand): Result<void, string> {
+export function runCommand(command: EngineCommand): Result<void, string> {
 	const code = execFile(command.file, command.args);
 	if (code != 0) {
 		return Result.err(command.file + " " + command.args.join(" ") +
@@ -149,7 +150,7 @@ function runCommand(command: EngineCommand): Result<void, string> {
 	return Result.ok(null);
 }
 
-function existingFile(label: string, path: string): Result<string, string> {
+export function existingFile(label: string, path: string): Result<string, string> {
 	const absolute = try absoluteEnginePath(path);
 	if (!isFile(absolute)) {
 		return Result.err(label + " " + absolute + " is not a file");
@@ -157,7 +158,7 @@ function existingFile(label: string, path: string): Result<string, string> {
 	return Result.ok(absolute);
 }
 
-function refuseExisting(output: string): Result<void, string> {
+export function refuseExisting(output: string): Result<void, string> {
 	const existing = isLinkLike(output);
 	if (existing.ok) {
 		return Result.err(output + " exists; --output names a new directory");
@@ -167,6 +168,52 @@ function refuseExisting(output: string): Result<void, string> {
 		return Result.err(existing.error.message);
 	}
 	return Result.ok(null);
+}
+
+// tar on Windows cannot create the symbolic links the source carries; they are test inputs and
+// mlgo-utils scripts the build never reads, which the release bat skips the same way by extracting with 7z.
+export function onlySymlinkFailures(errorOutput: string): boolean {
+	let failed = false;
+	for (const line of errorOutput.split("\n")) {
+		if (line == "" || line.endsWith("tar: Exiting with failure status due to previous errors")) { continue; }
+		if (!line.contains("tar: ") || !line.contains(": Cannot create symlink to ")) { return false; }
+		failed = true;
+	}
+	return failed;
+}
+
+export function tarExtractArgs(tarball: string, dest: string, hostOs: string, gnu: boolean): string[] {
+	const args = ["xf", tarball, "-C", dest];
+	if (hostOs == "windows" && gnu) { args.push("--force-local"); }
+	return args;
+}
+
+export function extractLlvmSource(
+	tarball: string, version: string, work: string,
+): Result<string, string> {
+	const extracted = join(work, "src");
+	try engineIo(ensureDir(extracted));
+	const tar = try hostTool("tar");
+	let gnu = false;
+	if (platform == "windows") {
+		const version = try captureToolUtf8(tar, ["--version"]);
+		gnu = version.output.contains("GNU tar");
+	}
+	const args = tarExtractArgs(tarball, extracted, platform, gnu);
+	if (platform == "windows") {
+		const ran = try captureToolUtf8(tar, args);
+		if (ran.returnCode != 0 && !onlySymlinkFailures(ran.errorOutput)) {
+			return Result.err(tar + " " + args.join(" ") + " failed (rc=" +
+				String(ran.returnCode) + "): " + ran.errorOutput);
+		}
+	} else {
+		try runCommand({ file: tar, args });
+	}
+	const source = join(extracted, SOURCE_PREFIX + version + ".src");
+	if (!isDir(source)) {
+		return Result.err(tarball + " did not extract to " + source);
+	}
+	return Result.ok(source);
 }
 
 export function prepareSourceEngine(
@@ -191,16 +238,7 @@ export function prepareSourceEngine(
 	const nice = platform == "windows" ? null : try hostTool("nice");
 	const build = join(work, "build");
 	const install = try buildCommand(ninja, build, request.jobs, nice);
-	const extracted = join(work, "src");
-	try engineIo(ensureDir(extracted));
-	try runCommand({
-		file: try hostTool("tar"),
-		args: ["xf", tarball, "-C", extracted],
-	});
-	const source = join(extracted, SOURCE_PREFIX + version + ".src");
-	if (!isDir(source)) {
-		return Result.err(tarball + " did not extract to " + source);
-	}
+	const source = try extractLlvmSource(tarball, version, work);
 	env.set("PATH", pathWithToolDir(ninja, env.get("PATH") ?? "", platform));
 	try runCommand(configureCommand(platform, arch, cmake, ninja, source, build,
 		output, cache, request.tools));

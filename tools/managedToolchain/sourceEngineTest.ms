@@ -4,7 +4,7 @@ import { randomUUIDSync } from "std/crypto";
 import { sha256File } from "./fileDigest";
 import {
 	SourceEngineRequest, SourceTools,
-	buildCommand, configureCommand, isSha256Hex, llvmSourceVersion, pathWithToolDir,
+	buildCommand, configureCommand, isSha256Hex, llvmSourceVersion, onlySymlinkFailures, pathWithToolDir, tarExtractArgs,
 	prepareSourceEngine,
 } from "./sourceEngine";
 
@@ -93,6 +93,22 @@ function commandCases(): void {
 		"the build's PATH starts with the given ninja's directory, as perf-training's cmake looks it up there");
 	expect(pathWithToolDir("C:/t/ninja.exe", "C:/w", "windows") == "C:/t;C:/w",
 		"a Windows PATH joins with a semicolon");
+	const symlinkOnly = "tar: llvm-project-23.1.4.src/llvm/utils/mlgo-utils/extract_ir.py: " +
+		"Cannot create symlink to ‘mlgo/corpus/extract_ir.py’: No such file or directory\n" +
+		"tar: Exiting with failure status due to previous errors\n";
+	expect(onlySymlinkFailures(symlinkOnly), "symbolic links tar cannot make on Windows are skipped");
+	expect(onlySymlinkFailures("/usr/bin/" + symlinkOnly.replaceAll("\ntar: ", "\n/usr/bin/tar: ")),
+		"Git's tar names itself by its path");
+	expect(!onlySymlinkFailures("tar: Exiting with failure status due to previous errors\n"),
+		"a failure that names no symbolic link is not");
+	expect(!onlySymlinkFailures(symlinkOnly + "tar: x.c: Cannot write: No space left on device\n"),
+		"any other tar error refuses the extraction");
+	expect(tarExtractArgs("C:/w/s.tar.xz", "C:/w/src", "windows", true).join(" ") ==
+		"xf C:/w/s.tar.xz -C C:/w/src --force-local",
+		"GNU tar on Windows reads C:/ as a local path, not a remote host");
+	expect(!tarExtractArgs("C:/w/s.tar.xz", "C:/w/src", "windows", false).includes("--force-local") &&
+		!tarExtractArgs("/w/s.tar.xz", "/w/src", "linux", true).includes("--force-local"),
+		"bsdtar and POSIX hosts take the plain line");
 }
 
 function scratch(): string {
