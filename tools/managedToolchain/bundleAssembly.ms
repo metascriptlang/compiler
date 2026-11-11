@@ -47,7 +47,7 @@ export function linuxConfigTriples(configTexts: string[]): string[] {
 	return triples;
 }
 
-function copyTree(
+export function copyBundleTree(
 	source: string, target: string, rel: string, skipTop: string[],
 ): Result<void, string> {
 	const names = readDirNames(rel == "" ? source : join(source, rel));
@@ -71,7 +71,7 @@ function copyTree(
 		}
 		if (isDir(from)) {
 			try engineIo(ensureDir(to));
-			try copyTree(source, target, child, skipTop);
+			try copyBundleTree(source, target, child, skipTop);
 			continue;
 		}
 		if (!isFile(from)) { return Result.err("not a regular file: " + child); }
@@ -107,7 +107,7 @@ function addTargetRuntimeDirectories(
 	for (const triple of linuxConfigTriples(texts)) {
 		if (triple == engineTriple) { continue; }
 		const directory = libraries + triple;
-		try copyTree(join(partial, libraries + engineTriple), join(partial, directory), "", []);
+		try copyBundleTree(join(partial, libraries + engineTriple), join(partial, directory), "", []);
 		made.push(directory);
 	}
 	return Result.ok(made);
@@ -140,12 +140,12 @@ function stage(
 	engine: string, runtimeBundle: string, partial: string,
 	engineContract: EngineContract, runtimeContract: EngineContract,
 ): Result<AssembledBundle, string> {
-	try copyTree(engine, partial, "", CONTRACT);
+	try copyBundleTree(engine, partial, "", CONTRACT);
 	if (!isDir(join(runtimeBundle, "runtime"))) {
 		return Result.err(runtimeBundle + " has no runtime/");
 	}
 	try engineIo(ensureDir(join(partial, "runtime")));
-	try copyTree(join(runtimeBundle, "runtime"), join(partial, "runtime"), "", []);
+	try copyBundleTree(join(runtimeBundle, "runtime"), join(partial, "runtime"), "", []);
 	const host = engineContract.host;
 	const version = engineContract.version;
 	const directories = try addTargetRuntimeDirectories(partial, host,
