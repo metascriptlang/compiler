@@ -137,6 +137,36 @@ test "an Unowned read that becomes an owner, or outlives a call that may release
 	assert bodyOf(owner, "f").contains("msIncref"), bodyOf(owner, "f");
 }
 
+test "an Unowned read passed to a call that writes only slots that cannot own its type takes no count" {
+	const head = VIEWS_HEAD + "class W { t: T = new T(); }\nclass L { names: string[] = []; n: int32 = 0; w: W | null = null; }\n";
+	const unrelated = emitted(head + "function note(t: T, l: L): int32 { l.names.push(t.name); l.names = []; l.n = t.id; return l.n; }\nfunction f(h: H, r: R): int32 { const l = new L(); return h.at != null ? note(h.at, l) : 0; }\n" + VIEWS_TAIL);
+	assert !bodyOf(unrelated, "f").contains("msIncref"), bodyOf(unrelated, "f");
+	const edge = emitted(head + "function relink(t: T, h: H): int32 { h.at = null; return t.id; }\nfunction f(h: H, r: R): int32 { return h.at != null ? relink(h.at, h) : 0; }\n" + VIEWS_TAIL);
+	assert !bodyOf(edge, "f").contains("msIncref"), bodyOf(edge, "f");
+	const appended = emitted(head + "function grow(t: T, r: R): int32 { r.items.push(new T()); return t.id; }\nfunction f(h: H, r: R): int32 { return h.at != null ? grow(h.at, r) : 0; }\n" + VIEWS_TAIL);
+	assert !bodyOf(appended, "f").contains("msIncref"), bodyOf(appended, "f");
+	const through = emitted(head + "function dropW(t: T, l: L): int32 { l.w = null; return t.id; }\nfunction f(h: H, r: R): int32 { const l = new L(); return h.at != null ? dropW(h.at, l) : 0; }\n" + VIEWS_TAIL);
+	assert bodyOf(through, "f").contains("msIncref"), bodyOf(through, "f");
+}
+
+test "a conditional joining Unowned reads stays a view when nothing can release before its last use" {
+	const head = VIEWS_HEAD + "function idOf(t: T | null): int32 { return t != null ? t.id : 0; }\n";
+	const joined = emitted(head + "function f(h: H, r: R): int32 { const k = r.items.length; return idOf(k > 0 ? h.at : null) + k; }\n" + VIEWS_TAIL);
+	assert !bodyOf(joined, "f").contains("msIncref"), bodyOf(joined, "f");
+	const bound = emitted(head + "function pick(t: T | null): T | null { return t; }\nfunction f(h: H, r: R): int32 { const q = pick(r.items.length > 0 ? h.at : null); return idOf(q); }\n" + VIEWS_TAIL);
+	assert !bodyOf(bound, "f").contains("msIncref"), bodyOf(bound, "f");
+	const released = emitted(head + "function f(h: H, r: R): int32 { const p = r.items.length > 0 ? h.at : null; drop(r); return idOf(p); }\n" + VIEWS_TAIL);
+	assert bodyOf(released, "f").contains("msIncref"), bodyOf(released, "f");
+}
+
+test "a view a routine returns through an Unowned edge stays uncounted until a call can release its type" {
+	const head = VIEWS_HEAD + "class L { names: string[] = []; }\nconst log = new L();\nfunction atOf(h: H): Readonly<T> | null { return h.at; }\nfunction note(l: L, s: string): int32 { l.names.push(s); l.names = []; return 0; }\n";
+	const unrelated = emitted(head + "function f(h: H, r: R): int32 { const p = atOf(h); note(log, \"x\"); return p != null ? p.id : 0; }\n" + VIEWS_TAIL);
+	assert !bodyOf(unrelated, "f").contains("msIncref"), bodyOf(unrelated, "f");
+	const released = emitted(head + "function f(h: H, r: R): int32 { const p = atOf(h); drop(r); return p != null ? p.id : 0; }\n" + VIEWS_TAIL);
+	assert bodyOf(released, "f").contains("msIncref"), bodyOf(released, "f");
+}
+
 test "an array of T and an array of Unowned<T> never stand for each other" {
 	const head = "class N { id: int32 = 1; }\nclass H { ups: Unowned<N>[] = []; }\nconst h = new H();\n";
 	const refused = "so one array cannot stand for the other";

@@ -16,7 +16,7 @@ import { skipConvDfa } from "./alias";
 import { RcInfo, RcKind, noRcInfo } from "./classify";
 import { returnsBorrow } from "../codegen/c/types";
 import { makeNumber, makeString } from "../checker/literalNodes";
-import { isSinkTypeForParam, isStructType, classDistance, createArray, createFunction, createGenericParam, createUnion, int32Type, nullType, isReadonlyView, isSendableFunction, stringType, withoutReadonlyView } from "../checker/types";
+import { isSinkTypeForParam, isStructType, isUnownedRef, classDistance, createArray, createFunction, createGenericParam, createUnion, int32Type, nullType, isReadonlyView, isSendableFunction, stringType, withoutReadonlyView } from "../checker/types";
 import { isAssignable, sameType } from "../checker/compat";
 import { generatedRef, isRuntimeProcSym, makeAssign, makeBlock, makeCall, makeCallResolved, makeExprStmt, makeFnDecl, makeIdentResolved, makeReturn } from "../transform/util";
 import { cstringSource } from "../transform/native/cstringConvLower";
@@ -27,6 +27,7 @@ const ELEMENT_SLOT = "E";
 // holds an element's address; such a borrow reads APPEND_SLOT besides ELEMENT_SLOT.
 export const APPEND_SLOT = "+E";
 export const ANY_HEAP_SLOT = "*";
+export const UNOWNED_TARGET_SLOT = "U";
 const REF_PARAM_ROOT_SLOT = "&";
 
 enum SummaryKind {
@@ -92,6 +93,8 @@ export interface WriteSummaries {
 	slotHolders: Type[];
 	slotHolderIds: HashMap<Type, int32>;
 	freesNothingGlobals: HashSet<string>;
+	globalSlotTypes: HashMap<string, Type>;
+	ownMemo: HashMap<Type, HashMap<Type, int32>>;
 	unitClosures: HashMap<string, HashSet<string>>;
 	stack: WriteSummary[];
 	nextIndex: int32;
@@ -111,7 +114,7 @@ export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits
 		routineSummaries: new HashMap<Symbol, WriteSummary>(), closureSummaries: new HashMap<Node, WriteSummary>(), retainedParams: new HashMap<Symbol, int32>(), constructionSummaries: new HashMap<Symbol, WriteSummary>(),
 		hookSummaries: new HashMap<Type, WriteSummary>(), hookless: new HashSet<Type>(), ownerHookCache: new HashMap<Symbol, Symbol[]>(),
 		viewReturns: new HashMap<Symbol, string[]>(), viewReturnsUnknown: new HashSet<Symbol>(), viewReturnsOpen: [], viewReturnsReach: 0,
-		slotHolders: [], slotHolderIds: new HashMap<Type, int32>(), freesNothingGlobals: new HashSet<string>(), unitClosures: new HashMap<string, HashSet<string>>(), stack: [], nextIndex: 0,
+		slotHolders: [], slotHolderIds: new HashMap<Type, int32>(), freesNothingGlobals: new HashSet<string>(), globalSlotTypes: new HashMap<string, Type>(), ownMemo: new HashMap<Type, HashMap<Type, int32>>(), unitClosures: new HashMap<string, HashSet<string>>(), stack: [], nextIndex: 0,
 		contracts: new HashMap<Symbol, CallbackContract>(), cloneContracts: new HashMap<Symbol, CallbackContract>(), unitContracts: [],
 		reusedClones: new HashMap<Symbol, Symbol>(), lending: { callbacks: [], contract: null, held: null }, valueCells: false,
 		envStores: new HashMap<string, HashMap<Type, HashMap<string, Node[]>>>(), unloweredWritesAnything: false,
@@ -376,16 +379,30 @@ export function canAlias(w: WriteEffects, arg: Type | null, ret: Type | null): b
 	else w.aliasMemo.set(arg, byRet);
 	const hit = byRet.get(ret);
 	if (hit != null) return hit == 1;
-	const result = canAliasIn(arg, ret, new HashSet<Type>());
+	const result = canAliasIn(arg, ret, new HashSet<Type>(), false);
 	byRet.set(ret, result ? 1 : 0);
 	return result;
 }
 
-function canAliasIn(arg: Type | null, ret: Type | null, seen: HashSet<Type>): boolean {
+export function canOwn(w: WriteEffects, arg: Type | null, ret: Type | null): boolean {
+	if (arg == null || ret == null) return true;
+	if (arg.kind == TypeKind.Union) return arg.typeChildren.some((member: Type): boolean => member.kind != TypeKind.Null && canOwn(w, member, ret));
+	let byRet = new HashMap<Type, int32>();
+	const known = w.tables.ownMemo.get(arg);
+	if (known != null) byRet = known;
+	else w.tables.ownMemo.set(arg, byRet);
+	const hit = byRet.get(ret);
+	if (hit != null) return hit == 1;
+	const result = canAliasIn(arg, ret, new HashSet<Type>(), true);
+	byRet.set(ret, result ? 1 : 0);
+	return result;
+}
+
+function canAliasIn(arg: Type | null, ret: Type | null, seen: HashSet<Type>, owning: boolean): boolean {
 	if (arg == null || ret == null) return true;
 	if (seen.has(ret)) return false;
 	seen.add(ret);
-	if (ret.kind == TypeKind.Ptr) return false;
+	if (ret.kind == TypeKind.Ptr || (owning && isUnownedRef(ret))) return false;
 	const a = holderType(arg);
 	if (a == null) return containsPointer(arg, 0);
 	const r = holderType(ret);
@@ -395,18 +412,18 @@ function canAliasIn(arg: Type | null, ret: Type | null, seen: HashSet<Type>): bo
 		TypeKind.Struct => {
 			if (isExtendedClass(t) || t.typeFlags.has(TypeFlag.HasGenericParam)) return true;
 			for (const field of t.typeChildren) {
-				if (canAliasIn(arg, field, seen)) return true;
+				if (canAliasIn(arg, field, seen, owning)) return true;
 			}
-			return t.typeExtra != null && canAliasIn(arg, t.typeExtra, seen);
+			return t.typeExtra != null && canAliasIn(arg, t.typeExtra, seen, owning);
 		},
-		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Borrow | TypeKind.Cursor => { return canAliasIn(arg, t.typeReturn, seen); },
+		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Borrow | TypeKind.Cursor => { return canAliasIn(arg, t.typeReturn, seen, owning); },
 		TypeKind.Union | TypeKind.Tuple => {
 			for (const member of t.typeChildren) {
-				if (canAliasIn(arg, member, seen)) return true;
+				if (canAliasIn(arg, member, seen, owning)) return true;
 			}
 			return false;
 		},
-		TypeKind.GenericInstance => { return t.typeReturn == null || canAliasIn(arg, t.typeReturn, seen); },
+		TypeKind.GenericInstance => { return t.typeReturn == null || canAliasIn(arg, t.typeReturn, seen, owning); },
 		TypeKind.Function | TypeKind.GenericParam | TypeKind.Unknown | TypeKind.Inferred | TypeKind.TypeReference | TypeKind.Error => { return true; },
 		_ => { return false; },
 	};
@@ -436,6 +453,7 @@ function writeTarget(w: WriteEffects, s: WriteSummary, target: Node | null, para
 			if (sym == null) return false;
 			if (isModuleState(sym)) {
 				const slot = globalSlot(sym);
+				if (sym.symbolType != null) w.tables.globalSlotTypes.set(slot, sym.symbolType!);
 				if (freesNothing(w, sym.symbolType) && !(w.tables.valueCells && isValueStruct(sym.symbolType))) w.tables.freesNothingGlobals.add(slot);
 				return addSlot(s, slot);
 			}
@@ -1390,6 +1408,10 @@ function pathFromParams(w: WriteEffects, n: Node, params: Symbol[] | null, d: Lo
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => { return pathFromParams(w, (t.data as HiddenDerefData).expr, params, d, seen, out); },
 		NodeKind.MoveExpr => { return pathFromParams(w, (t.data as MoveExprData).moveArg, params, d, seen, out); },
 		NodeKind.CallExpr => {
+			if (readsUnownedEdge(t)) {
+				out.push(UNOWNED_TARGET_SLOT);
+				return pathFromParams(w, (t.data as CallExprData).arguments[0], params, d, seen, out);
+			}
 			const projected = loweredAccessStep(t);
 			if (projected != null) {
 				if (projected == ELEMENT_SLOT) out.push(heldSlot(w, ELEMENT_SLOT, (t.data as CallExprData).arguments[0].nodeType));
@@ -1560,7 +1582,7 @@ export function borrowedArgsToCopy(w: WriteEffects, call: Node, defs: LocalDefs 
 const UNOWNED_EDGE_STORES = ["msUnownedAssign", "msUnownedAssignRo", "msUnownedTake", "msUnownedTakeRo"];
 
 // An Unowned<T> target's owner is a location the read never names (NIM-REF AN-41), so a read through
-// the edge stays a view only where nothing can release any value, not only where its slots stay unwritten.
+// the edge stays a view only where nothing can release a value that owns a T, not only where its slots stay unwritten.
 export function readsUnownedEdge(n: Node | null): boolean {
 	return n != null && n.kind == NodeKind.CallExpr && (isRuntimeProcSym(n.resolvedSym, "msUnownedPeek") || isRuntimeProcSym(n.resolvedSym, "msUnownedPeekRo"));
 }
@@ -1576,8 +1598,8 @@ export function holdsUnownedRead(n: Node | null): boolean {
 function namesExistingOwner(w: WriteEffects, n: Node | null, held: Type | null): boolean {
 	if (n == null) return false;
 	const t = skipConvDfa(n);
-	if (t.kind == NodeKind.HiddenAddr) return canAlias(w, held, (t.data as HiddenDerefData).expr.nodeType);
-	if (!w.rcOf(t.nodeType).needsCleanup || readsUnownedEdge(t) || !canAlias(w, held, t.nodeType)) return false;
+	if (t.kind == NodeKind.HiddenAddr) return canOwn(w, held, (t.data as HiddenDerefData).expr.nodeType);
+	if (!w.rcOf(t.nodeType).needsCleanup || readsUnownedEdge(t) || !canOwn(w, held, t.nodeType)) return false;
 	return t.kind == NodeKind.Identifier || t.kind == NodeKind.MemberExpr || t.kind == NodeKind.ArrayAccess || t.kind == NodeKind.HiddenDeref
 		|| t.kind == NodeKind.MoveExpr || t.kind == NodeKind.ConditionalExpr || t.kind == NodeKind.BinaryExpr;
 }
@@ -1602,7 +1624,7 @@ function takesOwnerOrAddress(w: WriteEffects, call: Node, held: Type | null): bo
 export function releasesAnything(w: WriteEffects, site: Node, held: Type | null, defs: LocalDefs | null): boolean {
 	if (site.kind == NodeKind.BinaryExpr) {
 		const target = (site.data as BinaryExprData).left;
-		return isAssign((site.data as BinaryExprData).operator) && w.rcOf(target.nodeType).needsCleanup && canAlias(w, held, target.nodeType);
+		return isAssign((site.data as BinaryExprData).operator) && w.rcOf(target.nodeType).needsCleanup && canOwn(w, held, target.nodeType);
 	}
 	if (site.kind == NodeKind.MoveExpr) return namesExistingOwner(w, (site.data as MoveExprData).moveArg, held);
 	if (site.kind == NodeKind.VariableDecl) return namesExistingOwner(w, (site.data as VariableDeclData).initializer, held);
@@ -1610,10 +1632,10 @@ export function releasesAnything(w: WriteEffects, site: Node, held: Type | null,
 		for (const a of (site.data as NewExprData).newArguments) {
 			if (namesExistingOwner(w, a, held)) return true;
 		}
-		return partsMayWrite(w, callWriteParts(w, site, defs), [ANY_HEAP_SLOT]);
+		return partsMayRelease(w, callWriteParts(w, site, defs), held);
 	}
 	if (site.kind != NodeKind.CallExpr || readsUnownedEdge(site) || UNOWNED_EDGE_STORES.some((name: string): boolean => isRuntimeProcSym(site.resolvedSym, name))) return false;
-	return takesOwnerOrAddress(w, site, held) || partsMayWrite(w, callWriteParts(w, site, defs), [ANY_HEAP_SLOT]);
+	return takesOwnerOrAddress(w, site, held) || partsMayRelease(w, callWriteParts(w, site, defs), held);
 }
 
 function evaluationReleases(w: WriteEffects, n: Node | null, held: Type | null, defs: LocalDefs | null): boolean {
@@ -1623,6 +1645,32 @@ function evaluationReleases(w: WriteEffects, n: Node | null, held: Type | null, 
 	let hit = false;
 	forEachChild(n, (c: Node): void => { if (!hit) hit = evaluationReleases(w, c, held, defs); });
 	return hit;
+}
+
+function partsMayRelease(w: WriteEffects, parts: WriteSummary[], held: Type | null): boolean {
+	for (const writes of parts) {
+		if (writes.unknown || writes.paramCalls.length > 0) return true;
+		for (const slot of writes.slots) {
+			if (bareSlot(slot) == APPEND_SLOT) continue;
+			const value = slotValueType(w, slot);
+			if (value == null || canOwn(w, held, value)) return true;
+		}
+	}
+	return false;
+}
+
+function slotValueType(w: WriteEffects, slot: string): Type | null {
+	if (slot.startsWith("G:")) return w.tables.globalSlotTypes.get(slot) ?? null;
+	const holder = slotHolder(w, slot);
+	if (holder == null) return null;
+	const bare = bareSlot(slot);
+	if (bare == ELEMENT_SLOT) return holder.kind == TypeKind.Array ? holder.typeReturn : null;
+	if (!bare.startsWith("F:") || holder.kind != TypeKind.Struct) return null;
+	const name = bare.slice(2);
+	for (let i = 0; i < holder.typeNames.length && i < holder.typeChildren.length; i += 1) {
+		if (holder.typeNames[i] == name) return holder.typeChildren[i];
+	}
+	return null;
 }
 
 function unownedReadMayDie(w: WriteEffects, call: Node, later: Node[], held: Type | null, defs: LocalDefs | null): boolean {
@@ -1784,7 +1832,10 @@ export function collectsHeld(w: WriteEffects): boolean {
 export function noteHeldAcrossCallbacks(w: WriteEffects, slots: string[]): void {
 	const held = w.tables.lending.held;
 	if (held == null) return;
-	for (const slot of slots) { if (!held.includes(slot)) held.push(slot); }
+	for (const each of slots) {
+		const slot = each == UNOWNED_TARGET_SLOT ? ANY_HEAP_SLOT : each;
+		if (!held.includes(slot)) held.push(slot);
+	}
 }
 
 export function openContract(w: WriteEffects, fn: Symbol, params: int32[], clone: Symbol, held: string[], forwards: Symbol[]): void {

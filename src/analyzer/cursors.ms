@@ -36,7 +36,7 @@ import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/checkPass";
 import { CK_ROOT_OF, Partitions, createPartitions, variableId, registerVariable as registerPartitionVariable, ufRoot, ufConnect, potentialMutation, dangerousMutation, containsPointer } from "../checker/varPartitions";
 import { calledRoutineType, isImmutableModuleConst, isViewCall, receiverOf, routineBody, viewCallSources } from "../checker/effects";
-import { ANY_HEAP_SLOT, APPEND_SLOT, addressSlots, callerDefsOf, callsPlainRoutine, canAlias, collectsHeld, createRoutineDecls, createWriteSummaries, holdsUnownedRead, isAssign, LocalDefs, mayWrite, noteHeldAcrossCallbacks, reachesModuleState, readsUnownedEdge, releasesAnything, retainsArg, runsCallbacks, runsHooks, stepSlot, valueFieldSlots, viewReturnSlots, WriteEffects } from "./writeEffects";
+import { ANY_HEAP_SLOT, APPEND_SLOT, UNOWNED_TARGET_SLOT, addressSlots, callerDefsOf, callsPlainRoutine, canAlias, canOwn, collectsHeld, createRoutineDecls, createWriteSummaries, holdsUnownedRead, isAssign, LocalDefs, mayWrite, noteHeldAcrossCallbacks, reachesModuleState, readsUnownedEdge, releasesAnything, retainsArg, runsCallbacks, runsHooks, stepSlot, valueFieldSlots, viewReturnSlots, WriteEffects } from "./writeEffects";
 import { makeCtx } from "../transform/testUtil";
 import { RcInfo, classifyType } from "./classify";
 import { isAwaitable, isReadonlyView, withoutReadonlyView, ownedEdgeOf, isSinkTypeForParam } from "../checker/types";
@@ -176,7 +176,7 @@ function sourceSlots(w: WriteEffects, p: Partitions, node: Node, out: string[]):
 		NodeKind.NewExpr => { for (const a of (node.data as NewExprData).newArguments) { sourceSlots(w, p, a, out); } },
 		NodeKind.CallExpr => {
 			if (readsUnownedEdge(node)) {
-				out.push(ANY_HEAP_SLOT);
+				out.push(UNOWNED_TARGET_SLOT);
 				sourceSlots(w, p, (node.data as CallExprData).arguments[0], out);
 			} else if (isViewCall(node)) {
 				const inner = viewReturnSlots(w, node);
@@ -338,7 +338,7 @@ function releasedWhileAlive(w: WriteEffects, p: Partitions, vid: int32, defs: Lo
 	}
 	for (let k = 0; k < bindSites.length; k += 1) {
 		if (bindTimes[k] < v.aliveStart || bindTimes[k] > v.aliveEnd) continue;
-		const releases = releasesAnything(w, bindSites[k], held, defs) || (rebound && bindsOwnerThatCanHold(bindSites[k], held));
+		const releases = releasesAnything(w, bindSites[k], held, defs) || (rebound && reassignedAfter(p, vid, bindTimes[k]) && bindsOwnerThatCanHold(bindSites[k], v.sym, held));
 		if (releases && !bindsLentValue(p, vid, bindSites[k])) return true;
 	}
 	return false;
@@ -346,11 +346,19 @@ function releasedWhileAlive(w: WriteEffects, p: Partitions, vid: int32, defs: Lo
 
 // A view rebound after its declaration may point at a target owned only by a local bound later,
 // which its block's end releases while the view still reads it.
-function bindsOwnerThatCanHold(site: Node, held: Type | null): boolean {
-	if (site.kind != NodeKind.VariableDecl || site.resolvedSym == null) return false;
+function bindsOwnerThatCanHold(site: Node, view: Symbol | null, held: Type | null): boolean {
+	if (site.kind != NodeKind.VariableDecl || site.resolvedSym == null || site.resolvedSym === view) return false;
 	const init = (site.data as VariableDeclData).initializer;
 	if (init != null && readsUnownedEdge(skipConvDfa(init))) return false;
-	return analysis!.rcOf(site.resolvedSym.symbolType).needsCleanup && canAlias(analysis!, held, site.resolvedSym.symbolType);
+	return analysis!.rcOf(site.resolvedSym.symbolType).needsCleanup && canOwn(analysis!, held, site.resolvedSym.symbolType);
+}
+
+function reassignedAfter(p: Partitions, vid: int32, time: int32): boolean {
+	for (let k = 0; k < writeSites.length; k += 1) {
+		const site = writeSites[k];
+		if (writeTimes[k] > time && site.kind == NodeKind.BinaryExpr && isAssign((site.data as BinaryExprData).operator) && variableId(p, getIdentSym((site.data as BinaryExprData).left)) == vid) return true;
+	}
+	return false;
 }
 
 function assignsUnownedView(p: Partitions, vid: int32, site: Node): boolean {
@@ -960,7 +968,7 @@ function deps(w: WriteEffects, p: Partitions, dest: Symbol | null, src: Node): v
 	destMightOwn(w, p, destId, src);
 	sourceSlots(w, p, src, borrowedSlots[destId]);
 	const viewsThroughEdges = containsPointer(dest!.symbolType, 0);
-	if (viewsThroughEdges && holdsUnownedRead(src)) unownedViews[destId] = true;
+	if (viewsThroughEdges && (holdsUnownedRead(src) || borrowedSlots[destId].includes(UNOWNED_TARGET_SLOT))) unownedViews[destId] = true;
 
 	// Source checks: prevent cursor when borrowing from unsafe sources
 	const srcRoots: Symbol[] = [];
