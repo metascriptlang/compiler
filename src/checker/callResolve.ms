@@ -3131,7 +3131,7 @@ function relateArgs(ctx: CheckerContext, node: Node, calleeType: Type, args: Nod
 			const formalAwaitsBinding = pi < args.length && args[pi] != null
 				&& hasGenericParams(paramType);
 			let addressAtC = false;
-			const unionFit = formalAwaitsBinding ? null : fitUnionIntoUnion(args[pi], argTypes[pi], paramType);
+			const unionFit = formalAwaitsBinding ? null : fitUnionIntoUnion(args[pi], peelTransparentInstance(argTypes[pi]), peelTransparentInstance(paramType));
 			if (unionFit != null) {
 				args[pi] = unionFit;
 				argTypes[pi] = paramType;
@@ -3485,7 +3485,7 @@ export function inferGenericReturn(ctx: CheckerContext, fnType: Type, argTypes: 
 			if (formalValue != null && instantiatedUnionBehind(formalValue).kind == TypeKind.Union) {
 				const uw = widenVariantToUnion(arg, formalValue, arg.nodeType, ctx);
 				if (uw != null as unknown as Node) cd.arguments[ai] = uw;
-				const carried = cd.arguments[ai].nodeType;
+				const carried = cd.arguments[ai].nodeType == null ? null : peelTransparentInstance(cd.arguments[ai].nodeType!);
 				if (carried != null && !hasGenericParams(formalValue) && convertsBetweenUnions(carried, formalValue) && sameType(carried, formalValue)) {
 					cd.arguments[ai] = convertUnionToUnion(cd.arguments[ai], carried, formalValue);
 				}
