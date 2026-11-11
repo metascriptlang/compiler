@@ -38,6 +38,7 @@ typedef int64_t msRc;
 #define MS_RC_SHIFT          27
 #define MS_UNOWNED_INCREMENT ((msRc)16)
 #define MS_UNOWNED_MASK      ((msRc)0x7fffff << 4)
+#define MS_UNOWNED_EDGE_LIMIT (MS_UNOWNED_MASK - MS_UNOWNED_INCREMENT)  /* the last count is the destroy's own */
 #define MS_RC_INCREMENT      ((msRc)1 << MS_RC_SHIFT)
 #define MS_RC_STRONG_MASK    (~(msRc)MS_RC_MASK & ~MS_UNOWNED_MASK)
 /* An immortal count sits halfway between the floor and the sign bit ORC's trial deletion uses, so a
@@ -154,19 +155,25 @@ void msLedgerDestroy(void* p, const msTypeInfo* type);
 #define MS_LEDGER_ALLOC(p, t)      msLedgerAlloc((p), (t))
 #define MS_DESTROY_DISPATCH(t, p)  do { \
 	msLedgerDestroy((p), (t)); \
+	msDestroyBegins(p); \
 	if ((t) != NULL && (t)->destroyFn != NULL) (t)->destroyFn(p); \
 } while (0)
 #define MS_RELEASE_DISPATCH(t, p)  do { \
 	msLedgerDestroy((p), (t)); \
+	msDestroyBegins(p); \
 	(t)->releaseFn(p); \
 } while (0)
 #else
 #define MS_LEDGER_COUNT(counter)   ((void)0)
 #define MS_LEDGER_ALLOC(p, t)      ((void)0)
 #define MS_DESTROY_DISPATCH(t, p)  do { \
+	msDestroyBegins(p); \
 	if ((t) != NULL && (t)->destroyFn != NULL) (t)->destroyFn(p); \
 } while (0)
-#define MS_RELEASE_DISPATCH(t, p)  ((t)->releaseFn(p))
+#define MS_RELEASE_DISPATCH(t, p)  do { \
+	msDestroyBegins(p); \
+	(t)->releaseFn(p); \
+} while (0)
 #endif
 
 /* ===== Small-Object Free-List Cache ===== */
@@ -462,7 +469,7 @@ static inline void msUnownedIncref(void* p) {
 	if (p != NULL) {
 		MS_PLAIN_ON_IMMORTAL_CHECK(p, "msUnownedIncref");
 		msRefHeader* h = msHeader(p);
-		if ((h->rc & MS_UNOWNED_MASK) == MS_UNOWNED_MASK) msRaiseUnownedOverflow(p);
+		if ((h->rc & MS_UNOWNED_MASK) == MS_UNOWNED_EDGE_LIMIT) msRaiseUnownedOverflow(p);
 		h->rc += MS_UNOWNED_INCREMENT;
 	}
 }
@@ -511,15 +518,33 @@ static inline void msUnownedKeepHusk(msRefHeader* h, void* p) {
 	h->rc = (h->rc & ~(msRc)MS_COLOR_MASK) | MS_COL_DEAD;
 }
 
+/* The target is dead to its Unowned<T> edges from here, and holds one edge count of its own until its
+ * destroy ends: without it the last edge released inside the destroy would free the memory under it. */
+static inline void msDestroyBegins(void* p) {
+	msRefHeader* h = msHeader(p);
+	if (__builtin_expect((h->rc & MS_UNOWNED_MASK) != 0, 0)) {
+		h->rc = ((h->rc & ~(msRc)MS_COLOR_MASK) | MS_COL_DEAD) + MS_UNOWNED_INCREMENT;
+	}
+}
+
+static inline bool msDestroyLeavesHusk(msRefHeader* h, void* p) {
+	if (__builtin_expect((h->rc & MS_UNOWNED_MASK) == 0, 1)) return false;
+	if ((h->rc & MS_COLOR_MASK) == MS_COL_DEAD) {
+		h->rc -= MS_UNOWNED_INCREMENT;
+		if ((h->rc & MS_UNOWNED_MASK) == 0) return false;
+		if (h->rootIdx >= 0) msUnregisterCycle(p);
+		return true;
+	}
+	msUnownedKeepHusk(h, p);
+	return true;
+}
+
 void msDestroyAndDisposeDyn(void* p);
 
 static inline void msDestroyAndDispose(void* p) {
 	if (p != NULL) {
 		msRefHeader* h = msHeader(p);
-		if (__builtin_expect((h->rc & MS_UNOWNED_MASK) != 0, 0)) {
-			msUnownedKeepHusk(h, p);
-			return;
-		}
+		if (msDestroyLeavesHusk(h, p)) return;
 		MS_DRC_STAT_ADD(MS_DS_FREE, 1);
 		/* Freeing a node that is still a registered cycle-root (rootIdx >= 0) must
 		 * scrub it from msRoots, else msOrcCollect later walks a dangling root
@@ -532,10 +557,7 @@ static inline void msDestroyAndDispose(void* p) {
 
 static inline void msDropDispose(msSlab* slab, void* p) {
 	msRefHeader* h = msHeader(p);
-	if (__builtin_expect((h->rc & MS_UNOWNED_MASK) != 0, 0)) {
-		msUnownedKeepHusk(h, p);
-		return;
-	}
+	if (msDestroyLeavesHusk(h, p)) return;
 	MS_DRC_STAT_ADD(MS_DS_FREE, 1);
 	if (h->rootIdx >= 0) msUnregisterCycle(p);
 	MS_HCR_COUNT(h->type, -1);
