@@ -149,6 +149,15 @@ test "an Unowned read passed to a call that writes only slots that cannot own it
 	assert bodyOf(through, "f").contains("msIncref"), bodyOf(through, "f");
 }
 
+test "an Unowned read is counted across a call that empties a slot typed by an interface or a record its class fits" {
+	const head = VIEWS_HEAD + "interface Named { id: int32; }\nclass G { slot: Named | null = null; rec: { id: int32 } | null = null; }\nconst g = new G();\n";
+	const tail = "const t = new T();\nconst h = new H();\nh.at = t;\nconst r = new R();\ng.slot = t;\ng.rec = t;\nconsole.log(f(h, r));\n";
+	const iface = emitted(head + "function empty(): int32 { g.slot = null; return 0; }\nfunction f(h: H, r: R): int32 { const p = h.at; empty(); return p != null ? p.id : 0; }\n" + tail);
+	assert bodyOf(iface, "f").contains("msIncref"), bodyOf(iface, "f");
+	const record = emitted(head + "function empty(): int32 { g.rec = null; return 0; }\nfunction f(h: H, r: R): int32 { const p = h.at; empty(); return p != null ? p.id : 0; }\n" + tail);
+	assert bodyOf(record, "f").contains("msIncref"), bodyOf(record, "f");
+}
+
 test "a conditional joining Unowned reads stays a view when nothing can release before its last use" {
 	const head = VIEWS_HEAD + "function idOf(t: T | null): int32 { return t != null ? t.id : 0; }\n";
 	const joined = emitted(head + "function f(h: H, r: R): int32 { const k = r.items.length; return idOf(k > 0 ? h.at : null) + k; }\n" + VIEWS_TAIL);

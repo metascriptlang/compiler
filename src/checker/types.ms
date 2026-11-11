@@ -4217,7 +4217,7 @@ function sameDeclaration(a: Type, b: Type): boolean {
 	return x != null && y != null && x.modulePath == y.modulePath && x.name == y.name && x.disamb == y.disamb;
 }
 
-function opensToHeld(slot: Type): boolean {
+export function opensToHeld(slot: Type): boolean {
 	return slot.kind == TypeKind.Struct && (slot.sym == null || slot.sym.symbolKind == SymbolKind.Interface);
 }
 

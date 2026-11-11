@@ -16,7 +16,7 @@ import { skipConvDfa } from "./alias";
 import { RcInfo, RcKind, noRcInfo } from "./classify";
 import { returnsBorrow } from "../codegen/c/types";
 import { makeNumber, makeString } from "../checker/literalNodes";
-import { isSinkTypeForParam, isStructType, isUnownedRef, classDistance, createArray, createFunction, createGenericParam, createUnion, int32Type, nullType, isReadonlyView, isSendableFunction, stringType, withoutReadonlyView } from "../checker/types";
+import { isSinkTypeForParam, isStructType, isUnownedRef, heldBeyond, opensToHeld, classDistance, createArray, createFunction, createGenericParam, createUnion, int32Type, nullType, isReadonlyView, isSendableFunction, stringType, withoutReadonlyView } from "../checker/types";
 import { isAssignable, sameType } from "../checker/compat";
 import { generatedRef, isRuntimeProcSym, makeAssign, makeBlock, makeCall, makeCallResolved, makeExprStmt, makeFnDecl, makeIdentResolved, makeReturn } from "../transform/util";
 import { cstringSource } from "../transform/native/cstringConvLower";
@@ -95,6 +95,7 @@ export interface WriteSummaries {
 	freesNothingGlobals: HashSet<string>;
 	globalSlotTypes: HashMap<string, Type>;
 	ownMemo: HashMap<Type, HashMap<Type, int32>>;
+	heldMemo: HashMap<Type, Type[]>;
 	unitClosures: HashMap<string, HashSet<string>>;
 	stack: WriteSummary[];
 	nextIndex: int32;
@@ -114,7 +115,7 @@ export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits
 		routineSummaries: new HashMap<Symbol, WriteSummary>(), closureSummaries: new HashMap<Node, WriteSummary>(), retainedParams: new HashMap<Symbol, int32>(), constructionSummaries: new HashMap<Symbol, WriteSummary>(),
 		hookSummaries: new HashMap<Type, WriteSummary>(), hookless: new HashSet<Type>(), ownerHookCache: new HashMap<Symbol, Symbol[]>(),
 		viewReturns: new HashMap<Symbol, string[]>(), viewReturnsUnknown: new HashSet<Symbol>(), viewReturnsOpen: [], viewReturnsReach: 0,
-		slotHolders: [], slotHolderIds: new HashMap<Type, int32>(), freesNothingGlobals: new HashSet<string>(), globalSlotTypes: new HashMap<string, Type>(), ownMemo: new HashMap<Type, HashMap<Type, int32>>(), unitClosures: new HashMap<string, HashSet<string>>(), stack: [], nextIndex: 0,
+		slotHolders: [], slotHolderIds: new HashMap<Type, int32>(), freesNothingGlobals: new HashSet<string>(), globalSlotTypes: new HashMap<string, Type>(), ownMemo: new HashMap<Type, HashMap<Type, int32>>(), heldMemo: new HashMap<Type, Type[]>(), unitClosures: new HashMap<string, HashSet<string>>(), stack: [], nextIndex: 0,
 		contracts: new HashMap<Symbol, CallbackContract>(), cloneContracts: new HashMap<Symbol, CallbackContract>(), unitContracts: [],
 		reusedClones: new HashMap<Symbol, Symbol>(), lending: { callbacks: [], contract: null, held: null }, valueCells: false,
 		envStores: new HashMap<string, HashMap<Type, HashMap<string, Node[]>>>(), unloweredWritesAnything: false,
@@ -320,23 +321,52 @@ function slotHolder(w: WriteEffects, slot: string): Type | null {
 	return at < 0 ? null : w.tables.slotHolders[parseInt(slot.slice(at + 1)) as int32];
 }
 
-function mayBePartOf(a: Type | null, b: Type | null, depth: int32): boolean {
+function mayBePartOf(w: WriteEffects, a: Type | null, b: Type | null, depth: int32): boolean {
 	if (a == null || b == null || a === b || depth > 8) return true;
-	if (a.kind == TypeKind.Array && b.kind == TypeKind.Array) return elementsMayAlias(a.typeReturn, b.typeReturn, depth + 1);
+	if (a.kind == TypeKind.Array && b.kind == TypeKind.Array) return elementsMayAlias(w, a.typeReturn, b.typeReturn, depth + 1);
 	if (a.kind == TypeKind.Struct && b.kind == TypeKind.Struct) {
 		if (isClassType(a) && isClassType(b)) return a.sym === b.sym || sameType(a, b) || classDistance(a, b) >= 0 || classDistance(b, a) >= 0;
-		return mayHoldEither(a, b);
+		return mayHoldEither(w, a, b);
 	}
 	return false;
 }
 
 // A structural holder can be an object of the other type exactly when one is assignable to the
 // other; a class that is extended may hide a subclass that is, and an open type may be anything.
-// A value struct is stored inline, so a place of one is a place of the other only when the types are the same.
-function mayHoldEither(a: Type, b: Type): boolean {
+// Two declared types share a place when they are the same type or one was given to a slot the other reaches.
+function mayHoldEither(w: WriteEffects, a: Type, b: Type): boolean {
 	if (isExtendedClass(a) || isExtendedClass(b) || a.typeFlags.has(TypeFlag.HasGenericParam) || b.typeFlags.has(TypeFlag.HasGenericParam)) return true;
+	if (sharesHeld(w, a, b)) return true;
 	if (isStructType(a) && isStructType(b)) return sameType(a, b);
 	return isAssignable(a, b) || isAssignable(b, a);
+}
+
+function heldClosure(w: WriteEffects, t: Type): Type[] {
+	const known = w.tables.heldMemo.get(t);
+	if (known != null) return known;
+	const out: Type[] = [t];
+	for (let i = 0; i < out.length; i += 1) {
+		for (const held of heldBeyond(out[i])) {
+			if (!out.includes(held)) out.push(held);
+		}
+	}
+	w.tables.heldMemo.set(t, out);
+	return out;
+}
+
+function sharesHeld(w: WriteEffects, a: Type, b: Type): boolean {
+	if (!opensToHeld(a) && !opensToHeld(b)) return false;
+	const givenToA = heldClosure(w, a);
+	const givenToB = heldClosure(w, b);
+	if (givenToA.length == 1 && givenToB.length == 1) return false;
+	for (const x of givenToA) {
+		for (const y of givenToB) {
+			if (x === a && y === b) continue;
+			if (x === y || sameType(x, y)) return true;
+			if (isClassType(x) && isClassType(y) && (classDistance(x, y) >= 0 || classDistance(y, x) >= 0)) return true;
+		}
+	}
+	return false;
 }
 
 function isExtendedClass(t: Type): boolean {
@@ -347,21 +377,21 @@ function isClassType(t: Type): boolean {
 	return t.sym != null && t.sym.symbolKind == SymbolKind.Class;
 }
 
-function elementsMayAlias(a: Type | null, b: Type | null, depth: int32): boolean {
+function elementsMayAlias(w: WriteEffects, a: Type | null, b: Type | null, depth: int32): boolean {
 	if (a == null || b == null || a === b || depth > 8) return true;
-	if (a.kind == TypeKind.Cursor || b.kind == TypeKind.Cursor) return a.kind == b.kind && elementsMayAlias(a.typeReturn, b.typeReturn, depth + 1);
+	if (a.kind == TypeKind.Cursor || b.kind == TypeKind.Cursor) return a.kind == b.kind && elementsMayAlias(w, a.typeReturn, b.typeReturn, depth + 1);
 	if (a.kind == TypeKind.Union || b.kind == TypeKind.Union) {
 		const union = a.kind == TypeKind.Union ? a : b;
 		const other = a.kind == TypeKind.Union ? b : a;
 		if (union.typeChildren.length == 0) return true;
 		for (const member of union.typeChildren) {
-			if (member == null || elementsMayAlias(member, other, depth + 1)) return true;
+			if (member == null || elementsMayAlias(w, member, other, depth + 1)) return true;
 		}
 		return false;
 	}
 	const ha = holderType(a);
 	const hb = holderType(b);
-	if (ha != null && hb != null) return mayBePartOf(ha, hb, depth);
+	if (ha != null && hb != null) return mayBePartOf(w, ha, hb, depth);
 	if (ha != null || hb != null) return isOpenType(ha != null ? b : a);
 	return isOpenType(a) || isOpenType(b) || sameType(a, b);
 }
@@ -379,7 +409,7 @@ export function canAlias(w: WriteEffects, arg: Type | null, ret: Type | null): b
 	else w.aliasMemo.set(arg, byRet);
 	const hit = byRet.get(ret);
 	if (hit != null) return hit == 1;
-	const result = canAliasIn(arg, ret, new HashSet<Type>(), false);
+	const result = canAliasIn(w, arg, ret, new HashSet<Type>(), false);
 	byRet.set(ret, result ? 1 : 0);
 	return result;
 }
@@ -393,12 +423,12 @@ export function canOwn(w: WriteEffects, arg: Type | null, ret: Type | null): boo
 	else w.tables.ownMemo.set(arg, byRet);
 	const hit = byRet.get(ret);
 	if (hit != null) return hit == 1;
-	const result = canAliasIn(arg, ret, new HashSet<Type>(), true);
+	const result = canAliasIn(w, arg, ret, new HashSet<Type>(), true);
 	byRet.set(ret, result ? 1 : 0);
 	return result;
 }
 
-function canAliasIn(arg: Type | null, ret: Type | null, seen: HashSet<Type>, owning: boolean): boolean {
+function canAliasIn(w: WriteEffects, arg: Type | null, ret: Type | null, seen: HashSet<Type>, owning: boolean): boolean {
 	if (arg == null || ret == null) return true;
 	if (seen.has(ret)) return false;
 	seen.add(ret);
@@ -406,24 +436,24 @@ function canAliasIn(arg: Type | null, ret: Type | null, seen: HashSet<Type>, own
 	const a = holderType(arg);
 	if (a == null) return containsPointer(arg, 0);
 	const r = holderType(ret);
-	if (r != null && mayBePartOf(a, r, 0)) return true;
+	if (r != null && mayBePartOf(w, a, r, 0)) return true;
 	const t = r ?? ret;
 	match (t.kind) {
 		TypeKind.Struct => {
 			if (isExtendedClass(t) || t.typeFlags.has(TypeFlag.HasGenericParam)) return true;
 			for (const field of t.typeChildren) {
-				if (canAliasIn(arg, field, seen, owning)) return true;
+				if (canAliasIn(w, arg, field, seen, owning)) return true;
 			}
-			return t.typeExtra != null && canAliasIn(arg, t.typeExtra, seen, owning);
+			return t.typeExtra != null && canAliasIn(w, arg, t.typeExtra, seen, owning);
 		},
-		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Borrow | TypeKind.Cursor => { return canAliasIn(arg, t.typeReturn, seen, owning); },
+		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Borrow | TypeKind.Cursor => { return canAliasIn(w, arg, t.typeReturn, seen, owning); },
 		TypeKind.Union | TypeKind.Tuple => {
 			for (const member of t.typeChildren) {
-				if (canAliasIn(arg, member, seen, owning)) return true;
+				if (canAliasIn(w, arg, member, seen, owning)) return true;
 			}
 			return false;
 		},
-		TypeKind.GenericInstance => { return t.typeReturn == null || canAliasIn(arg, t.typeReturn, seen, owning); },
+		TypeKind.GenericInstance => { return t.typeReturn == null || canAliasIn(w, arg, t.typeReturn, seen, owning); },
 		TypeKind.Function | TypeKind.GenericParam | TypeKind.Unknown | TypeKind.Inferred | TypeKind.TypeReference | TypeKind.Error => { return true; },
 		_ => { return false; },
 	};
@@ -433,7 +463,7 @@ function slotMayHit(w: WriteEffects, write: string, read: string): boolean {
 	if (bareSlot(write) != bareSlot(read)) return false;
 	const writtenHolder = slotHolder(w, write);
 	const readHolder = slotHolder(w, read);
-	return writtenHolder == null || readHolder == null || mayBePartOf(writtenHolder, readHolder, 0);
+	return writtenHolder == null || readHolder == null || mayBePartOf(w, writtenHolder, readHolder, 0);
 }
 
 function paramIndex(params: Symbol[] | null, sym: Symbol): int32 {
