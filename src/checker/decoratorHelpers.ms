@@ -14,14 +14,13 @@ export interface DecoratorInfo {
 	borrow: boolean;
 	compileTime: boolean;
 	noInline: boolean;
-	acyclic: boolean;
 	iteratorHelper: boolean;
 	jsHost: boolean;
 }
 
 const passThroughDirectives: string[] = [
 	"emit", "include", "compile", "link", "passC", "passL", "import",
-	"comptime", "builtin", "exportName", "beforeReload", "afterReload", "inline", "noinline", "computedGoto", "acyclic", "iteratorHelper", "wasm", "jsHost",
+	"comptime", "builtin", "exportName", "beforeReload", "afterReload", "inline", "noinline", "computedGoto", "iteratorHelper", "wasm", "jsHost",
 ];
 export const intrinsicBuiltins: BuiltinKind[] = [BuiltinKind.nonisolated, BuiltinKind.compilerFunc, BuiltinKind.throws, BuiltinKind.delegate];
 
@@ -210,7 +209,6 @@ export function extractDecoratorInfo(ctx: CheckerContext, node: Node): Decorator
 	let borrows = false;
 	let atCompileTime = false;
 	let keptOutOfLine = false;
-	let prunesCycles = false;
 	let closesSource = false;
 	let hostOnJs = false;
 	for (let i = 0; i < dd.decorators.length; i += 1) {
@@ -223,7 +221,6 @@ export function extractDecoratorInfo(ctx: CheckerContext, node: Node): Decorator
 		if (tag == BuiltinKind.delegate) borrows = true;
 		if (name == "comptime") atCompileTime = true;
 		if (name == "noinline") keptOutOfLine = true;
-		if (name == "acyclic") prunesCycles = true;
 		if (name == "iteratorHelper") closesSource = true;
 		if (name == "jsHost") hostOnJs = true;
 	}
@@ -247,7 +244,6 @@ export function extractDecoratorInfo(ctx: CheckerContext, node: Node): Decorator
 		borrow: borrows,
 		compileTime: atCompileTime,
 		noInline: keptOutOfLine,
-		acyclic: prunesCycles,
 		jsHost: hostOnJs,
 		iteratorHelper: closesSource,
 	};
