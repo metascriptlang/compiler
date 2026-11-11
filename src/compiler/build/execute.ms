@@ -436,11 +436,13 @@ function settle(j: Job): string {
 		j.abandon();
 		return `${label(j.node)}: ${j.shown} peaked at ${bytes(peak)}, above its declared maxRss of ${bytes(j.node.maxRss)}`;
 	}
-	if (code != Math.max(j.expectExit, 0)) {
+	const signal = status.ok ? status.value.signal : 0;
+	if (signal != 0 || code != Math.max(j.expectExit, 0)) {
 		if (j.out != "") console.log(j.out.trimEnd());
 		if (j.err != "") console.log(j.err.trimEnd());
 		j.abandon();
-		return `${label(j.node)}: ${j.shown} exited with ${code}${j.expectExit >= 0 ? `, expected ${j.expectExit}` : ""}`;
+		const how = signal != 0 ? `was killed by signal ${signal}` : `exited with ${code}`;
+		return `${label(j.node)}: ${j.shown} ${how}${j.expectExit >= 0 ? `, expected ${j.expectExit}` : ""}`;
 	}
 	try {
 		j.finish(j);
