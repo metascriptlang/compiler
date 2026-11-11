@@ -449,11 +449,19 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type | 
 	const recordsWereOff = ctx.symRecordsOff;
 	ctx.symRecordsOff = node.flags.has(NodeFlag.FromTemplate);
 	checkExprInner(ctx, node, slotType != null ? withoutUnowned(slotType) : slotType);
+	if (node.nodeType != null && joinsValues(node)) node.nodeType = withoutUnowned(node.nodeType);
 	ctx.symRecordsOff = recordsWereOff;
 	viewThroughReadonlyBase(node);
 	node.flags = node.flags.incl(NodeFlag.Sem);
 	derefBorrowResult(node);
 	checkOverloadResult(ctx, node);
+}
+
+function joinsValues(node: Node): boolean {
+	if (node.kind == NodeKind.ConditionalExpr) return true;
+	if (node.kind != NodeKind.BinaryExpr) return false;
+	const op = (node.data as BinaryExprData).operator;
+	return op == "??" || op == "||" || op == "&&";
 }
 
 function checkOverloadResult(ctx: CheckerContext, node: Node): void {
