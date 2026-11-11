@@ -162,21 +162,24 @@ static void splitOfDiscardedChunk(void) {
     msHeapFree(large);
 }
 
-enum { PAIR_TRIES = 16 };
+/* Two used chunks of exactly the sizes a take would give, side by side between two used
+ * chunks, split by hand from one allocation: which free chunk a take picks, and what lies on
+ * either side of it, depend on what earlier phases left free. */
 static int adjacentPair(size_t leftSize, size_t rightSize, unsigned char** left, unsigned char** right) {
-    unsigned char* lefts[PAIR_TRIES];
-    unsigned char* rights[PAIR_TRIES];
-    int pair = -1;
-    for (int i = 0; i < PAIR_TRIES && pair < 0; ++i) {
-        lefts[i] = msHeapCalloc(1, leftSize);
-        rights[i] = msHeapCalloc(1, rightSize);
-        msHeapChunk* l = msHeapPage(lefts[i]);
-        if ((uintptr_t)msHeapPage(rights[i]) == (uintptr_t)l + l->size) pair = i;
-    }
-    for (int i = 0; i < pair; ++i) { msHeapFree(lefts[i]); msHeapFree(rights[i]); }
-    if (pair < 0) return 0;
-    *left = lefts[pair];
-    *right = rights[pair];
+    unsigned fl, sl;
+    size_t leftBytes = msHeapSearchMapping(msHeapRound(leftSize + sizeof(msHeapBig), MS_HEAP_PAGE_SIZE), &fl, &sl);
+    size_t rightBytes = msHeapSearchMapping(msHeapRound(rightSize + sizeof(msHeapBig), MS_HEAP_PAGE_SIZE), &fl, &sl);
+    unsigned char* all = msHeapCalloc(1, 2 * MS_HEAP_PAGE_SIZE + leftBytes + rightBytes - sizeof(msHeapBig));
+    msHeapBig* l = msHeapSplit(region(), (msHeapBig*)msHeapPage(all), MS_HEAP_PAGE_SIZE);
+    msHeapBig* r = msHeapSplit(region(), l, leftBytes);
+    msHeapBig* behind = msHeapSplit(region(), r, rightBytes);
+    l->base.prevSize |= 1;
+    r->base.prevSize |= 1;
+    behind->base.prevSize |= 1;
+    memset(l->data, 0, leftSize);
+    memset(r->data, 0, rightSize);
+    *left = l->data;
+    *right = r->data;
     return 1;
 }
 
@@ -347,14 +350,34 @@ static void joinedChunkKeepsTheOlderAge(void) {
     CHECK(discardedBytes - before >= 2 * MIB - MS_HEAP_PAGE_SIZE);
 }
 
-static void youngerChunkWaitsItsOwnAge(void) {
-    phase = "a chunk freed later stays when an older one goes back";
+static void laterChunkJoinsTheOlderOneOnItsLeft(void) {
+    phase = "a chunk freed to the right of an older free one of its size goes back with it";
     unsigned char* left;
     unsigned char* right;
     CHECK(adjacentPair(MIB, MIB, &left, &right));
-    msHeapBig* younger = (msHeapBig*)msHeapPage(right);
+    msHeapChunk* joined = msHeapPage(left);
     msHeapReturnIdle();
     msHeapFree(left);
+    probeNowMs += 5000;
+    msHeapFree(right);
+    CHECK(joined->size >= 2 * MIB && !msHeapContains(region(), (uintptr_t)msHeapPage(right)));
+    probeNowMs += AGE_MS - 5000;
+    size_t before = discardedBytes;
+    msHeapReturnUnused();
+    CHECK(discardedBytes - before >= 2 * MIB - MS_HEAP_PAGE_SIZE && msHeapIdleWaitMs(-1) == -1);
+}
+
+static void youngerChunkWaitsItsOwnAge(void) {
+    phase = "a chunk freed later stays when an older one that it does not touch goes back";
+    unsigned char* keptLeft;
+    unsigned char* older;
+    unsigned char* keptRight;
+    unsigned char* right;
+    CHECK(adjacentPair(MIB, MIB, &keptLeft, &older));
+    CHECK(adjacentPair(MIB, MIB, &keptRight, &right));
+    msHeapBig* younger = (msHeapBig*)msHeapPage(right);
+    msHeapReturnIdle();
+    msHeapFree(older);
     probeNowMs += 5000;
     msHeapFree(right);
     probeNowMs += AGE_MS - 5000;
@@ -366,13 +389,20 @@ static void youngerChunkWaitsItsOwnAge(void) {
     CHECK(discardedBytes - before >= 2 * MIB - 2 * MS_HEAP_PAGE_SIZE && msHeapIdleWaitMs(-1) == -1);
 }
 
-/* Takes the front of a free chunk as msHeapGetBig does, which forgets the size of what lies to its left. */
+/* Takes the front of a free chunk as msHeapGetBig does. */
 static msHeapBig* takeFront(msHeapBig* chunk, size_t size) {
     msHeapRegion* a = region();
     msHeapRemoveBig(a, chunk);
     msHeapInsertUnused(a, msHeapSplit(a, chunk, size), *msHeapUnusedSince(chunk));
-    chunk->base.prevSize = 1;
+    chunk->base.prevSize |= 1;
     return chunk;
+}
+
+/* Frees a chunk without joining it, as the size cap of a big chunk leaves two free neighbours. */
+static void freeUnjoined(msHeapBig* chunk) {
+    chunk->base.prevSize &= ~(size_t)1;
+    chunk->zeroed = 0;
+    msHeapInsertUnused(region(), chunk, msHeapUnusedNow());
 }
 
 static void largeChunkKeepsItsAgeBesideAnOlderSmallOne(void) {
@@ -408,8 +438,8 @@ static void smallChunkJoinsANeighbourDiscardedInTheSameReturn(void) {
     msHeapFree(right);
     takeFront(small, SMALL);
     msHeapBig* large = takeFront((msHeapBig*)((uintptr_t)small + SMALL), 2 * MIB);
-    msHeapReleaseBig(region(), small);
-    msHeapReleaseBig(region(), large);
+    freeUnjoined(small);
+    freeUnjoined(large);
     CHECK(small->base.size == SMALL && !small->zeroed && !large->zeroed && large->base.size >= 2 * MIB);
     probeNowMs += AGE_MS;
     msHeapReturnUnused();
@@ -458,6 +488,8 @@ int32_t msAllocatorIdleChecks(void) {
     splitRestKeepsItsAge();
     freeChunksReadable();
     joinedChunkKeepsTheOlderAge();
+    freeChunksReadable();
+    laterChunkJoinsTheOlderOneOnItsLeft();
     freeChunksReadable();
     youngerChunkWaitsItsOwnAge();
     freeChunksReadable();

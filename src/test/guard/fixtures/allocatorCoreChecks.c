@@ -89,6 +89,45 @@ int32_t msAllocatorCoreChecks(void) {
 	checkBytes(merged, mergedSize, 0x33);
 	msHeapFree(merged);
 
+	phase = "frees in rising address order join";
+	msHeapChunk* home = msHeapPage(merged);
+	unsigned char* ra = msHeapAlloc(12000);
+	unsigned char* rb = msHeapAlloc(12000);
+	unsigned char* rc = msHeapAlloc(12000);
+	CHECK(msHeapPage(ra) == home && (unsigned char*)msHeapPage(rb) == (unsigned char*)home + 3 * 4096);
+	CHECK((unsigned char*)msHeapPage(rc) == (unsigned char*)home + 6 * 4096);
+	msHeapFree(ra);
+	msHeapFree(rb);
+	msHeapFree(rc);
+	unsigned char* joined = msHeapAlloc(mergedSize);
+	CHECK(joined == merged && requests == before);
+	msHeapFree(joined);
+
+	phase = "a join tells the right neighbour its new left size";
+	ra = msHeapAlloc(12000);
+	rb = msHeapAlloc(12000);
+	rc = msHeapAlloc(12000);
+	msHeapFree(rb);
+	msHeapFree(ra);
+	CHECK((msHeapPage(rc)->prevSize & ~(size_t)1) == 6 * 4096);
+	msHeapFree(rc);
+	joined = msHeapAlloc(mergedSize);
+	CHECK(joined == merged && requests == before);
+	msHeapFree(joined);
+
+	phase = "a left size that is not the left chunk's joins nothing";
+	ra = msHeapAlloc(12000);
+	rb = msHeapAlloc(12000);
+	rc = msHeapAlloc(12000);
+	msHeapFree(ra);
+	msHeapPage(rc)->prevSize = 6 * 4096 | 1;
+	msHeapFree(rc);
+	CHECK(home->size == 3 * 4096);
+	msHeapFree(rb);
+	joined = msHeapAlloc(mergedSize);
+	CHECK(joined == merged && requests == before);
+	msHeapFree(joined);
+
 	phase = "left coalescing after a split names the neighbour";
 	unsigned char* x = msHeapAlloc(2 * 4096 - sizeof(msHeapBig));
 	unsigned char* y = msHeapAlloc(2 * 4096 - sizeof(msHeapBig));
