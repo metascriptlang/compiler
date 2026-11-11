@@ -1,4 +1,4 @@
-// @stdout: tree=2047 live=same:3 twice=b read=hello-5 thrown=caught:2 swap=6|2 shared=2:2:2 derived=7:k:leaf init=fresh:rebound ctorStr=ab:ab self=ok:t-s-none more=fieldleaf=,ab1live,cap!,v3v3,tt,genv3,dldd,imp,ruru,argre,ns,rg=,nest
+// @stdout: tree=2047 live=same:3 twice=b read=hello-5 thrown=caught:2:2root swap=6|2 shared=2:2:2 derived=7:k:leaf init=fresh:rebound ctorStr=ab:ab self=ok:t-s-none more=fieldleaf=,ab1live,cap!,v3v3,tt,genv3,dldd,imp,ruru,argre,ns,rg=,nest
 
 // A constructor takes ownership of the values written into its fields: a temporary or a
 // last use moves in, a value still used after `new` is copied, and a field of the fresh
@@ -41,13 +41,29 @@ class Boom {
 	}
 }
 
+class Chain {
+	next: Chain | null;
+	held: Leaf;
+	constructor(l: Leaf, prev: Chain | null, bad: boolean) {
+		this.held = l;
+		this.next = prev;
+		if (bad) throw new Error("chain");
+	}
+}
+
 function throwing(): string {
 	let caught = 0;
 	for (let i = 0; i < 2; i++) {
 		try { const b = new Boom(new Leaf("x" + i.toString()), true); caught += b.held.name.length - 99; }
 		catch (e) { caught += 1; }
 	}
-	return "caught:" + caught.toString();
+	const root = new Chain(new Leaf("root"), null, false);
+	let linked = 0;
+	for (let i = 0; i < 2; i++) {
+		try { const c = new Chain(new Leaf("y" + i.toString()), root, true); linked += c.held.name.length - 99; }
+		catch (e) { linked += 1; }
+	}
+	return "caught:" + caught.toString() + ":" + linked.toString() + root.held.name;
 }
 
 class Pair { a: Leaf; b: Leaf; constructor(x: Leaf, y: Leaf) { this.a = y; this.b = x; } }

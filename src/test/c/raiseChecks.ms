@@ -272,7 +272,9 @@ function useLoud(n: int32): int32 {
 	const l = makeLoud(n);
 	return l.v + 1;
 }
-console.log(String(useQuiet(1) + useLoud(2)));
+class Link { next: Link | null; constructor(next: Link | null, bad: boolean) { if (bad) throw new Error("bad"); this.next = next; } }
+function makeLink(prev: Link | null, bad: boolean): Link { return new Link(prev, bad); }
+console.log(String(useQuiet(1) + useLoud(2)) + (makeLink(null, false).next == null ? "" : "!"));
 `;
 
 test "raiseChecks: a new of a constructor that cannot raise adds no check to it or its callers" {
@@ -285,8 +287,14 @@ test "raiseChecks: a new of a constructor that cannot raise adds no check to it 
 test "raiseChecks: a new of a constructor that raises frees the half-built object before it leaves" {
 	const result = compileToC(NEW_SRC);
 	assert result.ok, result.error;
-	assert functionBody(result.value, "makeLoud").contains("if (msErr) { msDecrefCyclic(_new");
+	assert functionBody(result.value, "makeLoud").contains("if (msErr) { msDecref(_new");
 	assert checksIn(result.value, "useLoud") == 1;
+}
+
+test "raiseChecks: a half-built object whose class can form a cycle is released through the cycle collector" {
+	const result = compileToC(NEW_SRC);
+	assert result.ok, result.error;
+	assert functionBody(result.value, "makeLink").contains("if (msErr) { msDecrefCyclic(_new");
 }
 
 const THROWS_SRC = `

@@ -1436,7 +1436,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 			initArgs = newTmp + initArgs;
 			emitStmtsLine(p, `${initName}(${initArgs});`);
 			if (!p.suppressRaiseCheck && inferredCallRaises(node)) {
-				emitStmtsLine(p, `if (msErr) { msDecrefCyclic(${newTmp}); goto ${raiseTarget(p)}; }`);
+				emitStmtsLine(p, `if (msErr) { ${node.flags.has(NodeFlag.PlainRelease) ? "msDecref" : "msDecrefCyclic"}(${newTmp}); goto ${raiseTarget(p)}; }`);
 			}
 			ctx.results.push(newTmp);
 			return;

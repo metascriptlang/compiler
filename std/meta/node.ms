@@ -484,6 +484,7 @@ export enum NodeFlag {
 	LengthGuard,   // transform: the for-of lowering's tail guard that throws when the array's length changed during the step
 	IntCheck,      // transform: a call intCheckInject made to check one integer operation; it reads and writes only its operands
 	WritesOperand, // transform: a call that replaced a compound assignment or a step and writes its first argument in place
+	PlainRelease,  // analyzer: this `new` runs a constructor and its class takes the plain decref, so a raise in the constructor releases the half-built object with it
 }
 
 // ===== Node Kind Enum =====

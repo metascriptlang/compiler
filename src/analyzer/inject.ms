@@ -23,7 +23,7 @@ import { lookupSymbol, hasFlag, setFlag, isCursorSym, SymbolFlag, makeSymbol, Ro
 import { TransformContext, createTransformContext, freshTempSym, reportTransformError, keepOutOfTree } from "../transform/context";
 import {
 	makeIdentResolved, makeTypedIdentResolved, makeBlock, makeExprStmt, makeCall, makeVarDecl,
-	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeConditional, makeHiddenAddr, makeHiddenDeref, makeIf, makeFnDecl, runtimeRef, makeCallResolved, makeBool, isRuntimeProcCall,
+	makeReturn, makeAssign, makeTryCatch, makeTryFinally, makeNull, makeMember, makeConditional, makeHiddenAddr, makeHiddenDeref, makeIf, makeFnDecl, runtimeRef, makeCallResolved, makeBool, isRuntimeProcCall, isRuntimeProcSym,
 } from "../transform/util";
 import { RcInfo, RcKind, isFreshExpr, noRcInfo } from "./classify";
 import {
@@ -998,6 +998,7 @@ function processNew(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		marks.push(markOperandEnd(dctx, node.location));
 	}
 	keepOperandOrder(nd.newArguments, marks, dctx);
+	if (isCtorRoutine(node.resolvedSym) && isRuntimeProcSym(classifyRc(node.nodeType, dctx).destroyFn, "msDecref")) node.flags = node.flags.incl(NodeFlag.PlainRelease);
 	// `new T(...)` produces a fresh owned heap object; the fresh-owned capture (Normal mode →
 	// ensureDestruction) is consolidated in processNode.
 	return node;
