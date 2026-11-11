@@ -54,6 +54,7 @@ function refused(source: string, want: string): void {
 
 removeAll(dir);
 ensureDir(`${dir}/app/src`);
+writeFile(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
 const libSource = [
 	"export function respond(): string { return \"lib\"; }",
 	"export function suffix(): string { return \"!\"; }",
