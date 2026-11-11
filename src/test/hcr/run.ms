@@ -3,6 +3,7 @@
 import { execFileResult, ExecFileResult, exit, env, cwd, platform } from "std/process";
 import { readFile, writeFile, readDir, exists, ensureDir, remove, removeAll, copyFile } from "std/fs";
 import { sleepAsync } from "std/core/promise";
+import { dirname } from "std/fs/path";
 import { spawn as spawnChild, ChildProcess, ChildStream } from "std/process/child";
 
 function slashes(p: string): string {
@@ -138,7 +139,17 @@ function boundedRun(dir: string, args: string[], capMs: int32): ExecFileResult {
 	return result;
 }
 
+// A case's entry directory is its project root, as it is for a program under no build.ms; the
+// repository's own build.ms would otherwise make every case a module of the recompiler project.
+function entryIsItsProject(dir: string, args: string[]): void {
+	const entry = args.find((a: string): boolean => !a.startsWith("-") && (a.endsWith(".ms") || a.endsWith(".cms")));
+	if (entry == null) return;
+	const home = dirname(entry.startsWith("/") ? entry : `${dir}/${entry}`);
+	if (home.startsWith(`${TMP}/`) && !exists(`${home}/build.ms`)) writeFile(`${home}/build.ms`, "const config = {};\nexport default config;\n");
+}
+
 function msc(dir: string, args: string[], capMs: int32 = RUN_CAP_MS): ExecFileResult {
+	entryIsItsProject(dir, args);
 	if (args[0] == "run") return boundedRun(dir, args, capMs);
 	if (!SAN || args[0] != "build") return execFileResult(MSC, args, dir);
 	sanSetup();
@@ -2475,6 +2486,7 @@ function runKeys(): void {
 		copy(`${FIXTURES}/runKeys/app.ms`, `${dir}/app.ms`);
 		copy(`${FIXTURES}/runKeys/logic.ms`, `${dir}/logic.ms`);
 		copy(`${FIXTURES}/runKeys/logicGrown.ms`, `${dir}/grown.txt`);
+		entryIsItsProject(dir, ["app.ms"]);
 		const started = spawnChild(MSC, ["run", "--hcr", "app.ms"], { cwd: dir, mergeStderr: true });
 		need(tag, started.ok, `cannot start ${MSC}`);
 		if (!started.ok) continue;
@@ -2543,6 +2555,7 @@ function watchOwnOutput(): void {
 	copy(`${FIXTURES}/watchOwnOutput/app.ms`, `${dir}/app.ms`);
 	copy(`${FIXTURES}/watchOwnOutput/sub/logic.ms`, `${dir}/sub/logic.ms`);
 	const events = `${dir}/events.jsonl`;
+	entryIsItsProject(dir, ["app.ms"]);
 	const started = spawnChild(MSC, ["run", "--hcr", `--events=${events}`, "app.ms"], { cwd: dir, mergeStderr: true });
 	need(tag, started.ok, `cannot start ${MSC}`);
 	if (!started.ok) return;
@@ -2576,6 +2589,7 @@ function watchOwnOutput(): void {
 function startEvents(tag: string, name: string, events: string): ChildProcess {
 	const dir = freshDir(`${TMP}/${name}`);
 	for (const f of readDir(`${FIXTURES}/runEvents`)) copy(`${FIXTURES}/runEvents/${f}`, `${dir}/${f}`);
+	entryIsItsProject(dir, ["app.ms"]);
 	const started = spawnChild(MSC, ["run", "--hcr", `--events=${events}`, "app.ms"], { cwd: dir, mergeStderr: true });
 	if (!started.ok) {
 		console.log(`FAIL ${tag}: cannot start ${MSC}`);
