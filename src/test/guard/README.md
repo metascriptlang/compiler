@@ -130,6 +130,13 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   (2026-11-10, macOS arm64, all six at both modes): LLVM 23 turns a call through a static slot that is
   only ever stored one function into a direct call, so every arming store hides its function with
   `MS_HIDE_FROM_OPTIMIZER` (`runtime/promise/dispatch.h`); hello `__text` at `--danger` 26,220 → 2,856 B.
+- **`asyncTimerLinksNoPool.ms`** — a program that awaits timers and spawns nothing links no pool
+  worker, because a wake reads the pool that exists and only a spawn or the actor system starts it,
+  as Nim wakes a worker it already holds and starts workers only in its pool setup. Builds and runs
+  a setTimeout + async/await program at `--danger` and `--release` and reads its symbols. Proven RED
+  on tree `939e207b0891` (Linux x86-64, rtx: `msPoolWorkerLoop` at both modes, reached through
+  `msPoolWakeWorker` → `msPoolGet`), GREEN with the wake reading `gPool` (rtx, 2026-11-12); that
+  program's `__text` at `--danger --lto=off` 54,032 → 47,968 B (macOS arm64).
 - **`releaseDisposeOutOfLine.ms`** — every generic ref release macro (`msDecref`, `msDecrefAny`,
   `msDecrefCyclic`, `msAtomicDecref`, `msDecrefCyclicEdge`) decides inline and disposes through one
   out-of-line call, as Nim inlines only `nimDecRefIsLast` and calls `nimDestroyAndDispose`. Compiles
