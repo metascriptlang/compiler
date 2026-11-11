@@ -437,7 +437,7 @@ export function genProjectDispatcher(
 			addLine(b, "  cmdLine = argv;");
 			addLine(b, "  cmdCount = argc;");
 			addLine(b, "  MsMain();");
-			addLine(b, "  msDrainUntilIdle();");
+			addLine(b, "  msDrainAtExit();");
 			addLine(b, "  if (msReportOrphanFailures()) msProgramResult = 1;");
 			addLine(b, "  MsDestroyGlobals();");
 			addLine(b, "  return msProgramResult;");
@@ -624,6 +624,17 @@ test "dispatcher follows dependency order regardless of result order" {
 	assert original.indexOf(`${depName}__Init000();`) < original.indexOf(`${entryName}__Init000();`);
 	const bareEntry = genProjectDispatcher([empty.modulePath], empty.modulePath, "", true, [empty]);
 	assert bareEntry.indexOf(`${emptyName}__Init000();`) >= 0;
+}
+
+test "every main drains at exit through the hook a facility arms, so a program with no async work links no event loop" {
+	const entry = new CModuleOutput();
+	entry.modulePath = "test/entry";
+	entry.hasInit = true;
+	for (const os of ["", "linux", "macos", "windows", "wasm", "emcc"]) {
+		const out = genProjectDispatcher([entry.modulePath], entry.modulePath, os, false, [entry]);
+		assert out.indexOf("  msDrainAtExit();") >= 0;
+		assert out.indexOf("msDrainUntilIdle") < 0;
+	}
 }
 
 test "dispatcher destroys globals after the drain, entry module first then dependencies in reverse" {
