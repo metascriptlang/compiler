@@ -1,4 +1,4 @@
-import { Node, NodeKind, NodeFlag, TypeKind, TypeFlag, Type, Symbol, SymbolKind, SourceLocation, HiddenStdConvData, BinaryExprData, ProgramData, CallExprData, ArrayLiteralData, ObjectLiteralData, BooleanLiteralData, BuiltinKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, TypeKind, TypeFlag, Type, Symbol, SymbolKind, SourceLocation, HiddenStdConvData, BinaryExprData, ProgramData, CallExprData, ArrayLiteralData, ObjectLiteralData, BooleanLiteralData, BuiltinKind } from "../../ast/node";
 import { instantiatedUnionBehind, isTagCarriedUnion, inlineVariantStruct, storesNothing, peelToStruct, unwrapRef, peelTransparentInstance, typeDisplayName, unionMemberDisplay, jsMemberKind, jsValueKind, runtimeClassSym, classParentOf, int32Type, booleanType, stringType, createArray, unknownType, isNumeric, booleanLiteralValue, isFloatType, numberLiteralBase, isDiscriminatedUnion, getDiscriminantName } from "../../checker/types";
 import { convertsBetweenUnions, unionMemberSlots, storesUnionTag, nullableUnionPayloads, isSlotUnion, booleanLiteralSlots, wrapInConv, convertStoredUnionRead, brandArrayBase } from "../../checker/fit";
 import { hashToBase36, typeKey } from "../../codegen/c/types";
@@ -7,7 +7,7 @@ import { parseIntegerLiteral, parseNumberLiteral } from "../../utils/string";
 import { makeFloatNumber } from "../../checker/literalNodes";
 import { TransformContext, mintSym, reportTransformError } from "../context";
 import { walkNode } from "../walker";
-import { makeBinary, makeBlock, makeCall, makeExprStmt, makeFnDecl, makeIf, makeIdentResolved, makeIntNumber, makeMember, makeReturn, makeString, makeTypedIdentResolved, makeTypedObjectLiteral, makeUnary, runtimeRef, syntheticToken, makeBool, makeNull, makeHiddenSubConv, callBuiltinKind } from "../util";
+import { makeBinary, makeBlock, makeCall, makeExprStmt, makeFnDecl, makeIf, makeIdentResolved, makeIntNumber, makeMember, makeReturn, makeString, makeTypedIdentResolved, makeTypedObjectLiteral, makeUnary, runtimeRef, syntheticToken, makeBool, makeNull, makeHiddenSubConv, callBuiltinKind, makeVarDecl, makeAssign } from "../util";
 import { createNode } from "../../ast/node";
 import { memberLabels, discriminantValue } from "../native/unionProjectLower";
 import { makeSymbol } from "../../checker/symbol";
@@ -329,7 +329,7 @@ function slotConv(expr: Node, target: Type, slot: int32): Node {
 function conversionArms(source: Type, target: Type, valueSym: Symbol, ctx: TransformContext, loc: SourceLocation): Node[] {
 	const slots = unionMemberSlots(source, target);
 	const order = armOrder(source, ctx, loc);
-	const stmts: Node[] = [];
+	const stmts: Node[] = movedFromArm(source, target, valueSym, ctx, loc);
 	for (let k = 0; k < order.length; k += 1) {
 		const vi = order[k];
 		const member = source.typeChildren[vi];
@@ -343,6 +343,24 @@ function conversionArms(source: Type, target: Type, valueSym: Symbol, ctx: Trans
 		}
 	}
 	return stmts;
+}
+
+function movedFromArm(source: Type, target: Type, valueSym: Symbol, ctx: TransformContext, loc: SourceLocation): Node[] {
+	if (ctx.jsBackend || ctx.raiserBackend || !isSlotUnion(source) || !isSlotUnion(target)) return [];
+	const tag = makeMember(read(valueSym, source, loc), "_tag", loc);
+	tag.nodeType = int32Type();
+	const moved = makeBinary(tag, "==", makeIntNumber(-1, loc), loc);
+	moved.nodeType = booleanType();
+	const emptySym = mintSym(ctx, SymbolKind.Variable, "$moved", target);
+	const zero = makeNull(loc);
+	zero.nodeType = target;
+	const decl = makeVarDecl(emptySym.name, zero, DeclKind.Let, loc);
+	decl.nodeType = target;
+	decl.resolvedSym = emptySym;
+	const emptyTag = makeMember(makeTypedIdentResolved(emptySym, target, loc), "_tag", loc);
+	emptyTag.nodeType = int32Type();
+	const reset = makeExprStmt(makeAssign(emptyTag, makeIntNumber(-1, loc), loc), loc);
+	return [makeIf(moved, makeBlock([decl, reset, makeReturn(makeTypedIdentResolved(emptySym, target, loc), loc)], loc), null, loc)];
 }
 
 function heldAs(held: Node, slot: Type, loc: SourceLocation): Node {
