@@ -158,11 +158,13 @@ void msAtomicRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount)
 void msAtomicRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item);
 void msAcyclicRefArrayDestroy(msRefArray* arr);
 void msUnownedRefArrayDestroy(msRefArray* arr);
+void msUnownedRefArraySetLen(msRefArray* arr, int64_t newLen);
 void msAcyclicRefArrayShrink(msRefArray* arr, int64_t newLen);
 void msAcyclicRefArraySetLen(msRefArray* arr, int64_t newLen);
 void msAcyclicRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item);
 void msRoRefArrayDestroy(msRefArray* arr);
 void msUnownedRoRefArrayDestroy(msRefArray* arr);
+void msUnownedRoRefArraySetLen(msRefArray* arr, int64_t newLen);
 void msRoRefArraySetLen(msRefArray* arr, int64_t newLen);
 void msRoRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount);
 void msRoRefArraySplice3(msRefArray* arr, int64_t start, int64_t deleteCount, void* item);

@@ -14,7 +14,7 @@
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
 import { Node, NodeKind, NodeFlag, ArrayAccessData, CallExprData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Symbol, Type, TypeKind, SymbolKind, SourceLocation, createNode, makeLoc } from "../../ast/node";
-import { isNumeric, distinctWidenBody, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, countedEvictElement, readonlyCountedElement, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
+import { isNumeric, distinctWidenBody, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, countedEvictElement, readonlyCountedElement, isUnownedSlot, isReadonlyUnownedSlot, isReadonlyView, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
 import { findChar } from "../../utils/string";
 import { TransformContext } from "../context";
 import { isAcyclicRefElement } from "../cycles";
@@ -263,6 +263,10 @@ function getArrayMacroName(elemType: Type | null, boundChecks: boolean): string 
 export function evictHelperName(nativeName: string, elemType: Type | null, ctx: TransformContext, arrT: Type | null = null): string {
 	const bare = countedEvictElement(elemType);
 	if (bare == null) return "";
+	if (isUnownedSlot(elemType)) {
+		if (nativeName != "msGenericArraySetLen") return "";
+		return isReadonlyView(arrT) || isReadonlyUnownedSlot(elemType) ? "msUnownedRoRefArraySetLen" : "msUnownedRefArraySetLen";
+	}
 	if (readonlyCountedElement(arrT, elemType)) {
 		if (nativeName == "msGenericArraySetLen") return "msRoRefArraySetLen";
 		if (nativeName == "msRefArraySplice") return "msRoRefArraySplice";

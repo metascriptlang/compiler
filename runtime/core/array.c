@@ -625,6 +625,20 @@ void msUnownedRefArrayDestroy(msRefArray* arr) {
 	}
 }
 
+void msUnownedRefArraySetLen(msRefArray* arr, int64_t newLen) {
+	if (newLen < 0) newLen = 0;
+	if (newLen > arr->len) {
+		msRefArrayGrow(arr, newLen, NULL);
+		return;
+	}
+	while (arr->len > newLen) {
+		arr->len--;
+		void* evicted = arr->p->data[arr->len];
+		arr->p->data[arr->len] = NULL;
+		msUnownedDecref(evicted);
+	}
+}
+
 void msAcyclicRefArrayShrink(msRefArray* arr, int64_t newLen) {
 	if (newLen < 0) newLen = 0;
 	while (arr->len > newLen) {
@@ -856,6 +870,20 @@ void msUnownedRoRefArrayDestroy(msRefArray* arr) {
 	if (p != NULL) {
 		for (int64_t i = 0; i < len; i++) msUnownedDecrefRo(p->data[i]);
 		msArrayPayloadFree(p);
+	}
+}
+
+void msUnownedRoRefArraySetLen(msRefArray* arr, int64_t newLen) {
+	if (newLen < 0) newLen = 0;
+	if (newLen > arr->len) {
+		msRefArrayGrow(arr, newLen, NULL);
+		return;
+	}
+	while (arr->len > newLen) {
+		arr->len--;
+		void* evicted = arr->p->data[arr->len];
+		arr->p->data[arr->len] = NULL;
+		msUnownedDecrefRo(evicted);
 	}
 }
 

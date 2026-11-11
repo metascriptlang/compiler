@@ -590,6 +590,9 @@ extern function msArrayUnownedRoRefSink(d: Ptr<void>, v: Ptr<void>): void;
 extern function msUnownedRoRefArrayDestroy(arr: Ptr<void>): void;
 
 @compilerFunc
+extern function msUnownedRoRefArraySetLen(arr: Ptr<void>, newLen: int64): void;
+
+@compilerFunc
 extern function msRoRefArraySetLen(arr: Ptr<void>, newLen: int64): void;
 
 @compilerFunc
@@ -684,6 +687,9 @@ extern function msAcyclicRefArrayDestroy(arr: Ptr<void>): void;
 
 @compilerFunc
 extern function msUnownedRefArrayDestroy(arr: Ptr<void>): void;
+
+@compilerFunc
+extern function msUnownedRefArraySetLen(arr: Ptr<void>, newLen: int64): void;
 
 @compilerFunc
 extern function msGenericArraySetLen(arr: Ptr<void>, newLen: int64): void;
