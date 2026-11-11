@@ -157,6 +157,9 @@ function errorLine(out: string): string {
 
 record("build --list names the exported nodes and the default", "app (default)|run|upper|stamp|bad",
 	run(graph, ["build", "--colors=off", "--list"]).split("\n").map((l: string): string => l.split("  ")[0]).join("|"));
+put(`${graph}/side.cms`, "console.log(\"side\");\n");
+record("a .cms file beside a graph build.ms is a file, not a node name", "side",
+	lastLine(run(graph, ["run", "--colors=off", "side.cms"])));
 record("build of a run node builds the executable and runs it with its args", "app first", lastLine(run(graph, ["build", "--colors=off", "run"])));
 record("run of an executable node passes the arguments after --", "app x,y", lastLine(run(graph, ["run", "--colors=off", "app", "--", "x", "y"])));
 const firstUpper = run(graph, ["build", "--colors=off", "upper"]);
