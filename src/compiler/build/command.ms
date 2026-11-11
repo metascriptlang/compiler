@@ -4,9 +4,10 @@ import { newExecution, executeNode, planRunsStep } from "./execute";
 import { CliOptions } from "../options";
 import { error, bold, dim, success } from "../../utils/color";
 import { execFile } from "std/process";
+import { msModuleExtensions } from "../../module/resolver";
 
 export function namesGraphNode(arg: string): boolean {
-	return !arg.includes("/") && !arg.includes("\\") && !arg.endsWith(".ms");
+	return !arg.includes("/") && !arg.includes("\\") && !msModuleExtensions.some((ext: string): boolean => arg.endsWith(ext));
 }
 
 function programArgs(extra: string[]): string[] {
