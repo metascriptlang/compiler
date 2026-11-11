@@ -24,6 +24,7 @@ function check(entry: string, output: string, script: string, want: string): voi
 
 removeAll(dir);
 ensureDir(dir);
+writeFile(`${dir}/build.ms`, "const config = {};\nexport default config;\n");
 writeFile(`${dir}/other.ms`, "export function respond(path: string): string { return \"other \" + path; }\n");
 writeFile(`${dir}/third.ms`, "export function respond(path: string): string { return \"third \" + path; }\n");
 for (const reverse of [false, true]) {
