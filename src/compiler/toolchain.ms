@@ -765,6 +765,11 @@ function nativeRuntimeConfig(targetOs: string, cpu: string, abi: string): string
 	return "";
 }
 
+// The newest ld64 whose features this LLVM's ld64.lld has, as clang's driver gates them: objc_msgSend selector
+// stubs from 811.2, which it links, and class selector stubs from 1250, which it leaves undefined. Unstated,
+// the driver assumes the Apple linker of the machine that built the engine.
+const BUNDLE_LD64_VERSION = "811.2";
+
 let pendingBundle: NativeToolchain | null = null;
 let pendingPath = "";
 let pendingStampRoot = "";
@@ -834,7 +839,7 @@ function selectNativeToolchain(opts: CliOptions, path: string, stampRoot: string
 	}
 	const sdk = opts.targetOs == "darwin" || opts.targetOs == "macos" ? macosSdkPath(stampRoot) : "";
 	if (sdk != "") {
-		opts.passC = `-isysroot ${quoteCcArg(sdk)} -resource-dir ${quoteCcArg(join(bundle.root, `lib/clang/${bundle.version.split(".")[0]}`))} ${opts.passC}`;
+		opts.passC = `-isysroot ${quoteCcArg(sdk)} -resource-dir ${quoteCcArg(join(bundle.root, `lib/clang/${bundle.version.split(".")[0]}`))} -mlinker-version=${BUNDLE_LD64_VERSION} ${opts.passC}`;
 		opts.passL = `--ld-path=${quoteCcArg(join(bundle.root, "bin/ld64.lld"))} ${opts.passL}`;
 		return Result.ok(null);
 	}
@@ -1016,6 +1021,17 @@ test "the macOS SDK memo answers only for the developer directory it was taken u
 	assert real != sdk && isDir(real);
 	assert (try readFile(join(stamps, "macos-sdk")) catch "") == `${key}${real}`;
 	assert removeAll(stamps).ok;
+}
+
+test "a macOS build through the bundle tells the driver which linker it links with" {
+	if (platform != "darwin") return;
+	const root = selectionProbe(true);
+	assert root != "";
+	const host = newCliOptions();
+	assert selectNativeToolchain(host, root, "").ok;
+	assert host.passC.contains("-mlinker-version=811.2") && host.passL.contains("ld64.lld");
+	verifySelectedToolchain();
+	assert removeAll(root).ok;
 }
 
 test "prepared runtimes are selected by both OS and CPU" {
