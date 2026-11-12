@@ -855,11 +855,27 @@ function selectNativeToolchain(opts: CliOptions, path: string, stampRoot: string
 		const cxxConfig = `runtime/${name.slice(0, name.length - 4)}.cxx.cfg`;
 		if (!exists(join(bundle.root, cxxConfig))) return Result.err(`native toolchain: UBSan or a sanitizer on ${target} links its runtime against the C++ runtime, and ${bundle.root} has no ${cxxConfig}\n  → use a bundle that ships it, or build with --release`);
 	}
+	if (opts.targetOs == "linux" && opts.abi != "musl") {
+		const missing = try glibcSanitizerGap(opts, bundle, name);
+	}
 	if (opts.isHcr && opts.targetOs != "linux" && opts.targetOs != "windows") return Result.err(`native toolchain: ${name} does not supply HCR startup`);
 	pendingConfig = `runtime/${name}`;
 	opts.ccBinary = `${opts.ccBinary} --config=${quoteCcArg(config)}`;
 	if (opts.targetOs == "linux" && sanitizing) opts.ccBinary = `${opts.ccBinary} --target=${name.slice(0, name.indexOf("-"))}-unknown-linux-${opts.abi == "musl" ? "musl" : "gnu"}`;
 	opts.ccConfigOwnsTarget = true;
+	return Result.ok(null);
+}
+
+// clang links a glibc sanitizer runtime from the engine's resource directory; without the archive the build
+// would stop at the linker with a path and no way forward.
+function glibcSanitizerGap(opts: CliOptions, bundle: NativeToolchain, name: string): Result<void, string> {
+	const folder = `lib/clang/${bundle.version.split(".")[0]}/lib/${name.slice(0, name.indexOf("-"))}-unknown-linux-gnu`;
+	for (const sanitizer of opts.sanitize == "" ? [] : opts.sanitize.split(",")) {
+		const library = sanitizer == "address" ? "libclang_rt.asan.a" : sanitizer == "thread" ? "libclang_rt.tsan.a" : sanitizer == "undefined" ? "libclang_rt.ubsan_standalone.a" : "";
+		if (library != "" && !exists(join(bundle.root, `${folder}/${library}`))) {
+			return Result.err(`native toolchain: --sanitize=${sanitizer} on linux needs ${folder}/${library}, and ${bundle.root} does not ship it\n  → use a bundle that ships it, or a compiler that has the runtime: --cc=clang`);
+		}
+	}
 	return Result.ok(null);
 }
 
@@ -1109,6 +1125,16 @@ test "a prepared Linux sanitizer link names its target after the config, and a n
 			const refused = selectNativeToolchain(explicit, root, "");
 			assert !refused.ok && refused.error.contains(`runtime/${stem}.cxx.cfg`);
 			assert writeFile(join(root, `runtime/${stem}.cxx.cfg`), "").ok;
+			const resources = join(root, "lib/clang/1/lib/x86_64-unknown-linux-gnu");
+			assert ensureDir(resources).ok;
+			for (const pair of [["address", "libclang_rt.asan.a"], ["thread", "libclang_rt.tsan.a"], ["undefined", "libclang_rt.ubsan_standalone.a"]]) {
+				const wanted = linuxOptions();
+				wanted.sanitize = pair[0];
+				const gap = selectNativeToolchain(wanted, root, "");
+				assert !gap.ok && gap.error.contains(`--sanitize=${pair[0]} on linux needs lib/clang/1/lib/x86_64-unknown-linux-gnu/${pair[1]}`) && gap.error.contains("--cc=clang");
+				assert writeFile(join(resources, pair[1]), "").ok;
+				assert selectNativeToolchain(wanted, root, "").ok;
+			}
 		}
 		assert selectNativeToolchain(explicit, root, "").ok;
 		assert explicit.ccBinary.endsWith(triple);
