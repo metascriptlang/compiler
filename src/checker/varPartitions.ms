@@ -9,7 +9,7 @@ import {
 	MatchExprData, MatchCaseData, ExprStmtData, IfStmtData, TryCatchStmtData, DestructuringDeclData, ObjectPatternData,
 	ObjectPatternPropData, ArrayPatternData, ActorDeclData, createNodeAt, BuiltinKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { receiverOf, returnsView, routineBody, viewCallSources, isViewCall, aliasTarget, boundRoutine, isImmortalModuleConst, moduleSourceOf, moduleStateCause, mayStoreIntoReceiver, EffectCause } from "./effects";
+import { receiverOf, returnsView, routineBody, viewCallSources, isViewCall, aliasTarget, boundRoutine, isImmortalModuleConst, moduleSourceOf, moduleStateCause, mayStoreIntoReceiver, runsVisibleBody, EffectCause } from "./effects";
 import { isOwnedRef, ownsNoStorage, typeVisitAdd, viewStructChangesInPlace, isPrimitiveKind, isViewType, isViewStruct, nestedViewType, nestedViewShown, ownedAlternativeOf, holdsViewSkippingClear, TypeVisitSet, isReadonlyView, isStructType, typeDisplayName, isLockedRef, isAtomicRef, typeCarriesRef, withoutReadonlyView, withoutNullMember } from "./types";
 import { hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "./symbol";
 import { CheckerContext, DispatchRegistry, addError, dispatchEntryFor, dispatchOverridesFor } from "./context";
@@ -72,12 +72,13 @@ export interface Partitions {
 	inAsgnSource: int32;
 	lentTemps: Symbol[];
 	lentInits: Node[];
+	moduleSources: int32;
 }
 
 export function createPartitions(): Partitions {
 	return {
 		abstractTime: 0, vars: [], graphs: [],
-		inConstructor: 0, inConditional: 0, inLoop: 0, inAsgnSource: 0, lentTemps: [], lentInits: [],
+		inConstructor: 0, inConditional: 0, inLoop: 0, inAsgnSource: 0, lentTemps: [], lentInits: [], moduleSources: 0,
 	};
 }
 
@@ -128,6 +129,38 @@ export function ufRoot(p: Partitions, start: int32): int32 {
 	return r;
 }
 
+function earliestModuleSource(p: Partitions, root: int32): int32 {
+	let best: int32 = -1;
+	for (let i = 0; i < p.vars.length; i += 1) {
+		if (p.vars[i].moduleSource == null || ufRoot(p, i) != root) continue;
+		if (best < 0 || p.vars[i].moduleSourceTime < p.vars[best].moduleSourceTime) best = i;
+	}
+	return best;
+}
+
+function reachRegion(p: Partitions, root: int32, c: EffectCause, time: int32): void {
+	for (let i = 0; i < p.vars.length; i += 1) {
+		if (ufRoot(p, i) != root) continue;
+		if (p.vars[i].moduleSource == null || time < p.vars[i].moduleSourceTime) {
+			p.vars[i].moduleSource = c;
+			p.vars[i].moduleSourceTime = time;
+			p.moduleSources += 1;
+		}
+	}
+}
+
+function joinModuleSources(p: Partitions, ra: int32, rb: int32): void {
+	if (p.moduleSources == 0) return;
+	const a = earliestModuleSource(p, ra);
+	const b = earliestModuleSource(p, rb);
+	const fromA: EffectCause | null = a >= 0 ? p.vars[a].moduleSource : null;
+	const fromB: EffectCause | null = b >= 0 ? p.vars[b].moduleSource : null;
+	const timeA = a >= 0 && p.vars[a].moduleSourceTime > p.abstractTime ? p.vars[a].moduleSourceTime : p.abstractTime;
+	const timeB = b >= 0 && p.vars[b].moduleSourceTime > p.abstractTime ? p.vars[b].moduleSourceTime : p.abstractTime;
+	if (fromA != null) reachRegion(p, rb, fromA, timeA);
+	if (fromB != null) reachRegion(p, ra, fromB, timeB);
+}
+
 export function ufConnect(p: Partitions, a: Symbol, b: Symbol): void {
 	const aid = variableId(p, a);
 	if (aid < 0) return;
@@ -137,6 +170,7 @@ export function ufConnect(p: Partitions, a: Symbol, b: Symbol): void {
 	const ra = ufRoot(p, aid);
 	const rb = ufRoot(p, bid);
 	if (ra == rb) return;
+	joinModuleSources(p, ra, rb);
 
 	let rbFlags: int32 = 0;
 	let rbMut: int32 = 0;
@@ -1450,12 +1484,15 @@ function deps(u: BorrowUnit, dest: Symbol | null, src: Node | null): void {
 	const view = isBorrower(u, dest);
 	if (view) borrowFrom(u, dest, src);
 	else handOff(u, src, scopeOf(u, dest));
-	if (carriesPointer(dest.symbolType)) {
-		const sources: Symbol[] = [];
-		rootsOf(src, sources);
-		for (const s of sources) { ufConnect(u.p, dest, s); }
-		markModuleSource(u, [dest], src);
-	}
+	joinRegionOf(u, dest, src);
+}
+
+function joinRegionOf(u: BorrowUnit, dest: Symbol, src: Node): void {
+	if (!carriesPointer(dest.symbolType)) return;
+	const sources: Symbol[] = [];
+	rootsOf(src, sources);
+	for (const s of sources) { ufConnect(u.p, dest, s); }
+	markModuleSource(u, [dest], src);
 }
 
 function markModuleSource(u: BorrowUnit, dests: Symbol[], src: Node | null): void {
@@ -1463,18 +1500,16 @@ function markModuleSource(u: BorrowUnit, dests: Symbol[], src: Node | null): voi
 	if (c == null) return;
 	for (const d of dests) {
 		const id = variableId(u.p, d);
-		if (id >= 0 && u.p.vars[id].moduleSource == null) {
-			u.p.vars[id].moduleSource = c;
-			u.p.vars[id].moduleSourceTime = u.p.abstractTime;
-		}
+		if (id >= 0) reachRegion(u.p, ufRoot(u.p, id), c, u.p.abstractTime);
 	}
 }
 
-function moduleSourceIn(u: BorrowUnit, root: int32, upTo: int32 = MAX_TIME, site: Node | null = null): EffectCause | null {
+function moduleSourceIn(u: BorrowUnit, id: int32, upTo: int32 = MAX_TIME, site: Node | null = null): EffectCause | null {
+	if (u.p.vars[id].moduleSource != null && u.p.vars[id].moduleSourceTime <= upTo) return u.p.vars[id].moduleSource;
+	if (site == null) return null;
+	const root = ufRoot(u.p, id);
 	for (let i = 0; i < u.p.vars.length; i += 1) {
-		if (ufRoot(u.p, i) != root) continue;
-		if (u.p.vars[i].moduleSource != null && u.p.vars[i].moduleSourceTime <= upTo) return u.p.vars[i].moduleSource;
-		const held = site != null ? moduleStateCause(u.ctx.dispatchRegistry, u.p.vars[i].sym, site) : null;
+		const held = ufRoot(u.p, i) == root ? moduleStateCause(u.ctx.dispatchRegistry, u.p.vars[i].sym, site) : null;
 		if (held != null) return held;
 	}
 	return null;
@@ -1487,7 +1522,7 @@ function moduleSourceOfValue(u: BorrowUnit, value: Node): EffectCause | null {
 	rootsOf(value, roots);
 	for (const r of roots) {
 		const id = variableId(u.p, r);
-		const c = id >= 0 ? moduleSourceIn(u, ufRoot(u.p, id)) : null;
+		const c = id >= 0 ? moduleSourceIn(u, id) : null;
 		if (c != null) return c;
 	}
 	return null;
@@ -1589,6 +1624,7 @@ function joinStored(u: BorrowUnit, value: Node, into: Node): void {
 		for (const s of sources) { ufConnect(u.p, t, s); }
 	}
 	markModuleSource(u, targets, value);
+	markModuleSource(u, sources, into);
 }
 
 function changeSym(u: BorrowUnit, sym: Symbol, viaRef: boolean, summary: ResizeSummary, site: Node): void {
@@ -1684,8 +1720,8 @@ function callEffects(u: BorrowUnit, node: Node): void {
 	const recv = receiverOf(node);
 	const summary = calleeSummary(u.ctx.dispatchRegistry, node);
 	let offset: int32 = 0;
+	const resizes = recv != null && resizesReceiver(node, recv);
 	if (recv != null) {
-		const resizes = resizesReceiver(node, recv);
 		if (node.flags.has(NodeFlag.ExtCall)) {
 			argEffect(u, recv, formalAt(fnType, 0), resizes, summary);
 			offset = 1;
@@ -1693,6 +1729,8 @@ function callEffects(u: BorrowUnit, node: Node): void {
 			argEffect(u, recv, null, resizes, summary);
 		}
 	}
+	const onlyReads = !resizes && runsVisibleBody(node) && !summary.unknown && !summary.writes;
+	const keepsArguments = recv != null && !onlyReads && mayStoreIntoReceiver(node);
 	let passesRoutine = false;
 	const all: Node[] = [];
 	if (recv != null) all.push(recv);
@@ -1701,7 +1739,10 @@ function callEffects(u: BorrowUnit, node: Node): void {
 		argEffect(u, a, formalAt(fnType, i + offset), false, summary);
 		if (a.nodeType != null && a.nodeType.kind == TypeKind.Function) passesRoutine = true;
 		all.push(a);
-		if (recv != null && carriesPointer(a.nodeType) && mayStoreIntoReceiver(node)) joinStored(u, a, recv);
+		if (keepsArguments && carriesPointer(a.nodeType)) {
+			refuseModuleStore(u, recv!, a);
+			joinStored(u, a, recv!);
+		}
 	}
 	storedIntoOther(u, all, summary);
 	const local = sym != null && sym.declNode != null && u.routines.includes(sym.declNode);
@@ -2101,7 +2142,10 @@ function bindPattern(u: BorrowUnit, pattern: Node | null, source: Node, fallback
 		NodeKind.Identifier => {
 			const sym = pattern.resolvedSym;
 			declare(u, sym, u.p.inLoop > 0);
-			if (u.pass != 2 || sym == null || !isBorrower(u, sym)) return;
+			if (u.pass != 2 || sym == null) return;
+			joinRegionOf(u, sym, source);
+			if (fallback != null) joinRegionOf(u, sym, fallback);
+			if (!isBorrower(u, sym)) return;
 			borrowFrom(u, sym, source);
 			if (fallback != null) borrowFrom(u, sym, fallback);
 		},
@@ -2305,7 +2349,7 @@ function openCaptureLend(u: BorrowUnit, fn: Node): void {
 	pushLend(u, fn, pending.map((l: PendingLend): Symbol => l.capture!), [], pending.map((l: PendingLend): Node => l.task), "");
 }
 
-const MODULE_LEND_RULE = "; module state crosses threads only as a const value, a Locked<T> or an Arc<T>, because any code that runs meanwhile can change it while the other thread reads it, so pass a copy or move a value built here";
+const MODULE_LEND_RULE = "; module state crosses threads only as a const value, a Locked<T> or an Arc<T>, because any code that runs meanwhile can change it while the other thread reads it, so pass a value built here, such as a spread of value-only elements; a call on module state returns a value that may still alias it";
 
 function refuseModuleArgs(u: BorrowUnit, call: Node): void {
 	const recv = receiverOf(call);
@@ -2375,14 +2419,14 @@ function checkLends(u: BorrowUnit, unitEnd: string): void {
 			const spawnAt = `${actor ? "actor call of '" + calleeName(task) + "'" : "spawn"} at ${task.location.line}:${task.location.column}${via}`;
 			const reader = actor ? "the actor" : "the task";
 			const id = variableId(u.p, r);
-			const held = actor || id >= 0 ? null : moduleStateCause(u.ctx.dispatchRegistry, r, l.site);
-			if (held != null) {
+			const held = actor ? null : moduleStateCause(u.ctx.dispatchRegistry, r, l.site);
+			if (held != null && l.callee != "") {
 				addError(u.ctx, `'${r.name}' is lent to the ${spawnAt}, but it ${held.text}${MODULE_LEND_RULE}`, l.site.location.line, l.site.location.column);
 				break;
 			}
 			if (id < 0) continue;
 			const root = ufRoot(u.p, id);
-			const reached = actor ? null : moduleSourceIn(u, root, l.end < 0 ? MAX_TIME : l.end, l.site);
+			const reached = actor || held != null ? null : moduleSourceIn(u, id, l.end < 0 ? MAX_TIME : l.end, l.site);
 			if (reached != null) {
 				addError(u.ctx, `'${r.name}' is lent to the ${spawnAt}, but it holds a value that ${reached.text}${MODULE_LEND_RULE}`, l.site.location.line, l.site.location.column);
 				break;

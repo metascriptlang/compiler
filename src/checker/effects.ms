@@ -3,7 +3,7 @@
 
 import { stdModuleName } from "../module/tiers";
 import { stmtsOf, membersOf } from "./unitsInCheck";
-import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, HiddenDerefData, HiddenStdConvData, ConstructorDeclData, DecoratedDeclData, ExportDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, IdentifierData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, PropertyDeclData, ReturnStmtData, SpreadExprData, Symbol, SymbolKind, Type, TryExprData, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData, BuiltinKind } from "../ast/node";
+import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrayPatternData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, HiddenDerefData, HiddenStdConvData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ExportDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, IdentifierData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ObjectPatternData, ObjectPatternPropData, PropertyDeclData, ReturnStmtData, SpreadExprData, Symbol, SymbolKind, Type, TryExprData, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData, BuiltinKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, DispatchRegistry, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, hasErrors, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
@@ -94,6 +94,8 @@ let uncheckedBodiesReported = false;
 let inAsync = false;
 let ownParams: string[] = [];
 let enclosingParams: string[] = [];
+let unitRoot: Node | null = null;
+let ownThis = false;
 let ownResult: Type | null = null;
 interface DeferredCheck {
 	site: Node;
@@ -272,6 +274,12 @@ function walkRoutine(dispatchRegistry: DispatchRegistry, decl: Node | null, e: E
 	const outerParams = viewParams;
 	const outerShared = sharedParams;
 	const outerResult = ownResult;
+	const outerEnclosing = enclosingParams;
+	const outerRoot = unitRoot;
+	const outerConstruction = ownThis;
+	enclosingParams = [];
+	unitRoot = decl;
+	ownThis = decl.kind == NodeKind.ConstructorDecl || decl.kind == NodeKind.MethodDecl;
 	ownParams = routineParams(decl);
 	ownResult = routineResult(decl);
 	inAsync = isAsyncFunctionNode(decl);
@@ -286,6 +294,9 @@ function walkRoutine(dispatchRegistry: DispatchRegistry, decl: Node | null, e: E
 	viewSyms = outerSyms;
 	viewParams = outerParams;
 	sharedParams = outerShared;
+	enclosingParams = outerEnclosing;
+	unitRoot = outerRoot;
+	ownThis = outerConstruction;
 	return c;
 }
 
@@ -293,14 +304,23 @@ export function walkWithViews(dispatchRegistry: DispatchRegistry, node: Node, e:
 	const outerSyms = viewSyms;
 	const outerParams = viewParams;
 	const outerShared = sharedParams;
+	const outerEnclosing = enclosingParams;
+	const outerRoot = unitRoot;
+	const outerConstruction = ownThis;
 	viewSyms = views;
 	viewParams = [];
 	sharedParams = [];
+	enclosingParams = [];
+	unitRoot = node;
+	ownThis = false;
 	if (e == Effect.StoresBorrowed) scanFlows(node);
 	const c = walkEffect(dispatchRegistry, node, e);
 	viewSyms = outerSyms;
 	viewParams = outerParams;
 	sharedParams = outerShared;
+	enclosingParams = outerEnclosing;
+	unitRoot = outerRoot;
+	ownThis = outerConstruction;
 	return c;
 }
 
@@ -310,13 +330,16 @@ function walkNestedRoutine(dispatchRegistry: DispatchRegistry, decl: Node, e: Ef
 	const outerParams = viewParams;
 	const outerResult = ownResult;
 	const outerEnclosing = enclosingParams;
+	const outerRoot = unitRoot;
 	enclosingParams = enclosingParams.concat(outer);
+	if (unitRoot == null) unitRoot = decl;
 	ownParams = routineParams(decl);
 	ownResult = routineResult(decl);
 	inAsync = isAsyncFunctionNode(decl);
 	viewParams = viewParams.filter((p: string): boolean => !ownParams.includes(p));
 	const c = (e == Effect.StoresBorrowed ? expressionResultStore(dispatchRegistry, decl) : null) ?? walkChildren(dispatchRegistry, decl, e);
 	enclosingParams = outerEnclosing;
+	unitRoot = outerRoot;
 	ownParams = outer;
 	ownResult = outerResult;
 	inAsync = outerAsync;
@@ -334,39 +357,125 @@ function isOwnParamField(n: Node | null, e: Effect): boolean {
 	if (n == null || !reachesModuleState(e)) return false;
 	let cur = peelConv(n);
 	if (cur.kind == NodeKind.Identifier) {
-		const bound = cur.resolvedSym != null && cur.resolvedSym!.symbolKind == SymbolKind.Variable ? constBindingInitializer(cur.resolvedSym) : null;
+		const bound = unitConst(cur.resolvedSym);
 		if (bound == null) return false;
 		cur = peelConv(bound);
 	}
-	return cur.kind == NodeKind.MemberExpr && fromCallerParams(cur, 0);
+	return cur.kind == NodeKind.MemberExpr && judgedHere(cur, 0);
 }
 
-function fromCallerParams(n: Node, depth: int32): boolean {
+function unitContains(target: Node | null): boolean {
+	if (unitRoot == null || target == null) return false;
+	const found: boolean[] = [false];
+	const visit = (n: Node): void => {
+		if (found[0]) return;
+		if (n == target) found[0] = true;
+		else forEachChild(n, visit);
+	};
+	visit(unitRoot!);
+	return found[0];
+}
+
+function walkedWhereItStands(closure: Node | null): boolean {
+	return unitContains(closure);
+}
+
+function unitConst(sym: Symbol | null): Node | null {
+	if (sym == null || sym.symbolKind != SymbolKind.Variable || hasFlag(sym, SymbolFlag.Global)) return null;
+	const bound = constBindingInitializer(sym);
+	return bound != null && unitContains(sym.declNode) ? bound : null;
+}
+
+function judgedHere(n: Node, depth: int32): boolean {
 	if (depth > 16) return false;
-	const p = peelConv(n);
-	return match (p.kind) {
-		NodeKind.MemberExpr => fromCallerParams((p.data as MemberExprData).object, depth + 1),
-		NodeKind.Identifier => p.resolvedSym != null && (isCallerParam(p.resolvedSym!)
-			|| (p.resolvedSym!.symbolKind == SymbolKind.Variable && constBindingInitializer(p.resolvedSym) != null && fromCallerParams(constBindingInitializer(p.resolvedSym)!, depth + 1))),
-		NodeKind.CallExpr | NodeKind.NewExpr => partsFromCallerParams(p, depth),
+	const alts: Node[] = [];
+	valueAlternatives(n, alts);
+	return alts.every((p: Node): boolean => match (p.kind) {
+		NodeKind.MemberExpr => judgedHere((p.data as MemberExprData).object, depth + 1),
+		NodeKind.ArrayAccess => judgedHere((p.data as ArrayAccessData).array, depth + 1),
+		NodeKind.Identifier => judgedBinding(p.resolvedSym, depth),
+		NodeKind.CallExpr | NodeKind.NewExpr | NodeKind.ArrayLiteral | NodeKind.ObjectLiteral => builtParts(p).every((a: Node): boolean => !holdsUnsendableFunction(a.nodeType, 0) || judgedHere(a, depth + 1)),
+		NodeKind.ArrowFunction | NodeKind.FunctionExpr | NodeKind.NullLiteral => true,
+		_ => false,
+	});
+}
+
+function judgedBinding(sym: Symbol | null, depth: int32): boolean {
+	if (sym == null) return false;
+	if (isCallerParam(sym) || isRoutine(sym) || (ownThis && sym.name == "this")) return true;
+	const bound = unitConst(sym) ?? patternSource(sym);
+	return bound != null && judgedHere(bound, depth + 1);
+}
+
+function patternSource(sym: Symbol): Node | null {
+	if (unitRoot == null || sym.symbolKind != SymbolKind.Variable || hasFlag(sym, SymbolFlag.Mutable)) return null;
+	const found: (Node | null)[] = [null];
+	const visit = (n: Node): void => {
+		if (found[0] != null) return;
+		if (n.kind == NodeKind.ForOfStmt && (n.resolvedSym == sym || bindsWithoutDefault((n.data as ForOfStmtData).forOfPattern, sym))) {
+			found[0] = (n.data as ForOfStmtData).forOfIterable;
+			return;
+		}
+		if (n.kind == NodeKind.DestructuringDecl && bindsWithoutDefault((n.data as DestructuringDeclData).destrPattern, sym)) {
+			found[0] = (n.data as DestructuringDeclData).destrInit;
+			return;
+		}
+		forEachChild(n, visit);
+	};
+	visit(unitRoot!);
+	return found[0];
+}
+
+function bindsWithoutDefault(pattern: Node | null, sym: Symbol): boolean {
+	if (pattern == null) return false;
+	return match (pattern.kind) {
+		NodeKind.Identifier => pattern.resolvedSym == sym,
+		NodeKind.ObjectPattern => (pattern.data as ObjectPatternData).patternProps.some((prop: Node): boolean => prop.kind == NodeKind.ObjectPatternProp
+			? (prop.data as ObjectPatternPropData).propDefault == null && bindsWithoutDefault((prop.data as ObjectPatternPropData).propAlias, sym)
+			: bindsWithoutDefault(prop, sym)),
+		NodeKind.ArrayPattern => (pattern.data as ArrayPatternData).patternDefaults.every((d: Node | null): boolean => d == null)
+			&& (pattern.data as ArrayPatternData).patternElements.some((e: Node): boolean => bindsWithoutDefault(e, sym)),
 		_ => false,
 	};
 }
 
-function partsFromCallerParams(call: Node, depth: int32): boolean {
+function builtParts(built: Node): Node[] {
+	if (built.kind == NodeKind.NewExpr) return (built.data as NewExprData).newArguments;
+	if (built.kind == NodeKind.ArrayLiteral) return (built.data as ArrayLiteralData).elements;
+	if (built.kind == NodeKind.ObjectLiteral) return (built.data as ObjectLiteralData).properties;
 	const parts: Node[] = [];
-	if (call.kind == NodeKind.NewExpr) {
-		for (const a of (call.data as NewExprData).newArguments) parts.push(a);
-	} else {
-		const recv = receiverOf(call);
-		if (recv != null) parts.push(recv);
-		for (const a of (call.data as CallExprData).arguments) parts.push(a);
-	}
-	return parts.every((a: Node): boolean => !typeCarriesRef(a.nodeType) || fromCallerParams(a, depth + 1));
+	const recv = receiverOf(built);
+	if (recv != null) parts.push(recv);
+	for (const a of (built.data as CallExprData).arguments) parts.push(a);
+	return parts;
 }
 
 function isCallerParam(sym: Symbol): boolean {
 	return sym.symbolKind == SymbolKind.Parameter && (ownParams.includes(sym.name) || enclosingParams.includes(sym.name));
+}
+
+export function valueAlternatives(n: Node, out: Node[]): void {
+	const p = peelView(n);
+	match (p.kind) {
+		NodeKind.HiddenAddr => valueAlternatives((p.data as HiddenDerefData).expr, out),
+		NodeKind.MoveExpr => valueAlternatives((p.data as MoveExprData).moveArg, out),
+		NodeKind.TryExpr => valueAlternatives((p.data as TryExprData).tryArg, out),
+		NodeKind.AwaitExpr => valueAlternatives((p.data as AwaitExprData).awaitArg, out),
+		NodeKind.ConditionalExpr => {
+			valueAlternatives((p.data as ConditionalExprData).ternaryConsequent, out);
+			valueAlternatives((p.data as ConditionalExprData).ternaryAlternate, out);
+		},
+		NodeKind.MatchExpr => { for (const c of (p.data as MatchExprData).matchCases) valueAlternatives((c.data as MatchCaseData).caseBody, out); },
+		NodeKind.BinaryExpr => {
+			const d = p.data as BinaryExprData;
+			if (d.operator == "=") valueAlternatives(d.right, out);
+			else if (d.operator == "??" || d.operator == "||" || d.operator == "&&") {
+				valueAlternatives(d.left, out);
+				valueAlternatives(d.right, out);
+			} else out.push(p);
+		},
+		_ => { out.push(p); },
+	};
 }
 
 function peelConv(n: Node): Node {
@@ -396,14 +505,31 @@ export function boundRoutine(sym: Symbol | null): Node | null {
 }
 
 function boundRoutineEffect(dispatchRegistry: DispatchRegistry, sym: Symbol, e: Effect): EffectCause | null {
-	return memo(sym, e, (): EffectCause | null => walkEffect(dispatchRegistry, boundRoutine(sym), e));
+	if (!reachesModuleState(e)) return memo(sym, e, (): EffectCause | null => walkEffect(dispatchRegistry, boundRoutine(sym), e));
+	if (walkedWhereItStands(boundRoutine(sym))) return null;
+	return memo(sym, e, (): EffectCause | null => {
+		const outer = ownParams;
+		const outerEnclosing = enclosingParams;
+		const outerRoot = unitRoot;
+		const outerConstruction = ownThis;
+		ownParams = [];
+		enclosingParams = [];
+		unitRoot = null;
+		ownThis = false;
+		const c = walkEffect(dispatchRegistry, boundRoutine(sym), e);
+		ownParams = outer;
+		enclosingParams = outerEnclosing;
+		unitRoot = outerRoot;
+		ownThis = outerConstruction;
+		return c;
+	});
 }
 
 function argumentEffect(dispatchRegistry: DispatchRegistry, arg: Node, e: Effect): EffectCause | null {
-	if (functionSlotOf(arg.nodeType) == null) return capturedFunctionHolder(arg, e);
+	if (functionSlotOf(arg.nodeType) == null) return unjudgedHolder(arg, e);
 	if (reachesModuleState(e) && isSendableFunction(arg.nodeType)) return null;
 	const a = peelConv(arg);
-	if (isRoutineNode(a) || isOwnParam(a) || isOwnParamField(a, e)) return null;
+	if (a.kind == NodeKind.NullLiteral || isRoutineNode(a) || isOwnParam(a) || isOwnParamField(a, e)) return null;
 	if (a.kind == NodeKind.Identifier && a.resolvedSym != null) {
 		if (isRoutine(a.resolvedSym)) return null;
 		if (boundRoutine(a.resolvedSym) != null) return boundRoutineEffect(dispatchRegistry, a.resolvedSym!, e);
@@ -411,15 +537,16 @@ function argumentEffect(dispatchRegistry: DispatchRegistry, arg: Node, e: Effect
 	return e == Effect.StoresBorrowed || e == Effect.ActorReach ? null : cause(arg, "passes a function value");
 }
 
-function capturedFunctionHolder(arg: Node, e: Effect): EffectCause | null {
-	if (!reachesModuleState(e)) return null;
-	const root = pathRoot(arg);
-	if (root == null || !viewSyms.includes(root) || !holdsUnsendableFunction(arg.nodeType, 0)) return null;
-	return cause(arg, "takes '" + root.name + "', a captured value holding a function value it may call,");
+const HOLDER_ADVICE = "; a callee answers for the function values its parameters hold only when its caller built them, so build the value in the code that hands it on, or declare the function field Sendable<...>";
+
+function unjudgedHolder(part: Node, e: Effect): EffectCause | null {
+	if (!reachesModuleState(e) || !holdsUnsendableFunction(part.nodeType, 0) || judgedHere(part, 0)) return null;
+	const c = cause(part, "hands on a value holding a function value it did not build, which the callee may call,");
+	return { site: c.site, text: c.text, advice: HOLDER_ADVICE };
 }
 
 function holdsUnsendableFunction(t: Type | null, depth: int32): boolean {
-	if (t == null || depth > 6) return false;
+	if (t == null || depth > 6 || (t.sym != null && t.sym.symbolKind == SymbolKind.Actor)) return false;
 	if (functionSlotOf(t) != null) return !isSendableFunction(t);
 	return match (t.kind) {
 		TypeKind.Ref | TypeKind.Var | TypeKind.Array | TypeKind.Alias | TypeKind.Distinct => holdsUnsendableFunction(t.typeReturn, depth + 1),
@@ -894,7 +1021,7 @@ export function constructionEffect(dispatchRegistry: DispatchRegistry, classSym:
 			if (member == null) continue;
 			let c: EffectCause | null = null;
 			if (member.kind == NodeKind.PropertyDecl && !(member.data as PropertyDeclData).propIsStatic) {
-				c = walkEffect(dispatchRegistry, (member.data as PropertyDeclData).propInitializer, e);
+				c = initializerEffect(dispatchRegistry, member, e);
 			} else if (member.kind == NodeKind.ConstructorDecl) {
 				c = walkRoutine(dispatchRegistry, member, e);
 			}
@@ -904,6 +1031,23 @@ export function constructionEffect(dispatchRegistry: DispatchRegistry, classSym:
 		if (parent == null) return null;
 		return through(decl, "extends '" + parent.name + "'", constructionEffect(dispatchRegistry, parent, e));
 	});
+}
+
+function initializerEffect(dispatchRegistry: DispatchRegistry, property: Node, e: Effect): EffectCause | null {
+	const outer = ownParams;
+	const outerEnclosing = enclosingParams;
+	const outerRoot = unitRoot;
+	const outerConstruction = ownThis;
+	ownParams = [];
+	enclosingParams = [];
+	unitRoot = property;
+	ownThis = true;
+	const c = walkEffect(dispatchRegistry, (property.data as PropertyDeclData).propInitializer, e);
+	ownParams = outer;
+	enclosingParams = outerEnclosing;
+	unitRoot = outerRoot;
+	ownThis = outerConstruction;
+	return c;
 }
 
 function dispatchedEffect(dispatchRegistry: DispatchRegistry, call: Node, sym: Symbol, e: Effect): EffectCause | null {
@@ -950,6 +1094,8 @@ export function callEffect(dispatchRegistry: DispatchRegistry, call: Node, e: Ef
 	}
 	const name = callee != null && callee.kind == NodeKind.Identifier ? (callee.data as IdentifierData).name
 		: callee != null && callee.kind == NodeKind.MemberExpr ? (callee.data as MemberExprData).property : sym!.name;
+	const handed = receiverOf(call) != null ? unjudgedHolder(receiverOf(call)!, e) : null;
+	if (handed != null) return through(call, "calls '" + name + "'", handed);
 	for (const arg of (call.data as CallExprData).arguments) {
 		const passed = argumentEffect(dispatchRegistry, arg, e);
 		if (passed != null) return through(call, "calls '" + name + "'", passed);
@@ -1011,6 +1157,12 @@ function isScalarToString(call: Node, sym: Symbol): boolean {
 export function newEffect(dispatchRegistry: DispatchRegistry, newNode: Node, e: Effect): EffectCause | null {
 	const classSym = (newNode.data as NewExprData).newCallee.resolvedSym;
 	if (e == Effect.StartsTask && classSym != null && classSym.symbolKind == SymbolKind.Actor) return cause(newNode, "starts the actor '" + classSym.name + "'");
+	if (reachesModuleState(e) && classSym != null && (classSym.symbolKind == SymbolKind.Class || classSym.symbolKind == SymbolKind.Actor)) {
+		for (const arg of (newNode.data as NewExprData).newArguments) {
+			const passed = argumentEffect(dispatchRegistry, arg, e);
+			if (passed != null) return through(newNode, "constructs '" + classSym.name + "'", passed);
+		}
+	}
 	if (classSym != null && classSym.symbolKind == SymbolKind.Actor && (reachesModuleState(e) || e == Effect.RunsElsewhere)) {
 		return through(newNode, "constructs the actor '" + classSym.name + "'", constructionEffect(dispatchRegistry, classSym, e));
 	}
@@ -1058,7 +1210,16 @@ function externSignatureHoldsPointer(sym: Symbol): boolean {
 
 export function moduleSourceOf(dispatchRegistry: DispatchRegistry, node: Node | null): EffectCause | null {
 	if (node == null || (node.nodeType != null && (!typeCarriesRef(node.nodeType) || isAtomicRef(node.nodeType) || holdsOnlyPids(node.nodeType)))) return null;
-	const p = peelView(node);
+	const alts: Node[] = [];
+	valueAlternatives(node, alts);
+	for (const p of alts) {
+		const c = p == node ? leafModuleSource(dispatchRegistry, p) : moduleSourceOf(dispatchRegistry, p);
+		if (c != null) return c;
+	}
+	return null;
+}
+
+function leafModuleSource(dispatchRegistry: DispatchRegistry, p: Node): EffectCause | null {
 	return match (p.kind) {
 		NodeKind.Identifier => p.resolvedSym == null ? null
 			: isModuleState(p.resolvedSym!) ? useEffect(dispatchRegistry, p, Effect.ActorReach)
@@ -1066,13 +1227,6 @@ export function moduleSourceOf(dispatchRegistry: DispatchRegistry, node: Node | 
 			: moduleSourceOf(dispatchRegistry, constBindingInitializer(p.resolvedSym)),
 		NodeKind.MemberExpr => p.resolvedSym != null && isModuleState(p.resolvedSym!) ? useEffect(dispatchRegistry, p, Effect.ActorReach) : moduleSourceOf(dispatchRegistry, (p.data as MemberExprData).object),
 		NodeKind.ArrayAccess => moduleSourceOf(dispatchRegistry, (p.data as ArrayAccessData).array),
-		NodeKind.MoveExpr => moduleSourceOf(dispatchRegistry, (p.data as MoveExprData).moveArg),
-		NodeKind.ConditionalExpr => moduleSourceOf(dispatchRegistry, (p.data as ConditionalExprData).ternaryConsequent) ?? moduleSourceOf(dispatchRegistry, (p.data as ConditionalExprData).ternaryAlternate),
-		NodeKind.BinaryExpr => {
-			const d = p.data as BinaryExprData;
-			if (d.operator == "=") return moduleSourceOf(dispatchRegistry, d.right);
-			return d.operator == "??" || d.operator == "||" || d.operator == "&&" ? moduleSourceOf(dispatchRegistry, d.left) ?? moduleSourceOf(dispatchRegistry, d.right) : null;
-		},
 		NodeKind.ArrayLiteral => firstModuleSource(dispatchRegistry, (p.data as ArrayLiteralData).elements),
 		NodeKind.ObjectLiteral => firstModuleSource(dispatchRegistry, (p.data as ObjectLiteralData).properties),
 		NodeKind.SpreadExpr => spreadCopiesValues(p) ? null : moduleSourceOf(dispatchRegistry, (p.data as SpreadExprData).spreadArg),
@@ -1103,18 +1257,38 @@ function callResultModuleSource(dispatchRegistry: DispatchRegistry, call: Node):
 	const merged = (recv != null ? moduleSourceOf(dispatchRegistry, recv) : null) ?? firstModuleSource(dispatchRegistry, (call.data as CallExprData).arguments);
 	if (merged != null) return merged;
 	const sym = call.resolvedSym;
-	if (!isRoutine(sym) || isExternalRoutine(sym!) || resultSourceOpen.includes(sym!)) return null;
-	recordBodyRead(sym!.modulePath);
-	const body = routineBody(unpackDecl(sym!.declNode));
+	if (!isRoutine(sym)) return unseenResultSource(call);
+	const own = through(call, "calls '" + sym!.name + "'", routineResultSource(dispatchRegistry, sym!));
+	if (own != null) return own;
+	const entry = dispatchEntryFor(dispatchRegistry, sym!);
+	if (entry == null || entry.overloaded) return null;
+	for (const o of dispatchOverridesFor(dispatchRegistry, entry.classSym, entry.methodName)) {
+		const c = through(call, "calls '" + entry.methodName + "' as overridden in '" + o.classSym.name + "'", routineResultSource(dispatchRegistry, o.sym));
+		if (c != null) return c;
+	}
+	return null;
+}
+
+function unseenResultSource(call: Node): EffectCause | null {
+	const callee = (call.data as CallExprData).callee;
+	const slot = callee != null ? callee.nodeType : null;
+	if (functionSlotOf(slot) == null || isSendableFunction(slot)) return null;
+	return cause(call, "calls a function value, whose result may be module state,");
+}
+
+function routineResultSource(dispatchRegistry: DispatchRegistry, sym: Symbol): EffectCause | null {
+	if (isExternalRoutine(sym) || resultSourceOpen.includes(sym)) return null;
+	recordBodyRead(sym.modulePath);
+	const body = routineBody(unpackDecl(sym.declNode));
 	if (body == null) return null;
-	resultSourceOpen.push(sym!);
+	resultSourceOpen.push(sym);
 	scanFlows(body);
 	const returned: Node[] = [];
 	if (body.kind == NodeKind.BlockStmt) collectReturned(body, returned);
 	else returned.push(body);
 	const c = firstModuleSource(dispatchRegistry, returned);
 	resultSourceOpen.pop();
-	return through(call, "calls '" + sym!.name + "'", c);
+	return c;
 }
 
 function collectReturned(node: Node, out: Node[]): void {
@@ -1141,6 +1315,11 @@ function firstModuleSource(dispatchRegistry: DispatchRegistry, nodes: Node[]): E
 		if (c != null) return c;
 	}
 	return null;
+}
+
+export function runsVisibleBody(call: Node): boolean {
+	const impl = calledRoutine(call);
+	return impl != null && !isExternalRoutine(impl);
 }
 
 function isExternalRoutine(sym: Symbol): boolean {
@@ -1369,7 +1548,13 @@ export function mayStoreIntoReceiver(call: Node): boolean {
 	if (!call.flags.has(NodeFlag.ExtCall)) return true;
 	const sig = calledRoutineType(call);
 	const formal = sig != null && sig.typeChildren.length > 0 ? sig.typeChildren[0] : null;
+	if (formal != null && formal.kind == TypeKind.Array) return readerKeepsThroughElement(formal.typeReturn);
 	return formal == null || formal.kind == TypeKind.Var || formal.kind == TypeKind.Sink || holdsPointerByValue(formal, 0);
+}
+
+function readerKeepsThroughElement(element: Type | null): boolean {
+	if (element != null && element.kind == TypeKind.GenericParam) return element.typeExtra != null && holdsPointerByValue(element.typeExtra, 1);
+	return holdsPointerByValue(element, 1);
 }
 
 function holdsPointerByValue(t: Type | null, depth: int32): boolean {

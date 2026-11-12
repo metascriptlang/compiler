@@ -1902,7 +1902,7 @@ function requireSpawnSafe(ctx: CheckerContext, fn: Node, runs: string, at: Node)
 		if (stored != null) addError(ctx, runs + ", but it " + stored.text + "; " + (stored.advice ?? storedValueName(stored.site) + " is a view the task does not own and a view takes no count, so pass it to a routine whose parameters are Readonly (the borrow form), or store an explicit copy of it (clone or spread) when the container must own its elements"), at.location.line, at.location.column);
 		const c = spawnEffectOf(ctx, peelHidden(fn), Effect.SpawnUnsafe, views);
 		if (c == null) return;
-		addError(ctx, runs + ", but it " + c.text + MODULE_STATE_RULE, at.location.line, at.location.column);
+		addError(ctx, runs + ", but it " + c.text + (c.advice ?? MODULE_STATE_RULE), at.location.line, at.location.column);
 	});
 }
 
@@ -1951,7 +1951,7 @@ function refuseStoredClosureReach(actorName: string, field: string, value: Node)
 	deferEffectCheck(closure, "actorModuleState", (ctx: CheckerContext): void => {
 		const c = walkEffect(ctx.dispatchRegistry, closure, Effect.ActorReach);
 		if (c == null) return;
-		addError(ctx, "actor '" + actorName + "' runs the closure stored in '" + field + "' on whichever thread takes its message, but it " + c.text + MODULE_STATE_RULE, closure.location.line, closure.location.column);
+		addError(ctx, "actor '" + actorName + "' runs the closure stored in '" + field + "' on whichever thread takes its message, but it " + c.text + (c.advice ?? MODULE_STATE_RULE), closure.location.line, closure.location.column);
 	});
 }
 
@@ -1966,7 +1966,7 @@ export function checkActorMethodModuleState(actorName: string, raw: Node): void 
 		if (stored != null) addError(ctx, runs + stored.text + "; " + (stored.advice ?? "a module const is shared by every thread and a read of it takes no count, so store an explicit copy of it (clone or spread)"), method.location.line, method.location.column);
 		const c = walkEffect(ctx.dispatchRegistry, method, Effect.ActorReach);
 		if (c == null) return;
-		addError(ctx, runs + c.text + MODULE_STATE_RULE, method.location.line, method.location.column);
+		addError(ctx, runs + c.text + (c.advice ?? MODULE_STATE_RULE), method.location.line, method.location.column);
 	});
 }
 
