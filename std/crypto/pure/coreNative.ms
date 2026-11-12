@@ -398,18 +398,12 @@ export function hmacSync<K extends ByteInput, D extends ByteInput>(
 	} else {
 		if (kind >= 0) {
 			const mac = new Buffer(hashOutputSize(kind));
-			when (c) {
-				hmacInto(
-					kind,
-					typeof key == "string" ? key.asBytes() : key,
-					typeof data == "string" ? data.asBytes() : data,
-					mac,
-				);
-			} else {
-				const secret = bytesOf(key);
-				hmacInto(kind, secret, bytesOf(data), mac);
-				wipeIfCopied(key, secret);
-			}
+			hmacInto(
+				kind,
+				typeof key == "string" ? key.asBytes() : key,
+				typeof data == "string" ? data.asBytes() : data,
+				mac,
+			);
 			return Result.ok(mac);
 		}
 		if (!isExtAlg(algorithm)) {
@@ -537,14 +531,7 @@ when (js && nodejs) {
 			const ctx = this._ctx;
 			if (ctx instanceof HashState) {
 				if (ctx.finished) return this;
-				when (c) {
-					updateHash(
-						ctx,
-						typeof data == "string" ? data.asBytes() : data,
-					);
-				} else {
-					updateHash(ctx, bytesOf(data));
-				}
+				updateHash(ctx, typeof data == "string" ? data.asBytes() : data);
 			} else if (ctx instanceof Ripemd160State) {
 				if (ctx.finished) return this;
 				updateRipemd160(ctx, bytesOf(data));
@@ -600,11 +587,7 @@ when (js && nodejs) {
 			if (!this._done) {
 				const ctx = this._ctx;
 				if (ctx instanceof HmacState) {
-					when (c) {
-						updateHmac(ctx, typeof data == "string" ? data.asBytes() : data);
-					} else {
-						updateHmac(ctx, bytesOf(data));
-					}
+					updateHmac(ctx, typeof data == "string" ? data.asBytes() : data);
 				} else {
 					updateExtHmac(ctx, bytesOf(data));
 				}
