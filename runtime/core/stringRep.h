@@ -261,13 +261,14 @@ static inline msString msStringNewUninit(int64_t len) {
 /* Single character as new string */
 msString msStringCharAtSlow(msString s, int64_t idx);
 
-extern const msString msCharTable[128];
+typedef struct { int64_t cap; char data[2]; } msCharPayload;
+extern const msCharPayload msCharPayloads[128];
 
 static inline msString msStringCharAt(msString s, int64_t idx) {
 	if (s.p != NULL && (uint64_t)idx < (uint64_t)s.len) {
 		const int64_t cap = msStrCapLoad(s.p);
 		if ((cap & (MS_ASCII_CHECKED | MS_ASCII_FLAG)) == (MS_ASCII_CHECKED | MS_ASCII_FLAG)) {
-			return msCharTable[(unsigned char)s.p->data[idx]];
+			return MS_STRING_LIT(&msCharPayloads[(unsigned char)s.p->data[idx]], 1);
 		}
 	}
 	return msStringCharAtSlow(s, idx);

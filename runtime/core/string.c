@@ -18,7 +18,7 @@
 #define MS_CP_ROW(b) MS_CP(b), MS_CP((b)+1), MS_CP((b)+2), MS_CP((b)+3), \
 	MS_CP((b)+4), MS_CP((b)+5), MS_CP((b)+6), MS_CP((b)+7)
 
-static const struct { int64_t cap; char data[2]; } msCharPayloads[128] = {
+const msCharPayload msCharPayloads[128] = {
 	MS_CP_ROW(0),   MS_CP_ROW(8),   MS_CP_ROW(16),  MS_CP_ROW(24),
 	MS_CP_ROW(32),  MS_CP_ROW(40),  MS_CP_ROW(48),  MS_CP_ROW(56),
 	MS_CP_ROW(64),  MS_CP_ROW(72),  MS_CP_ROW(80),  MS_CP_ROW(88),

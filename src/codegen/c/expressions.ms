@@ -1067,7 +1067,7 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 		if (byteLen == 1 && d.value.byteLength == 1) {
 			const code = d.value.byteAt(0);
 			if (code < 128) {
-				ctx.results.push(`msCharTable[${code}]`);
+				ctx.results.push(msStringPoolRef(`msCharPayloads[${code}]`, 1));
 				return;
 			}
 		}

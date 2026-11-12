@@ -141,12 +141,12 @@ static inline void msMemCopyTo(uint8_t* dst, int64_t at, const uint8_t* src, int
 
 /* ===== Extraction ===== */
 
-static inline msString msCharTableAt(uint8_t byte) { return msCharTable[byte & 0x7F]; }
+static inline msString msCharTableAt(uint8_t byte) { return MS_STRING_LIT(&msCharPayloads[byte & 0x7F], 1); }
 
 /* An already-verified-ASCII string indexes by byte, so the interned table
    answers without a call. Unknown/false flag, non-ASCII or out of range goes
    out of line — including the flag-computing path, which must stay one place. */
-static inline msString msStringAsciiChar(uint8_t byte) { return msCharTable[byte]; }
+static inline msString msStringAsciiChar(uint8_t byte) { return MS_STRING_LIT(&msCharPayloads[byte], 1); }
 
 /* Raw byte at byte offset. Returns -1 if out of range. */
 int64_t msStringByteAt(msString s, int64_t idx);
