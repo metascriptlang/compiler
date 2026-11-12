@@ -1843,9 +1843,11 @@ function rebinds(n: Node, sym: Symbol): boolean {
 	return left.kind == NodeKind.Identifier && left.resolvedSym === sym;
 }
 
-function isObjectReference(t: Type): boolean {
+function isObjectOrArrayReference(t: Type): boolean {
 	const held = holderType(t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t);
-	return held != null && held.sym != null && (held.sym.symbolKind == SymbolKind.Class || held.sym.symbolKind == SymbolKind.Interface);
+	if (held == null) return false;
+	if (held.kind == TypeKind.Array) return true;
+	return held.sym != null && (held.sym.symbolKind == SymbolKind.Class || held.sym.symbolKind == SymbolKind.Interface);
 }
 
 function isLoop(n: Node): boolean {
@@ -1862,7 +1864,7 @@ function isOtherArm(n: Node, child: Node): boolean {
 // the local's scope ends. What takes the value is no such read: it holds the value while it runs.
 export function deathSeenBeforeScopeEnd(w: WriteEffects, body: Node, use: Node, sym: Symbol, defs: LocalDefs | null): boolean {
 	const owner = sym.symbolType;
-	if (owner == null || !isObjectReference(owner) || !deathCanBeSeen(w, owner)) return false;
+	if (owner == null || !isObjectOrArrayReference(owner) || !deathCanBeSeen(w, owner)) return false;
 	const path: Node[] = [];
 	if (!pathTo(body, use, path)) return true;
 	let taker = path.length - 2;
