@@ -40,6 +40,20 @@ function redsOf(lane: string, lines: string[]): string[] {
 			if (mark >= 0 && close > mark && line.substring(0, mark).trim() == "") red = line.substring(mark + 7, close + 1);
 		} else if (lane == "guard" || lane == "hcr" || lane == "lsp") {
 			red = between(line, "FAIL ", ":");
+		} else if (lane == "solana") {
+			red = between(line, "FAIL solana ", ":");
+		} else if (lane == "tools") {
+			for (const kind of [": bash -n", ": self-test", ": check"]) {
+				if (line.startsWith("FAIL ") && line.endsWith(kind)) red = line.substring(5, line.length - kind.length);
+			}
+		} else if (lane == "build") {
+			if (line.startsWith("FAIL self-host: ")) {
+				const note = line.endsWith(")") ? line.lastIndexOf(" (") : line.length;
+				if (note > 5) red = line.substring(5, note);
+			}
+		} else if (lane == "crypto") {
+			const words = line.startsWith("RED ") ? line.substring(4).trim().split(" ") : [];
+			if (words.length > 2) red = `${words[0]} ${words[1]}`;
 		} else if (lane == "fmt") {
 			for (const kind of ["LOSSY ", "UNSTABLE ", "NO-FMT ", "UNREADABLE "]) {
 				const end = line.indexOf(".ms");
@@ -94,22 +108,39 @@ for (const entry of readDir(dir).sort()) {
 	const secs = trailer(lines, "SECS");
 	const part = entry.substring(0, entry.length - 4);
 	const reds = redsOf(name, lines);
+	if (lines.some((line: string): boolean => line.startsWith("TIMEOUT after "))) reds.push("timed out");
 	if (rc == null || secs == null) {
 		reds.push(`${part}: the log has no RC and SECS trailer`);
 	} else {
 		if (secs > lane.secs) lane.secs = secs;
-		if (rc != 0 && reds.length == 0) reds.push(`${part}: exit ${rc} with no named failure`);
+		if (rc != 0 && reds.length == 0) reds.push(name == "build" ? "build" : name == "crypto" ? "crypto setup" : `${part}: exit ${rc} with no named failure`);
 	}
 	for (const red of reds) if (!lane.reds.includes(red)) lane.reds.push(red);
 }
 if (lanes.length == 0) throw new Error(`gate: ${dir} holds no lane log`);
 
+const flaky = known.get("flaky") ?? [];
+function steady(name: string): boolean {
+	const cell = name.endsWith("]") ? name.lastIndexOf(" [") : -1;
+	return !flaky.includes(name) && (cell < 0 || !flaky.includes(name.substring(0, cell)));
+}
+function firstThree(names: string[]): string {
+	return names.slice(0, 3).join(", ");
+}
+
 let anyNew = false;
 for (const lane of lanes) {
-	const listed = known.get(lane.name) ?? [];
-	const fresh = lane.reds.filter((red: string): boolean => !listed.includes(red)).sort();
-	console.log(`gate: ${lane.name} ${lane.secs}s · ${lane.reds.length} red · ${lane.reds.length - fresh.length} known · ${fresh.length} new`);
+	const listed = (known.get(lane.name) ?? []).filter(steady);
+	const reds = lane.reds.filter(steady).sort();
+	const flakes = lane.reds.filter((red: string): boolean => !steady(red)).sort();
+	const fresh = reds.filter((red: string): boolean => !listed.includes(red));
+	const fixed = listed.filter((row: string): boolean => !reds.includes(row)).sort();
+	let line = `gate: ${lane.name} ${lane.secs}s · ${reds.length} red · ${reds.length - fresh.length} known · ${fresh.length} new`;
+	if (fixed.length > 0) line += ` · ${fixed.length} known-now-green (${firstThree(fixed)})`;
+	if (flakes.length > 0) line += ` · ${flakes.length} flaky (${firstThree(flakes)})`;
+	console.log(line);
 	for (const red of fresh) console.log(`  new: ${red}`);
+	for (const row of fixed) console.log(`  known-now-green: ${row}`);
 	if (fresh.length > 0) anyNew = true;
 }
 console.log(`gate: ${anyNew ? "RED" : "GREEN"} (${lanes.map((l: Lane): string => l.name).join(", ")})`);
