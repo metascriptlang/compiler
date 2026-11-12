@@ -1104,6 +1104,7 @@ function callResultModuleSource(dispatchRegistry: DispatchRegistry, call: Node):
 	if (merged != null) return merged;
 	const sym = call.resolvedSym;
 	if (!isRoutine(sym) || isExternalRoutine(sym!) || resultSourceOpen.includes(sym!)) return null;
+	recordBodyRead(sym!.modulePath);
 	const body = routineBody(unpackDecl(sym!.declNode));
 	if (body == null) return null;
 	resultSourceOpen.push(sym!);
