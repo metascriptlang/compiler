@@ -463,6 +463,29 @@ test "callRoutine calls an exported function again and again over the module's s
 	removeAll(dir);
 }
 
+test "a routine that arms a timer keeps its locals after an earlier call's timer ran" {
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, `class Box { v: int32 = 7; }\n`
+		+ `export function arm(): void { setTimeout((): void => {}, 0); }\n`
+		+ `export function use(): int32 { const b = new Box(); setTimeout((): void => {}, 0); return b.v; }\n`);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	const armed = callRoutine(interp, routineOf(interp, "arm"), []);
+	if (!armed.ok) throw new Error(armed.error);
+	assert intCall(interp, routineOf(interp, "use"), []) == 7;
+	assert intCall(interp, routineOf(interp, "use"), []) == 7;
+	removeAll(dir);
+}
+
+test "a routine that arms a timer keeps a local array after its own earlier call's timer ran" {
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, `export function count(): int32 { const xs: int32[] = [1, 2, 3]; setTimeout((): void => {}, 0); return xs.length as int32; }\n`);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	const count = routineOf(interp, "count");
+	assert intCall(interp, count, []) == 3;
+	assert intCall(interp, count, []) == 3;
+	removeAll(dir);
+}
+
 test "callRoutine passes floats and strings and returns them" {
 	const dir = scratchDir();
 	writeFile(`${dir}/main.ms`, `export function step(x: number, dt: number): number { return x + 2.5 * dt; }\n`
