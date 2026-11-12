@@ -226,12 +226,46 @@ On d87, from `llvm-project-23.1.4.src.tar.xz` with the source edit above, the fi
   extracted, verified and used it in 75 s (`installed: links of llvm.exe 26, size 413M`), and the second build took
   4 s.
 
-Not verified: a bundle made by `assembleBundle` on Windows. d87's installed bundle keeps the mingw builtins
-(`lib/clang/23/lib/x86_64-w64-windows-gnu`) and the UBSan archives' receipt outside `runtime/` and lists a root
-overlay, which `assembleBundle` refuses (`lists bundle overlays`), so the Windows runtime has to arrive as overlays.
-Also not measured: a compile-time A/B of this engine (the table above measured the same stages run by hand), ThinLTO
-for the Windows engine (the stage is PGO alone, as in the release bat), a Windows arm64 host, and the m1m and rtx
-engines rebuilt with this cache file.
+Not measured: a compile-time A/B of this engine (the table above measured the same stages run by hand), ThinLTO for
+the Windows engine (the stage is PGO alone, as in the release bat), a Windows arm64 host, and the m1m and rtx engines
+rebuilt with this cache file. The next section assembles a bundle from this package.
+
+## Measured 2026-11-12 — a bundle from an engine and overlays: Windows, wasi and musl from d87
+
+`assembleBundle` takes an engine and target overlays alone (`--runtime-bundle` is optional), because a bundle that
+overlays were merged into keeps files outside `runtime/` that an engine swap would drop (d87's installed bundle: the
+mingw builtins and the UBSan receipt). The overlays below were built on rtx with engine `5f03abdf2cf1` (the PGO
+engine package) and shipped to d87 as one archive.
+
+- `prepareWindowsRuntime` (mingw-w64 13.0.0, archive sha256 `5afe822af5c4…`): `producer rc=0 after 54 s`, 197 MB,
+  3,596 files. Its builtins are sha256 `5e878299b2b4…`, the digest of the archive built on 2026-11-08 with another
+  engine build. It now builds the standalone UBSan too (`libclang_rt.ubsan_standalone.a` 1,711,710 bytes, its C++
+  half 34,518), puts both in the executable and the DLL directory, and links `-fsanitize=undefined` through both
+  configs as part of its check; before, only `prepareSanitizerRuntime.py` made them.
+- The musl overlays (`prepareTargetRuntime`, 49 s and 46 s) no longer carry the 8 Linux headers whose name differs
+  from another header only by case (`linux/netfilter/xt_CONNMARK.h`, `xt_DSCP.h`, `xt_MARK.h`, `xt_RATEEST.h`,
+  `xt_TCPMSS.h`, `netfilter_ipv4/ipt_ECN.h`, `ipt_TTL.h`, `netfilter_ipv6/ip6t_HL.h`): 2,983 files on rtx became 2,975
+  when the archive was unpacked on d87's NTFS, each pair reduced to whichever file was written last. zig deletes
+  the same 8 (`tools/update-linux-headers.zig`, `bad_files`). The overlays are now 2,975 and 2,946 files on both
+  hosts, and `assembleBundle` refuses an overlay that holds two paths differing only by case.
+- On d87, `assembleBundle --engine win-producer-pkg` with the four overlays: 367 MB, 8,390 files, identity
+  `c5fb16e280df`, in 474 s; after contract writing, verification and tool copies hash each physical file once
+  (`digestOncePerFile`, by volume and file index or device and inode) the same command takes 62 s and gives the same
+  identity. `prepareCxxRuntime --target x86_64-windows-gnu` on that bundle (634 s, before that change): 392 MB,
+  10,092 files, `links of llvm.exe 26`, tar 394,814,976 bytes, 53,962,164 at `xz -6` against 207,179,188 for the
+  installed bundle, which carries Windows alone.
+- `platformMatrix.ms` from d87 through that bundle, msc `7b6e64e1f852` named by `MSC`: windows-x64 16 built and 31
+  run rows ok; wasm32-wasi 11 built and 20 run rows ok (node), `cppCompanion` the one FAIL (no
+  `wasm32-wasi.cxx.cfg`; zig fails it too); linux-musl-x86_64 16 built; linux-musl-arm64 16 built; the musl
+  artifacts are not run on Windows. ASan and TSan on musl and mingw and every sanitizer on wasm are refused by name.
+  `g1 through the bundle: 153 s`, `g2 by g1: 66 s`, g2 checks `src/index.ms` clean (589 modules).
+- The matrix runs the installed msc unless `MSC` names one. With d87's installed `9a9713925` every wasm32-wasi cell
+  fails (`drc.h:20:10: fatal error: 'stdlib.h' file not found`: it passes `-target wasm32-wasi` beside the config) and
+  the musl ASan and TSan cells fail at link instead of being refused, so this bundle needs the synced msc first.
+
+Not verified: a compile-time A/B of this bundle against the installed one, the musl artifacts built on d87 run on a
+Linux host, an install of this bundle, the overlays' bytes when built on another host, and the Windows C++ runtime
+as an overlay (it is still added to the assembled bundle on d87, so rtx and m1m do not carry it).
 
 ## Measured 2026-11-12 — what zig builds for each target, and the order of the C runtime libraries
 
