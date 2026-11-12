@@ -1564,14 +1564,16 @@ export function pathSlots(w: WriteEffects, n: Node, out: string[]): Symbol | nul
 }
 
 export function borrowedArgsToCopy(w: WriteEffects, call: Node, defs: LocalDefs | null): boolean[] {
-	const args = (call.data as CallExprData).arguments;
+	const isNew = call.kind == NodeKind.NewExpr;
+	const args = isNew ? (call.data as NewExprData).newArguments : (call.data as CallExprData).arguments;
 	const flags: boolean[] = [];
 	const roots: (Symbol | null)[] = [];
 	const slots: string[][] = [];
 	const byAddress: boolean[] = [];
 	const receiverByAddress = call.resolvedSym != null && call.resolvedSym!.nativeName.startsWith("&");
 	const fnType = call.resolvedSym != null && call.resolvedSym!.symbolType != null && call.resolvedSym!.symbolType!.kind == TypeKind.Function ? call.resolvedSym!.symbolType : null;
-	const formals = fnType != null && fnType.typeChildren.length == args.length ? fnType.typeChildren : null;
+	const params = fnType == null ? null : (isNew ? fnType.typeChildren.slice(1) : fnType.typeChildren);
+	const formals = params != null && params.length == args.length ? params : null;
 	let any = false;
 	for (const a of args) {
 		const toRefParam = formals != null && formals[byAddress.length] != null && formals[byAddress.length].kind == TypeKind.Var;
@@ -1597,7 +1599,7 @@ export function borrowedArgsToCopy(w: WriteEffects, call: Node, defs: LocalDefs 
 		for (let j = 0; j < args.length && !keep; j += 1) {
 			if (j != i && byAddress[j] && roots[i] != null && roots[j] === roots[i]) keep = true;
 		}
-		const reads = reachesCalleeByValue(w, call, i) ? slots[i] : addressSlots(slots[i]);
+		const reads = reachesCalleeByValue(w, call, args[i], i) ? slots[i] : addressSlots(slots[i]);
 		const immutable = slots[i].length > 0 && slots[i].every((slot: string): boolean => isImmutableEnvSlot(w, slot));
 		if (!keep && slots[i].length > 0 && !immutable) keep = partsMayWrite(w, writes, reads);
 		for (let j = i + 1; j < args.length && !keep && slots[i].length > 0 && !immutable; j += 1) {
@@ -1750,9 +1752,10 @@ function isImmutableEnvSlot(w: WriteEffects, slot: string): boolean {
 	return slot.startsWith("F:") && holder != null && holder.sym != null && hasFlag(holder.sym, SymbolFlag.ImmutableEnv);
 }
 
-function reachesCalleeByValue(w: WriteEffects, call: Node, i: int32): boolean {
-	const kind = w.rcOf((call.data as CallExprData).arguments[i].nodeType).rcKind;
+function reachesCalleeByValue(w: WriteEffects, call: Node, arg: Node, i: int32): boolean {
+	const kind = w.rcOf(arg.nodeType).rcKind;
 	if (kind != RcKind.Ref && kind != RcKind.String) return false;
+	if (call.kind == NodeKind.NewExpr) return true;
 	const sym = call.resolvedSym;
 	const fnType = sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function ? sym.symbolType : (call.data as CallExprData).callee.nodeType;
 	return i > 0 || !returnsBorrow(fnType);

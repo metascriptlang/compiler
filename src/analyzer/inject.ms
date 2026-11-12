@@ -37,6 +37,7 @@ import {
 import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym, isUnionProjection, isUnionSlotLocation } from "./alias";
 import { inferCursors } from "./cursors";
 import { calledRoutineType, isViewCall, returnsView } from "../checker/effects";
+import { ctorKeepsParam, ctorParamsKnown } from "../checker/ctorSunkParams";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
 import { LocalDefs, holderType, borrowedArgsToCopy, borrowedReceiverToCopy, unownedReceiverToCopy, readsUnownedEdge, callerDefsOf, cloneForCall, createRoutineDecls, createWriteSummaries, enterRoutineLending, leaveRoutineLending } from "./writeEffects";
 import { cstringSource } from "../transform/native/cstringConvLower";
@@ -538,8 +539,8 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const receiverCall = routineParams != null && routineParams.length > 0 && sym != null && sym.symbolType != null && sym.symbolType.kind == TypeKind.Function && node.flags.has(NodeFlag.ExtCall) && !node.flags.has(NodeFlag.ExtStatic) && cd.callee.kind == NodeKind.MemberExpr;
 	const receiverFormal: Type | null = receiverCall ? routineParams![0] : null;
 	const sinkParams: Type[] | null = receiverCall ? routineParams!.slice(1) : routineParams;
-	const sinksAll = isCtorRoutine(cd.callee.resolvedSym) || isCtorRoutine(sym);
 	const calleeSym = isCtorRoutine(cd.callee.resolvedSym) ? cd.callee.resolvedSym : sym;
+	const ctorCallee = isCtorRoutine(calleeSym) ? calleeSym : null;
 
 	// Actor proxy call without a park = SEND-class handoff: the caller never
 	// suspends on a reply, so a plain-ref arg must transfer ownership into the
@@ -559,7 +560,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const marks: Node[] = [];
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		let argMode = DrcMode.Normal;
-		if ((sinksAll && !isRestArg(calleeSym, i, cd.arguments.length)) || (sinkParams != null && i < sinkParams.length && isSinkTypeForParam(sinkParams[i]) && !isUncountedElement(boundElement(sinkParams, i, cd.arguments, receiverFormal, cd.callee)))) {
+		if (ctorCallee != null ? ctorTakesArg(ctorCallee, i, cd.arguments.length) : (sinkParams != null && i < sinkParams.length && isSinkTypeForParam(sinkParams[i]) && !isUncountedElement(boundElement(sinkParams, i, cd.arguments, receiverFormal, cd.callee)))) {
 			argMode = DrcMode.SinkArg;
 		}
 		// actor SEND handoff: plain (non-atomic) ref args are consumed into the message
@@ -973,12 +974,13 @@ function processArrayLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node 
 
 function processNew(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const nd = node.data as NewExprData;
-	// A constructor's parameters are owned (see isCtorRoutine): the arguments are sunk, a last
-	// use or a temporary moves in and anything still live is copied.
 	const marks: Node[] = [];
-	const argMode = isCtorRoutine(node.resolvedSym) || isAtomicRef(node.nodeType) ? DrcMode.SinkArg : DrcMode.Normal;
+	const ctor = isCtorRoutine(node.resolvedSym) ? node.resolvedSym : null;
+	const keepAlive = ctor != null ? borrowedArgsToCopy(dctx.writes, node, dctx.callerDefs) : null;
 	for (let i = 0; i < nd.newArguments.length; i += 1) {
-		nd.newArguments[i] = processNode(nd.newArguments[i], dctx, isRestArg(node.resolvedSym, i, nd.newArguments.length) ? DrcMode.Normal : argMode);
+		const sunk = ctor != null ? ctorTakesArg(ctor, i, nd.newArguments.length) : (isAtomicRef(node.nodeType) && !isRestArg(node.resolvedSym, i, nd.newArguments.length));
+		nd.newArguments[i] = processNode(nd.newArguments[i], dctx, sunk ? DrcMode.SinkArg : DrcMode.Normal);
+		if (!sunk && keepAlive != null && keepAlive[i] && !isRestArg(ctor, i, nd.newArguments.length)) nd.newArguments[i] = keepArgumentAlive(nd.newArguments[i], dctx);
 		marks.push(markOperandEnd(dctx, node.location));
 	}
 	keepOperandOrder(nd.newArguments, marks, dctx);
@@ -1902,13 +1904,26 @@ function callCanThrow(callExpr: Node): boolean {
 	return !hasFlag(sym, SymbolFlag.ImportC);
 }
 
-// A constructor owns the values it is handed: every call of one sinks its arguments, and its
-// body registers its parameters as owned. Decided from the routine alone, so a caller analysed
-// before the constructor's module is lowered still agrees with the body.
 function isCtorRoutine(sym: Symbol | null): boolean {
 	if (sym == null) return false;
 	if (hasFlag(sym, SymbolFlag.ClassInit)) return true;
 	return sym.declNode != null && sym.declNode.kind == NodeKind.ConstructorDecl;
+}
+
+// A constructor owns the parameters its checked body keeps, or that are written `sink`: a call
+// sinks those arguments and the body registers them as owned; the others are lent. Both sides
+// read the same Symbol's `sunkParams`, so a caller analysed before the constructor's module is
+// lowered still agrees with the body. The receiver is parameter 0 and no call passes it.
+function ctorOwnsParam(ctor: Symbol, param: int32): boolean {
+	const formals = ctor.symbolType != null && ctor.symbolType.kind == TypeKind.Function ? ctor.symbolType.typeChildren : null;
+	if (formals != null && param < formals.length && formals[param] != null && formals[param].kind == TypeKind.Varargs) return false;
+	if (!ctorParamsKnown(ctor)) throw new Error(`internal: DRC: the constructor '${ctor.name}' reached the analyzer before the checker settled which parameters it keeps`);
+	if (ctorKeepsParam(ctor, param)) return true;
+	return formals != null && param < formals.length && isSinkTypeForParam(formals[param]);
+}
+
+function ctorTakesArg(ctor: Symbol, argIdx: int32, argCount: int32): boolean {
+	return !isRestArg(ctor, argIdx, argCount) && ctorOwnsParam(ctor, argIdx + 1);
 }
 
 // A rest parameter is never sunk, whatever routine takes it: the caller packs the trailing
@@ -2034,16 +2049,18 @@ function isLastReadFieldSafe(node: Node, idx: number, stmts: Node[], dctx: DrcCo
 // Register RC-typed function parameters for scope cleanup.
 // The function owns the parameter values — they need destroy at scope exit.
 
-function registerFuncParams(paramNames: string[], paramTypes: Type[], paramSyms: Symbol[] | null, dctx: DrcContext, loc: SourceLocation, body: Node, ownedFrom: int32): void {
+function registerFuncParams(paramNames: string[], paramTypes: Type[], paramSyms: Symbol[] | null, dctx: DrcContext, loc: SourceLocation, body: Node, ctor: Symbol | null, receivers: int32): void {
 	if (dctx.ctx.checkerCtx == null) return;
 	for (let pi = 0; pi < paramNames.length && pi < paramTypes.length; pi += 1) {
 		const pRcInfo = classifyRc(paramTypes[pi], dctx);
 		if (pRcInfo.needsCleanup) {
 			if (paramSyms == null || pi >= paramSyms.length || paramSyms[pi] == null) throw new Error(`internal: DRC: parameter '${paramNames[pi]}' reached the analyzer without a resolved symbol`);
 			// Params are borrows registered as cursors: the caller owns the value and a
-			// store inside the callee copies at the assignment point. A constructor's
-			// parameters from `ownedFrom` on are owned: its callers sink them.
-			registerVar(dctx, pRcInfo, (!isSinkTypeForParam(paramTypes[pi]) && (ownedFrom < 0 || pi < ownedFrom)) || paramTypes[pi].kind == TypeKind.Varargs, paramSyms[pi]);
+			// store inside the callee copies at the assignment point. A constructor's body owns
+			// the parameters its callers sink (ctorOwnsParam); `receivers` is how many leading
+			// parameters of the routine this list leaves out.
+			const owned = ctor != null ? pi + receivers > 0 && ctorOwnsParam(ctor, pi + receivers) : isSinkTypeForParam(paramTypes[pi]);
+			registerVar(dctx, pRcInfo, !owned || paramTypes[pi].kind == TypeKind.Varargs, paramSyms[pi]);
 		}
 	}
 }
@@ -2107,7 +2124,7 @@ function markFirstFieldWrites(stmts: Node[], thisSym: Symbol | null): void {
 	}
 }
 
-function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: string, paramNames: string[], paramSyms: Symbol[] | null, dctx: DrcContext, loc: SourceLocation, funcNodeType: Type, ownedFrom: int32 = -1): Node {
+function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: string, paramNames: string[], paramSyms: Symbol[] | null, dctx: DrcContext, loc: SourceLocation, funcNodeType: Type, ctorMember: Symbol | null = null): Node {
 	if (body == null) return body;
 	if (body.kind != NodeKind.BlockStmt) return body;
 	const bd = body.data as BlockStmtData;
@@ -2145,9 +2162,9 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol | null, fnName: 
 	// Reference parity: ALWAYS use the function's type (owner.typ), never scope lookupSymbol.
 	// lookupSymbol(paramName) can find wrong-scope variables with the same name.
 	if (ownerSym != null && ownerSym.symbolType != null && ownerSym.symbolType.kind == TypeKind.Function) {
-		registerFuncParams(ownerSym.symbolType.typeNames, ownerSym.symbolType.typeChildren, paramSyms, dctx, loc, body, ownedFrom >= 0 ? ownedFrom : (isCtorRoutine(ownerSym) ? 1 : -1));
+		registerFuncParams(ownerSym.symbolType.typeNames, ownerSym.symbolType.typeChildren, paramSyms, dctx, loc, body, isCtorRoutine(ownerSym) ? ownerSym : null, 0);
 	} else if (funcNodeType != null && funcNodeType.kind == TypeKind.Function) {
-		registerFuncParams(funcNodeType.typeNames, funcNodeType.typeChildren, paramSyms, dctx, loc, body, ownedFrom);
+		registerFuncParams(funcNodeType.typeNames, funcNodeType.typeChildren, paramSyms, dctx, loc, body, ctorMember, 1);
 	} else if (paramNames.length > 0) {
 		// No type info for params — transform bug. Log so we catch it early.
 		// NEVER fall back to lookupSymbol(paramName) — it finds wrong-scope variables.
@@ -2899,7 +2916,7 @@ function processCtorMember(member: Node, dctx: DrcContext, loc: SourceLocation):
 	const cd = member.data as ConstructorDeclData;
 	if (cd.ctorBody != null) {
 		const ctorParamSyms = ctorSymsWithoutReceiver(member.paramSyms);
-		cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, noSym, "constructor", cd.ctorParams, ctorParamSyms, dctx, loc, member.nodeType!, 0);
+		cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, noSym, "constructor", cd.ctorParams, ctorParamSyms, dctx, loc, member.nodeType!, member.resolvedSym);
 	}
 }
 
