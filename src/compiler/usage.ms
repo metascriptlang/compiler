@@ -44,6 +44,8 @@ export function printUsage(): void {
 	console.log("  " + cyan("--target") + "=<c|js>       Target backend " + dim("(default: c)"));
 	console.log("  " + cyan("--os") + "=<os>             Target OS " +
 		dim("(bare|solana|wasm|emcc|linux|macos|windows|ios|android; default: host)"));
+	console.log("  " + cyan("--cpu") + "=<cpu>           Target CPU " +
+		dim("(x86_64|arm64|wasm32; default: host, where the prepared toolchain and zig cc build for this machine's own CPU model: name the CPU for a program that runs on other machines)"));
 	console.log("  " + cyan("--abi") + "=<abi>           libc of a linux target " + dim("(gnu|musl; default: gnu; musl links statically)"));
 	console.log("  " + cyan("--output") + "=<file>       Output file path");
 	console.log("  " + cyan("-t") + ", " + cyan("--time") + "            Show compilation timing");
