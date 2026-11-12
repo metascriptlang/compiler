@@ -104,7 +104,6 @@ export function evalModule(interp: Interpreter, path: string): Result<Evaluation
 		diagnostics.push({ file, line: e.line, column: e.column, message: e.message, severity: e.severity });
 	});
 	setRecoverableBuild(true);
-	interp.run = null;
 	if (!holdsBuildState(interp.session)) interp.session = createBuildSession(true);
 	let compiled: RaiserModule | null = null;
 	try {
@@ -119,8 +118,7 @@ export function evalModule(interp: Interpreter, path: string): Result<Evaluation
 	setDiagnosticHook(null);
 	if (compiled == null) return Result.err(diagnostics);
 
-	interp.output = [];
-	const lines = interp.output;
+	const lines: string[] = [];
 	const ctx = runRaiser(compiled, [path], (text: string): void => { lines.push(text); });
 	if (ctx.lastError != "") return Result.err([errorAt(path, `raiser runtime error: ${ctx.lastError}`)]);
 	if (ctx.orphanFailures.length > 0) {
@@ -132,12 +130,13 @@ export function evalModule(interp: Interpreter, path: string): Result<Evaluation
 	for (const line of lines) output = output + line + "\n";
 	const exitCode = ctx.lastResult.kind == RaiserValueKind.Int ? ctx.lastResult.intVal as int32 : 0;
 	interp.run = ctx;
+	interp.output = lines;
 	return Result.ok({ output, exitCode, warnings: diagnostics });
 }
 
 export function selectRoutine(interp: Interpreter, name: string): Result<Routine, string> {
 	const run = interp.run;
-	if (run == null) return Result.err(`no evaluated module to select '${name}' from: the last evalModule failed or none ran`);
+	if (run == null) return Result.err(`no evaluated module to select '${name}' from: no evalModule has succeeded`);
 	let found: Routine | null = null;
 	for (const exported of run.mod.exports) {
 		if (exported.name != name) continue;
@@ -473,6 +472,28 @@ test "callRoutine refuses a wrong arity and a routine selected before a reload" 
 	assert !stale.ok;
 	if (!stale.ok) assert stale.error.includes("select it again");
 	assert intCall(interp, routineOf(interp, "twice"), [hostValue(boxInt(5))]) == 15;
+	removeAll(dir);
+}
+
+test "a failed evalModule keeps the running program and its state" {
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, `let total: int32 = 100;\nexport function add(n: int32): int32 { total += n; return total; }\n`);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	const add = routineOf(interp, "add");
+	assert intCall(interp, add, [hostValue(boxInt(1))]) == 101;
+	writeFile(`${dir}/main.ms`, `let total: int32 = 100;\nexport function add(n: int32): int32 { total += n; return "typo"; }\n`);
+	assert !evalModule(interp, `${dir}/main.ms`).ok;
+	assert intCall(interp, add, [hostValue(boxInt(1))]) == 102;
+	writeFile(`${dir}/main.ms`, `throw new Error("init refused");\nexport function add(n: int32): int32 { return n; }\n`);
+	const thrown = evalModule(interp, `${dir}/main.ms`);
+	assert !thrown.ok;
+	if (!thrown.ok) assert thrown.error[0].message.includes("init refused");
+	assert intCall(interp, add, [hostValue(boxInt(1))]) == 103;
+	writeFile(`${dir}/main.ms`, `let total: int32 = 0;\nexport function add(n: int32): int32 { total += n * 10; return total; }\n`);
+	assert evalModule(interp, `${dir}/main.ms`).ok;
+	const stale = callRoutine(interp, add, [hostValue(boxInt(1))]);
+	assert !stale.ok;
+	assert intCall(interp, routineOf(interp, "add"), [hostValue(boxInt(1))]) == 10;
 	removeAll(dir);
 }
 
