@@ -18,7 +18,7 @@ import { TargetInfo, hostTargetInfo, unifyTypeProfile, substituteParamsProfile, 
 import { findAllExtensionsByNameProfile } from "./context";
 import { checkCallExprProfile } from "./callResolve";
 import { instantiateProfile, instantiateTimings, lookupModuleCtx, lookupModuleProgram, resetInstantiationState } from "./instantiate";
-import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbTypeCheck, dbCheckRecord, TransAmDb } from "../compiler/transam/index";
+import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbTypeCheck, dbCheckRecord, dbCheckCurrent, TransAmDb } from "../compiler/transam/index";
 import { opMark, opsFrom, replayOps, KeyedOp } from "../codegen/c/types";
 import { HeldNote, heldNoteMark, heldNotesFrom, replayHeldNotes, heldNotesText } from "./types";
 import { StdUnitInput, StdUnitModule, stdUnitRequested, stdUnitStoreOff, processFreshness, engineMark, noteGraphCheck, noteStdUnitRefused, stdUnitKeyText, stdUnitTimeKey, stdUnitReport, loadStdUnit, applyStdUnit, adoptStdUnitTarget, verifyRestoredExports, writeStdUnit } from "./stdUnit";
@@ -32,6 +32,8 @@ export class CheckSession {
 	ops: HashMap<string, KeyedOp[]>;
 	held: HashMap<string, HeldNote[]>;  // per module: the types its check accepted behind an interface or record
 	heldChanged: string;                // a module checked again whose notes differ from its last check, "" when none
+	rebuildsWhenStale: boolean;         // the driver starts a fresh session when a build reports stale state
+	preludeStale: string;               // a prelude module a later build would check again, "" when none
 }
 
 export function createCheckSession(keep: boolean): CheckSession {
@@ -44,6 +46,8 @@ export function createCheckSession(keep: boolean): CheckSession {
 		ops: new HashMap<string, KeyedOp[]>(),
 		held: new HashMap<string, HeldNote[]>(),
 		heldChanged: "",
+		rebuildsWhenStale: false,
+		preludeStale: "",
 	};
 }
 
@@ -174,6 +178,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		session.db = db;
 		session.rechecked = new HashSet<string>();
 		session.heldChanged = "";
+		session.preludeStale = "";
 	}
 	dbBindGraph(db, graph);
 	const tBind = performance.now() - _tb0;
@@ -188,6 +193,14 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		db.preludeCtx = baseCtx;
 		adoptStdUnitTarget(loaded);
 		applyStdUnit(loaded, db, graph);
+	}
+	if (kept != null && session != null && session.rebuildsWhenStale) {
+		for (const path of graph.loadOrder) {
+			const mod = findModule(graph, path);
+			if (mod == null || !mod.stdPrelude || !checkedInGraph(mod) || dbCheckCurrent(db, path)) continue;
+			session.preludeStale = path;
+			return db.exportRegistry;
+		}
 	}
 	const writePlan = plan != null && loaded == null ? plan : null;
 	let unitWritten = false;

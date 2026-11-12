@@ -564,6 +564,7 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 	// with stale ctx.targetOs → mac directives leak into a cross-compile
 	// windows build's linkFlags().
 	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt, opts.targetOs, targetInfo, gcMode, config, session, opts.strictNullChecks, opts.appMode);
+	if (session != null && session.preludeStale != "") return graph;
 	graphPreludeCtx = getPreludeContext();
 	markVmOnlyRoutines(graph, config.stdPath);
 	reportModuleErrors(graph, "type error");
@@ -3099,6 +3100,12 @@ test "a cross build's output suffix comes from the target os, not the host" {
 	assert targetBinarySuffix("emcc", "", false) == ".js";
 }
 
+function watchSession(): BuildSession {
+	const session = createBuildSession(true);
+	session.check.rebuildsWhenStale = true;
+	return session;
+}
+
 export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	const session = createBuildSession(false);
 	const verify = env.get("MSC_IC_VERIFY") == "1";
@@ -3378,7 +3385,7 @@ function openWatch(entryPath: string, opts: CliOptions): WatchRun {
 		feed = opened;
 	}
 	setRecoverableBuild(true);
-	return { entryPath, opts, session: createBuildSession(true), feed, replay, step: 0, changed: [], verify: env.get("MSC_IC_VERIFY") == "1", verifiedDir: "" };
+	return { entryPath, opts, session: watchSession(), feed, replay, step: 0, changed: [], verify: env.get("MSC_IC_VERIFY") == "1", verifiedDir: "" };
 }
 
 function emptyDir(dir: string): void {
@@ -3487,7 +3494,7 @@ function watchBuild(run: WatchRun): boolean {
 	let label = status == BuildStatus.UpToDate ? "up-to-date" : "built";
 	if (!stopped && internal == "" && status == BuildStatus.Stale) {
 		console.log(`watch: rebuilding from scratch: ${run.session.staleReason}`);
-		run.session = createBuildSession(true);
+		run.session = watchSession();
 		if (run.verify) emptyDir(warmDir);
 		eventDiagnostics = [];
 		icVerifyDiagnostics = [];
@@ -3504,7 +3511,7 @@ function watchBuild(run: WatchRun): boolean {
 	icVerifyCollecting = false;
 	if (internal != "") {
 		printError(`internal: the build threw '${internal}'`);
-		run.session = createBuildSession(true);
+		run.session = watchSession();
 		label = "failed";
 	}
 	const diagnostics = eventDiagnostics.slice(0, eventDiagnostics.length);
@@ -3516,7 +3523,7 @@ function watchBuild(run: WatchRun): boolean {
 				console.log(`watch: verify build ${run.step} differs: ${problem.split("\n")[0]}`);
 				printError(`internal: incremental verify, build ${run.step}: ${problem}`);
 			}
-			run.session = createBuildSession(true);
+			run.session = watchSession();
 			label = "failed";
 		} else if (stopped) {
 			console.log(`watch: verify build ${run.step}: ${icVerifyDiagnostics.length} diagnostics equal a failed cold build`);
@@ -3898,6 +3905,10 @@ function buildCPhases(entryPath: string, opts: CliOptions, session: BuildSession
 // Before the graph check: enum toString ops register during checking, and this resets the op tables.
 resetLiftedOps();
 	const graph = loadAndCheckGraph(entryPath, config, opts, opts.targetInfo, gcModeOf(opts.gcMode), session.check);
+	if (session.check.preludeStale != "") {
+		session.staleReason = `${session.check.preludeStale} of the prelude changed`;
+		return BuildStatus.Stale;
+	}
 	applyGcMode(opts);
 	session.moduleCount = graph.loadOrder.length as int32;
 	if (opts.hcrHost && hcrHostMissesEngine(graph, config.stdPath)) {

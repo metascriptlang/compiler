@@ -1473,6 +1473,11 @@ export function dbRestoreCheck(db: TransAmDb, filePath: string, ctx: CheckerCont
 	registerModuleCtx(filePath, ctx);
 }
 
+export function dbCheckCurrent(db: TransAmDb, filePath: string): boolean {
+	const fileId = getFileId(db.fileInput, filePath);
+	return fileId >= 0 && dbMarkGreen(db, createQueryKey(TaQueryKind.TypeCheck, fileId));
+}
+
 function copyDisambTable(table: HashMap<string, int32>): HashMap<string, int32> {
 	const copy = new HashMap<string, int32>();
 	for (const [name, count] of table) copy.set(name, count);
