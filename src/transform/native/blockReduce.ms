@@ -3,14 +3,14 @@
 //   while (i < LEN) BODY        BODY: `acc op= xs[i]` or `acc op= a[i] * b[i]` (op is += or -=) and the step of i
 //   → while (i < LEN) {
 //       const $end = msBlockEndOf(i, LEN, 1024);
-//       if (msSumFits<A><E>(acc, xs, i, $end)) { acc = msSumAdd<A><E>(acc, xs, i, $end); i = $end; }
+//       if (msSumTryAdd<A><E>(acc, xs, i, $end)) i = $end;
 //       else while (i < $end) BODY
 //     }
 //
 // BODY moves unchanged into the fallback, so a block the guard refuses keeps every check and stops
 // at the exact element. Any other loop is left alone.
 
-import { Node, NodeKind, Symbol, Type, TypeKind, DeclKind, SourceLocation, BinaryExprData, CallExprData, BlockStmtData, ExprStmtData, VariableDeclData, MemberExprData, ArrayAccessData, IfStmtData, WhileStmtData, HiddenStdConvData, HiddenDerefData, NumberLiteralData, TypeAssertionData } from "../../ast/node";
+import { Node, NodeKind, Symbol, Type, TypeKind, DeclKind, SourceLocation, BinaryExprData, CallExprData, BlockStmtData, ExprStmtData, VariableDeclData, MemberExprData, ArrayAccessData, IfStmtData, WhileStmtData, HiddenStdConvData, HiddenDerefData, NumberLiteralData, TypeAssertionData, NodeFlag } from "../../ast/node";
 import { peelStdConv } from "../../ast/shape";
 import { peelToRepr, getSysType, booleanType } from "../../checker/types";
 import { TransformContext, freshTempSym } from "../context";
@@ -48,7 +48,6 @@ function versionLoop(loop: Node, ctx: TransformContext): Node {
 	endDecl.nodeType = i64;
 	const endRef = (): Node => makeIdentResolved(endSym, loc);
 
-	const kind = r.arrays.length == 1 ? "Sum" : "Dot";
 	const args = (): Node[] => {
 		const out: Node[] = [ident(r.acc, loc)];
 		for (const a of r.arrays) out.push(arrayValue(a, loc));
@@ -56,15 +55,24 @@ function versionLoop(loop: Node, ctx: TransformContext): Node {
 		out.push(endRef());
 		return out;
 	};
-	const sumFits = makeCall(runtimeRef(`ms${kind}Fits${r.widthTag}`, loc), args(), loc);
-	sumFits.nodeType = booleanType();
-	const fits = indexInRange(r, sumFits, endRef, loc);
+	const sign = r.op == "+=" ? "Add" : "Sub";
 	const indexType = peelToRepr(r.index.nodeType)!;
-	const sum = makeCall(runtimeRef(`ms${kind}${r.op == "+=" ? "Add" : "Sub"}${r.widthTag}`, loc), args(), loc);
-	sum.nodeType = r.acc.nodeType;
 	const step = indexType.kind == TypeKind.Int64 ? endRef() : makeHiddenStdConv(endRef(), r.index.nodeType!, loc);
-	const fast = makeBlock([makeExprStmt(makeAssign(ident(r.acc, loc), sum, loc), loc), makeExprStmt(makeAssign(ident(r.index, loc), step, loc), loc)], loc);
-	return makeWhile(w.whileCondition, makeBlock([endDecl, makeIf(fits, fast, checkedBlock(r, w, endRef, loc), loc)], loc), loc);
+	const fast: Node[] = [];
+	let guard: Node;
+	if (r.arrays.length == 1) {
+		guard = makeCall(runtimeRef(`msSumTry${sign}${r.widthTag}`, loc), args(), loc);
+		guard.flags = guard.flags.incl(NodeFlag.WritesOperand);
+	} else {
+		guard = makeCall(runtimeRef(`msDotFits${r.widthTag}`, loc), args(), loc);
+		const sum = makeCall(runtimeRef(`msDot${sign}${r.widthTag}`, loc), args(), loc);
+		sum.nodeType = r.acc.nodeType;
+		fast.push(makeExprStmt(makeAssign(ident(r.acc, loc), sum, loc), loc));
+	}
+	guard.nodeType = booleanType();
+	fast.push(makeExprStmt(makeAssign(ident(r.index, loc), step, loc), loc));
+	const fits = indexInRange(r, guard, endRef, loc);
+	return makeWhile(w.whileCondition, makeBlock([endDecl, makeIf(fits, makeBlock(fast, loc), checkedBlock(r, w, endRef, loc), loc)], loc), loc);
 }
 
 function checkedBlock(r: Reduction, w: WhileStmtData, endRef: () => Node, loc: SourceLocation): Node {
