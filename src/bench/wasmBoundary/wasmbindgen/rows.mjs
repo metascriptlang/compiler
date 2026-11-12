@@ -1,5 +1,15 @@
 import { bench } from "../../harness.mjs";
 
+// With a constant bound, Node's V8 measured wasm-bindgen's add and method rows four times slower than
+// warmed (baseline.md, 2026-11-12): keep the bound a variable and the row warmed.
+let calls = 1;
+function benchWarmed(name, op) {
+	calls = 1;
+	for (let k = 0; k < 400; k++) op();
+	calls = 1000;
+	bench(name, 0, op);
+}
+
 export function runRows(w) {
 	let sink = 0;
 	const s16 = "hello wasm world";
@@ -7,13 +17,13 @@ export function runRows(w) {
 	for (let i = 0; i < 1000; i++) xs.push(Math.fround(i * 0.25));
 	const fx = new Float32Array(xs);
 
-	bench("add x1000", 0, () => { let s = 0; for (let i = 0; i < 1000; i++) s = w.add(i & 1023, 7); sink += s; });
-	bench("add64 x1000", 0, () => { let s = 0n; for (let i = 0; i < 1000; i++) s = w.add64(BigInt(i), 7n); sink += Number(s); });
-	bench("strLen16 x1000", 0, () => { let s = 0; for (let i = 0; i < 1000; i++) s += w.strLen(s16); sink += s; });
-	bench("echo16 x1000", 0, () => { let s = 0; for (let i = 0; i < 1000; i++) s += w.echo(s16).length; sink += s; });
-	bench("mid x1000", 0, () => {
+	benchWarmed("add x1000", () => { let s = 0; for (let i = 0; i < calls; i++) s = w.add(i & 1023, 7); sink += s; });
+	benchWarmed("add64 x1000", () => { let s = 0n; for (let i = 0; i < calls; i++) s = w.add64(BigInt(i), 7n); sink += Number(s); });
+	benchWarmed("strLen16 x1000", () => { let s = 0; for (let i = 0; i < calls; i++) s += w.strLen(s16); sink += s; });
+	benchWarmed("echo16 x1000", () => { let s = 0; for (let i = 0; i < calls; i++) s += w.echo(s16).length; sink += s; });
+	benchWarmed("mid x1000", () => {
 		let s = 0;
-		for (let i = 0; i < 1000; i++) {
+		for (let i = 0; i < calls; i++) {
 			const r = w.mid(new w.Point(i, 2));
 			s += r.x;
 			r.free();
@@ -28,9 +38,9 @@ export function runRows(w) {
 	bench("makeVec 1k", 0, () => { sink += w.makeVec(1000).length; });
 	bench("callback 1k", 0, () => { sink += w.each(1000, (k) => k & 7); });
 	const ctr = new w.Counter(0);
-	bench("method x1000", 0, () => { let s = 0; for (let i = 0; i < 1000; i++) s = ctr.bump(1); sink += s; });
-	bench("field x1000", 0, () => { let s = 0; for (let i = 0; i < 1000; i++) s += ctr.n; sink += s; });
-	bench("construct x1000", 0, () => { for (let i = 0; i < 1000; i++) { const c = new w.Counter(i & 1023); c.free(); } });
+	benchWarmed("method x1000", () => { let s = 0; for (let i = 0; i < calls; i++) s = ctr.bump(1); sink += s; });
+	benchWarmed("field x1000", () => { let s = 0; for (let i = 0; i < calls; i++) s += ctr.n; sink += s; });
+	benchWarmed("construct x1000", () => { for (let i = 0; i < calls; i++) { const c = new w.Counter(i & 1023); c.free(); } });
 	bench("primes 2M", 0, () => { sink += w.primes(2000000); });
 	box.free();
 	ctr.free();

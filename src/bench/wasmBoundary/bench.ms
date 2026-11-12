@@ -3,35 +3,44 @@ import { Handle } from "std/ffi";
 import { add, add64, strLen, echo, mid, sumVec, sumSpan, makeVec, scaleSpan, makeBox, scaleBox, each, primes, Counter, peek } from "./benchWasm";
 
 let sink: number = 0;
+// With a constant bound, Node's V8 measured wasm-bindgen's add and method rows four times slower than
+// warmed (baseline.md, 2026-11-12): keep the bound a variable and the row warmed.
+let calls: int32 = 1;
+function benchWarmed(name: string, op: () => void): void {
+	calls = 1;
+	for (let k = 0; k < 400; k += 1) op();
+	calls = 1000;
+	bench(name, 0, op);
+}
 const s16 = "hello wasm world";
 let xs: Vec<float32> = [];
 for (let i = 0; i < 1000; i += 1) xs.push((i as float32) * 0.25);
 let fx: float32[1000] = [0];
 for (let i = 0; i < 1000; i += 1) fx[i] = (i as float32) * 0.25;
 
-bench("add x1000", 0, (): void => {
+benchWarmed("add x1000", (): void => {
 	let s = 0;
-	for (let i = 0; i < 1000; i += 1) s = add(i & 1023, 7);
+	for (let i = 0; i < calls; i += 1) s = add(i & 1023, 7);
 	sink += s;
 });
-bench("add64 x1000", 0, (): void => {
+benchWarmed("add64 x1000", (): void => {
 	let s: int64 = 0;
-	for (let i = 0; i < 1000; i += 1) s = add64(i as int64, 7);
+	for (let i = 0; i < calls; i += 1) s = add64(i as int64, 7);
 	sink += s as number;
 });
-bench("strLen16 x1000", 0, (): void => {
+benchWarmed("strLen16 x1000", (): void => {
 	let s = 0;
-	for (let i = 0; i < 1000; i += 1) s += strLen(s16);
+	for (let i = 0; i < calls; i += 1) s += strLen(s16);
 	sink += s;
 });
-bench("echo16 x1000", 0, (): void => {
+benchWarmed("echo16 x1000", (): void => {
 	let s = 0;
-	for (let i = 0; i < 1000; i += 1) s += echo(s16).length;
+	for (let i = 0; i < calls; i += 1) s += echo(s16).length;
 	sink += s;
 });
-bench("mid x1000", 0, (): void => {
+benchWarmed("mid x1000", (): void => {
 	let s = 0.0;
-	for (let i = 0; i < 1000; i += 1) s += mid({ x: i, y: 2 }).x;
+	for (let i = 0; i < calls; i += 1) s += mid({ x: i, y: 2 }).x;
 	sink += s;
 });
 bench("sumVec 1k Array", 0, (): void => {
@@ -54,18 +63,18 @@ bench("callback 1k", 0, (): void => {
 	sink += each(1000, (k: int32): int32 => k & 7);
 });
 const ctr = Handle.retain(new Counter(0));
-bench("method x1000", 0, (): void => {
+benchWarmed("method x1000", (): void => {
 	let s = 0;
-	for (let i = 0; i < 1000; i += 1) s = ctr.value().bump(1);
+	for (let i = 0; i < calls; i += 1) s = ctr.value().bump(1);
 	sink += s;
 });
-bench("field x1000", 0, (): void => {
+benchWarmed("field x1000", (): void => {
 	let s = 0;
-	for (let i = 0; i < 1000; i += 1) s += ctr.value().n;
+	for (let i = 0; i < calls; i += 1) s += ctr.value().n;
 	sink += s;
 });
-bench("construct x1000", 0, (): void => {
-	for (let i = 0; i < 1000; i += 1) {
+benchWarmed("construct x1000", (): void => {
+	for (let i = 0; i < calls; i += 1) {
 		const c = Handle.retain(new Counter(i & 1023));
 		c.release();
 	}
