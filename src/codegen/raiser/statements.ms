@@ -50,11 +50,20 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 			const d = node.data as ReturnStmtData;
 			if (d.argument != null && producesNoValue(d.argument)) {
 				compileExprForEffect(s, d.argument);
+				leaveTries(s, 0);
 				emitReturnNothing(s);
 			} else if (d.argument != null) {
-				if (s.resultShape != null && s.resultShape.block) emitRet(s, compilePackedExpr(s, d.argument, s.resultType!).base, s.resultShape);
-				else emitRet(s, compileExpr(s, d.argument));
+				if (s.resultShape != null && s.resultShape.block) {
+					const base = compilePackedExpr(s, d.argument, s.resultType!).base;
+					leaveTries(s, 0);
+					emitRet(s, base, s.resultShape);
+				} else {
+					const value = compileExpr(s, d.argument);
+					leaveTries(s, 0);
+					emitRet(s, value);
+				}
 			} else {
+				leaveTries(s, 0);
 				emitReturnNothing(s);
 			}
 		},
