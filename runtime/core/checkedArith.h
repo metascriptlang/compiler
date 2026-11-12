@@ -190,6 +190,7 @@ static inline int64_t msBlockMagnitude(uint64_t bits) {
 }
 #define msBlockWithin(a, b, e) ((b) >= 0 && (e) <= (int64_t)(a).len)
 #define msBlockWithinSpan(s, b, e) ((b) >= 0 && (e) <= (int64_t)(s).len)
+#define msBlockSameData(a, b) ((void*)(a).data == (void*)(b).data)
 #define msBlockSumOf(acc, sum, sub) ((sub) ? (int64_t)(acc) - (sum) : (int64_t)(acc) + (sum))
 
 static inline int msBlockFits_(uint64_t acc, uint64_t term, int64_t n, uint64_t max) {

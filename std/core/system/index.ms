@@ -1144,6 +1144,8 @@ extern function msBlockWithin(a: Ptr<void>, b: int64, e: int64): boolean;
 @compilerFunc
 extern function msBlockWithinSpan(s: Ptr<void>, b: int64, e: int64): boolean;
 @compilerFunc
+extern function msBlockSameData(a: Ptr<void>, b: Ptr<void>): boolean;
+@compilerFunc
 extern function msBlockSumOf(acc: int64, sum: int64, sub: boolean): int64;
 @compilerFunc
 extern function msBlockMagnitude(bits: int64): int64;
