@@ -12,7 +12,10 @@ import { RaiserVM, RaiserInPlaceHostFn, registerInPlaceHostFn, vmCallHeld, vmDum
 import { liveCellBlocks } from "../raiser/memory";
 import { ledgerAudits } from "../raiser/ledger";
 import { setHostRuntimeDir, resolveRuntimeDir } from "../utils/path";
+import { System, machineSystem, activeSystem, setActiveSystem } from "../utils/system";
 import { writeFile, ensureDir, removeAll, exists } from "std/fs";
+import { IoError, notFound } from "std/io/errors";
+import { Buffer } from "std/core/buffer";
 import { join } from "std/fs/path";
 
 export interface Diagnostic {
@@ -34,6 +37,7 @@ export interface Interpreter {
 	session: BuildSession;
 	run: RaiserContext | null;
 	output: string[];
+	system: System | null;
 }
 
 export interface Routine {
@@ -44,6 +48,7 @@ export interface Routine {
 }
 
 export { RaiserValue, RaiserValueKind } from "../raiser/value";
+export { System, machineSystem } from "../utils/system";
 export {
 	RaiserVM,
 	RaiserInPlaceHostFn,
@@ -81,17 +86,61 @@ export {
 	text,
 } from "../raiser/marshal";
 
-export function createInterpreter(runtimeRoot: string, searchPaths: string[] = []): Result<Interpreter, string> {
+function insideRoot(path: string, roots: string[]): boolean {
+	const spelled = path.replaceAll("\\", "/");
+	for (const root of roots) {
+		if (spelled == root || spelled.startsWith(`${root}/`)) return true;
+	}
+	return false;
+}
+
+function readingRuntimeFromMachine(system: System, runtimeRoots: string[]): System {
+	const machine = machineSystem();
+	const roots: string[] = [];
+	for (const root of runtimeRoots) roots.push(root.replaceAll("\\", "/"));
+	const fromMachine = (path: string): boolean => insideRoot(path, roots);
+	return {
+		readFile: (path: string): Result<string, IoError> => fromMachine(path) ? machine.readFile(path) : system.readFile(path),
+		readFileBytes: (path: string): Result<Buffer, IoError> => fromMachine(path) ? machine.readFileBytes(path) : system.readFileBytes(path),
+		writeFile: system.writeFile,
+		appendFile: system.appendFile,
+		exists: (path: string): boolean => fromMachine(path) ? machine.exists(path) : system.exists(path),
+		isFile: (path: string): boolean => fromMachine(path) ? machine.isFile(path) : system.isFile(path),
+		isDir: (path: string): boolean => fromMachine(path) ? machine.isDir(path) : system.isDir(path),
+		isExecutable: (path: string): boolean => fromMachine(path) ? machine.isExecutable(path) : system.isExecutable(path),
+		readDir: (path: string): string[] => fromMachine(path) ? machine.readDir(path) : system.readDir(path),
+		realpath: (path: string): string => fromMachine(path) ? machine.realpath(path) : system.realpath(path),
+		ensureDir: system.ensureDir,
+		mkdir: system.mkdir,
+		remove: system.remove,
+		removeAll: system.removeAll,
+		rmdir: system.rmdir,
+		rename: system.rename,
+		symlink: system.symlink,
+		copyFile: system.copyFile,
+		fileSize: (path: string): number => fromMachine(path) ? machine.fileSize(path) : system.fileSize(path),
+		modifiedTime: (path: string): number => fromMachine(path) ? machine.modifiedTime(path) : system.modifiedTime(path),
+		changedTime: (path: string): number => fromMachine(path) ? machine.changedTime(path) : system.changedTime(path),
+		changeStamp: (path: string): string => fromMachine(path) ? machine.changeStamp(path) : system.changeStamp(path),
+		getEnv: system.getEnv,
+		cwd: system.cwd,
+		execPath: system.execPath,
+	};
+}
+
+export function createInterpreter(runtimeRoot: string, searchPaths: string[] = [], system: System | null = null): Result<Interpreter, string> {
 	if (!exists(join(runtimeRoot, "std/core/system/index.ms"))) {
 		return Result.err(`no MetaScript std under ${runtimeRoot}: expected ${runtimeRoot}/std/core/system/index.ms`);
 	}
 	const opts = newCliOptions();
 	for (const dir of searchPaths) {
-		if (!exists(dir)) return Result.err(`no search path ${dir}: the directory does not exist`);
+		const present = system != null ? system.isDir(dir) : exists(dir);
+		if (!present) return Result.err(`no search path ${dir}: the directory does not exist`);
 		opts.resolve.searchPaths.push(dir);
 	}
 	setHostRuntimeDir(runtimeRoot);
-	return Result.ok({ opts, session: createBuildSession(true), run: null, output: [] });
+	const sandbox = system != null ? readingRuntimeFromMachine(system, [runtimeRoot, resolveRuntimeDir()]) : null;
+	return Result.ok({ opts, session: createBuildSession(true), run: null, output: [], system: sandbox });
 }
 
 function errorAt(file: string, message: string): Diagnostic {
@@ -99,6 +148,16 @@ function errorAt(file: string, message: string): Diagnostic {
 }
 
 export function evalModule(interp: Interpreter, path: string): Result<Evaluation, Diagnostic[]> {
+	const outer = activeSystem();
+	setActiveSystem(interp.system);
+	try {
+		return evaluate(interp, path);
+	} finally {
+		setActiveSystem(outer);
+	}
+}
+
+function evaluate(interp: Interpreter, path: string): Result<Evaluation, Diagnostic[]> {
 	const diagnostics: Diagnostic[] = [];
 	setDiagnosticHook((file: string, e: ModuleError): void => {
 		diagnostics.push({ file, line: e.line, column: e.column, message: e.message, severity: e.severity });
@@ -155,6 +214,16 @@ function sinkParams(routine: Routine): boolean[] {
 }
 
 export function callRoutine(interp: Interpreter, routine: Routine, args: RaiserHostValue[]): Result<RaiserHostValue, string> {
+	const outer = activeSystem();
+	setActiveSystem(interp.system);
+	try {
+		return invoke(interp, routine, args);
+	} finally {
+		setActiveSystem(outer);
+	}
+}
+
+function invoke(interp: Interpreter, routine: Routine, args: RaiserHostValue[]): Result<RaiserHostValue, string> {
 	const run = interp.run;
 	if (run == null || run.mod != routine.mod) return Result.err(`'${routine.name}' was selected before the last evalModule; select it again`);
 	if (args.length != routine.arity) return Result.err(`'${routine.name}' takes ${routine.arity} argument(s), got ${args.length}`);
@@ -735,6 +804,103 @@ test "callRoutine passes a struct the host built and the struct it returns outli
 	}
 	assert vm.objectHeap.objects.length == objects;
 	assert liveCellBlocks(vm.arrayHeap.mem).length == arrays;
+	removeAll(dir);
+}
+
+function memorySystem(files: Map<string, string>, home: string): System {
+	const holds = (path: string): boolean => files.has(path);
+	const holdsDir = (path: string): boolean => {
+		for (const key of files.keys()) if (key.startsWith(`${path}/`)) return true;
+		return false;
+	};
+	const refused = (path: string): Result<void, IoError> => Result.err(notFound(path));
+	return {
+		readFile: (path: string): Result<string, IoError> => holds(path) ? Result.ok(files.get(path)!) : Result.err(notFound(path)),
+		readFileBytes: (path: string): Result<Buffer, IoError> => Result.err(notFound(path)),
+		writeFile: (path: string, content: string): Result<void, IoError> => { files.set(path, content); return Result.ok(null); },
+		appendFile: (path: string, content: string): Result<void, IoError> => refused(path),
+		exists: (path: string): boolean => holds(path) || holdsDir(path),
+		isFile: holds,
+		isDir: holdsDir,
+		isExecutable: (path: string): boolean => false,
+		readDir: (path: string): string[] => [],
+		realpath: (path: string): string => holds(path) || holdsDir(path) ? path : "",
+		ensureDir: refused,
+		mkdir: refused,
+		remove: refused,
+		removeAll: refused,
+		rmdir: refused,
+		rename: (oldPath: string, newPath: string): Result<void, IoError> => refused(oldPath),
+		symlink: (target: string, path: string): Result<void, IoError> => refused(path),
+		copyFile: (src: string, dst: string): Result<void, IoError> => refused(src),
+		fileSize: (path: string): number => holds(path) ? files.get(path)!.length : -1,
+		modifiedTime: (path: string): number => 0,
+		changedTime: (path: string): number => 0,
+		changeStamp: (path: string): string => holds(path) ? files.get(path)! : "",
+		getEnv: (name: string): string => name == "HOME" ? home : "",
+		cwd: (): string => "/virtual/app",
+		execPath: (): string => "/virtual/bin/editor",
+	};
+}
+
+function stringCall(interp: Interpreter, name: string): string {
+	const r = callRoutine(interp, routineOf(interp, name), []);
+	if (!r.ok) return `error: ${r.error}`;
+	return r.value.text();
+}
+
+const VIRTUAL_MAIN = `import { twice } from "./lib";
+import { readFile, readLines } from "std/fs";
+import { env } from "std/process";
+const atCompile = @comptime { return readFile("/virtual/app/data.txt").ok ? "compile-read" : "compile-none"; };
+export function note(): string { const r = readFile("/virtual/app/data.txt"); return r.ok ? r.value : "missing"; }
+export function home(): string { return env.get("HOME"); }
+export function seen(): string { return atCompile; }
+export function doubled(n: int32): int32 { return twice(n); }
+export function lines(): string { const r = readLines("/virtual/app/data.txt"); return r.ok ? "read lines" : "no lines"; }
+`;
+
+test "an interpreter given a system compiles an import only that system holds, and its program and macros read that system" {
+	const files = new Map<string, string>();
+	files.set("/virtual/app/main.ms", VIRTUAL_MAIN);
+	files.set("/virtual/app/lib.ms", `export function twice(n: int32): int32 { return n * 2; }\n`);
+	files.set("/virtual/app/data.txt", "from the embedder");
+	const created = createInterpreter(resolveRuntimeDir(), [], memorySystem(files, "/home/guest"));
+	if (!created.ok) throw new Error(created.error);
+	const interp = created.value;
+	const r = evalModule(interp, "/virtual/app/main.ms");
+	assert r.ok, r.ok ? "" : r.error[0].message;
+	assert stringCall(interp, "note") == "from the embedder";
+	assert stringCall(interp, "home") == "/home/guest";
+	assert stringCall(interp, "seen") == "compile-read";
+	assert intCall(interp, routineOf(interp, "doubled"), [hostValue(boxInt(21))]) == 42;
+	const refused = stringCall(interp, "lines");
+	assert refused.includes("a sandboxed interpreter cannot call host function 'std/fs.readLines'"), refused;
+	files.set("/virtual/app/lib.ms", `export function twice(n: int32): int32 { return n * 3; }\n`);
+	assert evalModule(interp, "/virtual/app/main.ms").ok;
+	assert intCall(interp, routineOf(interp, "doubled"), [hostValue(boxInt(21))]) == 63;
+}
+
+test "an interpreter created without a system reads the real disk beside one given a system" {
+	const files = new Map<string, string>();
+	files.set("/virtual/app/main.ms", VIRTUAL_MAIN);
+	files.set("/virtual/app/lib.ms", `export function twice(n: int32): int32 { return n * 2; }\n`);
+	files.set("/virtual/app/data.txt", "from the embedder");
+	const created = createInterpreter(resolveRuntimeDir(), [], memorySystem(files, "/home/guest"));
+	if (!created.ok) throw new Error(created.error);
+	const sandboxed = created.value;
+	assert evalModule(sandboxed, "/virtual/app/main.ms").ok;
+	const dir = scratchDir();
+	writeFile(`${dir}/data.txt`, "from the disk");
+	writeFile(`${dir}/main.ms`, `import { readFile } from "std/fs";\nexport function note(): string { const r = readFile("${dir}/data.txt"); return r.ok ? r.value : "missing"; }\n`
+		+ `export function virtual(): string { return readFile("/virtual/app/data.txt").ok ? "leaked" : "absent"; }\n`);
+	const machine = testInterpreter();
+	const m = evalModule(machine, `${dir}/main.ms`);
+	assert m.ok, m.ok ? "" : m.error[0].message;
+	assert stringCall(machine, "note") == "from the disk";
+	assert stringCall(machine, "virtual") == "absent";
+	assert stringCall(sandboxed, "note") == "from the embedder";
+	assert stringCall(machine, "note") == "from the disk";
 	removeAll(dir);
 }
 
