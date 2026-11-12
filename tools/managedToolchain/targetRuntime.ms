@@ -1,5 +1,5 @@
 import { env, platform } from "std/process";
-import { dirname, ensureDir, isDir, isFile, join, readDirNames, removeAll } from "std/fs";
+import { dirname, ensureDir, isDir, isFile, join, readDirNames, remove, removeAll } from "std/fs";
 import { jsonValueOf } from "std/serialize/json";
 import { stringifyPretty } from "std/serialize/json/stringify";
 import { sha256File } from "./fileDigest";
@@ -301,6 +301,13 @@ const LINUX_RUNTIME_OFF: string[] = [
 	"LIBFUZZER", "PROFILE", "MEMPROF", "XRAY", "ORC", "GWP_ASAN", "CTX_PROFILE",
 ];
 const MUSL_SANITIZERS: string[] = ["ubsan_standalone", "ubsan_standalone_cxx", "ubsan_minimal"];
+// Each has a lower-case twin in its directory; a host whose file system folds case keeps one file of the two.
+const CASE_TWIN_LINUX_HEADERS: string[] = [
+	"linux/netfilter/xt_CONNMARK.h", "linux/netfilter/xt_DSCP.h", "linux/netfilter/xt_MARK.h",
+	"linux/netfilter/xt_RATEEST.h", "linux/netfilter/xt_TCPMSS.h",
+	"linux/netfilter_ipv4/ipt_ECN.h", "linux/netfilter_ipv4/ipt_TTL.h",
+	"linux/netfilter_ipv6/ip6t_HL.h",
+];
 const CXX_COMPONENTS: string[] = ["libunwind", "libcxxabi", "libcxx"];
 
 function linuxCmake(
@@ -453,6 +460,9 @@ function buildMusl(
 		"-s", "-C", linux, "O=" + join(work, "linux"), "ARCH=" + arch,
 		"INSTALL_HDR_PATH=" + join(sysroot, "usr"), "headers_install",
 	] });
+	for (const header of CASE_TWIN_LINUX_HEADERS) {
+		try engineIo(remove(join(sysroot, "usr/include/" + header)));
+	}
 	try run(try muslConfigureCommand(engine, musl, work, recipe, sysroot, ""));
 	try run({ file: make, args: ["-s", "-C", muslBuild, "install-headers", "DESTDIR=" + sysroot] });
 	try run(linuxBuiltinsCommand(request.cmake, request.ninja, engine, llvm, work, recipe, sysroot));
