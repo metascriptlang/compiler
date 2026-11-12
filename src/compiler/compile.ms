@@ -20,7 +20,7 @@ import { transformProgram, transformProgramHead, transformProgramTail, Transform
 import { scanJsCells } from "../transform/lowering/jsVarParamLower";
 import { analyzeProgram } from "../analyzer/index";
 import { inferSinkParams } from "../analyzer/sinkInference";
-import { WriteSummaries, contractClaims, createRoutineDecls, createWriteSummaries, noteUnitDecls, restoreContracts, reuseClones } from "../analyzer/writeEffects";
+import { WriteSummaries, contractClaims, createRoutineDecls, createWriteSummaries, noteProgramEdgeReads, noteUnitDecls, restoreContracts, reuseClones } from "../analyzer/writeEffects";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS, generateJSBundleModule, generateJSModule, hasTopLevelAwait, bundleModuleEvaluator, JsModuleResult } from "../codegen/js/jsgen";
 import { SourceInfo, createSourceInfo, appendInfo, keepLines, toSourceMapJson, ignoredFileIndexes } from "../codegen/js/sourcemap";
@@ -4170,7 +4170,9 @@ resetLiftedOps();
 		}
 	}
 	if (!session.keep && !opts.isHcr && gcModeOf(opts.gcMode) == GcMode.Drc) {
-		inferSinkParams(staged.map((st: { at: int32, job: A2Job, tree: Node }): Node => st.tree), staged.map((st: { at: int32, job: A2Job, tree: Node }): TransformContext => st.job.nativeCtx!));
+		const trees = staged.map((st: { at: int32, job: A2Job, tree: Node }): Node => st.tree);
+		inferSinkParams(trees, staged.map((st: { at: int32, job: A2Job, tree: Node }): TransformContext => st.job.nativeCtx!));
+		noteProgramEdgeReads(writeTables, trees);
 	}
 	for (const st of staged) {
 		const cm = checkedMods[st.at];

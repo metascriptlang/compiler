@@ -39,7 +39,7 @@ import { inferCursors } from "./cursors";
 import { calledRoutineType, isViewCall, returnsView } from "../checker/effects";
 import { ctorKeepsParam, ctorParamsKnown } from "../checker/ctorSunkParams";
 import { cloneNodeKeepSem } from "../monomorphize/clone";
-import { LocalDefs, holderType, borrowedArgsToCopy, borrowedReceiverToCopy, unownedReceiverToCopy, readsUnownedEdge, callerDefsOf, cloneForCall, createRoutineDecls, createWriteSummaries, enterRoutineLending, leaveRoutineLending } from "./writeEffects";
+import { LocalDefs, holderType, borrowedArgsToCopy, borrowedReceiverToCopy, unownedReceiverToCopy, readsUnownedEdge, deathSeenBeforeScopeEnd, callerDefsOf, cloneForCall, createRoutineDecls, createWriteSummaries, enterRoutineLending, leaveRoutineLending } from "./writeEffects";
 import { cstringSource } from "../transform/native/cstringConvLower";
 import { cloneIfPure } from "../transform/place";
 import { isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
@@ -1982,7 +1982,13 @@ function isLastReadSafe(sym: Symbol, node: Node, idx: number, stmts: Node[], dct
 	if (sym == null || !ownsMovableValue(sym, dctx)) return false;
 	if (hasFlag(sym, SymbolFlag.SinkTemp)) return true;
 	if (dctx.currentFuncBody == null || node == null) return false;
-	return isLastReadCfgNodeCached(sym, node, dctx.currentFuncBody, dctx.cfgCache);
+	return isLastReadCfgNodeCached(sym, node, dctx.currentFuncBody, dctx.cfgCache) && !outlivesItsLastRead(sym, node, dctx);
+}
+
+function outlivesItsLastRead(sym: Symbol, node: Node, dctx: DrcContext): boolean {
+	const declaredOrParameter = sym.declNode != null || sym.symbolKind == SymbolKind.Parameter;
+	if (!declaredOrParameter || classifyRc(sym.symbolType, dctx).rcKind != RcKind.Ref) return false;
+	return deathSeenBeforeScopeEnd(dctx.writes, dctx.currentFuncBody!, node, sym, dctx.callerDefs);
 }
 
 function ownsMovableValue(sym: Symbol, dctx: DrcContext): boolean {

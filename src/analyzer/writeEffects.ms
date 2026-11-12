@@ -4,7 +4,7 @@
 // run; borrowedArgsToCopy picks the arguments the caller must keep alive, and mayWrite tells
 // cursor inference which statements end a borrow.
 
-import { Node, NodeKind, NodeFlag, ObjectLiteralData, Symbol, SymbolKind, SourceLocation, Type, TypeFlag, TypeKind, makeLoc, BinaryExprData, CallExprData, ClassDeclData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, HiddenDerefData, MemberExprData, MoveExprData, NewExprData, OutExprData, PropertyDeclData, ArrayAccessData, IdentifierData, ProgramData, ExportDeclData, FunctionDeclData, ReturnStmtData, VariableDeclData } from "../ast/node";
+import { Node, NodeKind, NodeFlag, ObjectLiteralData, Symbol, SymbolKind, SourceLocation, Type, TypeFlag, TypeKind, makeLoc, BinaryExprData, BlockStmtData, CallExprData, ClassDeclData, ConditionalExprData, ConstructorDeclData, IfStmtData, DecoratedDeclData, HiddenDerefData, MemberExprData, MoveExprData, NewExprData, OutExprData, PropertyDeclData, ArrayAccessData, IdentifierData, ProgramData, ExportDeclData, FunctionDeclData, ReturnStmtData, VariableDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { RoutineFlag, SymbolFlag, findOverloadImpl, hasFlag, makeSymbol, parentClassSymOf, routineFlagSet, setFlag } from "../checker/symbol";
 import { CheckerContext, DispatchRegistry, createDispatchRegistry, LIFECYCLE_HOOK_NAMES, dispatchEntryFor, routineSuspends, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, lifecycleHookOp, nominalTypeSym } from "../checker/context";
@@ -16,7 +16,7 @@ import { skipConvDfa } from "./alias";
 import { RcInfo, RcKind, noRcInfo } from "./classify";
 import { returnsBorrow } from "../codegen/c/types";
 import { makeNumber, makeString } from "../checker/literalNodes";
-import { isSinkTypeForParam, isStructType, isUnownedRef, heldBeyond, opensToHeld, classDistance, createArray, createFunction, createGenericParam, createUnion, int32Type, nullType, isReadonlyView, isSendableFunction, stringType, withoutReadonlyView } from "../checker/types";
+import { isSinkTypeForParam, isStructType, isUnownedRef, unownedElementOf, unwrapRefNullUnion, withoutUnowned, heldBeyond, opensToHeld, classDistance, createArray, createFunction, createGenericParam, createUnion, int32Type, nullType, isReadonlyView, isSendableFunction, stringType, withoutReadonlyView } from "../checker/types";
 import { isAssignable, sameType } from "../checker/compat";
 import { generatedRef, isRuntimeProcSym, makeAssign, makeBlock, makeCall, makeCallResolved, makeExprStmt, makeFnDecl, makeIdentResolved, makeReturn } from "../transform/util";
 import { cstringSource } from "../transform/native/cstringConvLower";
@@ -55,6 +55,8 @@ class WriteSummary {
 	unknown: boolean;
 	paramCalls: Symbol[];
 	paramsAssigned: HashSet<Symbol>;
+	edgeReads: Type[];
+	callsOpenValue: boolean;
 	edges: Edge[];
 	forwards: Symbol[];
 	linked: HashSet<Cursor<WriteSummary>>;
@@ -107,6 +109,7 @@ export interface WriteSummaries {
 	envStores: HashMap<string, HashMap<Type, HashMap<string, Node[]>>>;
 	unloweredWritesAnything: boolean;
 	valueCells: boolean;
+	programEdgeReads: Type[] | null;
 }
 
 export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits: string[], dispatchRegistry: DispatchRegistry): WriteSummaries {
@@ -118,7 +121,7 @@ export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits
 		slotHolders: [], slotHolderIds: new HashMap<Type, int32>(), freesNothingGlobals: new HashSet<string>(), globalSlotTypes: new HashMap<string, Type>(), ownMemo: new HashMap<Type, HashMap<Type, int32>>(), heldMemo: new HashMap<Type, Type[]>(), unitClosures: new HashMap<string, HashSet<string>>(), stack: [], nextIndex: 0,
 		contracts: new HashMap<Symbol, CallbackContract>(), cloneContracts: new HashMap<Symbol, CallbackContract>(), unitContracts: [],
 		reusedClones: new HashMap<Symbol, Symbol>(), lending: { callbacks: [], contract: null, held: null }, valueCells: false,
-		envStores: new HashMap<string, HashMap<Type, HashMap<string, Node[]>>>(), unloweredWritesAnything: false,
+		envStores: new HashMap<string, HashMap<Type, HashMap<string, Node[]>>>(), unloweredWritesAnything: false, programEdgeReads: null,
 	};
 }
 
@@ -175,7 +178,7 @@ function notLoweredYet(w: WriteEffects, s: WriteSummary): boolean {
 
 function newSummary(kind: SummaryKind, sym: Symbol | null, hooks: Symbol[]): WriteSummary {
 	return {
-		kind, sym, literal: null, hooks, slots: [], slotSet: new HashSet<string>(), refParamWrites: 0, returnsFresh: false, unknown: false, paramCalls: [], paramsAssigned: new HashSet<Symbol>(),
+		kind, sym, literal: null, hooks, slots: [], slotSet: new HashSet<string>(), refParamWrites: 0, returnsFresh: false, unknown: false, paramCalls: [], paramsAssigned: new HashSet<Symbol>(), edgeReads: [], callsOpenValue: false,
 		edges: [], forwards: [], linked: new HashSet<Cursor<WriteSummary>>(), reads: new HashSet<string>(), index: -1, low: -1, onStack: false, done: false,
 	};
 }
@@ -190,6 +193,12 @@ function addSlot(s: WriteSummary, slot: string): boolean {
 function markUnknown(s: WriteSummary): boolean {
 	if (s.unknown) return false;
 	s.unknown = true;
+	return true;
+}
+
+function addEdgeRead(s: WriteSummary, t: Type): boolean {
+	if (s.edgeReads.includes(t)) return false;
+	s.edgeReads.push(t);
 	return true;
 }
 
@@ -711,7 +720,10 @@ function calleesOf(w: WriteEffects, call: Node, s: WriteSummary, stores: Node[] 
 			own.called.push(sym);
 			return [];
 		}
-		if (own == null && sym != null && w.tables.lending.callbacks.includes(sym)) return [];
+		if (own == null && sym != null && w.tables.lending.callbacks.includes(sym)) {
+			s.callsOpenValue = true;
+			return [];
+		}
 		const known: WriteSummary[] = [];
 		if (defs != null && callee != null && routinesOf(w, callee, null, null, defs, 0, known)) return known;
 		const captured = own != null && callee != null ? capturedParamCalled(w, s, callee) : null;
@@ -720,6 +732,7 @@ function calleesOf(w: WriteEffects, call: Node, s: WriteSummary, stores: Node[] 
 			return [];
 		}
 		if (callee == null || !sendableWritesNothingHeld(callee.nodeType)) markUnknown(s);
+		s.callsOpenValue = true;
 		return [];
 	}
 	const out: WriteSummary[] = [];
@@ -845,6 +858,7 @@ function walkBody(w: WriteEffects, s: WriteSummary, body: Node | null, params: S
 			},
 			NodeKind.CallExpr => {
 				const args = (n.data as CallExprData).arguments;
+				for (const t of edgeReadsOf(n)) addEdgeRead(s, t);
 				if (isLifecycleOp(w, n)) {
 					targets.push(args[0]);
 				} else {
@@ -1218,6 +1232,13 @@ function absorb(w: WriteEffects, s: WriteSummary, e: Edge): boolean {
 	const c = e.callee;
 	let changed = false;
 	if (c.unknown && markUnknown(s)) changed = true;
+	if (c.callsOpenValue && !s.callsOpenValue) {
+		s.callsOpenValue = true;
+		changed = true;
+	}
+	for (const t of c.edgeReads) {
+		if (addEdgeRead(s, t)) changed = true;
+	}
 	for (const unit of c.reads) {
 		if (!s.reads.has(unit)) {
 			s.reads.add(unit);
@@ -1703,6 +1724,175 @@ function slotValueType(w: WriteEffects, slot: string): Type | null {
 		if (holder.typeNames[i] == name) return holder.typeChildren[i];
 	}
 	return null;
+}
+
+const UNOWNED_EDGE_READS = ["msUnownedPeek", "msUnownedPeekRo", "msUnownedGive", "msUnownedGiveRo"];
+
+function edgeReadsOf(call: Node): Type[] {
+	const out: Type[] = [];
+	const sym = call.resolvedSym;
+	if (UNOWNED_EDGE_READS.some((name: string): boolean => isRuntimeProcSym(sym, name))) {
+		if (call.nodeType != null) out.push(call.nodeType);
+		return out;
+	}
+	if (UNOWNED_EDGE_STORES.some((name: string): boolean => isRuntimeProcSym(sym, name))) return out;
+	const d = call.data as CallExprData;
+	const handed: (Node | null)[] = d.callee != null && d.callee.kind == NodeKind.MemberExpr ? [(d.callee.data as MemberExprData).object] : [];
+	for (const a of d.arguments) handed.push(a);
+	for (const a of handed) {
+		if (a == null) continue;
+		const elem = unownedElementOf((a.kind == NodeKind.HiddenAddr ? (a.data as HiddenDerefData).expr : a).nodeType);
+		if (elem != null) out.push(withoutUnowned(elem));
+	}
+	return out;
+}
+
+export function noteProgramEdgeReads(tables: WriteSummaries, trees: Node[]): void {
+	const found = new HashSet<Type>();
+	const reads: Type[] = [];
+	const step = (n: Node): void => {
+		if (n.kind == NodeKind.CallExpr) {
+			for (const t of edgeReadsOf(n)) {
+				if (found.has(t)) continue;
+				found.add(t);
+				reads.push(t);
+			}
+		}
+		forEachChild(n, step);
+	};
+	for (const tree of trees) step(tree);
+	tables.programEdgeReads = reads;
+}
+
+function deathCanBeSeen(w: WriteEffects, owner: Type): boolean {
+	const reads = w.tables.programEdgeReads;
+	if (reads == null) return true;
+	for (const t of reads) {
+		if (canOwn(w, t, owner)) return true;
+	}
+	return false;
+}
+
+function partsReadEdgeInto(w: WriteEffects, parts: WriteSummary[], owner: Type): boolean {
+	for (const p of parts) {
+		if (p.unknown || p.callsOpenValue || p.paramCalls.length > 0) return true;
+		for (const t of p.edgeReads) {
+			if (canOwn(w, t, owner)) return true;
+		}
+	}
+	return false;
+}
+
+function hooksReadEdgeInto(w: WriteEffects, t: Type | null, owner: Type): boolean {
+	const hooks = t != null ? hookSummary(w, t) : null;
+	return hooks != null && partsReadEdgeInto(w, [settled(w, hooks)], owner);
+}
+
+function readsEdgeInto(w: WriteEffects, site: Node, owner: Type, defs: LocalDefs | null): boolean {
+	if (hooksReadEdgeInto(w, site.nodeType, owner)) return true;
+	if (site.kind == NodeKind.NewExpr) return partsReadEdgeInto(w, callWriteParts(w, site, defs), owner);
+	if (site.kind != NodeKind.CallExpr) return false;
+	for (const t of edgeReadsOf(site)) {
+		if (canOwn(w, t, owner)) return true;
+	}
+	const sym = site.resolvedSym;
+	if (isLifecycleOp(w, site) || UNOWNED_EDGE_READS.some((name: string): boolean => isRuntimeProcSym(sym, name)) || UNOWNED_EDGE_STORES.some((name: string): boolean => isRuntimeProcSym(sym, name))) return false;
+	return runsCallbacks(w, site) || partsReadEdgeInto(w, callWriteParts(w, site, defs), owner);
+}
+
+function evaluationReadsEdgeInto(w: WriteEffects, n: Node | null, owner: Type, defs: LocalDefs | null): boolean {
+	if (n == null || isRoutineNode(n)) return false;
+	if (readsEdgeInto(w, n, owner, defs)) return true;
+	let hit = false;
+	forEachChild(n, (c: Node): void => { if (!hit) hit = evaluationReadsEdgeInto(w, c, owner, defs); });
+	return hit;
+}
+
+function pathTo(n: Node, target: Node, path: Node[]): boolean {
+	path.push(n);
+	if (n === target) return true;
+	let found = false;
+	forEachChild(n, (c: Node): void => { if (!found && c != null) found = pathTo(c, target, path); });
+	if (!found) path.pop();
+	return found;
+}
+
+function declaresLocal(n: Node, sym: Symbol): boolean {
+	if (n.kind != NodeKind.BlockStmt) return false;
+	for (const st of (n.data as BlockStmtData).statements) {
+		if (st != null && st.kind == NodeKind.VariableDecl && st.resolvedSym === sym) return true;
+	}
+	return false;
+}
+
+function localDestroyedFirstReadsEdgeInto(w: WriteEffects, block: Node, before: Node, sym: Symbol, owner: Type): boolean {
+	if (block.kind != NodeKind.BlockStmt) return false;
+	let diesBeforeSym = !declaresLocal(block, sym);
+	for (const st of (block.data as BlockStmtData).statements) {
+		if (st === before) break;
+		if (st == null || st.kind != NodeKind.VariableDecl) continue;
+		if (st.resolvedSym === sym) diesBeforeSym = true;
+		else if (diesBeforeSym && st.resolvedSym != null && hooksReadEdgeInto(w, st.resolvedSym.symbolType, owner)) return true;
+	}
+	return false;
+}
+
+function rebinds(n: Node, sym: Symbol): boolean {
+	if (n.kind != NodeKind.BinaryExpr || (n.data as BinaryExprData).operator != "=") return false;
+	const left = (n.data as BinaryExprData).left;
+	return left.kind == NodeKind.Identifier && left.resolvedSym === sym;
+}
+
+function isObjectReference(t: Type): boolean {
+	const held = holderType(t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t);
+	return held != null && held.sym != null && (held.sym.symbolKind == SymbolKind.Class || held.sym.symbolKind == SymbolKind.Interface);
+}
+
+function isLoop(n: Node): boolean {
+	return n.kind == NodeKind.WhileStmt || n.kind == NodeKind.DoWhileStmt || n.kind == NodeKind.ForStmt || n.kind == NodeKind.ForOfStmt || n.kind == NodeKind.ForInStmt;
+}
+
+function isOtherArm(n: Node, child: Node): boolean {
+	if (n.kind == NodeKind.IfStmt) return child !== (n.data as IfStmtData).condition;
+	return n.kind == NodeKind.ConditionalExpr && child !== (n.data as ConditionalExprData).ternaryCondition;
+}
+
+// NIM-REF AN-44: a local's object dies with what took it at the local's last read, so that read
+// stays a copy while a read through an Unowned edge that can reach the object may still run before
+// the local's scope ends. What takes the value is no such read: it holds the value while it runs.
+export function deathSeenBeforeScopeEnd(w: WriteEffects, body: Node, use: Node, sym: Symbol, defs: LocalDefs | null): boolean {
+	const owner = sym.symbolType;
+	if (owner == null || !isObjectReference(owner) || !deathCanBeSeen(w, owner)) return false;
+	const path: Node[] = [];
+	if (!pathTo(body, use, path)) return true;
+	let taker = path.length - 2;
+	while (taker >= 0 && skipConvDfa(path[taker]) !== path[taker]) taker -= 1;
+	let inTry = false;
+	for (const n of path) {
+		if (n.kind == NodeKind.TryCatchStmt) inTry = true;
+	}
+	let returned = false;
+	for (let k = taker; k >= 0; k -= 1) {
+		const cur = path[k];
+		const child = path[k + 1];
+		if (localDestroyedFirstReadsEdgeInto(w, cur, child, sym, owner)) return true;
+		if (!returned) {
+			if (k != taker && readsEdgeInto(w, cur, owner, defs)) return true;
+			let after = isLoop(cur);
+			let hit = false;
+			if (!isOtherArm(cur, child)) {
+				forEachChild(cur, (c: Node): void => {
+					if (hit || c == null) return;
+					if (c === child && !after) after = true;
+					else if (after && evaluationReadsEdgeInto(w, c, owner, defs)) hit = true;
+				});
+			}
+			if (hit) return true;
+		}
+		if (rebinds(cur, sym) || declaresLocal(cur, sym)) return false;
+		if (cur.kind == NodeKind.ReturnStmt && !inTry) returned = true;
+	}
+	return false;
 }
 
 function unownedReadMayDie(w: WriteEffects, call: Node, later: Node[], held: Type | null, defs: LocalDefs | null): boolean {
