@@ -363,6 +363,20 @@ report reads the error flag and walks no stack. The installed Linux compiler (25
 `9a9713925`) carries 1,226,740 B of `.eh_frame` and 155,892 B of `.eh_frame_hdr`, 6% of its stripped
 size; it was not rebuilt with the flag.
 
+Decision (the person, 2026-11-12): the option stays, and the compiler's own release build takes no
+`--strip` on any target, because its symbols and unwind tables are useful to us when a released
+`msc` crashes or is profiled (`tools/release.sh`, pinned by `tools/releaseToolchainTest.sh`). What
+that keeps, rtx, a candidate of tree `dc5549071d4c` building itself `--release`, toolchain bundle
+`e447dbf8b746`:
+
+| | file | gzip -9 | `.eh_frame` + `.eh_frame_hdr` | `.symtab` + `.strtab` | `.text` |
+|---|---|---|---|---|---|
+| `--release` | 26,262,336 | 8,634,806 | 1,333,520 | 2,844,442 | 18,475,170 |
+| `--release --strip` | 22,090,056 (−15.9%) | 7,703,778 (−10.8%) | 5,816 | 0 | 18,475,170 |
+
+The unstripped binary type-checks the tree. Not measured: the five other release targets, and the
+archive a release ships (std, runtime and vendor travel beside the binary).
+
 What a stripped Linux binary no longer has:
 - a debugger backtrace: gdb and lldb unwind an optimized frame through `.eh_frame`, and a stripped
   binary has no `.debug_frame` to fall back on;
