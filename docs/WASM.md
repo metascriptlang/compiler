@@ -28,14 +28,14 @@ unless its `@columns` says otherwise.
 | Numbers, bool | typed scalars; `int64`/`uint64` as BigInt, exact | `scalars`, `wireMatrix` |
 | Enums | an exported enum as itself, on the wire as its storage integer; the wasm side rebuilds it with the checked `as`, and a foreign JS caller's value outside it is a `RangeError` naming the enum; an unexported enum and an enum member type are refused | `enumCrossing`, `enumAsInt` |
 | Strings | copied as WTF-8 both ways; lone surrogates, BOM, NUL survive | `strings`, `stringsLong`, `bomStrings`, `decodeWtf8`, `interned` |
-| Structs, `Vec<T>` of scalars, nullable | copied; nested fields by leaf | `copies`, `nullableCopies`, `nullableScalars` |
+| Structs, `Vec<T>` of scalars, nullable | copied; nested fields by leaf | `copies`, `nullableCopies`, `nullableScalars`, `structResultNested` |
 | A TS typed array result (`Float32Array`, `Int32Array`, … the nine classes), nullable | copied into a new array of the same class over a copy of its whole buffer, `byteOffset` and `length` kept; the call throws when the array is still held on the wasm side, when its `ArrayBuffer` is held by another view, or when its class extends the declared one. A typed array parameter takes a `Span<T>`, which a typed array passes to | `typedArrayResults`, `typedArrayMisuse` |
 | `Span<T>` | lent for the call; a writable Span is copied back; two views of one array share one copy | `spans`, `spanOverlap`, `spanLendResize`, `scratchArena` |
 | Callbacks | lent for the call; one the wasm side keeps (any use but a direct call of it, through helpers too) stays callable until the wasm side drops its last reference, which frees its JS slot; called while a `Span` copy is live it throws | `callback*`, `keptCallback*`, `closureEnvDestroy` |
 | A callback's `Span<T>` parameter | a typed array over wasm memory for the call, so a write lands in place, also one made before a throw, and two Spans of one Vec see each other's writes; a `Span<boolean>` is a copy written back after the call, two of them sharing one copy; a boundary call while it is open throws | `spanCallback`, `callbackSpanViews`, `spanOverlap`, `spanReentry`, `exportsHeap`, `typedSet` |
 | `ref`, `out` and `sink` parameters | `ref`/`out` of a number, bool, exported enum, string or struct of those (nullable too): copied in from the caller's variable and written back after the call and when it throws; refused beside a callback, and at the call when two arguments reach one variable or one names an element a `Span` argument views; a kept callback called during the call throws. `sink` of a string, struct or `Vec`: the adopted copy is moved into the parameter. A `ref`/`out` `Vec`, `Span`, `Handle` or callback and a callback's own mode are refused naming the mode | `refOutScalars`, `refOutStructs`, `sinkCopies`, `refAliased`, `keptCallbackDuringRef`, `refForeign`, `refusedModes` |
 | Errors | a JS throw in a callback reaches the JS caller as the same object; a wasm throw reaches it as an Error; a trap ends the instance and every later call says so | `callbackThrow*`, `spanThrow`, `handleTrap` |
-| Owner `Handle<T>` of an exported class | wasm owns it, JS holds a counted reference: `release`, `retain`, `[Symbol.dispose]`; a release while a call lends it waits for that call. The JS side reaches the object as `h.value().member`: a method call, a getter or setter, a field read or write each run in wasm on the handle; `h.value()` used any other way, and a write or method call through a copied struct or `Vec` field, are refused. `Handle.retain(new C(…))` written on the JS side builds the object in wasm; any other `Handle.retain`, `Handle.borrow` or `Handle.at` of the class there is refused, so a `Handle<C>` on the JS side always holds a wasm object | `handleBasic`, `handleRetain`, `handleMisuse`, `handleDestroy`, `handleMembers`, `handleConstruct`, `refusedHandleRead`, `refusedHandleCopyWrite`, `refusedHandleMake` |
+| Owner `Handle<T>` of an exported class | wasm owns it, JS holds a counted reference: `release`, `retain`, `[Symbol.dispose]`; a release while a call lends it waits for that call. The JS side reaches the object as `h.value().member`: a method call and a getter or setter run in wasm on the handle, a read or write of a number, boolean or enum field is done by the JS side in wasm memory, and any other field goes through a call; `h.value()` used any other way, and a write or method call through a copied struct or `Vec` field, are refused. `Handle.retain(new C(…))` written on the JS side builds the object in wasm; any other `Handle.retain`, `Handle.borrow` or `Handle.at` of the class there is refused, so a `Handle<C>` on the JS side always holds a wasm object | `handleBasic`, `handleRetain`, `handleMisuse`, `handleDestroy`, `handleMembers`, `handleMemberRelease`, `handleFieldKinds`, `handleFieldMisuse`, `handleConstruct`, `refusedHandleRead`, `refusedHandleCopyWrite`, `refusedHandleMake` |
 | `Handle<VecBox<T>>.view(f)` | a Span over wasm memory, no copy, only inside `f`; a boundary call while it is open throws (it could grow memory) | `handleView*`, `refusedKeptView*` |
 | Classes, unions, arrays, functions, module state shared by both halves | refused with a named reason at the declaration | `refused*` |
 
@@ -83,6 +83,18 @@ compiler 60ecbc206ed. `handleConstruct` builds a `Counter` with a default argume
 passes it to a `@wasm` function that reads it, and keeps a plain `new Counter(…)` on the JS side,
 which stays a JS object and prints the same. Not measured: an overloaded constructor, a generic
 class, a constructor with a callback parameter.
+
+The one-flag entry, the borrowed receiver, the struct result slots and the direct field access were
+measured 2026-11-12 on m1m with a candidate of `wt/js-wasm-one-program` (compiler sources as landed on
+main `f380b4503b95` plus the field access): `WASMMIX_BROWSER=1 check.sh` passed 100 of the 100
+tracked programs on C, JS, mixed, the tree build and Chrome, units 80, 32, 44, 7, 7, 9, 4 and 11.
+`handleFieldKinds` reads and writes an `int8` to `uint64`, a `float32`, a `float64`, a `boolean` and
+two enums of a wasm-owned object, also after a 3000000-element `Vec<float64>` grew wasm memory;
+`handleFieldMisuse` reads and writes a field after the last release and gets `use of Handle<Counter>
+created at … after release`; `handleMemberRelease` releases the handle from a callback during a
+method of it and the object is destroyed when that method returns; `structResultNested` takes a
+struct result inside the callback of another call that returns one. Not measured: an inherited
+field, a field of a generic class, `--release`/`--danger` for these four programs.
 
 Dev builds (default mode) add: argument type checks on the functions the entry re-exports, and
 the site in handle messages (`use of Handle<Counter> created at core.ms:8 after release`); at exit
@@ -180,14 +192,39 @@ three handle checks and drop the site.
   wasm-bindgen keeps `__wbg_ptr`; with a callback it is lent, so a release from the callback waits
   (RT-48). Measured on m1m 2026-11-10 (not quiet, 5 rounds): `method x1000` 20.11 → 3.84 ns per call on
   Node (wasm-bindgen 12.97), `field x1000` 20.31 → 3.92 (wasm-bindgen 2.85); in Chrome 4.19 and 4.40
-  against 4.47 and 4.27. The Node field read stays about 1 ns above wasm-bindgen's getter: a
-  `@wasm` scalar call costs 2.9 ns here (`add x1000`) for the dead-instance check and the error
-  relay every call keeps.
+  against 4.47 and 4.27.
+- **The checks stay; the time was in two places** (2026-11-12). Removing the dead-instance test,
+  the `try` that poisons, the `dirty` test or the handle's liveness test one at a time moved no
+  row, and removing all of them 0.05 to 0.07 ns (`src/bench/wasmBoundary/baseline.md`, 2026-11-12,
+  hand-edited glue). The time was `__msb.enter()` as a method call testing a closure variable, now
+  `if (__msb.lent !== 0) __msb.enter()` with `die` making `lent` `Infinity` so one field carries
+  both the open views and the dead instance; and the member entry counting its receiver up and
+  down. The entry now reads the receiver as a `Cursor<C>`: the JS handle's own count spans the
+  call, because either no JS runs during it or a release is deferred to its end (RT-48).
+- **A struct result of scalar leaves is read from a slot, not handed to an import.** The wrapper
+  takes `8 * leaves` bytes from the glue's scratch arena, passes the address first, the entry stores
+  each leaf in its 8-byte slot (`msbPut_<letters>`) and the wrapper reads them from the Emscripten
+  heap views after the call, as wasm-bindgen passes a `retptr` taken from the wasm stack
+  (`crates/cli-support/src/js/binding.rs`, `__wbindgen_add_to_stack_pointer`, 706a03d). A slot per
+  call, not one static area, because a callback of the call may call another function that returns
+  a struct. `mid x1000` went from 53 to 5.1 ns on Node and from 58.6 to 5.7 in Chrome. A struct
+  with a string leaf keeps the import, because the string must be decoded while the wasm side
+  still holds it; a `ref`/`out` write-back keeps it too (not measured). A conversion that throws
+  on the JS side now throws after wasm returned, so it no longer ends the instance.
+- **A number, boolean or enum field of a wasm-owned object is read and written by the JS side.**
+  The wrapper keeps the flag test and the liveness test, asks the wasm half once for the field's
+  offset (the entry is `@emit` of `&${self.f}` minus the object's address, so the C compiler
+  answers and an inherited or reordered field cannot be guessed wrong) and then indexes the
+  Emscripten heap view of the field's type, which Emscripten replaces when memory grows.
+  `offsetOfField` (`src/checker/types.ms`) answers for structs only, which is why the offset is
+  asked and not computed. `field x1000` went from 3.2 to 1.44 ns on Node (wasm-bindgen 3.23, and
+  2.85 at its best) and from 3.86 to 1.30 in Chrome (4.46). A string, struct or nullable field
+  stays a call.
 - **A release while a call lends the handle is deferred to the end of that call**, a deliberate
   divergence recorded as `paper/NIM-REF.md` RT-48.
 - **A `ref` or `out` parameter is a copy written back, through the result takers.** Wasm cannot
   address the caller's JS variable, so the wasm export copies the value into a local passed by
-  reference and hands it back through the same `msb_rs_*` import a struct result uses, after the
+  reference and hands it back through the `msb_rs_*` import a struct result with a string leaf uses, after the
   call and in its `catch`, before the result; the JS glue writes it to the `[object, key]` pair the
   JS backend passes for a `ref` argument. Two arguments that reach one variable are refused at the
   call rather than shared, because the all-C program writes one variable through both (`f(x, x)`
@@ -220,7 +257,7 @@ Two checks answer it, both outside the land gate and the core tests, run on a ho
 
 - **Correct:** `src/test/wasmmix/check.sh` runs every wasm boundary unit test and every wasmmix
   program in all its columns; `WASMMIX_BROWSER=1 CHROME=<path>` adds headless Chrome. It ends with
-  `js-wasm check: GREEN` and exit 0. 2026-11-09 on m1m with `WASMMIX_BROWSER=1`: main
+  `js-wasm check: GREEN` and exit 0. 2026-11-12 on m1m with `WASMMIX_BROWSER=1`, a candidate of `wt/js-wasm-one-program`: 100/100 tracked programs, units green. 2026-11-09 on m1m with `WASMMIX_BROWSER=1`: main
   `379c2cb440b` units 188/188 and wasmmix 93/93. A `run-remote.sh` directory on a host keeps files
   deleted from the tree, so a program removed since that directory's first run is built there and
   fails (`refusedEnum`, `refusedKeptCallback*` on m1m); count the programs of the tree, and read a
@@ -231,7 +268,9 @@ Two checks answer it, both outside the land gate and the core tests, run on a ho
   addon, is a reference column, not the bar (the person, 2026-11-08). Recipe, arms and the recorded
   table: `src/bench/wasmBoundary/baseline.md`; its 2026-11-08 ship baseline reads 11 of 12 rows on Node,
   the twelfth (`primes`, wasm code rather than the boundary) parked on a compiler card, and 12 of 12
-  in Chrome.
+  in Chrome; its 2026-11-12 table, with the `x1000` rows warmed, reads 13 of 15 on Node (`add x1000`
+  13% above, `primes` parked) and 15 of 15 in Chrome, and says which wasm-bindgen rows depend on
+  the row's shape.
 
 ## Measurements
 

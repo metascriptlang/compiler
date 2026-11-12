@@ -300,3 +300,30 @@ wasm-bindgen is how the wrapper reaches the export: the same wrapper inside a cl
 the export in a `const` read 2.59 against wasm-bindgen's 2.60, where the module-scope function
 read 2.81 (one probe, `add` only; the loop the JS backend emits, the Emscripten instance and the
 wrapper's body each measured no difference).
+
+## 2026-11-12, m1m, scalar fields read and written by the JS side
+
+Candidate of tree `44794f184cda` (main `831706c55c03` plus the warmed rows and the direct field
+access). Not a quiet window (load 110 before, 1.7 after). Median of 5 rounds, us/op.
+
+| row | mixed | wasmbindgen | mixed-chrome | wasmbindgen-chrome | neon (reference) |
+|---|---|---|---|---|---|
+| add x1000 | 2.849 | 2.515 | 3.11 | 3.858 | 40.435 |
+| add64 x1000 | 4.591 | 16.042 | 4.366 | 15.531 | 62.51 |
+| strLen16 x1000 | 23.61 | 26.077 | 23.771 | 25.355 | 72.52 |
+| echo16 x1000 | 124.111 | 148.399 | 132.135 | 203.733 | 86.581 |
+| mid x1000 | 5.14 | 322.796 | 5.654 | 205.756 | 370.831 |
+| sumVec 1k Array | 1.484 | 1.467 | 1.6 | 1.593 | 52.359 |
+| sumSpan 1k Float32Array | 1.024 | 1.005 | 1.025 | 1.006 | 1.036 |
+| scaleSpan 1k Float32Array | 0.28 | 0.418 | 0.268 | 0.425 | 0.158 |
+| scaleBox 1k held by callee | 0.11 | 0.19 | 0.114 | 0.195 | 0.096 |
+| makeVec 1k | 0.658 | 0.864 | 1.149 | 1.095 | 0.819 |
+| callback 1k | 6.841 | 114.338 | 8.29 | 117.657 | 49.751 |
+| method x1000 | 3.092 | 3.348 | 3.65 | 4.744 | - |
+| field x1000 | 1.438 | 3.231 | 1.295 | 4.459 | - |
+| construct x1000 | 49.924 | 154.186 | 41.808 | 96.219 | - |
+| primes 2M | 5713.947 | 5090.069 | 6002 | 6185.714 | 4403.355 |
+
+`accept node: 13/15`, the misses `add x1000` (13% above) and the parked `primes`; `accept chrome:
+15/15`. `field x1000` is under wasm-bindgen's best getter of either row shape (2.85). The `add64`
+caveat of the section above holds here too.
