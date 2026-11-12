@@ -12,10 +12,10 @@ import { captureToolUtf8 } from "./processCapture";
 import { containsExistingRoot } from "./nativePath";
 import { isSymbolicLink, verifyStoredRelativeTarget } from "./nativeAlias";
 import { renameNoReplace } from "./nativePublication";
-import { claimPartial } from "./windowsEngine";
+import { auditWindowsBinaries, claimPartial, windowsTools } from "./windowsEngine";
 import { SourceProvenance, digitsOnly } from "./sourceEngine";
 import {
-	EngineContract, absoluteEnginePath, copyEngineFile, engineFileSize,
+	EngineContract, absoluteEnginePath, copyEngineFile, copyOnceByContent, engineFileSize,
 	engineIo, verifyEngineContract, writeEngineContract, writeEngineText,
 } from "./engineFiles";
 
@@ -56,6 +56,7 @@ export function engineHostKey(os: string, cpu: string): Result<string, string> {
 		"darwin" => "macos",
 		"macos" => "macos",
 		"linux" => "linux",
+		"windows" => "windows",
 		_ => "",
 	};
 	const machine = match (cpu) {
@@ -75,6 +76,7 @@ export function engineHostKey(os: string, cpu: string): Result<string, string> {
 // builds take them from the runtime's glibc 2.31 sysroot, and these per-target copies would win.
 // On ELF a sanitized link without the archive's .syms exports every symbol.
 export function resourceLibraries(host: string, major: string): string[] {
+	if (host.endsWith("-windows")) { return []; }
 	if (host.endsWith("-macos")) {
 		const darwin = "lib/clang/" + major + "/lib/darwin/libclang_rt.";
 		return ["osx.a", "ubsan_minimal_osx_dynamic.dylib", "ubsan_osx_dynamic.dylib",
@@ -91,11 +93,16 @@ export function requiredResources(host: string, major: string): string[] {
 	return ["lib/clang/" + major + "/include/stddef.h", ...resourceLibraries(host, major)];
 }
 
+function toolFile(host: string, tool: string): string {
+	return host.endsWith("-windows") ? tool + ".exe" : tool;
+}
+
 export function linkerTool(host: string): string {
-	return host.endsWith("-macos") ? "ld64.lld" : "ld.lld";
+	return toolFile(host, host.endsWith("-macos") ? "ld64.lld" : "ld.lld");
 }
 
 export function requiredTools(host: string): string[] {
+	if (host.endsWith("-windows")) { return windowsTools(); }
 	return ["clang", "clang++", "llvm-ar", "llvm-nm", "llvm-objcopy", linkerTool(host)];
 }
 
@@ -149,6 +156,7 @@ function copyInstall(
 	const source = rel == "" ? install : join(install, rel);
 	const names = readDirNames(source);
 	if (!names.ok) { return Result.err(names.error.message); }
+	const stored = new Map<string, string>();
 	for (const name of names.value) {
 		const child = rel == "" ? name : rel + "/" + name;
 		const from = join(install, child);
@@ -176,7 +184,8 @@ function copyInstall(
 		if (child.startsWith(libraryDir) && !libraries.includes(child)) {
 			continue;
 		}
-		try copyEngineFile(from, to);
+		if (rel == "bin") { try copyOnceByContent(from, to, stored); }
+		else { try copyEngineFile(from, to); }
 		try engineIo(chmod(to, isExecutable(from) ? 0o755 : 0o644));
 	}
 	return Result.ok(null);
@@ -218,7 +227,11 @@ function stage(
 			return Result.err("install lacks " + rel);
 		}
 	}
-	const clang = try toolVersion(join(partial, "bin/clang"), "clang version ");
+	if (host.endsWith("-windows")) {
+		try auditWindowsBinaries(partial, host, join(partial, "bin/llvm-readobj.exe"));
+	}
+	const clang = try toolVersion(join(partial, "bin/" + toolFile(host, "clang")),
+		"clang version ");
 	const lld = try toolVersion(join(partial, "bin/" + linkerTool(host)), "LLD ");
 	if (clang != version || lld != version) {
 		return Result.err("engine reports clang " + clang + " and lld " + lld +

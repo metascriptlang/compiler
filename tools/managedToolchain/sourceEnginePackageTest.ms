@@ -2,6 +2,7 @@ import { arch, cwd, platform } from "std/process";
 import { chmod, ensureDir, exists, isFile, join, removeAll, symlink, writeFile } from "std/fs";
 import { randomUUIDSync } from "std/crypto";
 import { readUtf8File } from "./textFile";
+import { samePhysicalFile } from "./nativePath";
 import {
 	engineHostKey, llvmTreeVersion, packageSourceEngine, requiredResources,
 	requiredTools, toolVersionLine,
@@ -27,8 +28,13 @@ function pureCases(): void {
 	expect(mac.ok && mac.value == "aarch64-macos", "an arm64 Mac");
 	const linux = engineHostKey("linux", "amd64");
 	expect(linux.ok && linux.value == "x86_64-linux", "an x86_64 Linux host");
-	expectRefusal(engineHostKey("windows", "amd64"), "no source engine packaging",
-		"Windows packs through its own producer");
+	const windows = engineHostKey("windows", "amd64");
+	expect(windows.ok && windows.value == "x86_64-windows", "an x64 Windows host");
+	expect(requiredResources("x86_64-windows", "23").join(" ") == "lib/clang/23/include/stddef.h",
+		"a Windows engine ships no runtime library: the mingw runtime carries the builtins");
+	expect(requiredTools("x86_64-windows").includes("ld.lld.exe") &&
+		requiredTools("x86_64-windows").includes("llvm-readobj.exe") &&
+		requiredTools("x86_64-windows").length == 16, "Windows needs its whole tool family by .exe name");
 	expectRefusal(engineHostKey("linux", "riscv64"), "no source engine packaging",
 		"an unknown machine");
 	const darwin = requiredResources("aarch64-macos", "23").join(" ");
@@ -66,6 +72,11 @@ function fixture(dir: string, host: string, aliasTarget: string): string[] {
 	written(join(install, "bin/llvm"), "#!/bin/sh\ncase \"$(basename \"$0\")\" in\n" +
 		"clang*) echo 'clang version 1.2.3 (fixture)';;\n*) echo 'LLD 1.2.3 (fixture)';;\nesac\n");
 	if (!chmod(join(install, "bin/llvm"), 0o755).ok) { throw new Error("chmod"); }
+	const multicall = readUtf8File(join(install, "bin/llvm"));
+	if (!multicall.ok) { throw new Error(multicall.error); }
+	written(join(install, "bin/llvm-copy"), multicall.value);
+	if (!chmod(join(install, "bin/llvm-copy"), 0o755).ok) { throw new Error("chmod"); }
+	written(join(install, "bin/llvm.txt"), multicall.value);
 	for (const tool of requiredTools(host)) {
 		if (!symlink(aliasTarget, join(install, "bin/" + tool)).ok) { throw new Error("symlink"); }
 	}
@@ -97,6 +108,10 @@ function packagingCases(dir: string, host: string): void {
 		receipt.value.contains("notices/compiler-rt/LICENSE.TXT"),
 		"the receipt names its kind, its licenses and no redistribution claim");
 	expect(isFile(join(output, "notices/lld/LICENSE.TXT")), "each component's license ships");
+	const copy = samePhysicalFile(join(output, "bin/llvm"), join(output, "bin/llvm-copy"));
+	expect(copy.ok && copy.value, "a tool installed as a copy of another is stored once");
+	const text = samePhysicalFile(join(output, "bin/llvm"), join(output, "bin/llvm.txt"));
+	expect(text.ok && !text.value, "a file that is not executable never shares a tool's mode");
 	const shipped = requiredResources(host, "1")[1];
 	expect(isFile(join(output, shipped)) && !exists(join(output,
 		shipped.slice(0, shipped.lastIndexOf("/")) + "/libclang_rt.lsan.a")),
@@ -122,7 +137,7 @@ function packagingCases(dir: string, host: string): void {
 function run(): void {
 	pureCases();
 	const host = engineHostKey(platform, arch);
-	if (host.ok) {
+	if (host.ok && !host.value.endsWith("-windows")) {
 		const token = randomUUIDSync();
 		if (!token.ok) { throw new Error(token.error.message); }
 		const dir = join(join(cwd(), "out"), "sourceEnginePackageTest-" + token.value);
