@@ -25,17 +25,6 @@ const msCharPayload msCharPayloads[128] = {
 	MS_CP_ROW(96),  MS_CP_ROW(104), MS_CP_ROW(112), MS_CP_ROW(120)
 };
 
-#define MS_CS(c) { 1, (msStrPayload*)&msCharPayloads[c] }
-#define MS_CS_ROW(b) MS_CS(b), MS_CS((b)+1), MS_CS((b)+2), MS_CS((b)+3), \
-	MS_CS((b)+4), MS_CS((b)+5), MS_CS((b)+6), MS_CS((b)+7)
-
-const msString msCharTable[128] = {
-	MS_CS_ROW(0),   MS_CS_ROW(8),   MS_CS_ROW(16),  MS_CS_ROW(24),
-	MS_CS_ROW(32),  MS_CS_ROW(40),  MS_CS_ROW(48),  MS_CS_ROW(56),
-	MS_CS_ROW(64),  MS_CS_ROW(72),  MS_CS_ROW(80),  MS_CS_ROW(88),
-	MS_CS_ROW(96),  MS_CS_ROW(104), MS_CS_ROW(112), MS_CS_ROW(120)
-};
-
 /* ===== Internal Allocation Helpers ===== */
 
 static void checkCap(int64_t cap) {

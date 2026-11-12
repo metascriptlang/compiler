@@ -234,11 +234,4 @@ double msStringParseFloat(msString s);
 /* Empty a string but keep its buffer, for a reused response or request buffer */
 void msStringClear(msString* s);
 
-/* ===== Single-Char Interning Table ===== */
-/* 128 precomputed ASCII single-char strings, const payloads (.rodata),
-   statically initialized — no init guard, no constructor. Each has
-   MS_STRLIT_FLAG set so DRC treats them as literals (no dealloc, shallow
-   copy on share). Eliminates malloc-per-char in s[i] loops. */
-extern const msString msCharTable[128];
-
 #endif /* MS_STRING_H */

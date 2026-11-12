@@ -174,5 +174,3 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   program with a one-char literal and an index at `--danger` and `--release` with `--lto=off` and
   reads the symbol table: no `msCharTable`, and `msCharPayloads` present. Proven RED on the compiler
   of `e21c6e7c3666` (rtx: `D msCharTable` at both modes), GREEN on the fix (rtx, 2026-11-12).
-  `msCharTable` stays defined in `runtime/core/string.c` while a builder older than this change
-  emits `msCharTable[c]`; nothing in the tree reads it.
