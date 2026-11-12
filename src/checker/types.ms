@@ -4200,7 +4200,27 @@ export function noteSubclass(parent: Type, sub: Type): void {
 	if (parent.sym.instantiatedFrom != null) noteSubclassOn(parent.sym.instantiatedFrom, sub);
 }
 
+interface SubclassNotesBefore {
+	parent: Symbol;
+	notes: Type[] | null;
+}
+
+let _subclassNotesTaken: SubclassNotesBefore[] | null = null;
+
+export function withoutSubclassNotes(collect: () => void): void {
+	const outer = _subclassNotesTaken;
+	const taken: SubclassNotesBefore[] = [];
+	_subclassNotesTaken = taken;
+	try {
+		collect();
+	} finally {
+		_subclassNotesTaken = outer;
+		for (let i = taken.length - 1; i >= 0; i -= 1) taken[i].parent.subclasses = taken[i].notes;
+	}
+}
+
 function noteSubclassOn(parent: Symbol, sub: Type): void {
+	if (_subclassNotesTaken != null) _subclassNotesTaken.push({ parent, notes: parent.subclasses == null ? null : parent.subclasses.slice(0) });
 	if (parent.subclasses == null) parent.subclasses = [];
 	const list = parent.subclasses;
 	for (let i = 0; i < list.length; i += 1) {

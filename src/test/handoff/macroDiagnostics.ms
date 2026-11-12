@@ -1,6 +1,10 @@
 import { compileToCWithStd, compileToJSWithStd, compileProjectToCWithStd, MapEntry } from "../helpers";
 import { createInterpreter, evalModule, Evaluation, Diagnostic } from "../../embed/index";
 import { resolveRuntimeDir } from "../../utils/path";
+import { preludeContextFor } from "../../checker/checkPass";
+import { stdSymbol } from "../../checker/context";
+import { subclassesOf } from "../../checker/types";
+import { Type } from "../../ast/node";
 import { mkdir, ensureDir, readFile, writeFile, remove, removeAll, exists, fileSize, modifiedTime, changeStamp } from "std/fs";
 import { join } from "std/fs/path";
 import { cwd } from "std/process";
@@ -265,6 +269,19 @@ test "macro std tiers: a class value a std routine returns takes its class's Rai
 		+ ' macro probe(n: Node): Node { const r = fromHex("0102ff"); if (!r.ok) return n; const b = r.value; b[0] = 7; const text = `${b[0] + b[1]} ${b.toHex()}`; return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: text }; } console.log(probe(0));');
 	assert result.ok, result.ok ? "" : result.error;
 	if (result.ok) assert result.value.contains("9 0702ff"), "9 0702ff";
+}
+
+test "macro std tiers: a std class the engine checks again for a macro stays noted on its parent by the declaration the build holds" {
+	const result = compileToCWithStd('import { Node, NodeKind } from "std/meta"; import { fromHex } from "std/crypto";'
+		+ ' macro probe(n: Node): Node { const r = fromHex("0102ff"); if (!r.ok) return n; const text = `${r.value.length}`; return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: text }; } console.log(probe(0));');
+	assert result.ok, result.ok ? "" : result.error;
+	const prelude = preludeContextFor(join(resolveRuntimeDir(), "std"), ".cms");
+	const parent = stdSymbol(prelude, "Uint8Array");
+	const buffer = stdSymbol(prelude, "Buffer");
+	assert parent != null && buffer != null;
+	const noted = subclassesOf(parent.symbolType) ?? [];
+	const buffers = noted.filter((t: Type): boolean => t.sym != null && t.sym.name == "Buffer");
+	assert buffers.length == 1 && buffers[0].sym == buffer, `${buffers.length} Buffer notes`;
 }
 
 test "macro std tiers: an extern with no host bridge called by a macro or a @comptime block is refused by its name" {

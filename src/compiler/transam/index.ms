@@ -798,7 +798,8 @@ function registerImportExports(db: TransAmDb, fileId: int32, visited: HashSet<st
 		tmpCtx.adoptStmt = (stmt: Node): void => adoptStmt(adoption, stmt);
 		collectTopLevel(tmpCtx, collected);
 		db.cache.collected += 1;
-		resolveDeclarations(tmpCtx, collected);
+		if (db.preludeCtx != null && db.preludeCtx.preludeModuleScopes.has(depPath)) withoutSubclassNotes((): void => resolveDeclarations(tmpCtx, collected));
+		else resolveDeclarations(tmpCtx, collected);
 		if (!isCancelled(db.cancelCtx, startVersion)) verifyAdoption(adoption);
 		db.trees.set(exportNodeKey(depId), collected);
 
@@ -2304,7 +2305,7 @@ test "two dbs keep their own trees and contexts for the same file id" {
 	assert dbTypeCheck(first, "/test/first.ms") == firstCtx;
 }
 
-import { typeDisplayName } from "../../checker/types";
+import { typeDisplayName, withoutSubclassNotes } from "../../checker/types";
 
 function checkChain(db: TransAmDb, paths: string[]): CheckerContext {
 	for (const path of paths) dbParse(db, path);
