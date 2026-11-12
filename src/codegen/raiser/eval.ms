@@ -3456,7 +3456,7 @@ test "orc: appending to a string held once leaves no string live" {
 	assert vm.error == "", vm.error;
 	assert vm.output == "ok\n", vm.output;
 	assert heapStringLive(vm.arrayHeap) == 0, `${heapStringLive(vm.arrayHeap)}`;
-	assert vm.arrayHeap.mem.allocations == 27, `${vm.arrayHeap.mem.allocations}`;
+	assert vm.arrayHeap.mem.allocations == 26, `${vm.arrayHeap.mem.allocations}`;
 }
 
 test "arena: appending to a string held once leaves no string live" {
@@ -3464,7 +3464,7 @@ test "arena: appending to a string held once leaves no string live" {
 	assert vm.error == "", vm.error;
 	assert vm.output == "ok\n", vm.output;
 	assert heapStringLive(vm.arrayHeap) == 0, `${heapStringLive(vm.arrayHeap)}`;
-	assert vm.arrayHeap.mem.allocations == 27, `${vm.arrayHeap.mem.allocations}`;
+	assert vm.arrayHeap.mem.allocations == 26, `${vm.arrayHeap.mem.allocations}`;
 }
 
 // --- A self-append extends the register's own string in place ---

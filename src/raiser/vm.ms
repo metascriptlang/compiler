@@ -1501,12 +1501,22 @@ function unhandledException(vm: RaiserVM): void {
 const FINALLY_NORMAL: int64 = 0;
 const FINALLY_RAISE: int64 = 1;
 const FINALLY_RETURN: int64 = 2;
+const FINALLY_KIND_MASK: int64 = 3;
+const FINALLY_RETURN_IP_SHIFT: int64 = 2;
 
-function enterFinally(vm: RaiserVM, routeRank: number, heldRank: number, kind: int64, value: RaiserValue): void {
-	vm.regs.slots[(vm.base + routeRank) as int64] = kind;
+function finallyKind(route: int64): int64 {
+	return route & FINALLY_KIND_MASK;
+}
+
+function returnRoute(retIp: int64): int64 {
+	return FINALLY_RETURN | (retIp << FINALLY_RETURN_IP_SHIFT);
+}
+
+function enterFinally(vm: RaiserVM, routeRank: number, heldRank: number, route: int64, value: RaiserValue): void {
+	vm.regs.slots[(vm.base + routeRank) as int64] = route;
 	const held = operandTagged(heldRank as int32, RaiserRegClass.Dyn);
 	setRegConform(vm, held, value);
-	if (kind != FINALLY_NORMAL) vm.safePoints.push(pendingMarker(absOf(vm, held)));
+	if (finallyKind(route) != FINALLY_NORMAL) vm.safePoints.push(pendingMarker(absOf(vm, held)));
 }
 
 function pendingMarker(abs: number): number {
@@ -1598,7 +1608,7 @@ function cleanUpOnReturn(vm: RaiserVM): number {
 	const fin = func.packed[sp];
 	if (packedOp(fin) != RaiserOpcode.Finally) return -1;
 	vm.safePoints.length = n - 1;
-	enterFinally(vm, packedA(fin), packedB(fin), FINALLY_RETURN, raiserInt((vm.ip - 1) as int64));
+	enterFinally(vm, packedA(fin), packedB(fin), returnRoute((vm.ip - 1) as int64), raiserNil());
 	return sp + 1;
 }
 
@@ -4204,7 +4214,8 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			enterFinally(vm, ia >> 3, ib, FINALLY_NORMAL, raiserNil());
 		},
 		RaiserOpcode.FinallyEnd => {
-			const kind = vm.regs.slots[absOf(vm, ia)];
+			const route = vm.regs.slots[absOf(vm, ia)];
+			const kind = finallyKind(route);
 			const heldReg = operandTagged(ib, RaiserRegClass.Dyn);
 			const held = getDyn(vm, heldReg);
 			const leaving = ic == FINALLY_LEAVE;
@@ -4226,7 +4237,7 @@ function vmStepSlow(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 			if (kind == FINALLY_RAISE) {
 				unwindStep(vm);
 			} else if (kind == FINALLY_RETURN) {
-				vm.ip = held.intVal as int32;
+				vm.ip = (route >> FINALLY_RETURN_IP_SHIFT) as int32;
 			} else if (kind != FINALLY_NORMAL) {
 				vmError(vm, `FinallyEnd: unknown routing ${kind}`);
 			}
