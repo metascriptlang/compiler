@@ -21,8 +21,11 @@
 // GUARD-CHECK-FAIL the actor call of 'take' lends a value that
 // GUARD-CHECK-FAIL uses module-level 'SHARED'
 // GUARD-CHECK-FAIL calls 'getShared'
+// GUARD-CHECK-FAIL calls a function value, whose result may be module state
+// GUARD-CHECK-FAIL as overridden in 'SharedSource'
 // GUARD-CHECK-FAIL actor 'Holder' keeps 'head' on whichever thread takes its message
 // GUARD-CHECK-FAIL actor 'Keeper' keeps 'head' on whichever thread takes its message
+// GUARD-CHECK-FAIL actor 'Collector' keeps 'items' on whichever thread takes its message
 // GUARD-CHECK-FAIL is lent to the spawn
 // GUARD-CHECK-FAIL module state crosses threads only as a const value
 
@@ -31,6 +34,9 @@ const SHARED = new Node();
 function getShared(): Node { return SHARED; }
 
 class Bag { items: Node[] = []; head: Node | null = null; }
+class Registry { items: Node[] = [new Node()]; exportInto(out: Node[]): void { out.push(this.items[0]); } }
+const REGISTRY = new Registry();
+let PICK: int32 = 1;
 function bagOf(): Bag { const b = new Bag(); b.items.push(getShared()); return b; }
 function reassigned(): Node { let n = new Node(); n = SHARED; return n; }
 const ROW: Node[] = [new Node()];
@@ -60,6 +66,14 @@ actor Keeper {
 		this.tail = getShared(); // GUARD-REFUSED
 	}
 	read(): int32 { return this.head.v + this.tail.v; }
+}
+
+actor Collector {
+	items: Node[] = [];
+	constructor() {
+		this.items.push(SHARED); // GUARD-REFUSED
+	}
+	read(): int32 { return this.items[0].v; }
 }
 
 async function lendAlias(r: Reader): Promise<int32> {
@@ -99,6 +113,45 @@ async function spawnCalleePushed(): Promise<int32> {
 	return await spawn(() => b.items[0].v); // GUARD-REFUSED
 }
 
+async function lendMatch(r: Reader): Promise<int32> {
+	return await r.take(match (PICK) { 1 => SHARED, _ => new Node() }); // GUARD-REFUSED
+}
+
+async function spawnMatch(): Promise<int32> {
+	const n = match (PICK) { 1 => new Node(), _ => SHARED };
+	return await spawn(() => n.v); // GUARD-REFUSED
+}
+
+async function spawnCalleeStoredItsReceiver(): Promise<int32> {
+	const out: Node[] = [];
+	REGISTRY.exportInto(out);
+	return await spawn(() => out[0].v); // GUARD-REFUSED
+}
+
+async function spawnMapSet(): Promise<int32> {
+	const m = new Map<string, Node>();
+	m.set("a", SHARED);
+	return await spawn(() => m.size); // GUARD-REFUSED
+}
+
+async function spawnSetAdd(): Promise<int32> {
+	const s = new Set<Node>();
+	s.add(SHARED);
+	return await spawn(() => s.size); // GUARD-REFUSED
+}
+
+class Source { get(): Node { return new Node(); } }
+class SharedSource extends Source { get(): Node { return SHARED; } }
+async function spawnFunctionValueResult(f: () => Node): Promise<int32> {
+	const n = f();
+	return await spawn(() => n.v); // GUARD-REFUSED
+}
+
+async function spawnOverrideResult(s: Source): Promise<int32> {
+	const n = s.get();
+	return await spawn(() => n.v); // GUARD-REFUSED
+}
+
 async function spawnCalleeReassigned(): Promise<int32> {
 	const n = reassigned();
 	return await spawn(() => n.v); // GUARD-REFUSED
@@ -110,7 +163,8 @@ async function main(): Promise<void> {
 	const row = await sumOf(ROW); // GUARD-REFUSED
 	console.log(row);
 	console.log(await lendAlias(r) + await lendCall(r) + await lendField(r) + await spawnAlias());
-	console.log(await new Holder().read() + await new Keeper().read());
+	console.log(await lendMatch(r) + await spawnMatch() + await spawnCalleeStoredItsReceiver() + await spawnMapSet() + await spawnSetAdd() + await spawnFunctionValueResult(getShared) + await spawnOverrideResult(new SharedSource()));
+	console.log(await new Holder().read() + await new Keeper().read() + await new Collector().read());
 }
 
 await main();
