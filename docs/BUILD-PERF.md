@@ -162,6 +162,40 @@ gates. With the installed runtime it is bundle `e447dbf8b746`: 37.2 MB against 6
 linux-glibc-x86_64 cells ok, self-build through it g1 159 s and g2 94 s (not a quiet window), g2 checks the
 compiler clean.
 
+## Measured 2026-11-12 — ASan and TSan on musl build, and run only in a dynamic executable
+
+compiler-rt of LLVM 23.1.4 against the musl 1.2.5 overlays, compiled by the bundle's clang on rtx (bundle
+`541eae252989`: PGO engine, installed glibc runtime, musl and wasi overlays). `clang_rt.asan`, `asan_static`,
+`asan_cxx`, `tsan` and `tsan_cxx` build for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` with no
+failed step. A C program with a heap overflow (`-fsanitize=address`) and one with a data race
+(`-fsanitize=thread`), linked three ways and run on rtx through the sysroot's `libc.so` as the loader:
+
+| link | ASan | TSan |
+|---|---|---|
+| `-static` (msc's musl executable) | link fails: `undefined hidden symbol: _DYNAMIC` | the same |
+| `-static-pie` | links, segmentation fault at startup (exit 139) | the same |
+| dynamic | reports `heap-buffer-overflow`, exit 1 | reports `data race`, exit 66 |
+
+A musl build of msc is static, so `--sanitize=address` and `--sanitize=thread` on `--abi=musl` are refused by name
+with the bundle (`muslSanitizerGap`, `src/compiler/toolchain.ms`); `--sanitize=undefined` builds and runs. zig
+fails the ASan cell at link (`undefined symbol: __asan_memcpy`) and builds a TSan executable that fails when run.
+Not verified: the aarch64 programs were linked, not run; C++ under either sanitizer; a dynamic musl executable
+on a musl system (Alpine) instead of through the sysroot's loader.
+
+On rtx the installed msc gives `error: link failed` for both, a candidate of the tree gives
+`error: native toolchain: --sanitize=thread is not available on linux-musl: its runtime needs a dynamically linked
+executable and a musl build is static, zig cc fails it as well`, and the matrix rows of both musl targets read
+`n/a (bundle refuses…)` in place of `FAIL`: 16 built and 14 ran ok on x86_64, 16 built on arm64, as before.
+
+A wasm build dropped `--sanitize` without a word: `cliCompileFlags` returns for `--os=wasm` and bare wasm32
+before the flag is added, so `--sanitize=undefined` on `ubsanCompanion.ms` built and printed the wrapped
+`-2147483648` with no report, with zig and with the bundle alike (the `ubsanSan` cell failed when run, the three
+`san*` cells passed without a sanitizer). msc now refuses it for either compiler (`wasmSanitizerGap`,
+`src/compiler/cc.ms`): `error: --sanitize=undefined is not available on wasm: a wasm build links no sanitizer
+runtime.` The wasm32-wasi cells are then 11 built and 10 ran ok for zig and for the bundle, the four sanitizer
+cells `n/a (msc refuses…)`, the C++ companion the one `FAIL` of both. This replaces the 15 built and 13 ran of
+the table above, which counted the four `--sanitize` cells as built and the three `san*` ones as run.
+
 ## Measured 2026-11-12 — what zig builds for each target, and the order of the C runtime libraries
 
 `tools/managedToolchain/platformMatrix.ms build --compilers=zig` on rtx, msc `e21c6e7c3666`, zig 0.16.0, all nine
