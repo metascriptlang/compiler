@@ -37,13 +37,14 @@ function log(body: string[], rc: number, secs: number = 3): string {
 }
 
 let cases = 0;
-function verdict(known: string, logs: string[][]): string {
+function verdict(known: string, logs: string[][], hostKnown: string = "{}"): string {
 	cases = cases + 1;
 	const dir = `${root}/case${cases}`;
 	ensureDir(dir);
 	put(`${dir}.json`, known);
+	put(`${dir}.host.json`, hostKnown);
 	for (const pair of logs) put(`${dir}/${pair[0]}.log`, pair[1]);
-	const r = execFileCapture(tool, [dir, `${dir}.json`], cwd());
+	const r = execFileCapture(tool, [dir, `${dir}.json`, `${dir}.host.json`], cwd());
 	const out = r.ok ? r.value : `${r.error.output}exit ${r.error.exitCode}`;
 	return out.trim().split("\n").map((l: string): string => l.trim()).join("|");
 }
@@ -98,6 +99,10 @@ record("a known red is not new, a green known row is named, a flaky id is neithe
 record("a new red beside a known one fails the gate",
 	"gate: fmt 3s · 2 red · 1 known · 1 new · 1 known-now-green (a.ms)|new: e.ms|known-now-green: a.ms|gate: RED (fmt)|exit 1",
 	verdict(rows, [["fmt", log(["LOSSY b.ms x", "NO-FMT e.ms"], 1)]]));
+
+record("a second known file adds its rows",
+	"gate: fmt 3s · 2 red · 2 known · 0 new · 1 known-now-green (a.ms)|known-now-green: a.ms|gate: GREEN (fmt)",
+	verdict(rows, [["fmt", log(["LOSSY b.ms x", "NO-FMT e.ms"], 1)]], "{\"fmt\":{\"e.ms\":{}}}"));
 
 let failures = 0;
 console.log(`root ${root}`);

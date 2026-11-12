@@ -72,8 +72,7 @@ function trailer(lines: string[], key: string): number | null {
 	return null;
 }
 
-function knownOf(path: string): Map<string, string[]> {
-	const known = new Map<string, string[]>();
+function readKnown(known: Map<string, string[]>, path: string): void {
 	const text = readFile(path);
 	if (!text.ok) throw new Error(`gate: cannot read ${path}`);
 	const parsed = JSON.parseValue(text.value);
@@ -81,17 +80,18 @@ function knownOf(path: string): Map<string, string[]> {
 	for (let i = 0; i < parsed.value.keys.length; i++) {
 		const rows = parsed.value.values[i];
 		if (rows.kind != JsonKind.Object) throw new Error(`gate: ${path}: lane ${parsed.value.keys[i]} is not an object of rows`);
-		known.set(parsed.value.keys[i], rows.keys);
+		known.set(parsed.value.keys[i], (known.get(parsed.value.keys[i]) ?? []).concat(rows.keys));
 	}
-	return known;
 }
 
-if (argv.length < 2) {
-	console.error("usage: gate <directory of lane logs> <known-red.json>");
+const params = argv.slice(1);
+if (params.length < 2) {
+	console.error("usage: gate <directory of lane logs> <known-red.json>...");
 	exit(2);
 }
-const dir = argv[argv.length - 2];
-const known = knownOf(argv[argv.length - 1]);
+const dir = params[0];
+const known = new Map<string, string[]>();
+for (const file of params.slice(1)) readKnown(known, file);
 const lanes: Lane[] = [];
 for (const entry of readDir(dir).sort()) {
 	if (!entry.endsWith(".log") || entry.startsWith(".")) continue;
