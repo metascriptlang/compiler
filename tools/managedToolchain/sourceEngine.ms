@@ -253,10 +253,7 @@ export function sourceEditRecords(
 	return Result.ok(records);
 }
 
-export function extractLlvmSource(
-	tarball: string, version: string, work: string,
-): Result<string, string> {
-	const extracted = join(work, "src");
+export function extractTarball(tarball: string, extracted: string): Result<void, string> {
 	try engineIo(ensureDir(extracted));
 	const tar = try hostTool("tar");
 	let gnu = false;
@@ -271,9 +268,16 @@ export function extractLlvmSource(
 			return Result.err(tar + " " + args.join(" ") + " failed (rc=" +
 				String(ran.returnCode) + "): " + ran.errorOutput);
 		}
-	} else {
-		try runCommand({ file: tar, args });
+		return Result.ok(null);
 	}
+	return runCommand({ file: tar, args });
+}
+
+export function extractLlvmSource(
+	tarball: string, version: string, work: string,
+): Result<string, string> {
+	const extracted = join(work, "src");
+	try extractTarball(tarball, extracted);
 	const source = join(extracted, SOURCE_PREFIX + version + ".src");
 	if (!isDir(source)) {
 		return Result.err(tarball + " did not extract to " + source);
