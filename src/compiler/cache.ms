@@ -60,10 +60,9 @@ export function changedSinceBuild(path: string, startMark: number): boolean {
 const EVERY_FILE_CHANGED = Number.MIN_VALUE;
 
 export function buildStartMark(): number {
-	const marker = `${getCacheDir()}/started.${performance.now()}`;
-	if (!writeFile(marker, "").ok) return EVERY_FILE_CHANGED;
+	const marker = `${getCacheDir()}/started`;
+	if (!writeFile(marker, "\n").ok) return EVERY_FILE_CHANGED;
 	const mark = changeMark(marker);
-	remove(marker);
 	return mark > 0 ? mark : EVERY_FILE_CHANGED;
 }
 
