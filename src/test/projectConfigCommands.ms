@@ -234,6 +234,8 @@ const copiedRuns = [copiedText(copied)];
 put(`${copied}/hidden.txt`, "three\n");
 copiedRuns.push(copiedText(copied));
 record("a copy of the project reuses a command's output and checks its depfile inputs in its own directory", "reused:two|ran:three", copiedRuns.join("|"));
+put(`${globbed}/hidden.txt`, "one\n");
+record("a tree back at an earlier state reuses the output that state produced", "reused:one", copiedText());
 record("--seed keeps the build's result", "src/a.txt,src/b.txt,src/c.txt", lastLine(run(globbed, ["build", "--colors=off", "--seed=7", "found"])));
 
 const written = `${root}/written`;
