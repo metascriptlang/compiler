@@ -5150,14 +5150,16 @@ override whose `sink` positions differ from the one it is matched against is an 
 actor method refuses `sink`, `ref` and `out`. Literal fitting, generic binding and `sink`
 as a parameter name: `src/test/handoff/sinkParam.ms`.
 
-A constructor takes a parameter with no `sink` written when its body keeps it on every path that
-completes normally: a store into a field or another slot that holds a count, an element of an object
-or array literal, a parameter property, an argument of a `sink` parameter, a written `move`, or an
-argument of another constructor (`new K(p)`, `super(p)`) that keeps it. The caller's last use then
-moves in. A parameter the body only reads, keeps through an `Unowned` or uncounted slot, stores under
-a condition, in a loop or after a `return`, hands to a function or method, or hands to a constructor
-of a module that imports this one back, is lent: the caller keeps the value to the end of its scope
-and the constructor copies it where it stores it. So the parent in `new Kid(parent)` with
+A constructor takes a parameter with no `sink` written when its body keeps it on every path, before
+anything that can leave the constructor: a store into a field or another slot that holds a count, an
+element of an object or array literal, a parameter property, an argument of a `sink` parameter, a
+written `move`, or an argument of another constructor (`new K(p)`, `super(p)`) that keeps it. The
+caller's last use then moves in. A parameter the body only reads, keeps through an `Unowned` or
+uncounted slot, stores under a condition, in a loop, after a `return` or a `throw`, after a call, a
+`new`, a getter or a field initializer that calls (any of them may throw), as a parameter property
+after `super(...)`, hands to a function or method, or hands to a constructor of a module that imports
+this one back, is lent: the caller keeps the value to the end of its scope and the constructor copies
+it where it stores it. So the parent in `new Kid(parent)` with
 `up: Unowned<P> | null` lives as long as its caller holds it; when a constructor took every parameter,
 the edge read a destroyed parent. Measured 2026-11-12 on a candidate of tree `de58c4078ae0`: corpus
 `constructorLendsAParameterItOnlyStoresUnowned`, `constructorParameterOwnershipAgreesAcrossModules`
@@ -5169,18 +5171,45 @@ Counted per construction on the same rule (a bench of 15 constructor shapes, 100
 count, as before; a constructor that hands its parameter to a helper function or method, or stores it
 under `if`, pays one count pair it did not pay before.
 
-On C under DRC the compiler also infers `sink` for a parameter the body always stores into a
-field or a non-local, puts in an object or array literal, or passes to a `sink` parameter,
-outside any branch, where that slot holds a count: a store into a `Cursor` or `Ptr` slot
-takes no ownership and leaves the parameter borrowed. It does so only where no caller can see the routine's type: a routine
+The throw exits were measured 2026-11-12 on a candidate of tree `42075e8aef4d` (rtx, against main
+`1b493b622aca`): corpus `constructorLendsAParameterItStoresAfterAPossibleThrow` prints `a b c d e f`
+on C, danger, JS, the Raiser and under SAN, and stops on main's C, danger and Raiser with the dead
+edge; a constructor that stores a parameter after `super(n)`, after `new Slot()` or after a call
+pays one count pair per construction it did not pay before, the other eighteen constructor shapes of
+the bench count the same. Not reached: a constructor that stores the parameter and throws afterwards
+takes it, and the half-built object destroys it with itself, so the caller's edge reads a destroyed
+target on C and the Raiser while JS prints (`class K { own: P; constructor(p: P, on: boolean)
+{ this.own = p; boom(on); } }`, measured the same day).
+
+On C under DRC the compiler also infers `sink` for a parameter the body keeps on every exit: it
+stores it into a field or a non-local, puts it in an object or array literal, or passes it to a
+`sink` parameter, on every path and before anything that can leave the function (a `return`, a
+`throw`, a call that may throw), where that slot holds a count: a store into a `Cursor` or `Ptr` slot
+takes no ownership and leaves the parameter borrowed. A store under a condition, in a loop, inside a
+`try`, or after an early `return`, a `throw` or a call leaves it borrowed too, because on the exit
+that did not store it the function would destroy the caller's value. It does so only where no caller can see the routine's type: a routine
 used as a value, given a native or library export name, overloaded, overridden or dispatched, async, a generator, generic,
 or one that builds a closure keeps its parameters borrowed. A caller's last use then moves
-in instead of being copied, and each program prints the same as with no inference. Measured
+in instead of being copied. Measured
 2026-10-28: corpus `inferSinkParamsRcBudget` runs 640008 rc operations on the compiler before
 the pass and 400008 with it (`@maxrcops: 410000`), and `inferSinkParamsBoundaries` keeps the
 excluded routines borrowed across modules; `inferSinkParamsUncountedSlots` runs 280004 rc
 operations when cursor-slot stores count as sinks and 160004 when they do not
 (`@maxrcops: 170000`).
+
+Until 2026-11-12 the inference skipped only `if` and `switch` branches, and a function that returned
+early, looped zero times or threw before its store destroyed the caller's last-use value: an
+`Unowned` edge to it then read a destroyed target on C while JS and the Raiser printed. Measured
+2026-11-12 on a candidate of tree `42075e8aef4d` (rtx, against main `1b493b622aca`): corpus
+`functionLendsAParameterItDoesNotKeepOnEveryExit` prints `a b c d e f g h i kept` on C, danger, JS,
+the Raiser and under SAN and stops on main's C and danger. The cost, on the same pair of compilers:
+compiling the compiler, 1674 parameters were inferred before and 520 are now (863 routines changed,
+most because some call sits before the store, and every call the compiler cannot prove silent counts
+as able to throw); emitting the compiler's own C runs 0.04% more `rc.inc` (`MS_DRC_STAT`, 1,351,089,451
+to 1,351,606,520 and 1,309,368,348 to 1,309,977,665 on two runs of each); per call, a store after a
+call, after an early `return` or after a `throw` guard pays one count pair it did not pay, and the
+other function shapes of the bench count the same. Wall time and instructions were not measured (the
+host was loaded and has no counters).
 
 ## Proxy
 
