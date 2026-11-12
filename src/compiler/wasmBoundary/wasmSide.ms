@@ -495,7 +495,8 @@ function wrapperLines(
 				sigs.push(`${p.name}: uint32`);
 				const target = handleAliasOf(modules, f, p.handle!);
 				const at = `${p.name} as uint64 as Ptr<void>`;
-				argList.push(`Handle.at<${target}>(${at})`);
+				const receives = i == 0 && f.member != null && f.member!.access != MemberAccess.New;
+				argList.push(receives ? receiverHeldByCaller(target, at) : `Handle.at<${target}>(${at})`);
 			}
 			BoundaryKind.Struct => {
 				if (p.nullable) sigs.push(`${some}: int32`);
@@ -587,8 +588,12 @@ function wrapperLines(
 	};
 }
 
+function receiverHeldByCaller(target: string, at: string): string {
+	return `((${at}) as ${target} as Cursor<${target}>)`;
+}
+
 function memberCall(m: BoundaryMember, args: string[], made: string): string {
-	const target = args.length > 0 ? `${args[0]}.value().${m.property}` : "";
+	const target = args.length > 0 ? `${args[0]}.${m.property}` : "";
 	return match (m.access) {
 		MemberAccess.New => `Handle.retain(new ${made}(${args.join(", ")}))`,
 		MemberAccess.Call => `${target}(${args.slice(1).join(", ")})`,

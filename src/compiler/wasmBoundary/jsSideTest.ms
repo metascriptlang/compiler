@@ -766,7 +766,7 @@ test "js side: a member the JS half reaches is a method of the class's proxy, wh
 		+ "\tbump_u1(a1) { return bundled_bump({ ptr: this[__msbSelf] }, a1); }\n}\n");
 	assert b.modules[0].code.includes("return { ptr: __msb.own(v, \"Handle<Counter>\", \"\", null, __msbRef$calc$Counter) };");
 	const entry = wasmEntrySource(m.functions, (path) => path).source;
-	assert entry.includes("Handle.at<msbm0_Counter>(h as uint64 as Ptr<void>).value().bump(by)");
+	assert entry.includes("((h as uint64 as Ptr<void>) as msbm0_Counter as Cursor<msbm0_Counter>).bump(by)");
 	assert !entry.includes("bump as msbm0_bump");
 }
 
@@ -791,8 +791,8 @@ test "js side: a field read and write are a getter and a setter of the proxy" {
 	assert b.prelude.includes("\tset n(a1) { bundled_bump({ ptr: this[__msbSelf] }, a1); }\n"
 		+ "\tget n() { return bundled_peek({ ptr: this[__msbSelf] }); }\n");
 	const entry = wasmEntrySource(m.functions, (path) => path).source;
-	assert entry.includes("Handle.at<msbm0_Counter>(h as uint64 as Ptr<void>).value().n = by;");
-	assert entry.includes("return Handle.at<msbm0_Counter>(h as uint64 as Ptr<void>).value().n;");
+	assert entry.includes("((h as uint64 as Ptr<void>) as msbm0_Counter as Cursor<msbm0_Counter>).n = by;");
+	assert entry.includes("return ((h as uint64 as Ptr<void>) as msbm0_Counter as Cursor<msbm0_Counter>).n;");
 }
 
 test "js side: a Handle result is owned with its declaration label in a dev bundle and an empty one in a release bundle" {
