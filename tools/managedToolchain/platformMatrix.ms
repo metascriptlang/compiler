@@ -171,6 +171,7 @@ function namedRefusal(compiler: string, text: string): string {
 	if (compiler != "bundle") { return ""; }
 	if (text.contains("is not installed in")) { return "bundle refuses: its runtime for this target is not installed"; }
 	if (text.contains("is not available on windows")) { return "bundle refuses: mingw has no ASan or TSan runtime (zig fails it as well)"; }
+	if (text.contains("--sanitize=address on linux needs")) { return "bundle refuses: its glibc runtime has no ASan library (zig fails it at link as well)"; }
 	if (text.contains("is not available on linux-musl")) { return "bundle refuses: ASan and TSan need a dynamic executable and musl builds are static (zig fails ASan at link, TSan when run)"; }
 	return "";
 }
