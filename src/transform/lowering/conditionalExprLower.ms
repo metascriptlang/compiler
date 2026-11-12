@@ -392,6 +392,11 @@ function captureSibling(parent: Node, index: int32, child: Node, pre: Node[], wr
 		|| parent.kind == NodeKind.HiddenDeref || parent.kind == NodeKind.HiddenAddr
 		|| (parent.kind == NodeKind.BinaryExpr && isAssignOperator((parent.data as BinaryExprData).operator)));
 	if (isLocation) return hoistAssignTargetEffects(child, pre, ctx, writes);
+	if (child.kind == NodeKind.SpreadExpr) {
+		const sd = child.data as SpreadExprData;
+		sd.spreadArg = captureSibling(child, 0, sd.spreadArg, pre, writes, calls, ctx);
+		return child;
+	}
 	if (isLiteral(child)) return child;
 	const source = cstringSource(child);
 	if (source != null) {
