@@ -152,6 +152,15 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   reports to the same check: RED on musl with `runtime/allocator.c` calling `fprintf`, GREEN with
   it calling `msErrorf`, one candidate compiler for both (rtx and d87, 2026-11-12); on WASI it
   was green before, because the managed heap is not built there.
+- **`libraryExportsOnlyItsApi.ms`** — a shared library (`--app=lib`) exports its `@exportName`
+  function, the host's entry points (`MsMain`, `MsDestroyGlobals`, `msDrainAtExit`,
+  `msReportOrphanFailures`, each module's `__DatInit000` and `__Init000`) and the C function of a
+  source it compiles with `@compile`, and nothing of std or the runtime. Builds the library at
+  `--danger`, reads its exported symbols with `nm` (`-D --defined-only`, on macOS `-gU`), and, where
+  `python3` exists, loads it and calls each entry point. Proven RED on the compiler of
+  `c62ba752f7de` (707 symbols outside the API on oci-u, 708 on m1m), GREEN on the fix (oci-u and
+  m1m, 2026-11-12). Skipped on Windows, where `nm` does not read a DLL's export table; the DLL was
+  measured by hand (`docs/BUILD-PERF.md`).
 - **`acyclicProgramLinksNoCycleCollector.ms`** — a program none of whose types can form a cycle
   (a `Map<string, int32>` and a `Set<int32>`) links no `msRegisterCycle`, at `--mm=drc` and at
   `--mm=none`: outside the counted mode a failed constructor releases nothing, so the cyclic
