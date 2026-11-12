@@ -1058,11 +1058,7 @@ function fieldOfStruct(v: Readonly<Type | null>, fieldName: string): Readonly<Ty
 // (`variantSlot`, 1-based, from the member's sym), because the union's own lookup answers with
 // the first variant that declares the name.
 export function declaredFieldOfRead(owner: Type | null, property: string, variantSlot: int32): Type {
-	let body = variantSlot > 0 ? peelToStructOrUnion(owner) : null;
-	if (body != null && body.kind == TypeKind.Union && body.typeChildren.length == 2) {
-		const heldIdx = body.typeChildren[0].kind == TypeKind.Null ? 1 : body.typeChildren[1].kind == TypeKind.Null ? 0 : -1;
-		if (heldIdx >= 0) body = peelToStructOrUnion(body.typeChildren[heldIdx]);
-	}
+	const body = variantSlot > 0 && owner != null ? peelToStructOrUnion(withoutNullMember(owner)) : null;
 	if (body == null || body.kind != TypeKind.Union) return getProperty(owner, property);
 	if (variantSlot > body.typeChildren.length) throw new Error(`internal: field '${property}' is pinned to variant slot ${variantSlot} of a union with ${body.typeChildren.length} members`);
 	return getProperty(body.typeChildren[variantSlot - 1], property);
