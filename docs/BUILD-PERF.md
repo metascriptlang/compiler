@@ -739,10 +739,8 @@ Windows hello carries 12,662 B of `.text` against 3,662 on Linux with no event l
 runtime and the program. The split, from the link map of that build (d87, the compiler of
 `e3f94f82fda4`): mingw CRT 5,170 B (`pseudo-reloc`, `crt2`, `pesect`, `tlsthrd`), winpthreads 2,766
 (`mutex.o` and `misc.o`; about 3.2 KB with their data and unwind rows), the runtime 3,317, the
-program 381. winpthreads comes in through the pthread mutexes of `runtime/drc.c`
-(`msOrphanRootsLock`, `gDsMutex`) and `runtime/core/system.c` (`_msSpawnCreateLock`);
-`runtime/allocator.c` already takes an SRW lock there. Not done: native locks at those sites would
-save at most that 3.2 KB of 21,504.
+program 381. What brought winpthreads in, and the hello without it (17,920 B), is in §Measured
+2026-11-12 — a Windows hello links no winpthreads.
 
 ## Measured 2026-11-12 — a static build without the libc formatter
 
