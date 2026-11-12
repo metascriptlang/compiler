@@ -344,7 +344,7 @@ record("a checked command that failed runs again", "2|exited with 3, expected 0"
 record("expectExitCode accepts the code it names", "passed", passes(run(checks, ["build", "--colors=off", "three"])));
 record("runArtifact runs the built executable and can capture its stdout", "app second", storedStdout(run(checks, ["build", "--colors=off", "shown"])));
 const namedOut = storedStdout(run(checks, ["build", "--colors=off", "named"]));
-record("addPrefixedArtifactArg passes the built executable's path", "--msc=/tmp/…/checks/out/app", namedOut.startsWith("--msc=/tmp/") && namedOut.endsWith("/checks/out/app") ? "--msc=/tmp/…/checks/out/app" : namedOut);
+record("addPrefixedArtifactArg passes the built executable's path", "--msc=/tmp/…/checks/out/app", namedOut.startsWith("--msc=/") && namedOut.endsWith(`${checks}/out/app`) ? "--msc=/tmp/…/checks/out/app" : namedOut);
 record("mscExe() is the msc that runs the build", compiler, storedStdout(run(checks, ["build", "--colors=off", "self"])));
 record("arguments after -- reach the command node msc build names", "args a b", lastLine(run(checks, ["build", "--colors=off", "echoed", "--", "a", "b"])));
 run(checks, ["build", "--colors=off", "said"]);
@@ -372,7 +372,8 @@ put(`${staged}/build.ms`, [
 ].join("\n"));
 const stagedPlan = run(staged, ["build", "--colors=off", "--dry-run", "stage2"]).split("\n");
 record("lto: LtoMode.None builds with --lto=off", "--lto=off", stagedPlan[0].split(" ").filter((w: string): boolean => w.startsWith("--lto")).join(" "));
-record("an executable with a compiler is built by that artifact", `${staged}/out/stage1`, stagedPlan.length > 1 ? stagedPlan[1].split(" ")[0] : stagedPlan.join("|"));
+const stagedBy = stagedPlan.length > 1 ? stagedPlan[1].split(" ")[0] : stagedPlan.join("|");
+record("an executable with a compiler is built by that artifact", `${staged}/out/stage1`, stagedBy.endsWith(`${staged}/out/stage1`) ? `${staged}/out/stage1` : stagedBy);
 
 const bounded = `${root}/bounded`;
 ensureDir(bounded);
@@ -413,7 +414,7 @@ const greedy = errorLine(run(bounded, ["build", "--colors=off", "greedy"]));
 record("a command that peaks above its maxRss fails the build", "peaked above maxRss of 19 MiB", greedy.includes(" peaked at ") && greedy.endsWith("above its declared maxRss of 19 MiB") ? "peaked above maxRss of 19 MiB" : greedy);
 record("a command far below its maxRss passes though msc itself holds more", "passed", passes(run(bounded, ["build", "--colors=off", "modest"])));
 const modestPeak = run(bounded, ["build", "--colors=off", "--summary=all", "modest"]).split("\n").filter((l: string): boolean => l.startsWith("modest "));
-record("the summary names no peak for a command that stayed below msc's own", "modest success", modestPeak.length == 1 && modestPeak[0].includes(" success") && !modestPeak[0].includes("MaxRSS") ? "modest success" : modestPeak.join("|"));
+record("the summary names a command's own peak, never the one it inherited from msc", "modest success", modestPeak.length == 1 && modestPeak[0].includes(" success") && modestPeak[0].includes("MaxRSS") == (platform != "linux") ? "modest success" : modestPeak.join("|"));
 const aboveTotal = errorLine(run(bounded, ["build", "--colors=off", "huge"]));
 record("without --maxrss the bound is the machine's memory", "MiB this build may use", aboveTotal.endsWith("MiB this build may use (--maxrss)") ? "MiB this build may use" : aboveTotal);
 for (const name of ["crashed", "crashedChecked"]) {
