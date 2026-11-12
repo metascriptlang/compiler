@@ -114,6 +114,7 @@ import "./stringMutatorsRemoved";
 import "./checkTakesParse";
 import "./hostCallbackBeforeBody";
 import "./metaFrameThrow";
+import "./metaVmOwnership";
 import "./engineHelperCheckedOnce";
 import "./comptimeStatement";
 import "./comptimeValues";
