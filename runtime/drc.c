@@ -601,7 +601,17 @@ void msRootsAdopt(msCellSeq* orphan) {
 
 static msCellSeq msOrphanRoots;
 
-#if !defined(MSOS_EMCC) && !defined(MSOS_WASM) && !defined(MSOS_BARE)
+#if defined(_WIN32) && !defined(MSOS_BARE)
+static SRWLOCK msOrphanRootsLock = SRWLOCK_INIT;
+
+static void msOrphanRootsAcquire(void) {
+	AcquireSRWLockExclusive(&msOrphanRootsLock);
+}
+
+static void msOrphanRootsRelease(void) {
+	ReleaseSRWLockExclusive(&msOrphanRootsLock);
+}
+#elif !defined(MSOS_EMCC) && !defined(MSOS_WASM) && !defined(MSOS_BARE)
 #include <pthread.h>
 static pthread_mutex_t msOrphanRootsLock = PTHREAD_MUTEX_INITIALIZER;
 

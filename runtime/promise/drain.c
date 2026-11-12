@@ -12,7 +12,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#if !defined(MSOS_EMCC) && !defined(MSOS_WASM) && !defined(MSOS_BARE)
+#if defined(_WIN32) && !defined(MSOS_BARE)
+#include <windows.h>
+static SRWLOCK msOrphanMu = SRWLOCK_INIT;
+#define MS_ORPHAN_LOCK()   AcquireSRWLockExclusive(&msOrphanMu)
+#define MS_ORPHAN_UNLOCK() ReleaseSRWLockExclusive(&msOrphanMu)
+#elif !defined(MSOS_EMCC) && !defined(MSOS_WASM) && !defined(MSOS_BARE)
 #include <pthread.h>
 static pthread_mutex_t msOrphanMu = PTHREAD_MUTEX_INITIALIZER;
 #define MS_ORPHAN_LOCK()   pthread_mutex_lock(&msOrphanMu)
