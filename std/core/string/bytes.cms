@@ -138,6 +138,7 @@ export function stringByteIndexOf(s: string, sub: string, byteStart: int64): int
 	return findBytesFrom(s.asBytes(), nb, byteStart < 0 ? 0 : byteStart);
 }
 
+@inline
 export function byteIndexOf(this s: string, sub: string, start: int32 = 0): int32 {
 	return stringByteIndexOf(s, sub, start) as int32;
 }
