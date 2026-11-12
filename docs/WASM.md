@@ -247,6 +247,16 @@ three handle checks and drop the site.
   cut the fixed cost of an empty array (Chrome 0.21 to 0.10 us, Node 0.14 to 0.096), while it hands
   a subarray result a buffer of its own length at offset 0 instead of the shape JS gives it;
   `ArrayBuffer.prototype.slice` measured slower on both (empty 0.28 and 0.26 us).
+  A wrapper that holds its wasm export in a closure, `const name = ((wasm) => function name(…) {
+  … wasm(…) … })(__msbMod._export)` (m1m, 2026-11-12, `baseline.md` of that day): on Node `add`
+  2.88 to 2.71 ns and `method` 3.17 to 3.07, which is what stands between `add` and wasm-bindgen
+  there; in Chrome 149 `mid` 5.67 to 9.0 ns with every wrapper in that form, and `add` 3.15 to 3.26
+  and `add64` 4.24 to 4.42 with only the wrappers that have no cleanup. No variant left every row
+  as fast, and the browser is the runtime this ships to, so the wrappers stay function
+  declarations. Such a `const` is also not hoisted: the wrappers would have to follow the prelude,
+  because a placed module that initialises a constant from its own `@wasm` function at top level
+  (pin `wasmModuleTopLevel`) otherwise reads the wrapper before it exists. Not explained: why
+  Chrome slows `mid`.
 - **No zero-copy path for JS-owned data.** Wasm cannot address a JS `ArrayBuffer`, so a `Span` of
   JS data is copied in and back, as wasm-bindgen's `&mut [f32]` glue does; data the wasm side
   holds is shared without a copy through `Handle<VecBox<T>>` (bench row `scaleBox`).
