@@ -5,9 +5,11 @@
 // @stdout: wide 3221225472000 -1501500
 // @stdout: int8 120 0 -120
 // @stdout: int16 -30000 0
+// @stdout: wrapped -1500004 -1502996 -1496 1501500
 // note: blocks whose magnitude bound refuses them though every partial sum fits (terms of +-2^30, an accumulator near
 // its limit), and blocks of negative terms the bound takes, give the plain loop's total on every backend: the fused
-// array sum (indexed, for-of), the sticky block (keys(), a bounded loop, a folded add), += and -=, int8 to int64 sums.
+// array sum (indexed, for-of), the sticky block (keys(), a bounded loop, a folded add, subtract or negate), += and -=,
+// int8 to int64 sums.
 
 function indexed(xs: int32[], start: int32): int32 {
 	let t = start;
@@ -36,6 +38,24 @@ function bounded(xs: int32[], n: int32, start: int32): int32 {
 function bumped(xs: int32[], start: int32): int32 {
 	let t = start;
 	for (let i: int32 = 0; i < xs.length; i++) t += xs[i] + 1;
+	return t;
+}
+
+function added(xs: int32[], ys: int32[]): int32 {
+	let t: int32 = 0;
+	for (const k of xs.keys()) t += xs[k] + ys[k];
+	return t;
+}
+
+function differed(xs: int32[], ys: int32[], n: int32): int32 {
+	let t: int32 = 0;
+	for (let i: int32 = 0; i < n; i++) t -= xs[i] - ys[i];
+	return t;
+}
+
+function negated(xs: int32[]): int32 {
+	let t: int32 = 0;
+	for (const k of xs.keys()) t += -xs[k];
 	return t;
 }
 
@@ -77,6 +97,7 @@ console.log(`near ${four(near, 2147483647 - 3000, -2147483648 + 3000)}`);
 console.log(`negative ${four(negative, -5000, 5000)}`);
 console.log(`bumped ${bumped([-2147483648, 2147483646, 7, -9], 100)} ${bumped(negative, -5000)}`);
 console.log(`wide ${wide(ones)} ${wide(negative)}`);
+console.log(`wrapped ${added(swing, negative)} ${differed(swing, negative, 3000)} ${negated(swing)} ${negated(negative)}`);
 
 const twelve: int8[] = [];
 const minusTwelve: int8[] = [];
