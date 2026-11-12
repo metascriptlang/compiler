@@ -42,17 +42,35 @@ function continuesAStatement(b: int32): boolean {
 		|| b == "]".code || b == "/".code;
 }
 
+const BODY_OPENERS: string[] = ["async function", "function*", "function", "class"];
+
+function opensABody(code: string, lineStart: int32, end: int32): boolean {
+	let last = end - 1;
+	while (last > lineStart && (code.byteAt(last) == " ".code || code.byteAt(last) == "\r".code)) last -= 1;
+	if (code.byteAt(last) != "{".code) return false;
+	for (const opener of BODY_OPENERS) {
+		if (startsWithAt(code, lineStart, opener) && code.byteAt(lineStart + opener.byteLength) == " ".code) return true;
+	}
+	return false;
+}
+
 // The names a unit declares at column 0. `droppable` is false when the unit also holds text
 // that is neither a declaration nor the continuation of one, because that text runs on load.
+// A function or class that opens its body at column 0 owns every line up to the next column-0
+// `}`, whatever their indent, because a raw-JS body is emitted as written.
 export function topLevelNames(code: string, names: string[]): boolean {
 	let droppable = true;
+	let inBody = false;
 	let lineStart: int32 = 0;
 	while (lineStart < code.byteLength) {
 		const end = lineEnd(code, lineStart);
-		if (end > lineStart && !continuesAStatement(code.byteAt(lineStart))) {
+		if (inBody) {
+			inBody = code.byteAt(lineStart) != "}".code;
+		} else if (end > lineStart && !continuesAStatement(code.byteAt(lineStart))) {
 			const name = declaredNameAt(code, lineStart);
 			if (name == "") droppable = false;
 			else names.push(name);
+			inBody = name != "" && opensABody(code, lineStart, end);
 		}
 		lineStart = (end + 1) as int32;
 	}
@@ -142,6 +160,18 @@ test "every column-0 declaration of a unit is one of its names" {
 	const code = "let Shape;\nfunction Shape_make(a) {\n  const inner = 1;\n  return a;\n}\nasync function load() {\n}\nfunction* walk() {\n}\n";
 	assert topLevelNames(code, names);
 	assert names.join(",") == "Shape,Shape_make,load,walk";
+}
+
+test "a body line at column 0 belongs to its function, and a statement after the closing brace still runs" {
+	const names: string[] = [];
+	assert topLevelNames("function raw(s) {\n  var m = s;\nreturn m;\n  unreachable();\n}\n", names);
+	assert names.join(",") == "raw";
+	const after: string[] = [];
+	assert !topLevelNames("function raw(s) {\nreturn s;\n}\nregistry.push(raw);\n", after);
+	const early: string[] = [];
+	assert !topLevelNames("function raw(s) {\nif (s) {\n}\nreturn s;\n}\n", early);
+	const oneLine: string[] = [];
+	assert !topLevelNames("function f() {}\nrun(f);\n", oneLine);
 }
 
 test "a name inside a string or a longer name is read as a whole word" {

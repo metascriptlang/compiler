@@ -32,7 +32,7 @@ import {
 	emitFunctionDecl, emitEnumDecl, emitClassDecl, emitActorDecl,
 	emitMethodDecl, emitConstructorDecl,
 	emitImportDecl, emitExportDecl, emitDecoratedDecl,
-	classEvaluatesStatics, emitDeferredClassBinding, emitDeferredClassValue, emitDeferredDefaultExport,
+	classEvaluatesStatics, classStaticsHaveEffect, emitDeferredClassBinding, emitDeferredClassValue, emitDeferredDefaultExport,
 } from "./declarations";
 
 import { emitTestDecl } from "./test";
@@ -170,7 +170,7 @@ function runsOnLoad(stmt: Node): boolean {
 		const initializer = (decl.data as VariableDeclData).initializer;
 		return initializer != null && hasEffect(initializer);
 	}
-	return runsInModuleBody(stmt) || isDecorated(stmt) || decl.kind == NodeKind.ActorDecl || classEvaluatesStatics(decl);
+	return runsInModuleBody(stmt) || isDecorated(stmt) || decl.kind == NodeKind.ActorDecl || classStaticsHaveEffect(decl);
 }
 
 // Declarations stay in the flat bundle scope so other modules keep naming them; the

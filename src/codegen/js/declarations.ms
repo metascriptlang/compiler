@@ -7,6 +7,7 @@ import {
 import { emit, emitNode, emitIndent, emitNewline, emitBlockInline, markNamed, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitJoinedSafeParams, emitBodyOrEmpty, lookupImportSpec, needsAutoAsync, escapeJSString, declareBinding, jsPropertyKey } from "./emit";
 import { safeJsName, exportedBindingName, jsSymbolName, jsMethodMemberName, jsExportedFunctionName, jsEnumMemberName } from "./expressions";
 import { ACTOR_EXIT_STOP, useActorRuntime } from "./actorMailbox";
+import { hasEffect } from "../../transform/walkEffects";
 import { hasGenericParams, runtimeClassSym, unwrapRef } from "../../checker/types";
 import { isGenericFn, routineKindFlag, isExtensionRoutine } from "../../checker/context";
 import { jsDefaultValue, emitCopyOnRead, valueCopyFnName } from "./valueCopy";
@@ -253,10 +254,20 @@ function emitClassDeclInner(gen: JSGenerator, node: Node, assigned: boolean = fa
 }
 
 export function classEvaluatesStatics(node: Node): boolean {
+	return classHasStatics(node, false);
+}
+
+export function classStaticsHaveEffect(node: Node): boolean {
+	return classHasStatics(node, true);
+}
+
+function classHasStatics(node: Node, effectsOnly: boolean): boolean {
 	if (node.kind != NodeKind.ClassDecl || classEmitsNoJs(node) || !classEmitsShell(node)) return false;
 	for (const member of (node.data as ClassDeclData).classBody) {
 		if (member.kind == NodeKind.BlockStmt) return true;
-		if (member.kind == NodeKind.PropertyDecl && (member.data as PropertyDeclData).propIsStatic && (member.data as PropertyDeclData).propInitializer != null) return true;
+		if (member.kind != NodeKind.PropertyDecl || !(member.data as PropertyDeclData).propIsStatic) continue;
+		const initializer = (member.data as PropertyDeclData).propInitializer;
+		if (initializer != null && (!effectsOnly || hasEffect(initializer))) return true;
 	}
 	return false;
 }
