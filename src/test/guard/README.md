@@ -139,6 +139,13 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   (2026-11-10, macOS arm64, all six at both modes): LLVM 23 turns a call through a static slot that is
   only ever stored one function into a direct call, so every arming store hides its function with
   `MS_HIDE_FROM_OPTIMIZER` (`runtime/promise/dispatch.h`); hello `__text` at `--danger` 26,220 → 2,856 B.
+- **`acyclicProgramLinksNoCycleCollector.ms`** — a program none of whose types can form a cycle
+  (a `Map<string, int32>` and a `Set<int32>`) links no `msRegisterCycle`, at `--mm=drc` and at
+  `--mm=none`: outside the counted mode a failed constructor releases nothing, so the cyclic
+  release no longer comes in through that path. Builds the program at `--danger` in both modes, runs
+  it and reads the symbol table. Proven RED on the compiler of `e3f94f82fda4` (rtx: `T
+  msRegisterCycle` at `--mm=none`), GREEN on the fix (rtx, 2026-11-12). A program with a
+  self-referential class still links the collector at `--mm=none`, through its type hooks.
 - **`asyncTimerLinksNoPool.ms`** — a program that awaits timers and spawns nothing links no pool
   worker, because a wake reads the pool that exists and only a spawn or the actor system starts it,
   as Nim wakes a worker it already holds and starts workers only in its pool setup. Builds and runs
