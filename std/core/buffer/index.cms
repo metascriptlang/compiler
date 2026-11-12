@@ -8,7 +8,7 @@ import {
 	hexCapacity, base64Capacity, writeHex, writeBase64, encodeBase64Url, writeRoom,
 	utf8Encoding, hexEncoding, base64Encoding, base64UrlEncoding, latin1Encoding, asciiEncoding,
 	encodingOf, textEncoding, sliceEncoding, encodedLength, utf8Fit, writeText, ucs2Text,
-	needBytes, checkedInt, storedInt, needWideValue, widthOrZero, badByteLength,
+	fieldFits, fieldLow, fieldHigh, offsetError, writeError, byteLengthError, wideValueError, storedInt, widthOrZero,
 } from "./codec";
 import { asciiWords, utf8String, wordAt } from "../string/bytes";
 
@@ -145,13 +145,26 @@ function doubleBits(value: number): uint64 {
 	return (((cell as Span<number>) as Ptr<number>) as Ptr<uint64>)[0];
 }
 
+// Each field op tests `fits` and throws itself: behind a call that can raise, the hot path reads
+// the thread-local error flag and keeps a stack frame, 1.6-4.8x the pre-port C (m1m, 2026-11-13).
+@inline
+function fits(this buf: Buffer, offset: number, width: int64): boolean {
+	return fieldFits(offset, buf.length - (width as number));
+}
+
+@noinline
+function fieldError(this buf: Buffer, offset: number, width: int64): RangeError {
+	return offsetError(offset, buf.length - (width as number));
+}
+
 function readField(this buf: Buffer, offset: number, width: int64, bigEndian: boolean): uint64 {
-	needBytes(buf.byteLength, offset, width as number);
+	if (!buf.fits(offset, width)) throw buf.fieldError(offset, width);
 	return buf.loadField(offset as int64, width, bigEndian);
 }
 
 function readSigned(this buf: Buffer, offset: number, width: int64, bigEndian: boolean): number {
-	return signExtend(buf.readField(offset, width, bigEndian), width << 3) as number;
+	if (!buf.fits(offset, width)) throw buf.fieldError(offset, width);
+	return signExtend(buf.loadField(offset as int64, width, bigEndian), width << 3) as number;
 }
 
 function writeField(
@@ -161,10 +174,27 @@ function writeField(
 	width: int64,
 	bigEndian: boolean,
 ): number {
-	needBytes(buf.byteLength, offset, width as number);
+	if (!buf.fits(offset, width)) throw buf.fieldError(offset, width);
 	const at = offset as int64;
 	buf.storeField(at, width, bigEndian, value);
 	return (at + width) as number;
+}
+
+function writeInt(
+	this buf: Buffer,
+	value: number,
+	offset: number,
+	width: int64,
+	isSigned: boolean,
+	bigEndian: boolean,
+): int64 {
+	const outside = value > fieldHigh(width, isSigned) || value < fieldLow(width, isSigned);
+	if (outside || !buf.fits(offset, width)) {
+		throw writeError(value, offset, buf.length - (width as number), width, isSigned);
+	}
+	const at = offset as int64;
+	buf.storeField(at, width, bigEndian, storedInt(value));
+	return at + width;
 }
 
 function copyBytes(
@@ -747,16 +777,20 @@ export function readInt32BE(this buf: Buffer, offset: number): number {
 // --- Read Float/Double ---
 
 export function readFloatLE(this buf: Buffer, offset: number): number {
-	return floatFromBits(buf.readField(offset, 4, false) as uint32) as number;
+	if (!buf.fits(offset, 4)) throw buf.fieldError(offset, 4);
+	return floatFromBits(buf.loadField(offset as int64, 4, false) as uint32) as number;
 }
 export function readFloatBE(this buf: Buffer, offset: number): number {
-	return floatFromBits(buf.readField(offset, 4, true) as uint32) as number;
+	if (!buf.fits(offset, 4)) throw buf.fieldError(offset, 4);
+	return floatFromBits(buf.loadField(offset as int64, 4, true) as uint32) as number;
 }
 export function readDoubleLE(this buf: Buffer, offset: number): number {
-	return doubleFromBits(buf.readField(offset, 8, false));
+	if (!buf.fits(offset, 8)) throw buf.fieldError(offset, 8);
+	return doubleFromBits(buf.loadField(offset as int64, 8, false));
 }
 export function readDoubleBE(this buf: Buffer, offset: number): number {
-	return doubleFromBits(buf.readField(offset, 8, true));
+	if (!buf.fits(offset, 8)) throw buf.fieldError(offset, 8);
+	return doubleFromBits(buf.loadField(offset as int64, 8, true));
 }
 
 // --- Read 64-bit ---
@@ -779,37 +813,37 @@ when (!bare && !solana) {
 // --- Write Unsigned Integers ---
 
 export function writeUInt8(this buf: Buffer, value: number, offset: number): number {
-	return buf.writeField(checkedInt(value, 0, 255), offset, 1, false);
+	return buf.writeInt(value, offset, 1, false, false) as number;
 }
 export function writeUInt16LE(this buf: Buffer, value: number, offset: number): number {
-	return buf.writeField(checkedInt(value, 0, 65535), offset, 2, false);
+	return buf.writeInt(value, offset, 2, false, false) as number;
 }
 export function writeUInt16BE(this buf: Buffer, value: number, offset: number): number {
-	return buf.writeField(checkedInt(value, 0, 65535), offset, 2, true);
+	return buf.writeInt(value, offset, 2, false, true) as number;
 }
 export function writeUInt32LE(this buf: Buffer, value: number, offset: number): number {
-	return buf.writeField(checkedInt(value, 0, 4294967295), offset, 4, false);
+	return buf.writeInt(value, offset, 4, false, false) as number;
 }
 export function writeUInt32BE(this buf: Buffer, value: number, offset: number): number {
-	return buf.writeField(checkedInt(value, 0, 4294967295), offset, 4, true);
+	return buf.writeInt(value, offset, 4, false, true) as number;
 }
 
 // --- Write Signed Integers ---
 
 export function writeInt8(this buf: Buffer, value: number, offset: number): number {
-	return buf.writeField(checkedInt(value, -128, 127), offset, 1, false);
+	return buf.writeInt(value, offset, 1, true, false) as number;
 }
 export function writeInt16LE(this buf: Buffer, value: number, offset: number): number {
-	return buf.writeField(checkedInt(value, -32768, 32767), offset, 2, false);
+	return buf.writeInt(value, offset, 2, true, false) as number;
 }
 export function writeInt16BE(this buf: Buffer, value: number, offset: number): number {
-	return buf.writeField(checkedInt(value, -32768, 32767), offset, 2, true);
+	return buf.writeInt(value, offset, 2, true, true) as number;
 }
 export function writeInt32LE(this buf: Buffer, value: number, offset: number): number {
-	return buf.writeField(checkedInt(value, -2147483648, 2147483647), offset, 4, false);
+	return buf.writeInt(value, offset, 4, true, false) as number;
 }
 export function writeInt32BE(this buf: Buffer, value: number, offset: number): number {
-	return buf.writeField(checkedInt(value, -2147483648, 2147483647), offset, 4, true);
+	return buf.writeInt(value, offset, 4, true, true) as number;
 }
 
 // --- Write Float/Double ---
@@ -916,8 +950,9 @@ function readVariable(
 	signed: boolean,
 ): number {
 	const width = widthOrZero(byteLength);
-	if (width == 0) badByteLength(byteLength);
-	const value = buf.readField(offset, width, bigEndian);
+	if (width == 0) throw byteLengthError(byteLength);
+	if (!buf.fits(offset, width)) throw buf.fieldError(offset, width);
+	const value = buf.loadField(offset as int64, width, bigEndian);
 	return signed ? signExtend(value, width << 3) as number : value as number;
 }
 
@@ -929,8 +964,13 @@ function writeVariable(
 	bigEndian: boolean,
 	signed: boolean,
 ): number {
-	needWideValue(value, byteLength, signed);
-	return buf.writeField(storedInt(value), offset, widthOrZero(byteLength), bigEndian);
+	const width = widthOrZero(byteLength);
+	if (width == 0) throw byteLengthError(byteLength);
+	const span = (((1 as int64) << (width << 3)) as number);
+	const lo = signed ? -span / 2 : 0;
+	const hi = signed ? span / 2 - 1 : span - 1;
+	if (value > hi || value < lo) throw wideValueError(value, byteLength, signed);
+	return buf.writeField(storedInt(value), offset, width, bigEndian);
 }
 
 export function readUIntLE(this buf: Buffer, offset: number, byteLength: number): number {

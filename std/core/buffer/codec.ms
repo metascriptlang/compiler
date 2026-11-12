@@ -286,16 +286,26 @@ export function receivedText(value: number): string {
 }
 
 @inline
+export function fieldFits(offset: number, max: number): boolean {
+	return offset >= 0 && offset <= max && Math.floor(offset) == offset;
+}
+
+@inline
 export function needBytes(length: number, offset: number, width: number): void {
 	const max = length - width;
-	if (!(offset >= 0 && offset <= max && Math.floor(offset) == offset)) badOffset(offset, max);
+	if (!fieldFits(offset, max)) badOffset(offset, max);
 }
 
 @noinline
-function badOffset(offset: number, max: number): never {
-	if (Math.floor(offset) != offset) throw outOfRange("offset", "an integer", receivedText(offset));
-	if (max < 0) throw new RangeError("Attempt to access memory outside buffer bounds");
-	throw outOfRange("offset", `>= 0 and <= ${max}`, receivedText(offset));
+export function badOffset(offset: number, max: number): never {
+	throw offsetError(offset, max);
+}
+
+@noinline
+export function offsetError(offset: number, max: number): RangeError {
+	if (Math.floor(offset) != offset) return outOfRange("offset", "an integer", receivedText(offset));
+	if (max < 0) return new RangeError("Attempt to access memory outside buffer bounds");
+	return outOfRange("offset", `>= 0 and <= ${max}`, receivedText(offset));
 }
 
 @inline
@@ -306,6 +316,29 @@ export function needValue(value: number, lo: number, hi: number): void {
 @noinline
 function badValue(rule: string, value: number): never {
 	throw outOfRange("value", rule, receivedText(value));
+}
+
+/** The RangeError of a `width`-byte integer write: the value is checked before the offset, as Node does. */
+@noinline
+export function writeError(value: number, offset: number, max: number, width: int64, isSigned: boolean): RangeError {
+	const lo = fieldLow(width, isSigned);
+	const hi = fieldHigh(width, isSigned);
+	return value > hi || value < lo ? valueError(lo, hi, value) : offsetError(offset, max);
+}
+
+@inline
+export function fieldLow(width: int64, isSigned: boolean): number {
+	return isSigned ? -(((1 as int64) << ((width << 3) - 1)) as number) : 0;
+}
+
+@inline
+export function fieldHigh(width: int64, isSigned: boolean): number {
+	return (((1 as int64) << ((width << 3) - (isSigned ? 1 : 0))) - 1) as number;
+}
+
+@noinline
+function valueError(lo: number, hi: number, value: number): RangeError {
+	return outOfRange("value", `>= ${lo} and <= ${hi}`, receivedText(value));
 }
 
 @inline
@@ -321,8 +354,13 @@ export function checkedInt(value: number, lo: number, hi: number): int64 {
 
 @noinline
 export function badByteLength(byteLength: number): never {
+	throw byteLengthError(byteLength);
+}
+
+@noinline
+export function byteLengthError(byteLength: number): RangeError {
 	const rule = Math.floor(byteLength) != byteLength ? "an integer" : ">= 1 and <= 6";
-	throw outOfRange("byteLength", rule, receivedText(byteLength));
+	return outOfRange("byteLength", rule, receivedText(byteLength));
 }
 
 @inline
@@ -342,9 +380,19 @@ export function needWideValue(value: number, byteLength: number, isSigned: boole
 	const span = Math.pow(2, bits);
 	const lo = isSigned ? -span / 2 : 0;
 	const hi = isSigned ? span / 2 - 1 : span - 1;
-	if (!(value > hi || value < lo)) return;
-	if (byteLength <= 4) badValue(`>= ${lo} and <= ${hi}`, value);
-	badValue(isSigned ? `>= -(2 ** ${bits - 1}) and < 2 ** ${bits - 1}` : `>= 0 and < 2 ** ${bits}`, value);
+	if (value > hi || value < lo) throw wideValueError(value, byteLength, isSigned);
+}
+
+/** The RangeError of a `value` outside the 1..6-byte integer `byteLength` holds. */
+@noinline
+export function wideValueError(value: number, byteLength: number, isSigned: boolean): RangeError {
+	const bits = byteLength * 8;
+	const span = Math.pow(2, bits);
+	const lo = isSigned ? -span / 2 : 0;
+	const hi = isSigned ? span / 2 - 1 : span - 1;
+	if (byteLength <= 4) return valueError(lo, hi, value);
+	const rule = isSigned ? `>= -(2 ** ${bits - 1}) and < 2 ** ${bits - 1}` : `>= 0 and < 2 ** ${bits}`;
+	return outOfRange("value", rule, receivedText(value));
 }
 
 when (!bare && !solana) {
