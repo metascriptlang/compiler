@@ -55,7 +55,7 @@ export function printUsage(): void {
 	console.log("  " + cyan("--danger") + "              Maximum optimization " + dim("(-O3, +LTO where the toolchain can link it)"));
 	console.log("  " + cyan("--cc") + "=<clang|gcc|zig|bundle|path> C compiler " +
 		dim("(default: the prepared LLVM bundle for the targets it carries, managed Zig for the rest)"));
-	console.log("  " + cyan("--strip") + "               Strip symbols from binary " + dim("(--os=solana always strips the program; --strip also drops its .debug copy)"));
+	console.log("  " + cyan("--strip") + "               Strip symbols from binary " + dim("(a Linux build also drops its unwind tables: no debugger backtrace; --os=solana always strips the program; --strip also drops its .debug copy)"));
 	console.log("  " + cyan("--mm") + "=<mode>           Memory management " + dim("(drc|manual|none; solana defaults to manual)"));
 	console.log("  " + cyan("--sanitize") + "=<mode>    Enable sanitizer " + dim("(address|undefined|thread)"));
 	console.log("  " + cyan("--wasm-placement") + "=<on|off>  js: send " + cyan("@wasm") + " functions to wasm " + dim("(default: on; off builds them as js)"));

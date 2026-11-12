@@ -692,6 +692,11 @@ export function debugUbFlags(opts: CliOptions): string {
 	return `${checks} -fsanitize-minimal-runtime -fno-sanitize-recover=undefined`;
 }
 
+export function stripUnwindFlags(opts: CliOptions): string {
+	if (!opts.strip || opts.targetOs != "linux" || opts.sanitize != "") return "";
+	return "-fno-asynchronous-unwind-tables -fno-unwind-tables";
+}
+
 export function cliCompileFlags(opts: CliOptions): string {
 	let flags = "";
 	// Solana/SBF: completely different flag set, skip everything else.
@@ -766,6 +771,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 	// Linker DCE: place each function/data in its own section so the linker can strip unused ones
 	flags = appendFlag(flags, "-fdata-sections");
 	flags = appendFlag(flags, "-ffunction-sections");
+	flags = appendFlag(flags, stripUnwindFlags(opts));
 	// LTO strategy — emitted into the compile flags, which also flow to the link
 	// command (allLink = cliLinkFlags(allFlags)); thin bitcode + -flto=thin at
 	// link enables the parallel ThinLTO backend. opts.lto is final here:
@@ -2106,6 +2112,21 @@ test "musl names the third part of a linux target triple for zig and for clang" 
 	assert crossTargetFlag("linux", "amd64", "musl", false) == "--target=x86_64-unknown-linux-musl";
 	assert crossTargetFlag("linux", "arm64", "musl", false) == "--target=aarch64-unknown-linux-musl";
 	assert crossTargetFlag("linux", "arm64", "", false) == "--target=aarch64-unknown-linux-gnu";
+}
+
+test "--strip drops unwind tables on Linux only, and never under a sanitizer" {
+	const unwindOff = "-fno-asynchronous-unwind-tables -fno-unwind-tables";
+	const flagsOf = (args: string[]): string => {
+		const opts = newCliOptions();
+		assert applyArgs(opts, ["build", "a.ms", "--cc=zig cc"].concat(args), 0).ok;
+		return cliCompileFlags(opts);
+	};
+	assert flagsOf(["--os=linux", "--strip"]).contains(unwindOff);
+	assert flagsOf(["--os=linux", "--abi=musl", "--strip", "--danger"]).contains(unwindOff);
+	assert !flagsOf(["--os=linux"]).contains("unwind-tables");
+	assert !flagsOf(["--os=linux", "--strip", "--sanitize=address"]).contains("unwind-tables");
+	assert !flagsOf(["--os=macos", "--strip"]).contains("unwind-tables");
+	assert !flagsOf(["--os=windows", "--strip"]).contains("unwind-tables");
 }
 
 test "--abi=musl asks for a target flag even where os and cpu match the host" {
