@@ -37,7 +37,7 @@ static const char* phase;
 
 /* The strictest page source: one reservation carved front to back, whose discarded pages fault
  * on any access until reused and come back holding 0xa5, the bytes no OS promises to clear. */
-enum { RESERVED = 64 << 20, UNCLEARED = 0xa5 };
+enum { RESERVED = 256 << 20, UNCLEARED = 0xa5 };
 static unsigned char* reserved;
 static size_t carved;
 static size_t discardedBytes, reusedBytes;
@@ -593,6 +593,135 @@ static void chunkWaitsForACellInItsOwnersCache(void) {
     CHECK(region()->remoteCells[SLOT] == NULL && !(chunkHolding(awayPair[0])->base.prevSize & 1));
 }
 
+enum { TURN_CHUNKS = MS_HEAP_TURN_PAGES + 64 };
+static unsigned char* turnCells[TURN_CHUNKS];
+static int turnChunksLeft(void) {
+    int left = 0;
+    for (int i = 0; i < TURN_CHUNKS; ++i) left += isSmallChunkOf(turnCells[i], MS_HEAP_SMALL_ROOM);
+    return left;
+}
+
+static void agedChunksLeaveATurnsShareAtATime(void) {
+    phase = "a timed return releases one turn's share of aged empty chunks and the next turn takes the rest";
+    for (int i = 0; i < TURN_CHUNKS; ++i) {
+        turnCells[i] = msHeapAlloc(MS_HEAP_SMALL_ROOM);
+        turnCells[i][0] = 1;
+    }
+    msHeapReturnIdle();
+    CHECK(region()->returnDue == 0 && turnChunksLeft() == TURN_CHUNKS);
+    for (int i = 0; i < TURN_CHUNKS; ++i) msHeapFree(turnCells[i]);
+    int wait = msHeapIdleWaitMs(-1);
+    CHECK(region()->agedEmpties != NULL && wait > MS_HEAP_RETURN_AFTER_MS && wait <= AGE_MS);
+    probeNowMs += wait;
+    msHeapReturnUnused();
+    CHECK(turnChunksLeft() == TURN_CHUNKS - MS_HEAP_TURN_PAGES);
+    CHECK(msHeapIdleWaitMs(-1) == 1);
+    probeNowMs += 1;
+    msHeapReturnUnused();
+    CHECK(turnChunksLeft() == 1 && region()->agedEmpties == NULL);
+}
+
+static size_t pagesToDiscard(unsigned char** blocks, int count) {
+    size_t pages = 0;
+    for (int i = 0; i < count; ++i) {
+        msHeapBig* chunk = chunkHolding(blocks[i]);
+        int counted = 0;
+        for (int j = 0; j < i; ++j) counted |= chunkHolding(blocks[j]) == chunk;
+        if (!counted) pages += chunk->base.size / MS_HEAP_PAGE_SIZE - 1;
+    }
+    return pages;
+}
+
+static int turnsUntilNothingIsDue(void) {
+    int turns = 0;
+    while (msHeapIdleWaitMs(-1) == 1) {
+        probeNowMs += 1;
+        size_t before = discardedBytes;
+        msHeapReturnUnused();
+        CHECK(discardedBytes - before <= (size_t)MS_HEAP_TURN_PAGES * MS_HEAP_PAGE_SIZE);
+        CHECK(++turns < 64);
+    }
+    return turns;
+}
+
+static void dueChunksGoBackATurnsShareAtATime(void) {
+    phase = "a timed return discards one turn's share of due chunks and later turns take the rest";
+    enum { BIGS = 24, BIG_PAGES = 512 };
+    unsigned char* bigs[BIGS];
+    unsigned char* walls[BIGS];
+    msHeapReturnIdle();
+    for (int i = 0; i < BIGS; ++i) {
+        bigs[i] = msHeapAlloc(BIG_PAGES * MS_HEAP_PAGE_SIZE - sizeof(msHeapBig));
+        walls[i] = msHeapAlloc(2 * MS_HEAP_PAGE_SIZE);
+    }
+    for (int i = 0; i < BIGS; ++i) msHeapFree(bigs[i]);
+    size_t due = pagesToDiscard(bigs, BIGS);
+    CHECK(due > MS_HEAP_TURN_PAGES);
+    probeNowMs += AGE_MS;
+    size_t before = discardedBytes;
+    msHeapReturnUnused();
+    CHECK(discardedBytes - before == (size_t)MS_HEAP_TURN_PAGES * MS_HEAP_PAGE_SIZE);
+    int turns = 1 + turnsUntilNothingIsDue();
+    size_t gone = (discardedBytes - before) / MS_HEAP_PAGE_SIZE;
+    CHECK(turns > 1 && gone + turns > due);
+    CHECK(region()->returnDue == 0);
+    for (int i = 0; i < BIGS; ++i) CHECK(chunkHolding(bigs[i])->zeroed & MS_HEAP_DISCARDED);
+    for (int i = 0; i < BIGS; ++i) msHeapFree(walls[i]);
+    msHeapReturnIdle();
+}
+
+static void chunkLargerThanATurnsShareGoesBackInParts(void) {
+    phase = "a due chunk larger than one turn's share goes back a share per turn and is one discarded chunk at the end";
+    enum { PAGES = MS_HEAP_TURN_PAGES + MS_HEAP_TURN_PAGES / 2 };
+    msHeapReturnIdle();
+    unsigned char* p = msHeapAlloc((size_t)PAGES * MS_HEAP_PAGE_SIZE - sizeof(msHeapBig));
+    unsigned char* wall = msHeapAlloc(2 * MS_HEAP_PAGE_SIZE);
+    msHeapFree(p);
+    size_t due = pagesToDiscard(&p, 1);
+    CHECK(due >= PAGES - 1);
+    probeNowMs += AGE_MS;
+    size_t before = discardedBytes;
+    msHeapReturnUnused();
+    CHECK(discardedBytes - before == (size_t)MS_HEAP_TURN_PAGES * MS_HEAP_PAGE_SIZE);
+    int turns = 1 + turnsUntilNothingIsDue();
+    size_t gone = (discardedBytes - before) / MS_HEAP_PAGE_SIZE;
+    CHECK(turns > 1 && gone + turns > due);
+    CHECK(region()->returnDue == 0);
+    msHeapBig* chunk = chunkHolding(p);
+    CHECK((chunk->zeroed & MS_HEAP_DISCARDED) && chunk->base.size >= (due + 1) * MS_HEAP_PAGE_SIZE);
+    size_t bytes = (size_t)PAGES * MS_HEAP_PAGE_SIZE - sizeof(msHeapBig);
+    unsigned char* again = msHeapCalloc(1, bytes);
+    checkZeroWritable(again, bytes);
+    msHeapFree(again);
+    msHeapFree(wall);
+    msHeapReturnIdle();
+}
+
+enum { AWAY_CELLS = MS_HEAP_TURN_CELLS + 4096 };
+static void* awayCells[AWAY_CELLS];
+static void freeAwayCells(void* arg) {
+    (void)arg;
+    for (int i = 0; i < AWAY_CELLS; ++i) msHeapFree(awayCells[i]);
+}
+
+static void remoteCellsGoHomeATurnsShareAtATime(void) {
+    phase = "a timed return routes home one turn's share of remote cells and the next turn takes the rest";
+    msHeapReturnIdle();
+    for (int i = 0; i < AWAY_CELLS; ++i) awayCells[i] = msHeapAlloc(MS_HEAP_ALIGN);
+    probeJoin(probeSpawn(freeAwayCells, NULL));
+    CHECK(region()->remoteCells[1] == NULL);
+    msHeapReturn(region(), probeNowMs);
+    int cached = 0;
+    for (msHeapCell* cell = region()->remoteCells[1]; cell; cell = cell->next) ++cached;
+    CHECK(cached == AWAY_CELLS - MS_HEAP_TURN_CELLS);
+    CHECK(msHeapIdleWaitMs(-1) == 1);
+    probeNowMs += 1;
+    msHeapReturnUnused();
+    CHECK(region()->remoteCells[1] == NULL);
+    msHeapReturnIdle();
+    CHECK(region()->returnDue == 0);
+}
+
 int32_t msAllocatorIdleChecks(void) {
     reserve();
     dirtyChunkGoesBack();
@@ -629,6 +758,14 @@ int32_t msAllocatorIdleChecks(void) {
     chunkWaitsForACellInAnotherThreadsRun();
     freeChunksReadable();
     chunkWaitsForACellInItsOwnersCache();
+    freeChunksReadable();
+    agedChunksLeaveATurnsShareAtATime();
+    freeChunksReadable();
+    dueChunksGoBackATurnsShareAtATime();
+    freeChunksReadable();
+    chunkLargerThanATurnsShareGoesBackInParts();
+    freeChunksReadable();
+    remoteCellsGoHomeATurnsShareAtATime();
     freeChunksReadable();
     return 0;
 }
