@@ -57,6 +57,40 @@ median difference +0.6% at noise 0.3% (no mark); wall time noise 17% and max rss
 time and rss under that load show nothing. Not measured: Linux (`perf stat` and the `/usr/bin/time -f`
 fallback are written, not run), and `rt:` programs.
 
+## Measured 2026-11-13 — an engine built on a Mac assumed that Mac's Apple linker
+
+Bundle `8d7d908f2630` (the engine built on m1m by the producer), installed on the Mac and m1m on 2026-11-12, left
+every arm64 Objective-C class message undefined at link: `ld64.lld: error: undefined symbol:
+objc_msgSendClass$stringWithUTF8String:$_OBJC_CLASS_$_NSString`. Haro's native release met it first, with 20 such
+symbols from Ion and Void. The bundle before it, `be33328d1c99` (the stock release engine), links the same file.
+
+clang's driver passes `-fobjc-msgsend-class-selector-stubs` to cc1 on arm64 when the linker version is 1250 or
+newer, and `-fobjc-msgsend-selector-stubs` from 811.2 (`clang/lib/Driver/ToolChains/Darwin.cpp`, LLVM 23.1.4). With
+no `-mlinker-version` it takes `HOST_LINK_VERSION`, which CMake reads from the build machine's `ld -v` unless the
+engine is linked by lld (`clang/CMakeLists.txt`). The two engines, same clang version, same file, on the Mac:
+
+| bundle | `-target-linker-version` in the cc1 line | undefined symbols of the object | link through `ld64.lld` |
+|---|---|---|---|
+| `be33328d1c99` | 1053.12 | `_objc_msgSend$length`, `_objc_msgSend$stringWithUTF8String:` | links, runs |
+| `8d7d908f2630` | 1267 (m1m's `ld-1267`) | `_objc_msgSend$length`, `_objc_msgSendClass$stringWithUTF8String:$_OBJC_CLASS_$_NSString` | undefined symbol |
+| `8d7d908f2630` with `-mlinker-version=811.2` | 811.2 | as the first row | links, runs, thin LTO too |
+
+msc links a macOS build with the bundle's `ld64.lld`, so it now states that linker's version (`BUNDLE_LD64_VERSION`,
+`selectNativeToolchain`): 811.2, the newest gate of the driver that `ld64.lld` 23.1.4 serves. The link line is the
+same with and without it; the driver already decides the link arguments by the linker being lld.
+
+Rejected: `-fno-objc-msgsend-class-selector-stubs` in the compile flags. It names the one feature, but the driver
+reports it unused on every C and C++ file (`argument unused during compilation`, an error under `-Werror`).
+
+The matrix had no Objective-C consumer. Cells `objcCompanion` and `objcRelease` (`matrix/objcCompanion.m`, two class
+messages, `-framework Foundation`) fail with the installed msc `c62ba752f7de` and bundle `8d7d908f2630`, debug and
+`--release`, and print `matrix-objc 8` on a candidate of tree `b11227f36240` on m1m for macos-arm64, bundle and zig alike.
+macos-x64 through the bundle links both; its debug cell dies loading the missing x86_64 runtime dylib like every
+debug cell of that target, and zig finds no `Foundation/Foundation.h` for it.
+
+Not done: the engine still bakes its build machine's linker version (a hidden input of the producer); a driver that
+decided the stubs by the linker being lld would need no number, and that is a source edit for the next engine round.
+
 ## Measured 2026-11-13 — a debug build guards its stack frames, as under `zig cc`
 
 zig gives every module of a debug build that links libc `-fstack-protector-strong --param ssp-buffer-size=4` and
