@@ -55,6 +55,9 @@ written by older compilers only, and `gate-ctl` by gates before the records.
   reuses its output from `build/o/`. The inputs a depfile names are recorded relative to the root
   too and checked in the reusing tree, not in the tree that ran the command
   (`src/test/projectConfigCommands.ms`, "a copy of the project reuses …").
+- **A build graph executable** is keyed with its project root, so another worktree never hits
+  it, for the reason the compiler checkouts above differ; measurements in
+  [PACKAGE.md](PACKAGE.md) "Reuse".
 - **A linked image** is stored under `build/` keyed by its objects and link flags
   (`linkStoreKey`, `src/compiler/cache.ms`) and restored when the same tree lost `out/`
   ("(link restored)"). Another worktree never hits it: its objects embed absolute paths, so its
@@ -195,7 +198,7 @@ std unit and the prelude pack: one day), and a temporary file of an entry left o
 | `stamps/` | `<key>.sum`, `.files`, `.exe` | no; a miss recomputes the memo |
 | `stdunit/<format>/` | `<key>.su`, unused for a day, units of an older format included | yes, at most hourly, on a unit load |
 | `prelude/<stamp>/` | `<key>.pk` with its `.deps`, after each pack write, unused for a day | yes, at most hourly, on a pack hit |
-| `build/` | `m/<key>.m` (a node's manifest: output digest, then `path<TAB>hash` per depfile input); `o/<digest>/` with its stamp `o/<digest>.u`; scratch `tmp/<id>/` after an hour | yes, on a hit (`collectStepStore`, `src/compiler/build/store.ms`) |
+| `build/` | `m/<key>.m` (a node's manifest: per input state, the output digest, then `path<TAB>hash` per depfile input); `o/<digest>/` with its stamp `o/<digest>.u`; scratch `tmp/<id>/` after an hour | yes, on a hit (`collectStepStore`, `src/compiler/build/store.ms`) |
 
 The collector deletes only files with those names, record before companion, so a reader never
 finds a companion without its record; it never enters a directory whose real path leaves the

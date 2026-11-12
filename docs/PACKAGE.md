@@ -236,9 +236,22 @@ merging by shape gives that result without intercepting calls (`keepOne`,
   remembered by change stamp, so an unchanged input tree is not read again: a command over 400
   files of 256 KB took 0.96 s to find its output before and 0.006 s after (tree `7d6a63e19c01`,
   host load 16–18, three runs each).
-- An executable node runs `msc build`, whose own project cache answers `Up to date` when nothing
-  changed (40–54 ms for a one-file program on the same tree); the design's second read-set layer
-  over it was not built, because this one answers the same question.
+- An executable node is looked up in the store before `msc build` runs (`runCompile`,
+  `src/compiler/build/execute.ms`): its key is the compiler, the flags and the project root, and
+  its manifest lists every file the build read, which `msc build --depfile=<path>` writes from
+  the project record (`writeProjectDepFile`, `src/compiler/cache.ms`). A manifest keeps up to
+  16 input states (`MANIFEST_ENTRIES`, `store.ms`), so a tree back at an earlier state (a
+  revert, a branch switch) gets that state's binary copied to `out/<name>` instead of a build.
+  Measured 2026-11-12 on recompiler's own `build.ms`, candidate of tree `d74493c1a6e2`, rtx at
+  load 1.5–2.3, one run each: `msc build msc` after a one-line compiler edit 37.0 s, back at the
+  previous state 2.5 s, forward again 1.9 s, no change 1.9 s; before this layer the return took
+  53.3 s, the same as the edit. ccache's manifest is the model; Zig keeps one state per step, so
+  a revert misses there. Not verified: a library node, a cross-compiled target, Windows.
+  Limits: the key holds the project root, because two checkouts of one tree do not build the
+  same bytes ([BUILD-CACHE.md](BUILD-CACHE.md) "Two checkouts of the compiler"); the project
+  record's header-presence queries are not in the manifest, so a new header that shadows an old
+  one is seen only when `msc build` itself runs; each state keeps one copy of the binary until
+  the store's age sweep.
 - `updateSourceFiles` writes a generated file into the source tree only when its content changed.
 
 **Commands, checks and runs** follow Zig's `Run` step (`hasSideEffects`, `Step.writeManifest`):
