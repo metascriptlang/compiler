@@ -677,10 +677,30 @@ Self-host chain on that candidate: g2 and g3 emit 550 byte-identical C files, wi
 `msCharPayloads[` and none of `msCharTable[`. 15 string and char corpus programs: 90 cells pass, 15
 under SAN.
 
-Not done: the payload table itself (2,048 B) stays in every program with a one-char literal. Dropping
-it means giving a one-char literal its own payload, which ends the shared payload between a literal
-and an indexed char; how `s[i] == "x"` compares was not traced. Not measured: run time of `s[i]`
-(the change removes one 16-byte load), macOS and Windows sizes.
+That left the payload table (2,048 B) in every program with a one-char literal, the `" "` between
+`console.log` arguments included. A one-char literal now names its own payload (`msCharLit<code>`,
+128 objects of 16 B in `runtime/core/string.c`, each in its own data section), so the table links
+only where an index reads it (`msStringCharAt`, `msStringAsciiChar`). Nothing relied on the shared
+payload: `msStringEquals` compares the length, then the bytes. rtx, old = the compiler of
+`e3f94f82fda4`, new = a candidate of tree `6f4abd4a9667`, `--danger --strip`, file bytes, every pair
+printing the same:
+
+| program | old | new |
+|---|---|---|
+| `console.log("done", 15)` | 22,248 | 20,360 |
+| a `Map`, a `Set` and an array, five values printed | 32,576 | 30,720 |
+| a loop over `s[i] == "o"` that prints `s[4]` and `"x"` | 22,344 | 22,536 |
+
+A program that indexes keeps the table and adds the literals it writes. The compare loop
+(`s[i] == "o"` over 88,000 chars, 20,000 rounds) is the same code in both `--danger` binaries: its
+function's disassembly, addresses normalized, differs in no line, and the literal folds to
+`cmpb $0x6f` in both. Its user time, 5 interleaved runs at load 22, was 1.93–2.70 s old against
+2.15–2.98 s new, which identical code leaves to placement and load. Self-host on the candidate: g2
+and g3 are byte-identical (22,453,296 B) and g3 emits `msCharLit` names and no `msCharPayloads[`.
+14 string and char corpus programs with the 8 `@maxatomics` ones: 113 cells pass, 3 xfail, and the
+string programs pass under SAN. macOS arm64, the same pair of compilers built on the development Mac:
+the two-argument print's `__const` goes from 2,280 to 408 B and its `__text` from 13,200 to 13,184
+(the file stays on the same page count). Not measured: Windows sizes, and the default (`-O0`) build.
 
 Pinned by `src/test/guard/oneCharLiteralLinksNoStringTable.ms`.
 
