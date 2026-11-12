@@ -616,6 +616,15 @@ bool msPoolSetWorkerCount(int32_t count) {
 	return true;
 }
 
+typedef struct {
+	bool (*runEdge)(const void* awaited, bool follow, bool descend);
+	bool (*compensate)(const void* awaited, const char* wait);
+} msPoolWaitOps;
+static bool msPoolRunEdgeQueued(const void* awaited, bool follow, bool descend);
+static bool msPoolCompensateStart(const void* awaited, const char* wait);
+static const msPoolWaitOps msPoolWaits = { msPoolRunEdgeQueued, msPoolCompensateStart };
+static _Atomic(const msPoolWaitOps*) msPoolWaitsArmed = NULL;
+
 static void msPoolInit(void) {
 	msArmExitDrain();
 	gPool = (msThreadPool*)msMemAlloc0(sizeof(msThreadPool));
@@ -648,6 +657,9 @@ static void msPoolInit(void) {
 	gPool->workerCount = created;
 	msPoolWorkerCount = created;  /* init lock-free shouldSend threshold */
 	atomic_store_explicit(&msPoolThreadCount, created, memory_order_release);
+	const msPoolWaitOps* waits = &msPoolWaits;
+	MS_HIDE_FROM_OPTIMIZER(waits);
+	atomic_store_explicit(&msPoolWaitsArmed, waits, memory_order_release);
 	atexit(msPoolShutdown);
 }
 
@@ -808,7 +820,13 @@ int32_t msPoolEdgeRuns(void) {
 
 bool msPoolRunEdge(const void* awaited, bool follow, bool descend) {
 	if (msPoolPendingPeek() == 0) return false;
-	msThreadPool* pool = msPoolGet();
+	const msPoolWaitOps* waits = atomic_load_explicit(&msPoolWaitsArmed, memory_order_acquire);
+	return waits != NULL && waits->runEdge(awaited, follow, descend);
+}
+
+static bool msPoolRunEdgeQueued(const void* awaited, bool follow, bool descend) {
+	msThreadPool* pool = gPool;
+	if (pool == NULL) return false;
 	const void* set[MS_EDGE_WALK_MAX];
 	set[0] = awaited;
 	int n = 1;
@@ -868,9 +886,15 @@ extern void (*msFatalTrap)(void);
 extern void msSleepMs(int ms);
 
 bool msPoolCompensate(const void* awaited, const char* wait) {
+	const msPoolWaitOps* waits = atomic_load_explicit(&msPoolWaitsArmed, memory_order_acquire);
+	return waits != NULL && waits->compensate(awaited, wait);
+}
+
+static bool msPoolCompensateStart(const void* awaited, const char* wait) {
 	if (atomic_load_explicit(&msPoolBusyCount, memory_order_relaxed) >= msPoolWorkerCount) return false;
 	if (!msEdgeLessLeaf(awaited)) return false;
-	msThreadPool* pool = msPoolGet();
+	msThreadPool* pool = gPool;
+	if (pool == NULL) return false;
 	MS_LOCK(pool);
 	if (msPoolUnclaimed(pool) <= msPoolSparesEnRoute) {
 		MS_UNLOCK(pool);
@@ -928,7 +952,7 @@ bool msPoolCompensate(const void* awaited, const char* wait) {
 }
 
 void msPoolCompensateEnd(void) {
-	msThreadPool* pool = msPoolGet();
+	msThreadPool* pool = gPool;
 	msPoolSpares--;
 	MS_LOCK(pool);
 	msPoolSparesWanted--;
