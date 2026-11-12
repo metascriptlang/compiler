@@ -1,6 +1,9 @@
 // A guarded variant field read keeps the declared type of the variant the guard pinned,
 // through every receiver shape: local, array element, field path and Result payload.
 
+import { JsonKind, JsonValue } from "std/serialize/json";
+import { sleepAsync } from "std/core/promise";
+
 enum PaneKind { Optional, Scoped, Scalar }
 
 struct PaneTarget { host: int32; pane: int32; }
@@ -120,4 +123,20 @@ test "narrowed variant read: a Result payload with an enum discriminant" {
 	let x = 0;
 	if (r.ok && r.value.kind == ClickKind.Click) x = r.value.x;
 	assert x == 7;
+}
+
+function pickJsonArray(): JsonValue | null {
+	return { kind: JsonKind.Array, items: [{ kind: JsonKind.Null }] };
+}
+
+async function countJsonItems(): Promise<int32> {
+	const held = pickJsonArray();
+	let n = 0;
+	if (held != null && held.kind == JsonKind.Array) n = held.items.length;
+	await sleepAsync(1);
+	return n;
+}
+
+test "narrowed variant read: a nullable union local in an async frame keeps its variant slot" {
+	assert await countJsonItems() == 1;
 }
