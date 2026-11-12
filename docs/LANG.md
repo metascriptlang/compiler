@@ -3929,6 +3929,39 @@ count pair: on the scene-graph benchmark of `udrcp/step6bench` (200 000 leaf-to-
 round), +8.0% instructions and +3.5% time against an unchecked read (rtx, 2026-11-09). Design the teardown order of
 a structure so that a back edge is not read after its target goes.
 
+A local keeps its object while an edge to it can still be read. A local or parameter of a class or interface type
+that is handed over at its last use (stored into a holder, passed to a `sink` parameter or to a constructor that
+takes it) moves into that receiver only when nothing that runs later in the local's scope can read an `Unowned` edge
+reaching the object or one it owns. When something can (a read of such an edge, a call that may run one, where an
+unknown callee or a function value counts, or a destroy hook that does), the hand-over is a copy and the local holds
+the object to the end of its scope, as it does on JS, whatever the receiver does with it:
+
+```typescript
+const h = new H();
+const p = new P("a");
+h.up = p;                            // an Unowned edge to p's object
+{ const b = new Box(); b.own = p; }  // p's last use: the box takes it and dies here
+console.log(h.up!.name);             // a
+```
+
+A written `move p` ends the life at the move. Before 2026-11-13 the last use always moved, the object died with the
+box, and the read stopped on C and the Raiser with `Error: an Unowned<P> edge was read after its P was destroyed`
+while JS printed `a`. Measured 2026-11-13 on a candidate of `wt/unified-drc` against a control of main
+`d695beb5ee02` (rtx): corpus `localKeepsItsObjectWhileAnEdgeToItCanStillBeRead` (a holder in an inner scope, a
+binding or a field overwritten, a constructor's object that dies or that throws after its store, a `sink` parameter
+only read, the read in a callee, through a closure, in a catch, in a finally, in the statement that hands over, an
+object the local owns, a `sink` parameter of the callee) prints on C, danger, JS, ESM, the Raiser and under SAN and
+stops on the control's C, danger, Raiser and SAN; `localKeepsItsObjectForADestroyHookThatReadsAnEdgeToIt` the same
+without JS. The cost is one count pair per hand-over kept as a copy: emitting the compiler's own C runs 0.15% more
+`rc.inc` (`MS_DRC_STAT`, 1,367,908,553 to 1,369,984,716, three runs of each within 0.002%), allocations equal; a
+program that reads no `Unowned` edge of a type pays nothing for locals of that type, and a bench of 48 call shapes
+counts the same on every shape. Not reached: a local that is an array holding the object
+(`const list: P[] = [new P("a")]`, handed to a holder that dies) still stops on C and the Raiser; an edge read after
+every binding and owner is gone is the stop of the table above; a destroy hook of the object's own class is not a
+reader, so with no edge read left in the scope the object still dies at its last receiver. A watch or HCR session
+and the Raiser do not see the whole program and keep the local wherever a call they cannot read follows. Not
+measured: wall time and instructions (the host was loaded and has no counters), threads.
+
 Measured on candidates of `wt/unified-drc` (rtx, 2026-11-09, C, danger and Raiser; JS where the program has no
 `onDestroy`): corpus `unownedEdgeReadsItsTarget`, `unownedEdgeElements` and `unownedEdgeOutlivesItsTarget` (the stop),
 `unownedLocalArrayReadAfterTargetDies` (the stop through a returned array), `unownedArrayHeldAnywhere`,
@@ -5188,9 +5221,10 @@ on C, danger, JS, the Raiser and under SAN, and stops on main's C, danger and Ra
 edge; a constructor that stores a parameter after `super(n)`, after `new Slot()` or after a call
 pays one count pair per construction it did not pay before, the other eighteen constructor shapes of
 the bench count the same. Not reached: a constructor that stores the parameter and throws afterwards
-takes it, and the half-built object destroys it with itself, so the caller's edge reads a destroyed
-target on C and the Raiser while JS prints (`class K { own: P; constructor(p: P, on: boolean)
-{ this.own = p; boom(on); } }`, measured the same day).
+takes it, and the half-built object destroys it with itself (`class K { own: P; constructor(p: P,
+on: boolean) { this.own = p; boom(on); } }`); until 2026-11-13 the caller's edge then read a destroyed
+target on C and the Raiser while JS printed, and since then the caller's local keeps the object
+while it can still read the edge (§Stored back edges).
 
 On C under DRC the compiler also infers `sink` for a parameter the body keeps on every exit: it
 stores it into a field or a non-local, puts it in an object or array literal, or passes it to a
