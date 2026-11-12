@@ -699,7 +699,7 @@ function wrapperLines(
 	if (checked) {
 		for (const c of paramChecks(f)) out.push(`	${c}`);
 	}
-	out.push("	__msb.enter();");
+	out.push("	if (__msb.lent !== 0) __msb.enter();");
 	const viewed = f.params.some((p) => {
 		return p.kind == BoundaryKind.Vec || p.kind == BoundaryKind.Span;
 	}) && !f.params.some((p) => p.kind == BoundaryKind.Handle);

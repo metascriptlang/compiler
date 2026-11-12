@@ -606,7 +606,7 @@ export function preludeFor(
 		"\t\tfresh(b) {",
 		`\t\t\tif (__msbMod.HEAPU8.buffer !== b) throw new Error("${grownView}");`,
 		"\t\t},",
-		"\t\tdie(e) { if (!dead) { dead = true; cause = e; } return e; },",
+		"\t\tdie(e) { if (!dead) { dead = true; cause = e; this.lent = Infinity; } return e; },",
 		"\t\tfail(e, z) {",
 		"\t\t\tif (dead) throw e;",
 		"\t\t\tconst m = String(e?.message ?? e);",
