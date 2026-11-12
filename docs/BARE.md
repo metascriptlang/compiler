@@ -65,7 +65,7 @@ Both select `Backend.Wasm` (`src/compiler/compile.ms`) but drive different toolc
 
 | | `--os=wasm` | `--os=emcc` |
 |---|---|---|
-| Compiler / linker | zig cc, `-target wasm32-wasi` (`cc.ms:321-326`, `:369-374`) | `emcc` (`compile.ms:931-934`) |
+| Compiler / linker | the prepared bundle's clang with `runtime/wasm32-wasi.cfg`, which owns the target; `zig cc -target wasm32-wasi` under `--cc=zig` or with a bundle that lacks that config (`cliCompileFlags`, `selectNativeToolchain`). M3 Max, bundle `8d7d908f2630`, msc `1b493b622aca`, 2026-11-13: `hello.ms --os=wasm` compiles with triple `wasm32-unknown-wasip1`, 40,110 bytes, and prints `matrix-hello 42` under wasmtime | `emcc` (`compile.ms:931-934`) |
 | Output | `.wasm` | **`.js` + `.wasm` pair** — suffix forced at `compile.ms:949` |
 | Link flags | `-Wl,--gc-sections -Wl,--strip-all` | `-sWASM=1 -sALLOW_MEMORY_GROWTH=1` (`cc.ms:363-367`) |
 
