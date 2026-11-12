@@ -327,3 +327,35 @@ access). Not a quiet window (load 110 before, 1.7 after). Median of 5 rounds, us
 `accept node: 13/15`, the misses `add x1000` (13% above) and the parked `primes`; `accept chrome:
 15/15`. `field x1000` is under wasm-bindgen's best getter of either row shape (2.85). The `add64`
 caveat of the section above holds here too.
+
+## 2026-11-12, the bar is the lower of the run's wasm-bindgen and its recorded best
+
+The four scalar `x1000` rows are the ones where wasm-bindgen's number depends on the row shape
+(constant bound against warmed variable bound, the section of the warmed rows above), so a run
+can meet a wasm-bindgen that is not at its best. `accept.mjs` now takes as a row's bar the lower
+of wasm-bindgen's median in the run and `WASM_BINDGEN_BEST_SEEN`, the lowest value any table of
+this file holds for that row:
+
+| row | Node | from | Chrome | from |
+|---|---|---|---|---|
+| add x1000 | 2.515 | 2026-11-12, warmed | 3.475 | 2026-11-08, constant bound |
+| add64 x1000 | 4.248 | 2026-11-08, constant bound | 4.653 | 2026-11-08, constant bound |
+| method x1000 | 3.348 | 2026-11-12, warmed | 4.472 | 2026-11-10, constant bound |
+| field x1000 | 2.849 | 2026-11-10, constant bound | 4.268 | 2026-11-10, constant bound |
+
+Run on the `runs.tsv` of the section above (no new measurement), the verdicts do not move: Node
+13/15 with the same two misses, Chrome 15/15. The rows that now answer to the recorded number:
+
+```
+add64 x1000                          4.591              16.042         62.51  ok against wasmbindgen's recorded best 4.248
+field x1000                          1.438               3.231             -  ok against wasmbindgen's recorded best 2.849
+add x1000                             3.11               3.858  ok against wasmbindgen-chrome's recorded best 3.475
+add64 x1000                          4.366              15.531  ok against wasmbindgen-chrome's recorded best 4.653
+method x1000                          3.65               4.744  ok against wasmbindgen-chrome's recorded best 4.472
+field x1000                          1.295               4.459  ok against wasmbindgen-chrome's recorded best 4.268
+```
+
+The other rows keep the run's own wasm-bindgen as their bar: they do not change shape, so their
+tables differ by the load of each run only, and a minimum over those would turn noise into a miss
+(`makeVec 1k` in Chrome: 1.149 measured here against a lowest recorded 1.052). The recorded numbers come from runs of
+different load, so they move only by hand, when a table of this file shows a lower one.
