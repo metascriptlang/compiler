@@ -2,7 +2,7 @@
 // a chain of nested conditionals breaking together as one group.
 
 import {
-	Node, NodeKind, ConditionalExprData, CallExprData, MemberExprData, ArrayAccessData, TypeAssertionData,
+	Node, NodeKind, ConditionalExprData, CallExprData, MemberExprData, ArrayAccessData, TypeAssertionData, SatisfiesExprData,
 	BinaryExprData, UnaryExprData, YieldExprData, ReturnStmtData, ThrowStmtData, VariableDeclData, DestructuringDeclData,
 	NewExprData, PropertyDeclData,
 } from "../../../ast/node";
@@ -107,7 +107,8 @@ function insideMemberChainValue(node: Node): boolean {
 			continue;
 		}
 		const wraps = (anc.kind == NodeKind.NewExpr && (anc.data as NewExprData).newCallee == expr)
-			|| (anc.kind == NodeKind.TypeAssertion && (anc.data as TypeAssertionData).asExpr == expr);
+			|| (anc.kind == NodeKind.TypeAssertion && (anc.data as TypeAssertionData).asExpr == expr)
+			|| (anc.kind == NodeKind.SatisfiesExpr && (anc.data as SatisfiesExprData).satisfiesExpr == expr);
 		if (wraps) {
 			expr = anc;
 			parent = printedAncestor(level + 1);

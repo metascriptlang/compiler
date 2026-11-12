@@ -168,3 +168,4 @@ import "./cases/quotedMemberNames";
 import "./cases/constructorOverloadSignatures";
 import "./cases/danglingBraceComments";
 import "./cases/commentBeforeToken";
+import "./cases/satisfiesOperator";

@@ -15,7 +15,7 @@ import { Node, NodeKind, NodeFlag,
 	IdentifierData, NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData,
 	ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData,
-	TypeAssertionData, ConditionalExprData, SpreadExprData, NewExprData,
+	TypeAssertionData, SatisfiesExprData, ConditionalExprData, SpreadExprData, NewExprData,
 	TryExprData, MatchExprData, MatchCaseData, AwaitExprData, YieldExprData,
 	MoveExprData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData,
 	ForStmtData, ForOfStmtData, DoWhileStmtData, BlockStmtData, FunctionDeclData,
@@ -144,6 +144,10 @@ export function astShape(node: Node | null): string {
 		NodeKind.TypeAssertion => {
 			const d = node.data as TypeAssertionData;
 			return k + "[as " + d.asType + "](" + astShape(d.asExpr) + ")";
+		},
+		NodeKind.SatisfiesExpr => {
+			const d = node.data as SatisfiesExprData;
+			return k + "[satisfies " + d.satisfiesType + "](" + astShape(d.satisfiesExpr) + ")";
 		},
 		NodeKind.TryExpr => {
 			const d = node.data as TryExprData;

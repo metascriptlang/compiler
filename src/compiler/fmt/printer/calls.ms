@@ -1,7 +1,7 @@
 import {
 	Node, NodeKind, NodeFlag,
 	CallExprData, MemberExprData, ArrayAccessData, NewExprData, ObjectLiteralData, ArrayLiteralData,
-	ArrowFunctionData, FunctionExprData, TypeAssertionData, UnaryExprData, UpdateExprData, IdentifierData,
+	ArrowFunctionData, FunctionExprData, TypeAssertionData, SatisfiesExprData, UnaryExprData, UpdateExprData, IdentifierData,
 	RegexLiteralData, StringLiteralData, BinaryExprData,
 } from "../../../ast/node";
 import { SourceComment } from "../comments";
@@ -170,6 +170,10 @@ function isRelativelyShort(node: Node, options: FormatOptions): boolean {
 			const d = node.data as TypeAssertionData;
 			return isSimpleType(d.asType) && isSimple(d.asExpr, options);
 		},
+		NodeKind.SatisfiesExpr => {
+			const d = node.data as SatisfiesExprData;
+			return isSimpleType(d.satisfiesType) && isSimple(d.satisfiesExpr, options);
+		},
 		NodeKind.RegexLiteral => true,
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
@@ -208,6 +212,7 @@ function canGroup(node: Node, isArrowRecursion: boolean, options: FormatOptions)
 		NodeKind.ObjectLiteral => (node.data as ObjectLiteralData).keys.length > 0 || hasAnyComments(node),
 		NodeKind.ArrayLiteral => (node.data as ArrayLiteralData).elements.length > 0 || hasAnyComments(node),
 		NodeKind.TypeAssertion => !isNonNull(node) && canGroup((node.data as TypeAssertionData).asExpr, false, options),
+		NodeKind.SatisfiesExpr => canGroup((node.data as SatisfiesExprData).satisfiesExpr, false, options),
 		NodeKind.FunctionExpr => true,
 		NodeKind.ArrowFunction => {
 			const d = node.data as ArrowFunctionData;

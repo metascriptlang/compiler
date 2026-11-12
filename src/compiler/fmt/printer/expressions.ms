@@ -4,7 +4,7 @@ import {
 	Node, NodeKind, NodeFlag, SourceLocation,
 	BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData,
 	ArrayAccessData, HiddenDerefData, ObjectLiteralData, ComputedPropertyData, ArrayLiteralData, ArrowFunctionData,
-	ConditionalExprData, SpreadExprData, TypeAssertionData,
+	ConditionalExprData, SpreadExprData, TypeAssertionData, SatisfiesExprData,
 	MatchExprData, MatchCaseData, TryExprData, MoveExprData,
 	OutExprData, SizeofExprData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
 	IdentifierData, NewExprData, MacroInvocationData, FunctionExprData, AwaitExprData, YieldExprData, BlockStmtData, ReturnStmtData,
@@ -208,7 +208,7 @@ function printBinaryOperand(child: Node, parentOp: string, isRight: boolean, opt
 		return needs ? docGroup([docText("("), printed, docText(")")]) : printed;
 	}
 	if (written) return callPrintNode(child, options);
-	if (child.kind == NodeKind.TypeAssertion && !isNonNullAssertion(child) && assertionNeedsParens(child, parentOp, isRight)) {
+	if (typeOperatorOperand(child) != null && assertionNeedsParens(child, parentOp, isRight)) {
 		return docGroup([docText("("), callPrintNode(child, options), docText(")")]);
 	}
 	if (child.kind != NodeKind.BinaryExpr) {
@@ -256,7 +256,7 @@ const UNBOUND_PREC = 100;
 function assertionNeedsParens(child: Node, parentOp: string, isRight: boolean): boolean {
 	const parentPrec = opPrecedence(parentOp);
 	if (isRight) return parentPrec >= AS_PREC;
-	return parentOp == "|" || parentOp == "&" || parentOp == "<" || bareBinaryPrec((child.data as TypeAssertionData).asExpr) < parentPrec;
+	return parentOp == "|" || parentOp == "&" || parentOp == "<" || bareBinaryPrec(typeOperatorOperand(child)!) < parentPrec;
 }
 
 function bareBinaryPrec(node: Node): number {
@@ -299,7 +299,7 @@ export function printUnaryExpr(node: Node, options: FormatOptions): Doc {
 }
 
 function bindsInsideUnary(op: string, operand: Node): boolean {
-	if (operand.kind == NodeKind.TypeAssertion) return true;
+	if (operand.kind == NodeKind.TypeAssertion || operand.kind == NodeKind.SatisfiesExpr) return true;
 	if (operand.kind != NodeKind.UnaryExpr) return false;
 	const inner = (operand.data as UnaryExprData).unaryOp;
 	return !((op == "-" && inner == "-") || (op == "+" && inner == "+"));
@@ -347,9 +347,17 @@ export function isNonNullAssertion(node: Node): boolean {
 	return node.kind == NodeKind.TypeAssertion && (node.data as TypeAssertionData).asType == "!";
 }
 
+// The operand of `e as T` or `e satisfies T`, which format alike.
+export function typeOperatorOperand(node: Node): Node | null {
+	if (node.kind == NodeKind.SatisfiesExpr) return (node.data as SatisfiesExprData).satisfiesExpr;
+	if (node.kind == NodeKind.TypeAssertion && !isNonNullAssertion(node)) return (node.data as TypeAssertionData).asExpr;
+	return null;
+}
+
 function needsAtomParens(kind: NodeKind): boolean {
 	return match (kind) {
 		NodeKind.TypeAssertion |
+		NodeKind.SatisfiesExpr |
 		NodeKind.BinaryExpr |
 		NodeKind.ConditionalExpr |
 		NodeKind.UnaryExpr |
@@ -560,6 +568,7 @@ function leftmostIsObjectOrFunction(node: Node): boolean {
 			NodeKind.CallExpr => (cur.data as CallExprData).callee,
 			NodeKind.ArrayAccess => (cur.data as ArrayAccessData).array,
 			NodeKind.TypeAssertion => (cur.data as TypeAssertionData).asExpr,
+			NodeKind.SatisfiesExpr => (cur.data as SatisfiesExprData).satisfiesExpr,
 			_ => null,
 		};
 	}
@@ -647,12 +656,20 @@ function isUnaryLevel(node: Node): boolean {
 
 export function printTypeAssertion(node: Node, options: FormatOptions): Doc {
 	const d = node.data as TypeAssertionData;
-	const bare = d.asExpr.kind == NodeKind.TypeAssertion || (d.asType != "!" && (isUnaryLevel(d.asExpr) || (d.asExpr.kind == NodeKind.BinaryExpr && bareBinaryPrec(d.asExpr) >= AS_PREC)));
-	const inner = bare ? callPrintNode(d.asExpr, options) : printAtom(d.asExpr, options);
-	if (d.asType == "!") return docGroup([inner, docText("!")]);
+	if (d.asType == "!") return docGroup([d.asExpr.kind == NodeKind.TypeAssertion ? callPrintNode(d.asExpr, options) : printAtom(d.asExpr, options), docText("!")]);
+	return printTypeOperator(d.asExpr, " as " + d.asType, options);
+}
+
+export function printSatisfiesExpr(node: Node, options: FormatOptions): Doc {
+	const d = node.data as SatisfiesExprData;
+	return printTypeOperator(d.satisfiesExpr, " satisfies " + d.satisfiesType, options);
+}
+
+function printTypeOperator(operand: Node, tail: string, options: FormatOptions): Doc {
+	const bare = operand.kind == NodeKind.TypeAssertion || operand.kind == NodeKind.SatisfiesExpr || isUnaryLevel(operand) || (operand.kind == NodeKind.BinaryExpr && bareBinaryPrec(operand) >= AS_PREC);
 	return docGroup([
-		inner,
-		docText(" as " + d.asType),
+		bare ? callPrintNode(operand, options) : printAtom(operand, options),
+		docText(tail),
 	]);
 }
 
