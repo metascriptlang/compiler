@@ -120,7 +120,7 @@ export extern function byteIsAscii(s: string): boolean from "msStringIsAscii";
 /** First index at or after `from` where the non-empty `nb` occurs in `hb`, or -1. */
 @inline
 export function findBytesFrom(hb: Readonly<Span<uint8>>, nb: Readonly<Span<uint8>>, from: int64): int64 {
-	const limit = hb.length - nb.length;
+	const limit: int64 = hb.length - nb.length;
 	let at = from;
 	while (at <= limit) {
 		const hit = msMemChr(hb, at, limit + 1, nb[0]);
