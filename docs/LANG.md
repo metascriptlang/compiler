@@ -697,6 +697,8 @@ Math.floor(3.7);  // → floor(3.7), receiver not passed
 
 Instance: receiver prepended as first arg at call site. Static: receiver stripped, just a namespaced call.
 
+A macro can take a `this` receiver too (`macro whereM(this src: Node, fn: Node)`), and `x.whereM(f)` is `whereM(x, f)`; `docs/LANG-METAPROGRAMMING.md` §Macro Invocation Forms owns its rules and measurements.
+
 An extension on an actor is a free function on the caller's side, not a message: `a.describe()` for `function describe(this a: A): string` is a `string` with no `await`, its body reaches the actor only through its messages (a field read there is refused), and an `async` one is `Promise<T>` as declared. Measured 2026-10-31 on C, `--danger`, JS and ESM (corpus `actorExtensionIsCallerSide`, handoff `actorFieldIsolation`): `a.describe()` prints `A ext` and `b.describe()` on a second actor prints `B ext`; the Raiser has no actors.
 
 An array receiver says whether the method writes. `this arr: T[]` may write the array (`push`,

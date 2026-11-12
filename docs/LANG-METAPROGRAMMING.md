@@ -227,7 +227,7 @@ Compiler continues: [Transform] -> [Analyze] -> [Codegen]
 
 ### Macro Invocation Forms
 
-Macros can receive any `Node` type as argument — functions, expressions, JSX. Every form is a bare call:
+Macros can receive any `Node` type as argument — functions, expressions, JSX. Every form is a bare call, except a macro whose first parameter is `this` (below):
 
 | Form | User writes | Macro receives |
 |------|------------|----------------|
@@ -238,6 +238,8 @@ Macros can receive any `Node` type as argument — functions, expressions, JSX. 
 | Computed key | `styles({ [screen.wide]: { width: 280 } })` | `ObjectLiteral` whose property is a `ComputedProperty` node |
 
 A computed key whose expression is not a string literal is kept for the macro (measured 2026-10-15 on C, JS and the Raiser, corpus `macroReadsComputedKey`): `keys[i]` is `"__computed__"` and `properties[i]` is `{ kind: NodeKind.ComputedProperty, computedKey, computedValue }`. `computedKey` is the expression as checked, so `getImpl(computedKey.object)` on `[screen.wide]` returns the `VariableDecl` of `screen`, at the top of the argument and nested two objects deep; two computed keys are two properties. Outside a macro argument such a key is an error (`docs/LANG.md`, Structs, Computed keys), so a macro that keeps a `ComputedProperty` in its output gets that error at the key. `["lit"]` is the plain key `lit` and arrives as one.
+
+A macro whose first parameter is written `this src: Node` is also reached by a dot call: `cards.whereM(fn)` is `whereM(cards, fn)`, the receiver is argument 1 and `getType(src)` answers its checked type. A method of the receiver, or a function-typed field of the same name, wins; a non-function field of that name does not block the macro; an extension function of the same name on the same receiver is an error ("both a macro taking this receiver and an extension"), not a pick. A macro without `this` stays bare-call only. Measured 2026-11-12 on C, `--danger`, JS, ESM and the Raiser (corpus `methodCallReachesMacro`, `methodCallMacroReadsCalleeSymbol`; handoff `macroMethodCall`): `cards.whereM(c => ...)` prints `method macro ran`; the macro's `getType(src)` is `Table<Card>` for an identifier, a member chain (`holder.cards`), a call result (`makeCards()`) and a generic class `Box<Card>`; a struct or class receiver arrives as an object type with its field list (`{column,owner}`); the method and the function-typed field print `real method` and `field fn`; `client.run(moveCard, {...})` expands to a generic call and prints `sent moveCard`. `this` is only the first parameter and only as `this name`: `this ref`, `this typeof T` and `this:` on a macro are parse errors.
 
 Two forms that older revisions of this table listed do **not** exist (measured 2026-09-08): `@log class Foo {}` does not pass the class to `log` (`Macro 'log' expects 1 args, got 0`), and `@routes { … }` parses as a decorator on a block statement and passes nothing. Attaching behaviour to a declaration is the job of decorators, below.
 
