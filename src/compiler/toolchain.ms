@@ -831,6 +831,9 @@ function selectNativeToolchain(opts: CliOptions, path: string, stampRoot: string
 	if (opts.targetOs == "windows") {
 		const missing = try windowsSanitizerGap(opts, bundle.root, name);
 	}
+	if (opts.targetOs == "linux" && opts.abi == "musl") {
+		const missing = try muslSanitizerGap(opts);
+	}
 	const sanitizing = opts.sanitize != "" || debugUbChecks(opts);
 	const minimal = opts.sanitize == "" && opts.abi != "musl";
 	if (opts.targetOs == "linux" && sanitizing && !minimal) {
@@ -842,6 +845,15 @@ function selectNativeToolchain(opts: CliOptions, path: string, stampRoot: string
 	opts.ccBinary = `${opts.ccBinary} --config=${quoteCcArg(config)}`;
 	if (opts.targetOs == "linux" && sanitizing) opts.ccBinary = `${opts.ccBinary} --target=${name.slice(0, name.indexOf("-"))}-unknown-linux-${opts.abi == "musl" ? "musl" : "gnu"}`;
 	opts.ccConfigOwnsTarget = true;
+	return Result.ok(null);
+}
+
+// compiler-rt builds ASan and TSan for musl, and both run only in a dynamically linked executable: a static
+// link fails on `_DYNAMIC` and a static-pie one stops at startup (LLVM 23.1.4, musl 1.2.5, x86_64).
+function muslSanitizerGap(opts: CliOptions): Result<void, string> {
+	for (const sanitizer of opts.sanitize == "" ? [] : opts.sanitize.split(",")) {
+		if (sanitizer != "undefined") return Result.err(`native toolchain: --sanitize=${sanitizer} is not available on linux-musl: its runtime needs a dynamically linked executable and a musl build is static, zig cc fails it as well\n  → use --sanitize=undefined, or build for glibc without --abi=musl`);
+	}
 	return Result.ok(null);
 }
 
@@ -1043,7 +1055,7 @@ test "a prepared Linux sanitizer link names its target after the config, and a n
 		assert debug.ccBinary.endsWith(triple) && debug.ccBinary.indexOf(".cfg") < debug.ccBinary.indexOf(triple);
 		const explicit = linuxOptions();
 		explicit.abi = abi;
-		explicit.sanitize = "address";
+		explicit.sanitize = abi == "gnu" ? "address" : "undefined";
 		if (abi == "gnu") {
 			const refused = selectNativeToolchain(explicit, root, "");
 			assert !refused.ok && refused.error.contains(`runtime/${stem}.cxx.cfg`);
@@ -1051,6 +1063,34 @@ test "a prepared Linux sanitizer link names its target after the config, and a n
 		}
 		assert selectNativeToolchain(explicit, root, "").ok;
 		assert explicit.ccBinary.endsWith(triple);
+	}
+	verifySelectedToolchain();
+	assert removeAll(root).ok;
+}
+
+test "a prepared musl build refuses ASan and TSan by name, as an executable and as a library" {
+	const root = selectionProbe(true);
+	assert root != "";
+	for (const stem of ["x86_64-linux-musl", "aarch64-linux-musl"]) {
+		assert writeFile(join(root, `runtime/${stem}.cfg`), "").ok;
+		assert writeFile(join(root, `runtime/${stem}.cxx.cfg`), "").ok;
+		for (const san of ["address", "thread", "undefined,thread"]) {
+			for (const appMode of ["console", "lib"]) {
+				const opts = linuxOptions();
+				opts.abi = "musl";
+				opts.cpuTarget = stem.slice(0, stem.indexOf("-"));
+				opts.sanitize = san;
+				opts.appMode = appMode;
+				const refused = selectNativeToolchain(opts, root, "");
+				assert !refused.ok && refused.error.contains(`--sanitize=${san.endsWith("thread") ? "thread" : "address"} is not available on linux-musl`);
+				assert refused.error.contains("dynamically linked");
+			}
+		}
+		const undefinedOnly = linuxOptions();
+		undefinedOnly.abi = "musl";
+		undefinedOnly.cpuTarget = stem.slice(0, stem.indexOf("-"));
+		undefinedOnly.sanitize = "undefined";
+		assert selectNativeToolchain(undefinedOnly, root, "").ok;
 	}
 	verifySelectedToolchain();
 	assert removeAll(root).ok;
