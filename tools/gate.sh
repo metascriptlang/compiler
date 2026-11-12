@@ -3038,6 +3038,25 @@ if [ -s "$OUT/stale" ] && [ "$verdict" = GREEN ]; then
     || say "  src/test/known-red.json without them: ${OUT#"$TOP"/}/known-red.pruned.json; tools/wt.sh land commits it as \"test: drop known-red entries that are green\""
   [ "$stale_local" -eq 0 ] || say "  $KNOWN_LOCAL: a gate host replaces this file every gate; a red only one platform or host shows gets a compiler inbox card (~/metascript/.inbox/compiler/), and --record runs on macOS on a clean main"
 fi
+shadow_verdict() {
+  local d="$OUT/shadow" lane sh ms differs="" n=0 known=("$KNOWN")
+  [ "${GATE_SHADOW:-1}" != 0 ] && [ -x "$CAND" ] && [ ! -s "$OUT/build.new" ] && [ -f tools/gate.ms ] && [ -n "$ran" ] || return 0
+  [ ! -f "$KNOWN_LOCAL" ] || known+=("$KNOWN_LOCAL")
+  rm -rf "$d"; mkdir -p "$d" || return 0
+  for lane in $ran; do cp "$OUT/$lane.log" "$d/" 2>/dev/null; done
+  env -u NO_COLOR -u FORCE_COLOR "$CAND" build tools/gate.ms --output="$d/verdict$EXE_SUFFIX" >"$d/build.txt" 2>&1 \
+    || { say "gate: shadow verdict: tools/gate.ms did not build ($d/build.txt)"; return 0; }
+  "$d/verdict$EXE_SUFFIX" "$d" "${known[@]}" >"$d/verdict.txt" 2>&1
+  for lane in $ran; do
+    n=$((n + 1))
+    sh="$(grep -c . "$OUT/$lane.red" | tr -d ' ') red · $(cat "$OUT/$lane.new" "$OUT/$lane.notyours" 2>/dev/null | grep -c . | tr -d ' ') new"
+    ms=$(sed -n "s/^gate: $lane [0-9]*s · \\([0-9]* red\\) · [0-9]* known · \\([0-9]* new\\).*$/\\1 · \\2/p" "$d/verdict.txt")
+    [ "$sh" = "$ms" ] || differs="$differs $lane (gate.sh $sh; gate.ms ${ms:-no line})"
+  done
+  if [ -z "$differs" ]; then say "gate: shadow verdict: tools/gate.ms counts the same reds in $n lane(s)"
+  else say "gate: shadow verdict differs:$differs ($d/verdict.txt)"; fi
+}
+shadow_verdict
 say "gate: $verdict ($(printf '%s' "$ran" | sed 's/^ //; s/ /, /g')) $(fmt_secs $((SECONDS - start)))${blocked:+ · not run on this host:$blocked}"
 ledger total $((SECONDS - start)) "$([ "$verdict" = GREEN ] && echo 0 || echo 1)" "$red_sum" "$((red_sum - new_sum))" "$new_sum" "$flaky_sum" "$ADMIT_WAITED"
 if [ "$verdict" = GREEN ]; then adopt_builder GREEN "$ran"; exit 0; fi
