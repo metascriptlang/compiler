@@ -230,6 +230,98 @@ Not measured: a compile-time A/B of this engine (the table above measured the sa
 the Windows engine (the stage is PGO alone, as in the release bat), a Windows arm64 host, and the m1m and rtx engines
 rebuilt with this cache file. The next section assembles a bundle from this package.
 
+## Measured 2026-11-12 — what `zig cc` does on a host build, and a bundle whose configs name no CPU
+
+Since `303df0be8582` made the bundle the default compiler, a host build ran several times slower than under
+`zig cc` (rtx, `src/bench/iter/bench.ms --release`, us/op: indexed 15.4-17.7 against 2.0, `keys()` 38-74 against
+1.77, generator 5.2 against 0.85; session iter-fusion). The cause is the CPU, not the compiler: with no `-target`
+zig compiles for the detected host CPU (`lib/std/zig/system.zig:365`, zig `16d31ceed5`), and msc gave zig no
+`-target` for a host build. The glibc config of a bundle carried the cc1 line zig prints for a cross target, one
+`-Xclang -target-cpu x86-64` and 189 `-Xclang -target-feature` lines, and the Windows config one
+`-Xclang -target-cpu`. Options given through `-Xclang` reach the compiler after the driver's own, so every build
+was x86-64 with SSE2 and a `--passC=-march=native` changed nothing (rtx, installed bundle `e447dbf8b746`: the
+assembly of a file with and without `-march=native` is identical).
+
+What the same msc build passes to the compiler under `--cc=zig` and under the installed bundle, read from
+`CC_PRINT_OPTIONS` on `hello.ms` and `cppCompanion.ms` (msc `1b493b622aca`; rtx bundle `e447dbf8b746`, m1m
+`be33328d1c99`, d87 `95dae1a75e7b`):
+
+| | `zig cc` | bundle |
+|---|---|---|
+| CPU of a host build | rtx `znver5`, 85 features on; d87 `skylake`, 57; m1m the detected model, 92 | rtx and d87 `x86-64`; m1m `apple-m1` (no config on macOS) |
+| `--danger` | `-O2`: zig maps `-O1`, `-O2` and `-O3` to one mode and passes `-O2` (`src/main.zig:2334`) | `-O3` |
+| `--release` LTO | none on macOS and Windows | thin on all three |
+| frame pointer, release | kept (`-mframe-pointer=all`; `non-leaf` on macOS) | `none` (`non-leaf-no-reserve` on macOS) |
+| debug info, release | DWARF 4 (CodeView on Windows) | none; `hello --release` on rtx is 34,656 bytes against 250,008 |
+| stack protector | strong in a debug build, off in release | off on Linux and Windows; clang's basic one in every mode on macOS |
+| debug UBSan runtime | zig's, with recovery | compiler-rt's minimal one (standalone on Windows and musl) |
+| glibc of a host build | the host's (rtx: triple `gnu2.43.0`, the program needs `GLIBC_2.34` to `2.36`) | 2.31 (the program needs `GLIBC_2.17`) |
+| link, Linux | `EXEC`, `BIND_NOW`, RELRO, 16 MB stack, no build id | the same |
+
+Bit-fields are laid out the Windows way by zig and by both d87 bundles (a `_Static_assert` on
+`struct { char a : 4; int b : 4; }` being 8 bytes), although only zig's cc1 line names `-mms-bitfields`.
+
+The config renderers now write no CPU and `assembleBundle` drops the pin from a copied runtime's configs. Without
+it the driver picks `-target-cpu x86-64` itself and the predefined macros are the same (sha256 of `-dM -E`
+`c01e5ce48a66` both ways); the baseline's tuning becomes clang's generic one (`incq` where the pinned config gave
+`addq $1`, which `-mtune=x86-64` reproduces); `-march=native` gives `znver5` and a later `-march=x86-64-v3` wins.
+
+Speed of the built program, `--cc=zig` against a bundle assembled by this tree with `--passC=-march=native`
+(`-mcpu=native` on arm64), time of bundle over zig as the geometric mean of the 16 rows of
+`src/bench/iter/bench.ms`, second run of each binary, hosts not quiet:
+
+| | rtx (Ryzen 9 9950X) | m1m (M1 Max) | d87 (i7-8700K) |
+|---|---|---|---|
+| `--release`, host CPU | 1.01 (worst row 1.50, best 0.92) | 0.99 (1.09, 0.93) | 0.42 (0.76, 0.02) |
+| `--danger`, host CPU | 0.98 (1.06, 0.80) | 1.03 (1.06, 0.99) | 0.80 (1.14, 0.15) |
+| `--danger` with `-O2` | 1.06 (1.76, 0.81) | 1.29 (2.20, 1.01) | 0.81 (1.17, 0.14) |
+| `--release`, baseline against `zig cc -mcpu=baseline` | 0.94 (1.16, 0.47) | 0.99 (1.04, 0.89) | 1.15 (1.80, 0.36) |
+
+The worst release row on rtx is `map toArray` (28.860 against 19.251 us; 4.375 against 4.200 in `--danger`). On d87
+`map toArray --release` is 44.798 us against zig's 2,026.643.
+
+The bundles of that table, each assembled from an engine package, the host's installed runtime where it has one
+and the same four overlays (Windows with its C++ runtime, wasi, musl x86_64 and aarch64), with `platformMatrix.ms`
+from its host under msc `1b493b622aca`:
+
+- rtx `3a7e411898f0`: 454 MB, 14,555 files, 64,535,792 bytes at `xz -6` (installed: 37,227,908). linux-glibc-x86_64
+  16 built, 29 run rows ok; linux-musl-x86_64 16 built, 28 run rows ok; linux-musl-arm64 16 built; wasm32-wasi 11
+  built, 20 run rows ok; windows-x64 16 built from Linux. FAIL: the four glibc sanitizer cells (the bundle ships no
+  ASan, TSan or standalone UBSan for glibc) and `cppCompanion` on wasi. `g1 through the bundle: 73 s`,
+  `g2 by g1: 50 s`, g2 checks `src/index.ms` clean.
+- m1m `8d7d908f2630`: 415 MB, 12,369 files, 55,115,900 bytes at `xz -6` (installed: 107,463,408). macos-arm64 18
+  built, 35 run rows ok; macos-x64 18 built, 12 run rows ok and 21 FAIL: a debug or sanitized x86_64 program cannot
+  load `@rpath/libclang_rt.*_osx_dynamic.dylib`, which the engine package and the installed bundle `be33328d1c99`
+  both carry for arm64 alone; both musl targets and windows-x64 16 built; wasm32-wasi 11 built, 20 run rows ok.
+  `g1 through the bundle: 78 s`, `g2 by g1: 44 s`.
+- d87 `44950a26db3f`: 409 MB, 11,786 files, 54,809,776 bytes at `xz -6`, assembled in 124 s beside other jobs.
+  windows-x64 16 built, 31 run rows ok; wasm32-wasi 11 built, 20 run rows ok; both musl targets 16 built. FAIL:
+  `cppCompanion` on wasi and the `debugstop` cell (gdb on a CodeView build). `g1 through the bundle: 164 s`,
+  `g2 by g1: 107 s`.
+
+The Windows C++ runtime is now part of the Windows overlay: `prepareWindowsRuntime` builds libc++, libc++abi and
+libunwind after the C runtime and links a C++ executable and DLL as its check (`producer rc=0 after 60 s` on rtx,
+222 MB, 5,304 files; the C part differs from the overlay before only in the two configs and the receipt). The
+archives are 3,648,592, 719,490 and 89,596 bytes against 3,648,972, 719,870 and 89,596 for the ones d87 built
+with the same recipe, and the overlay also carries libunwind's headers (`runtimeCpp.cpp` includes
+`libunwind.h`). `prepareCxxRuntime`, which added the runtime to an assembled bundle on d87 in 634 s, is gone.
+
+The musl overlays keep libc++'s headers in their sysroot (`usr/include/c++/v1` and
+`usr/include/<triple>/c++/v1`). They were under the bundle's own `include/`, which clang searches for every
+target: on m1m a C++ build for macOS then stopped at `include/c++/v1/__config:13:10: fatal error: '__config_site'
+file not found`. `assembleBundle` refuses an overlay that has `include/`.
+
+Also measured: with d87's installed bundle `95dae1a75e7b` and msc `1b493b622`, `cppCompanion.ms --release` fails at
+link (`undefined symbol: __cxa_thread_atexit_impl`, from the zig-built `c++abi.lib`); the candidate `de6e68691e8a`
+passes the same matrix as above under that msc.
+
+Not verified: msc does not pass the native CPU yet, so a default host build is still the baseline; the d87
+baseline row and the rtx `map toArray` row on a quiet host; whether the object cache and the std unit store can
+take `-march=native` (the text is the same on two machines); the tuning change of the baseline on a benchmark of
+its own; macOS with a model newer than the default (the M3 Max reads `apple-m3` under `-mcpu=native`, m1m is the
+default `apple-m1`); an install of any of the three bundles; the windows-x64 and linux-musl-arm64 programs built
+on rtx and m1m run on their own hosts.
+
 ## Measured 2026-11-12 — a bundle from an engine and overlays: Windows, wasi and musl from d87
 
 `assembleBundle` takes an engine and target overlays alone (`--runtime-bundle` is optional), because a bundle that
@@ -266,8 +358,8 @@ engine package) and shipped to d87 as one archive; the tools are those of tree `
   the musl ASan and TSan cells fail at link instead of being refused, so this bundle needs the synced msc first.
 
 Not verified: a compile-time A/B of this bundle against the installed one, the linux-musl-arm64 programs built on d87
-run on an arm64 host, an install of this bundle, the overlays' bytes when built on another host, and the Windows C++ runtime
-as an overlay (it is still added to the assembled bundle on d87, so rtx and m1m do not carry it).
+run on an arm64 host, an install of this bundle and the overlays' bytes when built on another host. The Windows C++
+runtime has since moved into the Windows overlay (the section above).
 
 ## Measured 2026-11-12 — what zig builds for each target, and the order of the C runtime libraries
 
