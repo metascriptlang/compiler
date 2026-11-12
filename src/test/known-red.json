@@ -11,7 +11,9 @@
     "405-lockedSharedCounter": {"since":"3a5b991e","note":"hangs at random: green on [danger] and [san] while [drc] hit cell TIMEOUT after 300s in the same run, 2026-09-21"}
   },
   "fmt": {},
-  "guard": {},
+  "guard": {
+    "sharedTypeQueries [drc]": {"since":"d2034e7b4f8d","note":"inbox compiler/2026-11-12-the-checkers-type-universe-crosses-threads-unproven.md: the guard lends a graph built from the checker's module-level type tables to a spawn, which the module-state reach rule refuses until that card proves the tables cross threads","approved":"2026-11-09 land bay giờ đi rồi làm 2."}
+  },
   "hcr": {},
   "san": {
     "762-bitSetMacro [san]": {"since":"52ae61ea","note":"build fails for this program on every lane it is listed on; measured 2026-09-21"}
