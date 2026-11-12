@@ -8,7 +8,7 @@ const QUOTE: int32 = 34;
 const SLASH: int32 = 47;
 const BACKSLASH: int32 = 92;
 
-// Must track direct-argv CRT quoting in runtime/process.h.
+// Must track direct-argv CRT quoting in std/process/winCommandLine.ms `windowsArg`.
 function tokenUnits(
 	text: string,
 	isExecutable: boolean,
