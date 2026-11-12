@@ -507,6 +507,18 @@ export function modeFlags(mode: number): string {
 	};
 }
 
+test "a wasm build names its target unless the bundle config owns it" {
+	for (const owned of [false, true]) {
+		const opts = newCliOptions();
+		assert applyArgs(opts, ["--os=wasm"], 0).ok;
+		opts.ccConfigOwnsTarget = owned;
+		const compile = cliCompileFlags(opts);
+		assert compile.contains("-target wasm32-wasi") != owned;
+		assert cliLinkFlags(compile, opts).contains("-target wasm32-wasi") != owned;
+		assert cliLinkFlags(compile, opts).contains("-Wl,--gc-sections");
+	}
+}
+
 test "every build mode keeps a*b+c as two roundings" {
 	for (const mode of [0, 1, 2]) assert modeFlags(mode).indexOf("-ffp-contract=off") >= 0;
 }
@@ -728,7 +740,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 	}
 	// WASM32-WASI: zig cc handles sysroot + libc automatically
 	if (opts.targetOs == "wasm") {
-		flags = appendFlag(flags, "-target wasm32-wasi");
+		if (!opts.ccConfigOwnsTarget) flags = appendFlag(flags, "-target wasm32-wasi");
 		flags = appendFlag(flags, "-fdata-sections -ffunction-sections");
 		if (opts.passC != "") flags = appendFlag(flags, opts.passC);
 		return flags;
@@ -810,7 +822,7 @@ export function cliLinkFlags(base: string, opts: CliOptions, forceExe: boolean =
 	}
 	// WASM: zig cc links with -target wasm32-wasi, strip dead sections + debug info
 	if (opts.targetOs == "wasm") {
-		let wflags = appendFlag(base, "-target wasm32-wasi");
+		let wflags = opts.ccConfigOwnsTarget ? base : appendFlag(base, "-target wasm32-wasi");
 		wflags = appendFlag(wflags, "-Wl,--gc-sections -Wl,--strip-all");
 		wflags = appendFlag(wflags, opts.passL);
 		return wflags;
