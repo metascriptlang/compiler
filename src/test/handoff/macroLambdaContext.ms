@@ -43,3 +43,11 @@ test "macro lambda: an untyped Node formal checks its argument with no expected 
 	const result = compileToCWithStd(head + `macro raw(fn: Node): Node { return createNodeAt(NodeKind.StringLiteral, { value: "raw" }, fn.location); }\nconst v: string = raw((c) => c);`);
 	assert result.ok, result.ok ? "" : result.error;
 }
+
+test "macro lambda: a formal that spells a type parameter's name is not a mention of it" {
+	const result = compileToCWithStd(head + `
+class Rows { n: number = 0; }
+macro spelled<R>(t: Table<R, string>, kind: "R", rows: Rows, f: (row: R) => boolean): Node { return createNodeAt(NodeKind.StringLiteral, { value: "spelled" }, f.location); }
+const v: string = spelled(cards, "other", new Rows(), c => c.column == "x");`);
+	assert result.ok, result.ok ? "" : result.error;
+}

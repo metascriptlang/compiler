@@ -366,20 +366,15 @@ export function checkJsxConsumed(ctx: CheckerContext, nodes: Node[], consumer: S
 // type or mentions a macro type parameter; every other declared type stays the macro body's own
 // business, and its slot here is null. Resolved in the declaring module's scope with the macro's
 // type parameters defined, because the caller may not import what the formal names.
-function mentionsTypeParam(text: string, names: string[]): boolean {
-	let i = 0;
-	while (i < text.length) {
-		const c = text.charCodeAt(i);
-		const start = (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95 || c == 36;
-		if (!start) { i += 1; continue; }
-		let j = i + 1;
-		while (j < text.length) {
-			const d = text.charCodeAt(j);
-			if (!((d >= 65 && d <= 90) || (d >= 97 && d <= 122) || (d >= 48 && d <= 57) || d == 95 || d == 36)) break;
-			j += 1;
-		}
-		if (names.includes(text.slice(i, j)) && !(i > 0 && text.charCodeAt(i - 1) == 46)) return true;
-		i = j;
+// Whether `t` contains one of `params` by identity: a GenericParam the macro's own declaration
+// defined, never a name that happens to spell one.
+function holdsMacroParam(t: Type | null, params: Type[], seen: TypeVisitSet): boolean {
+	if (t == null) return false;
+	if (t.kind == TypeKind.GenericParam) return params.includes(t);
+	if (!typeVisitAdd(seen, t)) return false;
+	if (holdsMacroParam(t.typeReturn, params, seen) || holdsMacroParam(t.typeExtra, params, seen)) return true;
+	for (const child of t.typeChildren) {
+		if (holdsMacroParam(child, params, seen)) return true;
 	}
 	return false;
 }
@@ -396,23 +391,20 @@ export function macroFormalTypes(ctx: CheckerContext, sym: Symbol, decl: MacroDe
 	home.table.current = top;
 	openScope(home.table, ScopeKind.Block);
 	const written = splitTopLevel(decl.macroDeclTypeParams, ",").map((n: string): string => n.trim()).filter((n: string): boolean => n != "");
-	const names: string[] = [];
-	for (let i = 0; i < written.length; i += 1) {
-		const gp = defineGenericParam(home, written[i], sym, i as int32);
-		names.push(gp.typeName);
-	}
+	const params: Type[] = [];
+	for (let i = 0; i < written.length; i += 1) params.push(defineGenericParam(home, written[i], sym, i as int32));
 	for (let i = 0; i < texts.length; i += 1) {
 		const text = texts[i].trim();
 		if (text == "") continue;
 		const t = resolveAnnotation(text, home, 0, 0);
-		const contractText = text.startsWith("(") || mentionsTypeParam(text, names);
-		if (isUnresolvedType(t) || t.kind == TypeKind.Error || (contractText && holdsInferred(t))) {
-			if (at != null && contractText) {
+		const contract = t.kind == TypeKind.Function || holdsMacroParam(t, params, new TypeVisitSet());
+		if (isUnresolvedType(t) || t.kind == TypeKind.Error || (contract && holdsInferred(t))) {
+			if (at != null && contract) {
 				addError(ctx, `macro '${decl.macroDeclName}' parameter ${i} declares type '${text}', which does not resolve in the macro's module`, at.location.line, at.location.column);
 			}
 			continue;
 		}
-		if (t.kind == TypeKind.Function || hasGenericParams(t)) formals[i] = t;
+		if (contract) formals[i] = t;
 	}
 	closeScope(home.table);
 	home.table.current = saved;
