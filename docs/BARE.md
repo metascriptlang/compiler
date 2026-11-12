@@ -8,11 +8,28 @@ Zig-inspired memory model for MetaScript targeting constrained environments (Sol
 
 | Flag | Allocator | RC | Free | Use Case |
 |------|-----------|-----|------|----------|
-| `--mm=drc` | malloc | ARC + cycle collector (always linked) | Yes (scope exit; cycles at collection) | **Default** |
+| `--mm=drc` | malloc | ARC + cycle collector (linked when a type of the program can form a cycle) | Yes (scope exit; cycles at collection) | **Default** |
 | `--mm=none` | malloc | None | Never | Debug, leak testing |
 | `--mm=manual` | malloc | None | defer / manual free | Performance, game engines, libraries |
 
-`--gc=` is refused with an error that names `--mm`; there is no mode without the cycle collector.
+`--gc=` is refused with an error that names `--mm`; no flag turns the cycle collector off. Whether
+a program links it (`msRegisterCycle` in the symbol table), rtx, Linux x86-64, `--danger`, a
+candidate of tree `d85d9c39e350`, `.text` bytes in brackets:
+
+| program | `--mm=drc` | `--mm=none` | `--mm=manual` |
+|---|---|---|---|
+| `console.log("hello")` | no (3,662) | no (3,662) | no (3,456) |
+| a `Map<string, int32>` and a `Set<int32>` | no (22,198) | no (21,163) | no (18,797) |
+| two classes, one holding an array of the other | no (16,444) | no (16,104) | no (15,405) |
+| a class with a `next: Node \| null` field, two instances pointing at each other | yes (22,109) | yes (21,576) | no (13,437) |
+| an `async` function awaiting a `setTimeout` promise | yes (37,836) | yes (36,735), and the program prints nothing | refused at build: no async under the freestanding runtime |
+
+Before this candidate the Map/Set program linked the collector at `--mm=none` (26,619 B): a
+failed constructor released its object through the cyclic release. At `--mm=none` a cyclic type
+still brings the collector in through its type hooks, which nothing calls there. The async
+program exits 139 on macOS arm64 at `--mm=none`:
+inbox card `2026-11-12-async-timer-program-segfaults-at-mm-none.md`. Not measured: macOS and
+Windows for this table, `--release` and the default build.
 `--os=bare` defaults to `--mm=drc` like every other target (since 2026-11-06; it implied `manual`
 before); `--os=solana` is always `manual` (or `none` when asked), whatever `--mm=` says
 (`targetMemoryMode`, `src/compiler/buildConfig.ms`).
