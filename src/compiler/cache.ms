@@ -52,7 +52,7 @@ function changeMark(path: string): number {
 	return stamp == "" ? -1 : Number(stamp.substring(stamp.lastIndexOf(":") + 1, stamp.length));
 }
 
-function changedSinceBuild(path: string, startMark: number): boolean {
+export function changedSinceBuild(path: string, startMark: number): boolean {
 	const changed = changeMark(path);
 	return changed < 0 || changed >= startMark;
 }
@@ -1711,20 +1711,32 @@ function storedDepCurrent(entry: string): boolean {
 	return path != "" && entry == `${path}=${hashFile(path)}`;
 }
 
-export function writeProjectDepFile(depFile: string, outputFile: string, ccOption: number, ccBinary: string, mode: number, flags: string): void {
-	const command = buildCmdFingerprint(ccOption, ccBinary, mode, flags);
-	const record = readProjectRecord(projectCacheFile(outputFile, command), outputFile, command);
-	const inputs = record == null ? [] as string[] : record.deps.map(storedDepPath).filter((path: string): boolean => path != "" && !path.startsWith(QUERY_ENTRY));
+function writeDepFile(depFile: string, target: string, inputs: string[], ccOption: number, ccBinary: string): void {
 	if (inputs.length == 0) {
 		if (exists(depFile)) { const gone = remove(depFile); }
 		return;
 	}
 	const cc = compilerInvocation(ccOption, ccBinary);
 	if (cc.ok) inputs.push(findOnPath(cc.value.path) != "" ? findOnPath(cc.value.path) : cc.value.path);
-	let text = `${outputFile.replaceAll(" ", "\\ ")}:`;
+	let text = `${target.replaceAll(" ", "\\ ")}:`;
 	for (const input of inputs) text = `${text} ${input.replaceAll(" ", "\\ ")}`;
 	ensureDir(dirname(depFile));
 	atomicWriteFile(depFile, `${text}\n`);
+}
+
+export function writeProjectDepFile(depFile: string, outputFile: string, ccOption: number, ccBinary: string, mode: number, flags: string): void {
+	const command = buildCmdFingerprint(ccOption, ccBinary, mode, flags);
+	const record = readProjectRecord(projectCacheFile(outputFile, command), outputFile, command);
+	const inputs = record == null ? [] as string[] : record.deps.map(storedDepPath).filter((path: string): boolean => path != "" && !path.startsWith(QUERY_ENTRY));
+	writeDepFile(depFile, outputFile, inputs, ccOption, ccBinary);
+}
+
+export function writeBuildDepFile(depFile: string, target: string, sources: string[], ccOption: number, ccBinary: string): void {
+	const inputs: string[] = [];
+	for (const path of sources.concat(_nativeProjectDeps)) {
+		if (!inputs.includes(path)) inputs.push(path);
+	}
+	writeDepFile(depFile, target, inputs, ccOption, ccBinary);
 }
 
 export function projectRecordCurrent(

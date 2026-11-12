@@ -99,7 +99,7 @@ import { compileC, compileCFile, trimRootList, withoutPreprocessorArgs, objectCo
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch, isDefined } from "./defines";
 import { resolveCC, requirePreparedToolchain } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, buildStartMark, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, projectRecordCurrent, writeProjectCache, writeProjectDepFile, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, headerSearch, invalidateCompileCache, isLinkCached, writeLinkCache, linkStoreKey, restoreLinked, publishLinked, cacheDir, headerModuleKey, lookupHeaderModule, storeHeaderModule, toolchainStamp, compilerStamp, objectStamp, stdTreeStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
+import { initCache, buildStartMark, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, projectRecordCurrent, writeProjectCache, writeProjectDepFile, writeBuildDepFile, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, headerSearch, invalidateCompileCache, isLinkCached, writeLinkCache, linkStoreKey, restoreLinked, publishLinked, cacheDir, headerModuleKey, lookupHeaderModule, storeHeaderModule, toolchainStamp, compilerStamp, objectStamp, stdTreeStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
 import { stampMemoRoot } from "../utils/cachePaths";
 import { hashContent } from "../utils/contentHash";
 import { lineText } from "../utils/sourceLines";
@@ -5102,6 +5102,12 @@ resetLiftedOps();
 	}
 
 	if (opts.showTime) printTiming("compiled", t0);
+	if (opts.depFile != "") {
+		const sources = graph.loadOrder.concat(linkInputs(opts));
+		const buildFile = opts.projectRoot != "" ? join(opts.projectRoot, "build.ms") : "";
+		if (buildFile != "" && exists(buildFile)) sources.push(buildFile);
+		writeBuildDepFile(opts.depFile, testBin, sources, opts.ccCompiler, opts.ccBinary);
+	}
 	if (opts.verbose) verboseLog("running tests");
 	const fRun = flowStart();
 	const runCode = execFile(testBin);
