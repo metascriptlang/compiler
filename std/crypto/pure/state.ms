@@ -47,7 +47,7 @@ when (!js) {
 		return [0];
 	}
 } else {
-	export type HashBytes = Readonly<uint8[]>;
+	export type HashBytes = Readonly<Span<uint8>>;
 	type HashBlock = uint8[];
 	type HashSchedule = uint32[160];
 

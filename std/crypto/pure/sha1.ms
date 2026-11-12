@@ -268,7 +268,7 @@ when (!js) {
 }
 
 when (js) {
-	function compressSha1Block(h: HashState, data: Readonly<uint8[]>, off: int32): void {
+	function compressSha1Block(h: HashState, data: HashBytes, off: int32): void {
 		for (let i = 0; i < 16; i++) {
 			const at = off + i * 4;
 			h.schedule[i] = ((data[at] as uint32) << 24) | ((data[at + 1] as uint32) << 16) | ((data[at + 2] as uint32) << 8) | (data[at + 3] as uint32);

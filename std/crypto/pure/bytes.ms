@@ -3,7 +3,7 @@ import { ByteInput } from "std/core/buffer/bytes";
 import { wipeBytes } from "./secret";
 
 when (!js) {
-	/** The bytes a kernel reads in place: on C any view of the caller's bytes, on JavaScript an array. */
+	/** The bytes a kernel reads in place: any view of the caller's bytes. */
 	export type InputBytes = Readonly<Span<uint8>>;
 	/** Where a kernel writes bytes: on C any view, a Buffer's included, on JavaScript an array. */
 	export type OutputBytes = Span<uint8>;
@@ -20,7 +20,7 @@ when (!js) {
 		return bytes;
 	}
 } else {
-	export type InputBytes = Readonly<uint8[]>;
+	export type InputBytes = Readonly<Span<uint8>>;
 	export type OutputBytes = uint8[];
 	export type OutputArray = uint8[];
 

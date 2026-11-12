@@ -715,7 +715,7 @@ when (!js) {
 when (js) {
 	import { load32BE } from "./endian";
 
-	function compress256Block(h: HashState, data: Readonly<uint8[]>, off: int32): void {
+	function compress256Block(h: HashState, data: HashBytes, off: int32): void {
 		for (let i = 0; i < 16; i++) h.schedule[i] = load32BE(data, off + i * 4);
 		for (let i = 16; i < 64; i++) {
 			const w15 = h.schedule[i - 15];
@@ -782,7 +782,7 @@ when (js) {
 		return sum < addend ? 1 : 0;
 	}
 
-	function compress512Block(h: HashState, data: Readonly<uint8[]>, off: int32): void {
+	function compress512Block(h: HashState, data: HashBytes, off: int32): void {
 		for (let i = 0; i < 32; i++) h.schedule[i] = load32BE(data, off + i * 4);
 		for (let i = 16; i < 80; i++) {
 			const w15h = h.schedule[(i - 15) * 2];

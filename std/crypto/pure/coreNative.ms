@@ -374,11 +374,7 @@ export function digestSync<D extends ByteInput>(
 	} else {
 		if (kind >= 0) {
 			const out = new Buffer(hashOutputSize(kind));
-			when (c) {
-				hashInto(kind, typeof data == "string" ? data.asBytes() : data, out);
-			} else {
-				hashInto(kind, bytesOf(data), out);
-			}
+			hashInto(kind, typeof data == "string" ? data.asBytes() : data, out);
 			return Result.ok(out);
 		}
 		if (!isExtAlg(algorithm)) {
