@@ -260,6 +260,13 @@ test "macro std tiers: a std routine written in MetaScript, secret wipes include
 	assert result.ok, result.ok ? "" : result.error;
 }
 
+test "macro std tiers: a class value a std routine returns takes its class's Raiser extensions in a macro: element read, element write and a method" {
+	const result = compileToCWithStd('import { Node, NodeKind } from "std/meta"; import { fromHex } from "std/crypto";'
+		+ ' macro probe(n: Node): Node { const r = fromHex("0102ff"); if (!r.ok) return n; const b = r.value; b[0] = 7; const text = `${b[0] + b[1]} ${b.toHex()}`; return { kind: NodeKind.StringLiteral, line: n.line, column: n.column, value: text }; } console.log(probe(0));');
+	assert result.ok, result.ok ? "" : result.error;
+	if (result.ok) assert result.value.contains("9 0702ff"), "9 0702ff";
+}
+
 test "macro std tiers: an extern with no host bridge called by a macro or a @comptime block is refused by its name" {
 	const viaMacro = compileToCWithStd(stdCallMacro("extern function msOsHostname(): string;", "msOsHostname().length"));
 	const viaBlock = compileToCWithStd("extern function msOsHostname(): string; const n: number = @comptime { return msOsHostname().length; }; console.log(n);");

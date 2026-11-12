@@ -1,7 +1,7 @@
 import { platform } from "std/process";
 import { DispatchRegistry, DispatchRecords, DispatchReadSink, DispMethodEntry, createDispatchRegistry } from "./dispatchRegistry";
 export { DispatchRegistry, DispatchRecords, DispatchReadSink, DispMethodEntry, createDispatchRegistry } from "./dispatchRegistry";
-import { isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf, declaredBasesOf, classDeclaredParentOf, distinctWidenBody, isArrayShaped } from "./types";
+import { sameDeclaredSym, isNumeric, peelThrough, PEEL_ALIAS, TargetInfo, hostTargetInfo, unknownRefusal, UnknownRefusal, noneType, inferredType, isUnresolvedType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, typeDisplayName, createFunction, getMinArity, setMinArity, withoutReadonlyView, classParentOf, declaredBasesOf, classDeclaredParentOf, distinctWidenBody, isArrayShaped } from "./types";
 import { isAssignable, sameType, isReinterpretUnsafe, scoreCandidatePriority, cmpCandidates, isNoMatch, emptyCandidateScore, typeRelation, TypeRelation } from "./compat";
 import { isMetaBuiltin, Scope, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag, isTypeSymbol, setFlag, lookupSymbol, lookupStd, markUsed, makeSymbol, RoutineFlag, routineFlagSet, refuseRoutineFlagDecodeWhileSealed, decodeRoutineFlags } from "./symbol";
 import { IdentCache } from "./idents";
@@ -528,7 +528,7 @@ function denotedOwner(sym: Symbol): Symbol {
 
 export function isStaticExtOf(ext: ExtensionMethod, owner: Symbol): boolean {
 	if (!ext.isStatic || ext.sym == null || ext.sym.staticOwner == null) return false;
-	return denotedOwner(ext.sym.staticOwner) == denotedOwner(owner);
+	return sameDeclaredSym(denotedOwner(ext.sym.staticOwner), denotedOwner(owner));
 }
 
 export function filterStaticExtsByOwner(exts: ExtensionMethod[], owner: Symbol): ExtensionMethod[] {
@@ -691,7 +691,7 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type | null): boo
 	if (objT.kind == TypeKind.Ref && objT.typeReturn != null && objT.typeReturn.kind == TypeKind.Array) objT = objT.typeReturn;
 	const recvNominal = nominalTypeSym(recvT);
 	const objNominal = nominalTypeSym(objT);
-	if (recvNominal != null && objNominal != null && recvNominal != objNominal) return false;
+	if (recvNominal != null && objNominal != null && !sameDeclaredSym(recvNominal, objNominal)) return false;
 	// Generic extensions: try unification on receiver param.
 	// e.g. map<T>(this arr: T[]) should match number[] but NOT string.
 	if (hasGenericParams(recvT)) {

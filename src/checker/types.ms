@@ -4678,7 +4678,7 @@ export function classAncestorInstance(t: Type | null, target: Type): Type | null
 	for (let depth = 0; cur != null && depth < PEEL_MAX_DEPTH; depth += 1) {
 		const body = cur.kind == TypeKind.Ref && cur.typeReturn != null ? cur.typeReturn : cur;
 		const cls = body.kind == TypeKind.GenericInstance ? genericInstanceClass(body) : body;
-		if (cls != null && cls.sym == tgtClass.sym && (body.kind == TypeKind.GenericInstance) == (tgt.kind == TypeKind.GenericInstance)) return body;
+		if (cls != null && cls.sym != null && sameDeclaredSym(cls.sym, tgtClass.sym) && (body.kind == TypeKind.GenericInstance) == (tgt.kind == TypeKind.GenericInstance)) return body;
 		cur = classParentOf(body);
 	}
 	return null;
@@ -4705,7 +4705,7 @@ export function declaredAncestorInstance(t: Type | null, target: Type): Type | n
 		for (const cur of level) {
 			const body = cur.kind == TypeKind.Ref && cur.typeReturn != null ? cur.typeReturn : cur;
 			const base = body.kind == TypeKind.GenericInstance ? genericInstanceClass(body) : null;
-			if (base != null && base.sym == origin.sym) return body;
+			if (base != null && base.sym != null && sameDeclaredSym(base.sym, origin.sym)) return body;
 			for (const parent of declaredBasesOf(body)) next.push(parent);
 		}
 		level = next;
@@ -4725,8 +4725,10 @@ export function classBodyOf(t: Type | null): Type | null {
 
 function classDepth(t: Type | null, cls: Symbol | null): int32 {
 	let cur = classBodyOf(t);
+	const target = classOrigin(cls);
+	if (target == null) return -1;
 	for (let depth = 0; cur != null && depth < PEEL_MAX_DEPTH; depth += 1) {
-		if (classOrigin(cur.sym) == classOrigin(cls)) return depth;
+		if (sameDeclaredSym(classOrigin(cur.sym)!, target)) return depth;
 		cur = classBodyOf(cur.typeExtra);
 	}
 	return -1;
@@ -4769,7 +4771,7 @@ function isClassOrSubclass(sub: Type, sup: Type): boolean {
 	for (let depth = 0; cur != null && depth < PEEL_MAX_DEPTH; depth += 1) {
 		if (cur.kind == TypeKind.GenericInstance) cur = genericInstanceClass(cur);
 		if (cur == null) return false;
-		if (cur.sym == supSym) return supBody.kind != TypeKind.GenericInstance;
+		if (cur.sym != null && sameDeclaredSym(cur.sym, supSym)) return supBody.kind != TypeKind.GenericInstance;
 		const base: Type | null = cur.typeExtra;
 		cur = base != null && base.kind == TypeKind.Ref ? base.typeReturn : base;
 	}
