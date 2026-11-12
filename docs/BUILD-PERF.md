@@ -114,6 +114,54 @@ without `-no-canonical-prefixes`; the symlinked `clang`, `clang++` and `x86_64-l
 `llvm clang` on both keep working (`.probe/winPatchVerify.sh`, `.probe/linuxPatchVerify.sh`, final stage rebuilt
 incrementally, 19 s and 14 s). Not verified: macOS, and an engine built by the whole producer from the edited source.
 
+## Measured 2026-11-12 — musl and wasm32-wasi runtimes from source, in every host's bundle
+
+`tools/managedToolchain/prepareTargetRuntime.ms` builds one target's runtime from pinned upstream source with the
+engine's clang and writes an overlay of bundle paths in LLVM's per-target layout (`runtime/<name>` as the sysroot,
+`lib/clang/<major>/lib/<triple>`, `lib/<triple>`, `include/c++/v1`, `include/<triple>/c++/v1`), so a config is
+`-target`, `--sysroot` and, on Linux, `--rtlib=compiler-rt` and `--ld-path`. `assembleBundle --overlay` adds
+overlays to an engine and a runtime bundle. Sources: wasi-libc `wasi-sdk-34`, musl 1.2.5, Linux 6.19 headers,
+compiler-rt, libunwind, libc++abi and libc++ of LLVM 23.1.4 (`targetRuntime.ms` holds the URLs and digests).
+
+On rtx, one bundle of the PGO engine, the installed glibc runtime and the three overlays (216 MB, 44.3 MB as
+`tar | xz -6` against 66.7 MB installed), a candidate msc of the tree, `platformMatrix.ms --compilers=bundle`:
+
+| target | built | ran ok on rtx | zig (same day) |
+|---|---|---|---|
+| linux-glibc-x86_64 | 16 | 16 | 17 built |
+| linux-musl-x86_64 | 16 | 14 | 17 built, 14 ran ok: its TSan cell builds and fails when run |
+| linux-musl-arm64 | 16 | not run (no arm64 host in the run) | 17 built |
+| wasm32-wasi | 15 | 13 (node) | 15 built |
+
+Not built by the bundle: ASan on every target and TSan on musl (no library; zig has no ASan either), the three
+`--sanitize` cells on glibc (the installed runtime has no sanitizer libraries, see below), C++ on wasm32-wasi (zig
+fails it as well; wasi-sdk carries three LLVM patches for it).
+
+The wasm32-wasi overlay is 232 files. Two producer runs on rtx in different work directories gave the same bytes
+for all of them. A run on d87 (the engine rebuilt with the multicall fix) and one on rtx gave the same bytes for the
+231 files other than the receipt, after three host differences were removed in the producer: empty archives
+(`llvm-ar` writes the host's format when an archive has no member), a header cmake writes with CRLF on Windows, and
+host paths in the receipt. Producer wall: 16 to 41 s on rtx, 63 s on m1m, 284 s on d87, 6 to 8 cores. Not verified:
+the receipt and the m1m bytes after the last producer change, a musl overlay built on macOS, and musl on Windows
+(refused there: musl and the Linux headers build with make and sh).
+
+Traps met:
+- `assembleBundle` copies the engine's runtime libraries under each Linux config triple, which replaced an
+  overlay's musl builtins with the engine's x86_64 glibc ones (the aarch64 cells failed "incompatible with
+  aarch64linux"); overlays are now added after that copy.
+- libc++abi's check for `__cxa_thread_atexit_impl` passes on any target when cmake try-compiles a static library,
+  so a C++ `thread_local` with a destructor failed to link on musl until `LIBCXXABI_HAS_CXA_THREAD_ATEXIT_IMPL=OFF`.
+- The `ubsanRelease` cell compared the value a signed overflow in a C companion prints: `-2147483648` with
+  `--lto=off`, `2147483648` under the default LTO, with the installed msc and the candidate alike. It now checks
+  only that a release build does not trap.
+- msc passed `-target wasm32-wasi` itself, which overrode the config's `wasm32-wasip1`; a wasm build now names no
+  target when the bundle config owns it (`cliCompileFlags`, `cliLinkFlags`, `src/compiler/cc.ms`).
+
+The Linux engine rebuilt by the whole producer from the edited source took 1906 s on 16 cores of rtx beside two
+gates. With the installed runtime it is bundle `e447dbf8b746`: 37.2 MB against 66.7 MB, `platformMatrix`
+linux-glibc-x86_64 cells ok, self-build through it g1 159 s and g2 94 s (not a quiet window), g2 checks the
+compiler clean.
+
 ## Measured 2026-11-12 — what zig builds for each target, and the order of the C runtime libraries
 
 `tools/managedToolchain/platformMatrix.ms build --compilers=zig` on rtx, msc `e21c6e7c3666`, zig 0.16.0, all nine
