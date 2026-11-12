@@ -161,6 +161,8 @@ test "macro enum codec: each narrowed discriminant round-trips with its payload"
 		const parsed = JSON.parse<CodecEvent>(text);
 		assert parsed.ok;
 		assert parsed.value.kind == value.kind;
+		if (parsed.value.kind == CodecKind.Click) assert parsed.value.x == 7;
+		else assert parsed.value.code == 42;
 	}
 }
 

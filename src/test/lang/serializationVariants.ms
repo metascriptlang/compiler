@@ -60,10 +60,13 @@ test "serializationVariants: literal-discriminated unions round-trip tag and pay
 		assert decoded.ok;
 		if (decoded.ok) {
 			assert decoded.value.kind == value.kind;
+			if (decoded.value.kind == "circle") assert decoded.value.r == 2.0;
+			else assert decoded.value.side == 3.0;
 		}
 	}
 	const direct = JSON.parse<WireShape>(`{"kind":"square","side":3.0}`);
 	assert direct.ok;
+	if (direct.ok && direct.value.kind == "square") assert direct.value.side == 3.0;
 	assert !JSON.parse<WireShape>(`{"kind":"triangle","a":1.0}`).ok;
 	const circle: WireShape = { kind: "circle", r: 2.0 };
 	assert JSON.stringify(circle).includes("circle");
@@ -76,6 +79,8 @@ test "serializationVariants: enum-member unions round-trip tag and payload and r
 		assert decoded.ok;
 		if (decoded.ok) {
 			assert decoded.value.kind == value.kind;
+			if (decoded.value.kind == LiteralEventKind.Click) assert decoded.value.x == 7;
+			else assert decoded.value.code == 42;
 		}
 	}
 	assert !JSON.parse<LiteralEvent>(`{"kind":"Wheel","delta":1}`).ok;
