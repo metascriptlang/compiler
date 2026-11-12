@@ -202,6 +202,29 @@ function visitAll(cb: ChildVisitor, nodes: Node[]): void {
 export function forEachChild(node: Node, cb: ChildVisitor): void {
 	if (node == null) return;
 	match (node.kind) {
+		NodeKind.Program | NodeKind.SpliceMany | NodeKind.BlockStmt | NodeKind.IfStmt | NodeKind.WhileStmt | NodeKind.ForStmt | NodeKind.ForOfStmt | NodeKind.ForInStmt | NodeKind.DoWhileStmt | NodeKind.SwitchStmt | NodeKind.SwitchCase | NodeKind.MatchStmt | NodeKind.MatchExpr | NodeKind.MatchCase => forEachFlow(node, cb),
+		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr | NodeKind.ClassDecl | NodeKind.MethodDecl | NodeKind.ConstructorDecl | NodeKind.ExportDecl | NodeKind.DecoratedDecl | NodeKind.EnumDecl | NodeKind.MacroDecl | NodeKind.ActorDecl | NodeKind.PropertyDecl => forEachDecl(node, cb),
+		NodeKind.VariableDecl | NodeKind.ReturnStmt | NodeKind.ThrowStmt | NodeKind.ExprStmt | NodeKind.DeferStmt | NodeKind.TryCatchStmt | NodeKind.DestructuringDecl | NodeKind.QuoteExpr | NodeKind.ComptimeBlock | NodeKind.MacroInvocation | NodeKind.TestDecl | NodeKind.AssertStmt => forEachSimple(node, cb),
+		NodeKind.BinaryExpr | NodeKind.UnaryExpr | NodeKind.UpdateExpr | NodeKind.CallExpr | NodeKind.MemberExpr | NodeKind.ArrayAccess | NodeKind.ObjectLiteral | NodeKind.ArrayLiteral | NodeKind.ConditionalExpr | NodeKind.SpreadExpr | NodeKind.NewExpr | NodeKind.TryExpr => forEachExpr(node, cb),
+		NodeKind.AwaitExpr | NodeKind.YieldExpr | NodeKind.MoveExpr | NodeKind.OutExpr | NodeKind.HiddenDeref | NodeKind.HiddenAddr | NodeKind.HiddenStdConv | NodeKind.HiddenSubConv | NodeKind.TypeAssertion => forEachWrapper(node, cb),
+		NodeKind.ArrayPattern | NodeKind.ObjectPattern | NodeKind.ObjectPatternProp => forEachPattern(node, cb),
+		NodeKind.TypeGeneric | NodeKind.TypeArray | NodeKind.TypeUnion | NodeKind.TypeIntersection | NodeKind.TypeFunction | NodeKind.TypeObject => forEachType(node, cb),
+		NodeKind.JSXElement | NodeKind.JSXFragment | NodeKind.JSXExpressionContainer | NodeKind.JSXAttribute | NodeKind.JSXSpreadAttribute | NodeKind.ComputedProperty => forEachJsx(node, cb),
+		// Genuine leaves (no Node children). Listed explicitly (not via `_`) so
+		// adding a new NodeKind forces an exhaustiveness error here, preventing
+		// the silent-gap class of bugs that bit replaceTypeVars.
+		NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral
+			| NodeKind.NullLiteral | NodeKind.BigIntLiteral | NodeKind.RegexLiteral
+			| NodeKind.Identifier | NodeKind.TypeAnnotation | NodeKind.SizeofExpr
+			| NodeKind.BreakStmt | NodeKind.ContinueStmt | NodeKind.UnreachableStmt
+			| NodeKind.ImportDecl | NodeKind.TypeAliasDecl
+			| NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.ExternDecl
+			| NodeKind.JSXText => {},
+	};
+}
+
+function forEachFlow(node: Node, cb: ChildVisitor): void {
+	match (node.kind) {
 		// Program root
 		NodeKind.Program => {
 			const d: Cursor<ProgramData> = node.data as ProgramData;
@@ -278,6 +301,12 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 			visitChild(cb, d.caseGuard);
 			visitChild(cb, d.caseBody);
 		},
+		_ => {},
+	};
+}
+
+function forEachDecl(node: Node, cb: ChildVisitor): void {
+	match (node.kind) {
 		// Declarations with bodies
 		NodeKind.FunctionDecl => {
 			const d: Cursor<FunctionDeclData> = node.data as FunctionDeclData;
@@ -321,6 +350,20 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 			const d: Cursor<MacroDeclData> = node.data as MacroDeclData;
 			visitChild(cb, d.macroDeclBody);
 		},
+		NodeKind.ActorDecl => {
+			const d: Cursor<ActorDeclData> = node.data as ActorDeclData;
+			visitAll(cb, d.actorBody);
+		},
+		NodeKind.PropertyDecl => {
+			const d: Cursor<PropertyDeclData> = node.data as PropertyDeclData;
+			visitChild(cb, d.propInitializer);
+		},
+		_ => {},
+	};
+}
+
+function forEachSimple(node: Node, cb: ChildVisitor): void {
+	match (node.kind) {
 		// Simple statements with one child
 		NodeKind.VariableDecl => {
 			const d: Cursor<VariableDeclData> = node.data as VariableDeclData;
@@ -348,6 +391,38 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 			visitChild(cb, d.catchBody);
 			visitChild(cb, d.finallyBody);
 		},
+		NodeKind.DestructuringDecl => {
+			const d: Cursor<DestructuringDeclData> = node.data as DestructuringDeclData;
+			visitChild(cb, d.destrPattern);
+			visitChild(cb, d.destrInit);
+		},
+		NodeKind.QuoteExpr => {
+			const d: Cursor<QuoteExprData> = node.data as QuoteExprData;
+			visitChild(cb, d.quoteBody);
+		},
+		NodeKind.ComptimeBlock => {
+			const d: Cursor<ComptimeBlockData> = node.data as ComptimeBlockData;
+			visitChild(cb, d.comptimeBody);
+		},
+		NodeKind.MacroInvocation => {
+			const d: Cursor<MacroInvocationData> = node.data as MacroInvocationData;
+			visitAll(cb, d.macroArgs);
+		},
+		NodeKind.TestDecl => {
+			const d: Cursor<TestDeclData> = node.data as TestDeclData;
+			visitChild(cb, d.testBody);
+		},
+		NodeKind.AssertStmt => {
+			const d: Cursor<AssertStmtData> = node.data as AssertStmtData;
+			visitChild(cb, d.assertExpr);
+			visitChild(cb, d.assertMessageExpr);
+		},
+		_ => {},
+	};
+}
+
+function forEachExpr(node: Node, cb: ChildVisitor): void {
+	match (node.kind) {
 		// Expressions
 		NodeKind.BinaryExpr => {
 			const d: Cursor<BinaryExprData> = node.data as BinaryExprData;
@@ -404,6 +479,12 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 			visitChild(cb, d.tryArg);
 			if (d.hasCatch) { visitChild(cb, d.catchVal); }
 		},
+		_ => {},
+	};
+}
+
+function forEachWrapper(node: Node, cb: ChildVisitor): void {
+	match (node.kind) {
 		NodeKind.AwaitExpr => {
 			const d: Cursor<AwaitExprData> = node.data as AwaitExprData;
 			visitChild(cb, d.awaitArg);
@@ -432,40 +513,12 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 			const d: Cursor<TypeAssertionData> = node.data as TypeAssertionData;
 			visitChild(cb, d.asExpr);
 		},
-		NodeKind.DestructuringDecl => {
-			const d: Cursor<DestructuringDeclData> = node.data as DestructuringDeclData;
-			visitChild(cb, d.destrPattern);
-			visitChild(cb, d.destrInit);
-		},
-		NodeKind.QuoteExpr => {
-			const d: Cursor<QuoteExprData> = node.data as QuoteExprData;
-			visitChild(cb, d.quoteBody);
-		},
-		NodeKind.ComptimeBlock => {
-			const d: Cursor<ComptimeBlockData> = node.data as ComptimeBlockData;
-			visitChild(cb, d.comptimeBody);
-		},
-		NodeKind.MacroInvocation => {
-			const d: Cursor<MacroInvocationData> = node.data as MacroInvocationData;
-			visitAll(cb, d.macroArgs);
-		},
-		NodeKind.TestDecl => {
-			const d: Cursor<TestDeclData> = node.data as TestDeclData;
-			visitChild(cb, d.testBody);
-		},
-		NodeKind.AssertStmt => {
-			const d: Cursor<AssertStmtData> = node.data as AssertStmtData;
-			visitChild(cb, d.assertExpr);
-			visitChild(cb, d.assertMessageExpr);
-		},
-		NodeKind.ActorDecl => {
-			const d: Cursor<ActorDeclData> = node.data as ActorDeclData;
-			visitAll(cb, d.actorBody);
-		},
-		NodeKind.PropertyDecl => {
-			const d: Cursor<PropertyDeclData> = node.data as PropertyDeclData;
-			visitChild(cb, d.propInitializer);
-		},
+		_ => {},
+	};
+}
+
+function forEachPattern(node: Node, cb: ChildVisitor): void {
+	match (node.kind) {
 		NodeKind.ArrayPattern => {
 			const d: Cursor<ArrayPatternData> = node.data as ArrayPatternData;
 			visitAll(cb, d.patternElements);
@@ -480,6 +533,12 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 			visitChild(cb, d.propAlias);
 			visitChild(cb, d.propDefault);
 		},
+		_ => {},
+	};
+}
+
+function forEachType(node: Node, cb: ChildVisitor): void {
+	match (node.kind) {
 		NodeKind.TypeGeneric => {
 			const d: Cursor<TypeGenericData> = node.data as TypeGenericData;
 			visitChild(cb, d.typExprBase);
@@ -509,6 +568,12 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 			visitChild(cb, d.typExprIndexValue);
 			for (let i = 0; i < d.typExprFieldDecorators.length; i++) visitAll(cb, d.typExprFieldDecorators[i]);
 		},
+		_ => {},
+	};
+}
+
+function forEachJsx(node: Node, cb: ChildVisitor): void {
+	match (node.kind) {
 		NodeKind.JSXElement => {
 			const d: Cursor<JSXElementData> = node.data as JSXElementData;
 			visitAll(cb, d.jsxAttrs);
@@ -535,9 +600,27 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 			visitChild(cb, d.computedKey);
 			visitChild(cb, d.computedValue);
 		},
+		_ => {},
+	};
+}
+
+// Apply f to all child nodes of a given node (mutates in place).
+// Core dispatch used by walkChildren, and directly by bounded walkers
+// that stop at function boundaries.
+// SYNC: forEachChild must handle the same NodeKinds (read-only variant).
+export function mapChildren(node: Node, f: Visitor): void {
+	match (node.kind) {
+		NodeKind.Program | NodeKind.SpliceMany | NodeKind.BlockStmt | NodeKind.IfStmt | NodeKind.WhileStmt | NodeKind.ForStmt | NodeKind.ForOfStmt | NodeKind.ForInStmt | NodeKind.DoWhileStmt | NodeKind.SwitchStmt | NodeKind.SwitchCase | NodeKind.MatchStmt | NodeKind.MatchExpr | NodeKind.MatchCase => mapFlow(node, f),
+		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr | NodeKind.ClassDecl | NodeKind.ActorDecl | NodeKind.MethodDecl | NodeKind.ConstructorDecl | NodeKind.ExportDecl | NodeKind.DecoratedDecl | NodeKind.EnumDecl | NodeKind.MacroDecl | NodeKind.PropertyDecl => mapDecl(node, f),
+		NodeKind.VariableDecl | NodeKind.ReturnStmt | NodeKind.ThrowStmt | NodeKind.ExprStmt | NodeKind.DeferStmt | NodeKind.TryCatchStmt | NodeKind.DestructuringDecl | NodeKind.QuoteExpr | NodeKind.ComptimeBlock | NodeKind.MacroInvocation | NodeKind.TestDecl | NodeKind.AssertStmt => mapSimple(node, f),
+		NodeKind.BinaryExpr | NodeKind.UnaryExpr | NodeKind.UpdateExpr | NodeKind.CallExpr | NodeKind.MemberExpr | NodeKind.ArrayAccess | NodeKind.ObjectLiteral | NodeKind.ArrayLiteral | NodeKind.ConditionalExpr | NodeKind.SpreadExpr | NodeKind.NewExpr | NodeKind.TryExpr => mapExpr(node, f),
+		NodeKind.AwaitExpr | NodeKind.YieldExpr | NodeKind.MoveExpr | NodeKind.OutExpr | NodeKind.HiddenDeref | NodeKind.HiddenAddr | NodeKind.HiddenStdConv | NodeKind.HiddenSubConv | NodeKind.TypeAssertion => mapWrapper(node, f),
+		NodeKind.ArrayPattern | NodeKind.ObjectPattern | NodeKind.ObjectPatternProp => mapPattern(node, f),
+		NodeKind.TypeGeneric | NodeKind.TypeArray | NodeKind.TypeUnion | NodeKind.TypeIntersection | NodeKind.TypeFunction | NodeKind.TypeObject => mapType(node, f),
+		NodeKind.JSXElement | NodeKind.JSXFragment | NodeKind.JSXExpressionContainer | NodeKind.JSXAttribute | NodeKind.JSXSpreadAttribute | NodeKind.ComputedProperty => mapJsx(node, f),
 		// Genuine leaves (no Node children). Listed explicitly (not via `_`) so
-		// adding a new NodeKind forces an exhaustiveness error here, preventing
-		// the silent-gap class of bugs that bit replaceTypeVars.
+		// adding a new NodeKind forces an exhaustiveness error here — keeping
+		// this walker in sync with the AST by construction.
 		NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral
 			| NodeKind.NullLiteral | NodeKind.BigIntLiteral | NodeKind.RegexLiteral
 			| NodeKind.Identifier | NodeKind.TypeAnnotation | NodeKind.SizeofExpr
@@ -548,11 +631,7 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 	};
 }
 
-// Apply f to all child nodes of a given node (mutates in place).
-// Core dispatch used by walkChildren, and directly by bounded walkers
-// that stop at function boundaries.
-// SYNC: forEachChild must handle the same NodeKinds (read-only variant).
-export function mapChildren(node: Node, f: Visitor): void {
+function mapFlow(node: Node, f: Visitor): void {
 	match (node.kind) {
 		// Program root
 		NodeKind.Program => {
@@ -648,6 +727,12 @@ export function mapChildren(node: Node, f: Visitor): void {
 			if (d.caseGuard != null) { d.caseGuard = f(d.caseGuard); }
 			d.caseBody = f(d.caseBody);
 		},
+		_ => {},
+	};
+}
+
+function mapDecl(node: Node, f: Visitor): void {
+	match (node.kind) {
 		// Declarations with bodies
 		NodeKind.FunctionDecl => {
 			const d: Cursor<FunctionDeclData> = node.data as FunctionDeclData;
@@ -705,6 +790,16 @@ export function mapChildren(node: Node, f: Visitor): void {
 			const d: Cursor<MacroDeclData> = node.data as MacroDeclData;
 			d.macroDeclBody = f(d.macroDeclBody);
 		},
+		NodeKind.PropertyDecl => {
+			const d: Cursor<PropertyDeclData> = node.data as PropertyDeclData;
+			if (d.propInitializer != null) { d.propInitializer = f(d.propInitializer); }
+		},
+		_ => {},
+	};
+}
+
+function mapSimple(node: Node, f: Visitor): void {
+	match (node.kind) {
 		// Simple statements with one child
 		NodeKind.VariableDecl => {
 			const d: Cursor<VariableDeclData> = node.data as VariableDeclData;
@@ -732,6 +827,40 @@ export function mapChildren(node: Node, f: Visitor): void {
 			d.catchBody = f(d.catchBody);
 			d.finallyBody = f(d.finallyBody);
 		},
+		NodeKind.DestructuringDecl => {
+			const d: Cursor<DestructuringDeclData> = node.data as DestructuringDeclData;
+			d.destrPattern = f(d.destrPattern);
+			d.destrInit = f(d.destrInit);
+		},
+		NodeKind.QuoteExpr => {
+			const d: Cursor<QuoteExprData> = node.data as QuoteExprData;
+			d.quoteBody = f(d.quoteBody);
+		},
+		NodeKind.ComptimeBlock => {
+			const d: Cursor<ComptimeBlockData> = node.data as ComptimeBlockData;
+			d.comptimeBody = f(d.comptimeBody);
+		},
+		NodeKind.MacroInvocation => {
+			const d: Cursor<MacroInvocationData> = node.data as MacroInvocationData;
+			for (let i = 0; i < d.macroArgs.length; i += 1) {
+				d.macroArgs[i] = f(d.macroArgs[i]);
+			}
+		},
+		NodeKind.TestDecl => {
+			const d: Cursor<TestDeclData> = node.data as TestDeclData;
+			d.testBody = f(d.testBody);
+		},
+		NodeKind.AssertStmt => {
+			const d: Cursor<AssertStmtData> = node.data as AssertStmtData;
+			d.assertExpr = f(d.assertExpr);
+			if (d.assertMessageExpr != null) { d.assertMessageExpr = f(d.assertMessageExpr); }
+		},
+		_ => {},
+	};
+}
+
+function mapExpr(node: Node, f: Visitor): void {
+	match (node.kind) {
 		// Expressions
 		NodeKind.BinaryExpr => {
 			const d: Cursor<BinaryExprData> = node.data as BinaryExprData;
@@ -796,6 +925,12 @@ export function mapChildren(node: Node, f: Visitor): void {
 			d.tryArg = f(d.tryArg);
 			if (d.hasCatch) { d.catchVal = f(d.catchVal); }
 		},
+		_ => {},
+	};
+}
+
+function mapWrapper(node: Node, f: Visitor): void {
+	match (node.kind) {
 		NodeKind.AwaitExpr => {
 			const d: Cursor<AwaitExprData> = node.data as AwaitExprData;
 			d.awaitArg = f(d.awaitArg);
@@ -824,38 +959,12 @@ export function mapChildren(node: Node, f: Visitor): void {
 			const d: Cursor<TypeAssertionData> = node.data as TypeAssertionData;
 			d.asExpr = f(d.asExpr);
 		},
-		NodeKind.DestructuringDecl => {
-			const d: Cursor<DestructuringDeclData> = node.data as DestructuringDeclData;
-			d.destrPattern = f(d.destrPattern);
-			d.destrInit = f(d.destrInit);
-		},
-		NodeKind.QuoteExpr => {
-			const d: Cursor<QuoteExprData> = node.data as QuoteExprData;
-			d.quoteBody = f(d.quoteBody);
-		},
-		NodeKind.ComptimeBlock => {
-			const d: Cursor<ComptimeBlockData> = node.data as ComptimeBlockData;
-			d.comptimeBody = f(d.comptimeBody);
-		},
-		NodeKind.MacroInvocation => {
-			const d: Cursor<MacroInvocationData> = node.data as MacroInvocationData;
-			for (let i = 0; i < d.macroArgs.length; i += 1) {
-				d.macroArgs[i] = f(d.macroArgs[i]);
-			}
-		},
-		NodeKind.TestDecl => {
-			const d: Cursor<TestDeclData> = node.data as TestDeclData;
-			d.testBody = f(d.testBody);
-		},
-		NodeKind.AssertStmt => {
-			const d: Cursor<AssertStmtData> = node.data as AssertStmtData;
-			d.assertExpr = f(d.assertExpr);
-			if (d.assertMessageExpr != null) { d.assertMessageExpr = f(d.assertMessageExpr); }
-		},
-		NodeKind.PropertyDecl => {
-			const d: Cursor<PropertyDeclData> = node.data as PropertyDeclData;
-			if (d.propInitializer != null) { d.propInitializer = f(d.propInitializer); }
-		},
+		_ => {},
+	};
+}
+
+function mapPattern(node: Node, f: Visitor): void {
+	match (node.kind) {
 		NodeKind.ArrayPattern => {
 			const d: Cursor<ArrayPatternData> = node.data as ArrayPatternData;
 			for (let i = 0; i < d.patternElements.length; i += 1) {
@@ -876,6 +985,12 @@ export function mapChildren(node: Node, f: Visitor): void {
 			if (d.propAlias != null) { d.propAlias = f(d.propAlias); }
 			if (d.propDefault != null) { d.propDefault = f(d.propDefault); }
 		},
+		_ => {},
+	};
+}
+
+function mapType(node: Node, f: Visitor): void {
+	match (node.kind) {
 		NodeKind.TypeGeneric => {
 			const d: Cursor<TypeGenericData> = node.data as TypeGenericData;
 			d.typExprBase = f(d.typExprBase);
@@ -920,6 +1035,12 @@ export function mapChildren(node: Node, f: Visitor): void {
 				}
 			}
 		},
+		_ => {},
+	};
+}
+
+function mapJsx(node: Node, f: Visitor): void {
+	match (node.kind) {
 		NodeKind.JSXElement => {
 			const d: Cursor<JSXElementData> = node.data as JSXElementData;
 			for (let i = 0; i < d.jsxAttrs.length; i += 1) d.jsxAttrs[i] = f(d.jsxAttrs[i]);
@@ -946,15 +1067,6 @@ export function mapChildren(node: Node, f: Visitor): void {
 			d.computedKey = f(d.computedKey);
 			d.computedValue = f(d.computedValue);
 		},
-		// Genuine leaves (no Node children). Listed explicitly (not via `_`) so
-		// adding a new NodeKind forces an exhaustiveness error here — keeping
-		// this walker in sync with the AST by construction.
-		NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral
-			| NodeKind.NullLiteral | NodeKind.BigIntLiteral | NodeKind.RegexLiteral
-			| NodeKind.Identifier | NodeKind.TypeAnnotation | NodeKind.SizeofExpr
-			| NodeKind.BreakStmt | NodeKind.ContinueStmt | NodeKind.UnreachableStmt
-			| NodeKind.ImportDecl | NodeKind.TypeAliasDecl
-			| NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.ExternDecl
-			| NodeKind.JSXText => {},
+		_ => {},
 	};
 }

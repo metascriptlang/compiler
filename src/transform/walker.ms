@@ -70,6 +70,15 @@ export function isInstanceFieldInit(node: Node): boolean {
 
 export function mapExprChildrenWith<S>(node: Node, s: S, f: (s: S, child: Node) => Node): void {
 	match (node.kind) {
+		NodeKind.CallExpr | NodeKind.BinaryExpr | NodeKind.UnaryExpr | NodeKind.MemberExpr | NodeKind.ArrayAccess => mapExprCalls(node, s, f),
+		NodeKind.ConditionalExpr | NodeKind.ObjectLiteral | NodeKind.ArrayLiteral | NodeKind.SpreadExpr | NodeKind.NewExpr => mapExprLiterals(node, s, f),
+		NodeKind.TryExpr | NodeKind.MatchExpr | NodeKind.TypeAssertion | NodeKind.HiddenDeref | NodeKind.HiddenAddr | NodeKind.HiddenStdConv | NodeKind.HiddenSubConv | NodeKind.UpdateExpr => mapExprWrappers(node, s, f),
+		_ => {},
+	};
+}
+
+function mapExprCalls<S>(node: Node, s: S, f: (s: S, child: Node) => Node): void {
+	match (node.kind) {
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
 			d.callee = f(s, d.callee);
@@ -94,6 +103,12 @@ export function mapExprChildrenWith<S>(node: Node, s: S, f: (s: S, child: Node) 
 			d.array = f(s, d.array);
 			d.index = f(s, d.index);
 		},
+		_ => {},
+	};
+}
+
+function mapExprLiterals<S>(node: Node, s: S, f: (s: S, child: Node) => Node): void {
+	match (node.kind) {
 		NodeKind.ConditionalExpr => {
 			const d = node.data as ConditionalExprData;
 			d.ternaryCondition = f(s, d.ternaryCondition);
@@ -120,6 +135,12 @@ export function mapExprChildrenWith<S>(node: Node, s: S, f: (s: S, child: Node) 
 			let i = 0;
 			while (i < d.newArguments.length) { d.newArguments[i] = f(s, d.newArguments[i]); i += 1; }
 		},
+		_ => {},
+	};
+}
+
+function mapExprWrappers<S>(node: Node, s: S, f: (s: S, child: Node) => Node): void {
+	match (node.kind) {
 		NodeKind.TryExpr => {
 			const d = node.data as TryExprData;
 			d.tryArg = f(s, d.tryArg);
