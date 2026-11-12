@@ -762,7 +762,7 @@ static void msHeapReleaseBig(msHeapRegion* a, msHeapBig* chunk) {
     msHeapReleaseBigSince(a, chunk, msHeapUnusedNow());
 }
 
-static void msHeapDeallocBig(msHeapRegion* a, msHeapBig* chunk) {
+static __attribute__((noinline)) void msHeapDeallocBig(msHeapRegion* a, msHeapBig* chunk) {
     if (!(chunk->base.prevSize & 1)) msHeapFreedTwice(chunk->data);
     a->occupied -= chunk->base.size;
     msHeapReleaseBig(a, chunk);
@@ -788,13 +788,13 @@ static msHeapChunk* msHeapPage(void* p) {
     return (msHeapChunk*)((uintptr_t)p & ~((uintptr_t)MS_HEAP_PAGE_SIZE - 1));
 }
 
-static void msHeapShelveSmall(msHeapRegion* a, msHeapSmall* chunk) {
+static __attribute__((noinline)) void msHeapShelveSmall(msHeapRegion* a, msHeapSmall* chunk) {
     msHeapRemoveSmall(a, chunk);
     chunk->next = a->empties;
     a->empties = chunk;
 }
 
-static void msHeapRelistSmall(msHeapRegion* a, msHeapSmall* chunk) {
+static __attribute__((noinline)) void msHeapRelistSmall(msHeapRegion* a, msHeapSmall* chunk) {
     msHeapSmall* head = a->small[chunk->base.size / MS_HEAP_ALIGN];
     msHeapInsertSmall(a, chunk);
     if (head && head->free == MS_HEAP_SMALL_ROOM) msHeapShelveSmall(a, head);
@@ -804,15 +804,16 @@ static uintptr_t msHeapHomeMark(msHeapSmall* chunk) {
     return (uintptr_t)chunk ^ (uintptr_t)0x9e3779b97f4a7c15u;
 }
 
-static int msHeapIsHome(msHeapSmall* chunk, msHeapCell* cell) {
+static __attribute__((noinline, cold)) int msHeapIsHome(msHeapSmall* chunk, msHeapCell* cell) {
     for (msHeapCell* home = chunk->freeList; home; home = home->next)
         if (home == cell) return 1;
     return 0;
 }
 
-static inline void msHeapPutHome(msHeapRegion* a, msHeapSmall* chunk, msHeapCell* cell, size_t size) {
+static inline __attribute__((always_inline)) void msHeapPutHome(msHeapRegion* a, msHeapSmall* chunk, msHeapCell* cell, size_t size, size_t occupied) {
     uintptr_t mark = msHeapHomeMark(chunk);
     if (__builtin_expect(cell->run == mark, 0) && msHeapIsHome(chunk, cell)) msHeapFreedTwice(cell);
+    a->occupied -= occupied;
     cell->run = mark;
     cell->next = chunk->freeList;
     chunk->freeList = cell;
@@ -868,7 +869,7 @@ static int msHeapRouteRemoteCells(msHeapRegion* a, size_t most) {
                 a->remoteCells[slot] = cell;
                 return 1;
             }
-            msHeapPutHome(a, (msHeapSmall*)msHeapPage(cell), cell, slot * MS_HEAP_ALIGN);
+            msHeapPutHome(a, (msHeapSmall*)msHeapPage(cell), cell, slot * MS_HEAP_ALIGN, 0);
         }
     }
     return 0;
@@ -1031,8 +1032,7 @@ void msHeapFree(void* p) {
         }
 #endif
         msHeapRegion* a = MS_HEAP_REGION(here);
-        msHeapPutHome(a, (msHeapSmall*)base, p, size);
-        a->occupied -= size;
+        msHeapPutHome(a, (msHeapSmall*)base, p, size, size);
     } else {
 #if MS_HEAP_THREADS
         if (owner != here) {
