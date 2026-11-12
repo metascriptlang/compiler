@@ -196,23 +196,42 @@ runtime.` The wasm32-wasi cells are then 11 built and 10 ran ok for zig and for 
 cells `n/a (msc refuses…)`, the C++ companion the one `FAIL` of both. This replaces the 15 built and 13 ran of
 the table above, which counted the four `--sanitize` cells as built and the three `san*` ones as run.
 
-## Measured 2026-11-12 — the source-built Windows engine has no packager yet
+## Measured 2026-11-12 — the Windows engine by its producer, one `llvm.exe` under 26 names
 
-On d87, the install of the final PGO stage built from the edited LLVM 23.1.4 source (multicall `llvm.exe`, no
-runtimes: the builtins come from the mingw runtime bundle), msc `d7cb5337a11f`:
+On d87, from `llvm-project-23.1.4.src.tar.xz` with the source edit above, the first stage compiled by bundle
+`07b7c1d8410a` (installed engine, mingw runtime, C++ runtime from source); msc `d7cb5337a11f` ran the producer and
+`e3f94f82fda4` the rest:
 
-- `prepareWindowsEngine --llvm-root <install> --license llvm/LICENSE.TXT` stops with
-  `missing lib/clang/23/lib/windows/clang_rt.builtins-x86_64.lib`: it packages the layout of an upstream release,
-  which carries its own builtins. `packageSourceEngine` names Linux and macOS hosts only (`engineHostKey`,
-  `tools/managedToolchain/sourceEnginePackage.ms`).
-- Every tool name in the install's `bin/` is its own 101,355,520-byte copy of `llvm.exe` (link count 1). LLVM
-  installs a tool alias with `cmake -E copy` unless `LLVM_USE_SYMLINKS` is on, and that defaults to
-  `CMAKE_HOST_UNIX` (`llvm/CMakeLists.txt`, `llvm_install_symlink` in `llvm/cmake/modules/AddLLVM.cmake`).
-- `C:\Windows\System32\tar.exe` (bsdtar 3.8.4, the tar `tarProgram` of `src/compiler/toolchain.ms` installs a
-  bundle with) keeps hard links: three hard-linked names of a 5,000,000-byte file make a 5,003,776-byte archive,
-  and extraction gives link count 3 with the same bytes.
+- `prepareSourceEngine --bundle` runs the four Windows stages (stage0 with its builtins and profile runtime, an
+  instrumented clang, the `Sema.cpp` training compile, the engine with the merged profile):
+  `producer rc=0 after 3518 s` at `--jobs 8`, beside this arc's own test jobs. The build trees take 12.5 GB (stage0
+  2.1, instrument 3.3, train 0.2, final 4.4, source 2.5); the profile is 43,377,376 bytes from one `.profraw`.
+- `llvmEngine.cmake` configures the engine stage alone on a Windows host. Its cache elsewhere is unchanged: an empty
+  project configured with the file before and after gives the same 126 cache entries (cmake 4.2.3, macOS).
+- The install holds `llvm.exe` (101,354,496 bytes) as 26 copies, 2.5 GB: LLVM installs a tool alias with
+  `cmake -E copy` unless `LLVM_USE_SYMLINKS` is on, which defaults to `CMAKE_HOST_UNIX` (`llvm/CMakeLists.txt`,
+  `llvm_install_symlink` in `llvm/cmake/modules/AddLLVM.cmake`). `packageSourceEngine` stores the names of `bin/` that
+  have the same bytes as one file: `pkg 112M, bin 97M, files 329, names in bin 26, links of llvm.exe 26`; its tar is
+  116,817,920 bytes, 29,502,520 at `xz -6`. Packaging took 50 s on the idle host and 543 s beside the engine build,
+  because every name is hashed three times (7.9 GB).
+- The engine imports ADVAPI32, CRYPT32, KERNEL32, ntdll, ole32, SHELL32, VERSION, WINHTTP and the Universal CRT's
+  `api-ms-win-crt-*` sets; the package audit takes those sets as system libraries and refuses any other DLL.
+- In a measurement bundle (bundle `07b7c1d8410a` with this package's `bin/` and resource headers, resealed, 413 MB,
+  never installed), `platformMatrix.ms` builds 16 of 16 windows-x64 consumers and 31 run rows are ok. The one FAIL,
+  `debugLine debugstop` (`gdb: no stop at debugLine.ms:3`), is the same row with the installed engine: the harness
+  asks gdb, the build carries CodeView. `g1 through the bundle: 150 s`, `g2 by g1: 65 s`, and g2 checks
+  `src/index.ms` with no type errors in 584 modules.
+- msc installs a bundle of hard-linked tools: with `MSC_TOOLCHAIN_ARCHIVE` naming a 52,412,456-byte `tar.xz` of that
+  bundle (written by `C:\Windows\System32\tar.exe`, bsdtar 3.8.4) and no bundle in a fresh home, the first build
+  extracted, verified and used it in 75 s (`installed: links of llvm.exe 26, size 413M`), and the second build took
+  4 s.
 
-Not verified: that `verifyStagedBundle` accepts hard-linked tools, and an install of such a bundle through msc.
+Not verified: a bundle made by `assembleBundle` on Windows. d87's installed bundle keeps the mingw builtins
+(`lib/clang/23/lib/x86_64-w64-windows-gnu`) and the UBSan archives' receipt outside `runtime/` and lists a root
+overlay, which `assembleBundle` refuses (`lists bundle overlays`), so the Windows runtime has to arrive as overlays.
+Also not measured: a compile-time A/B of this engine (the table above measured the same stages run by hand), ThinLTO
+for the Windows engine (the stage is PGO alone, as in the release bat), a Windows arm64 host, and the m1m and rtx
+engines rebuilt with this cache file.
 
 ## Measured 2026-11-12 — what zig builds for each target, and the order of the C runtime libraries
 
