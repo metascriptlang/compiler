@@ -63,7 +63,7 @@ import { declaringModuleCtx } from "../../checker/instantiate";
 import { lookupSymbol, lookupSymbolInDefiningScope, scopeDefining, hasFlag, SymbolFlag, isTypeSymbol } from "../../checker/symbol";
 import { metaTaggedFor, registeredModuleSymbols, metaNodeType, metaNodeKindType, metaDeclKindType, metaExternKindType } from "./stdTags";
 import { bindMetaBodyNames, metaIntrinsicOf } from "../../checker/bindNames";
-import { anyArgIsParametric, rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf, isDirectiveInvocation } from "../../checker/callResolve";
+import { anyArgIsParametric, rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf, macroParamNames, isDirectiveInvocation } from "../../checker/callResolve";
 import { stillDecoratedMessage, peelToImpl } from "./typeQuery";
 import { callMacroEngineCompiler, EngineMacroResult, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx, engineCompiling, engineStdSymbol } from "./callbacks";
 import { isBuiltinDirective } from "../../checker/decoratorHelpers";
@@ -1902,10 +1902,11 @@ function getOrCompileMacroBody(ctx: CheckerContext, regCtx: CheckerContext, macr
 		return builds[bi].compiled;
 	}
 	let body = decl.macroDeclBody;
-	let params = decl.macroDeclParams;
+	const declNames = macroParamNames(decl);
+	let params = declNames;
 	if (hasTypeArg) {
 		params = [];
-		for (const param of decl.macroDeclParams) params.push(param);
+		for (const param of declNames) params.push(param);
 	}
 
 	// Bake into a CLONE when the call site supplies a type argument: the declared
@@ -1914,7 +1915,7 @@ function getOrCompileMacroBody(ctx: CheckerContext, regCtx: CheckerContext, macr
 	if (hasTypeArg) workBody = cloneNodeForCheck(body);
 	const bakeMark = ctx.errors.length;
 	_typeArgSite = atCallSite();
-	bakeMacroBody(workBody, ctx, macroSym, macroName, hasTypeArg, decl.macroDeclParams, params);
+	bakeMacroBody(workBody, ctx, macroSym, macroName, hasTypeArg, declNames, params);
 	if (errorsSince(ctx, bakeMark)) {
 		builds.push(failedBuild(hasTypeArg, ctx, bakeMark));
 		return null;
@@ -1979,7 +1980,7 @@ function getOrCompileMacroBody(ctx: CheckerContext, regCtx: CheckerContext, macr
 	}
 	if (result.funcIdx < 0) return null;
 
-	const cm: CompiledMacro = { vm: result.vm, funcIdx: result.funcIdx, typeArgInput: params.length > decl.macroDeclParams.length, typeArgSite };
+	const cm: CompiledMacro = { vm: result.vm, funcIdx: result.funcIdx, typeArgInput: params.length > declNames.length, typeArgSite };
 	builds.push({ hasTypeArg, compiled: cm, errors: [], reportedIn: null });
 	return cm;
 }
@@ -2008,7 +2009,7 @@ export function invokeMacro(node: Node, ctx: CheckerContext): Node {
 		regCtx = bmc;
 	}
 	const body = decl.macroDeclBody;
-	const params = decl.macroDeclParams;
+	const params = macroParamNames(decl);
 
 	enterMacroBuildsCompilation(ctx);
 	if (!_preprocessedMacros.has(body)) {
@@ -2458,7 +2459,7 @@ import { registerExpandMacroInvocation } from "../../checker/checkerCallbacks";
 registerExpandMacroInvocation(expandMacroInvocation);
 registerMacroBodyPreparer((body: Node, ctx: CheckerContext, macroSym: Symbol, macroName: string): Node => {
 	const decl = macroDeclOf(macroSym);
-	const params: string[] = decl != null ? decl.macroDeclParams : [];
+	const params: string[] = decl != null ? macroParamNames(decl) : [];
 	preprocessMacroBody(body, macroScopeOf(ctx, macroSym), macroSym.name, params);
 	return bakeMacroBody(body, ctx, macroSym, macroName, false, params, null);
 });

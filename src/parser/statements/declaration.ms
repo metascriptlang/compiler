@@ -2067,6 +2067,10 @@ export function parseMacroDecl(state: ParserState): NodeResult {
 	const raw = parseParamList(state, nameToken.value);
 	const macroDeclParams = extractParamNames(raw);
 	const macroDeclParamTypes = extractParamTypes(raw);
+	const receiver = macroDeclParams.length > 0 ? macroDeclParams[0] : "";
+	if (receiver == "this" || receiver.startsWith("this:ref:") || receiver.startsWith("typeof:")) {
+		return Result.err(`The first parameter of macro '${nameToken.value}' can only be written 'this name: Node' at line ${nameToken.line}`);
+	}
 
 	const macroDeclReturnType = captureOptionalType(state);
 	const returnTypeExpr = getLastTypeExpr();

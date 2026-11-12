@@ -137,6 +137,7 @@ import "./importedHeaderDeclarations";
 import "./localDeclarationIdentity";
 import "./macroCallbackFit";
 import "./macroConverterBoundary";
+import "./macroMethodCall";
 import "./macroDiagnostics";
 import "./macroExpansionBoundary";
 import "./macroReflection";

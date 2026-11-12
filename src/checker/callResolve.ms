@@ -405,6 +405,19 @@ export function macroDeclOf(sym: Symbol | null): MacroDeclData | null {
 	return decl.data as MacroDeclData;
 }
 
+const MACRO_RECEIVER_PREFIX = "this:";
+
+export function macroTakesReceiver(decl: MacroDeclData): boolean {
+	return decl.macroDeclParams.length > 0 && decl.macroDeclParams[0].startsWith(MACRO_RECEIVER_PREFIX);
+}
+
+export function macroParamNames(decl: MacroDeclData): string[] {
+	if (!macroTakesReceiver(decl)) return decl.macroDeclParams;
+	const names = decl.macroDeclParams.slice(0);
+	names[0] = names[0].slice(MACRO_RECEIVER_PREFIX.length, names[0].length);
+	return names;
+}
+
 export function invokedMacroSym(ctx: CheckerContext, node: Node): Symbol | null {
 	const bound = node.flags.has(NodeFlag.BoundSym) && node.resolvedSym != null;
 	if (bound || macroDeclOf(node.resolvedSym) != null) return macroDeclOf(node.resolvedSym) != null ? node.resolvedSym : null;
