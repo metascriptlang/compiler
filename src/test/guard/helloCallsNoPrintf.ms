@@ -7,18 +7,30 @@ const msc = mscEnv == "" ? `${root}/msc` : mscEnv.startsWith(".") ? `${root}/${m
 const dir = `${root}/out/guardHelloCallsNoPrintf`;
 
 const FORMATTER_DATA = "-0X+0X 0X-0x+0x 0x";
-const REQUIRED = "hello";
 interface StaticTarget {
 	name: string;
 	flags: string[];
-	output: string;
+	suffix: string;
 }
 const TARGETS: StaticTarget[] = [
-	{ name: "wasi", flags: ["--os=wasm"], output: "hello.wasm" },
-	{ name: "musl", flags: ["--os=linux", "--abi=musl"], output: "hello-musl" },
+	{ name: "wasi", flags: ["--os=wasm"], suffix: ".wasm" },
+	{ name: "musl", flags: ["--os=linux", "--abi=musl"], suffix: "-musl" },
 ];
-const PROGRAM = `console.log("hello");
-`;
+interface StaticProgram {
+	name: string;
+	marker: string;
+	source: string;
+}
+const PROGRAMS: StaticProgram[] = [
+	{ name: "hello", marker: "hello", source: `console.log("hello");
+` },
+	{ name: "coll", marker: "coll", source: `const m = new Map<string, int32>();
+m.set("a", 1);
+const s = new Set<int32>();
+s.add(2);
+console.log("coll", m.get("a"), s.has(2));
+` },
+];
 
 let failed = 0;
 
@@ -33,23 +45,26 @@ function holds(file: string, name: string): boolean {
 
 removeAll(dir);
 ensureDir(dir);
-writeFile(`${dir}/hello.ms`, PROGRAM);
 
-for (const target of TARGETS) {
-	const binary = `${dir}/${target.output}`;
-	const build = execFileResult(msc, ["build", "hello.ms", "--danger", "--strip", ...target.flags, `--output=${binary}`], dir);
-	if (build.exitCode != 0 || !exists(binary)) {
-		console.log(`GUARD-FAIL ${target.name}: build failed\n${build.output}${build.errorOutput}`);
-		failed = failed + 1;
-		continue;
-	}
-	if (holds(binary, FORMATTER_DATA)) {
-		console.log(`GUARD-FAIL ${target.name}: a static hello links the libc formatter (its prefix table "${FORMATTER_DATA}" is in the binary)`);
-		failed = failed + 1;
-	}
-	if (!holds(binary, REQUIRED)) {
-		console.log(`GUARD-FAIL ${target.name}: no "${REQUIRED}" in ${binary}, so the check read nothing`);
-		failed = failed + 1;
+for (const program of PROGRAMS) {
+	writeFile(`${dir}/${program.name}.ms`, program.source);
+	for (const target of TARGETS) {
+		const label = `${target.name} ${program.name}`;
+		const binary = `${dir}/${program.name}${target.suffix}`;
+		const build = execFileResult(msc, ["build", `${program.name}.ms`, "--danger", "--strip", ...target.flags, `--output=${binary}`], dir);
+		if (build.exitCode != 0 || !exists(binary)) {
+			console.log(`GUARD-FAIL ${label}: build failed\n${build.output}${build.errorOutput}`);
+			failed = failed + 1;
+			continue;
+		}
+		if (holds(binary, FORMATTER_DATA)) {
+			console.log(`GUARD-FAIL ${label}: a static build links the libc formatter (its prefix table "${FORMATTER_DATA}" is in the binary)`);
+			failed = failed + 1;
+		}
+		if (!holds(binary, program.marker)) {
+			console.log(`GUARD-FAIL ${label}: no "${program.marker}" in ${binary}, so the check read nothing`);
+			failed = failed + 1;
+		}
 	}
 }
 
