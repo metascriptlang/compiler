@@ -6,7 +6,7 @@ import { argv, execPath, exec, exit } from "std/process";
 import { readBytes, readLine } from "std/io";
 import { writeFile, remove } from "std/fs";
 
-function text(b: uint8[]): string {
+function text(b: Buffer): string {
 	let s = "";
 	for (const c of b) s += String.fromCharCode(c);
 	return s;
