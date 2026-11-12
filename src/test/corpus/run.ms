@@ -299,7 +299,12 @@ const SAN_CC = !SAN || BUNDLE_COMPILES_SAN ? "" : SAN_WIN != "" ? " --cc=clang" 
 
 const EXIT_SAN_HOST_BLOCKED = 77;
 
+// The bundle takes ASan as --sanitize=address: named only in --passC, the debug build's own UBSan flags stay on
+// and clang refuses its minimal runtime beside ASan.
 function sanBuildCmd(entry: string, bin: string): string {
+	if (BUNDLE_COMPILES_SAN) {
+		return MSC_CMD + " build " + entry + " --sanitize=address --passC=\"" + SAN_PASSC.replace("-fsanitize=address ", "") + "\" --output=" + bin;
+	}
 	const extra = SAN_WIN != "" ? " " + SAN_WIN : "";
 	return MSC_CMD + " build " + entry + SAN_CC + " --passC=\"" + SAN_PASSC + extra + "\" --passL=\"" + SAN_PASSL + extra + "\" --output=" + bin;
 }
