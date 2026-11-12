@@ -164,10 +164,12 @@ function note(path: string, fields: string[]): void {
 	if (!wrote.ok) { throw new Error(`cannot write ${path}`); }
 }
 
-function bundleRefusal(compiler: string, text: string): string {
+function namedRefusal(compiler: string, text: string): string {
+	if (text.contains("is not available on wasm")) { return "msc refuses: a wasm build links no sanitizer runtime"; }
 	if (compiler != "bundle") { return ""; }
 	if (text.contains("is not installed in")) { return "bundle refuses: its runtime for this target is not installed"; }
 	if (text.contains("is not available on windows")) { return "bundle refuses: mingw has no ASan or TSan runtime (zig fails it as well)"; }
+	if (text.contains("is not available on linux-musl")) { return "bundle refuses: ASan and TSan need a dynamic executable and musl builds are static (zig fails ASan at link, TSan when run)"; }
 	return "";
 }
 
@@ -376,7 +378,7 @@ function buildCell(out: string, results: string, cells: string, host: string, ho
 		return;
 	}
 	if (built.code != 0 || !exists(artifact)) {
-		const refused = bundleRefusal(compiler, built.err + built.out);
+		const refused = namedRefusal(compiler, built.err + built.out);
 		if (refused != "") {
 			note(results, [consumer.name, target.name, compiler, "build", host, "n/a", String(built.seconds), "", refused]);
 			return;
