@@ -49,6 +49,16 @@ test "ctorSunkParams: a constructor lends the parameters it reads, keeps Unowned
 	assert takenBy("class Local { n: int32; constructor(p: P) { let q = p; q = p; this.n = q.name.length; } }", "Local") == 0;
 }
 
+test "ctorSunkParams: a constructor lends a parameter it stores after something that can leave the constructor" {
+	assert takenBy("class Guard { own: P; constructor(p: P, on: boolean) { if (on) throw new Error(\"x\"); this.own = p; } }", "Guard") == 0;
+	assert takenBy("class Calls { n: int32; own: P; constructor(p: P, q: P) { this.n = look(q); this.own = p; } }", "Calls") == 0;
+	assert takenBy("class News { h: Holder; own: P; constructor(p: P, q: P) { this.h = new Holder(q); this.own = p; } }", "News") == 2;
+	assert takenBy("class Init { n: int32 = look(new P(\"x\")); own: P; constructor(p: P) { this.own = p; } }", "Init") == 0;
+	assert takenBy("class PropSub extends Holder { constructor(readonly own: P, q: P) { super(q); } }", "PropSub") == 2;
+	assert takenBy("class G { get v(): int32 { return 1; } }\nclass Reads { n: int32; own: P; constructor(p: P, g: G) { this.n = g.v; this.own = p; } }", "Reads") == 0;
+	assert takenBy("class Iter { own: P; constructor(p: P, xs: int32[]) { for (const x of xs) {} this.own = p; } }", "Iter") == 0;
+}
+
 test "ctorSunkParams: a parameter handed to another constructor is taken when that constructor keeps it" {
 	assert takenBy("class Owner { h: Holder; constructor(p: P) { this.h = new Holder(p); } }", "Owner") == 1;
 	assert takenBy("class Wrap { kid: Kid; constructor(p: P) { this.kid = new Kid(p); } }", "Wrap") == 0;
