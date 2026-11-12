@@ -352,9 +352,14 @@ function ensureDestructionIfNeeded(node: Node, dctx: DrcContext): Node {
 	// double-frees (PARALOCK). A genuine discarded fire-and-forget future is captured by the
 	// ordinary discarded-call path, where this flag is false.
 	if (dctx.skipAwaitableCapture && isAwaitable(exprType)) return node;
+	return destroyAtScopeExit(node, dctx);
+}
+
+function destroyAtScopeExit(node: Node, dctx: DrcContext): Node {
+	const exprType = node.nodeType;
+	if (exprType == null) return node;
 	const rcInfo = classifyRc(exprType, dctx);
 	if (!rcInfo.needsCleanup) return node;
-	// Capture in temp, register for scope-exit destroy
 	const loc = node.location;
 	for (let ci = 0; ci < dctx.capturedNodes.length; ci += 1) {
 		if (dctx.capturedNodes[ci] == node) {
@@ -1005,15 +1010,25 @@ function reportUnsharableMove(srcExpr: Node, dctx: DrcContext): boolean {
 	return true;
 }
 
+function movedPathIsEmptied(arg: Node, dctx: DrcContext): boolean {
+	if (arg.nodeType == null || !isPathSlot(arg) || holdsNonNullRef(declaredSlotType(arg))) return false;
+	if (arg.kind == NodeKind.ArrayAccess) return hasNullMember(arg.nodeType) && sinkClassify(arg.nodeType, dctx).needsCleanup;
+	if (arg.kind != NodeKind.MemberExpr) return false;
+	const rc = classifyMemberFieldRc(arg, dctx);
+	return rc.needsCleanup && rc.wasMovedFn != null;
+}
+
 function processMove(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const md = node.data as MoveExprData;
-	// The consuming position decides the mode — an explicit `move` never
-	// overrides it (reference parity: the call-arg loop passes sinkArg only for
-	// sink params / spawn handoff; everything else is a borrow). MS params are
-	// borrows (ea38c2a): at a Normal call-arg position `move x` compiles exactly
-	// like the implicit pass — raw pointer, caller keeps its scope-exit destroy.
-	// Consuming here unconditionally left the value with no owner on either
-	// side: callee borrows, caller wasMoved — 1 leak per moved RC arg.
+	// A `move` that empties its field or element empties it wherever it is written (NIM-REF
+	// AN-34): in a position that only reads the value, the value moves into a temporary this
+	// scope destroys. A path a move would share instead (movedPathIsEmptied) is lent as before.
+	if (mode == DrcMode.Normal && movedPathIsEmptied(md.moveArg, dctx)) {
+		if (node.nodeType == null) node.nodeType = md.moveArg.nodeType;
+		return destroyAtScopeExit(processMove(node, dctx, DrcMode.Consumed), dctx);
+	}
+	// A `move` of a binding in a position that only reads it compiles like the implicit pass:
+	// the binding keeps its scope-exit destroy, and the checker refuses a later read of it.
 	const consume = mode == DrcMode.Consumed || mode == DrcMode.SinkArg;
 	const taken = md.moveArg.resolvedSym;
 	if (consume && md.moveArg.kind == NodeKind.Identifier && taken != null && taken.symbolType != null
