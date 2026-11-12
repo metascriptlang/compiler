@@ -150,7 +150,8 @@ burst that followed a gap (rtx best of 3 runs under load 37-41, the Mac best of 
 Bursts closer than the age keep their pages, so they pay no fault for pages given back (the 500 ms runtime paid
 it on Linux: 426 against 402 ms and 407 against 367 ms; on macOS `MADV_FREE_REUSABLE` changes the footprint
 without unmapping, so no runtime shows it there). What stays after the return is small chunks, which keep their
-pages (the 1M cells and their strings). One of the three `main` runs on rtx fell from 436 to 368 MB during its
+pages (the 1M cells and their strings). Since tree `844c75a751e8` they
+return too: §Emptied small chunks. One of the three `main` runs on rtx fell from 436 to 368 MB during its
 5 s gaps; `main` returns nothing, and the cause was not looked for. Under the earlier probe (same burst, 2 s
 idle) `libc` (`-DMS_HEAP_USE_MALLOC=1`) settled at 253-259 MB on rtx and 115-208 MB on m1m, and node 24.1.0
 with `--expose-gc` at 421-434 MB.
@@ -167,3 +168,58 @@ one, whose dirty pieces no longer join returned neighbours; both are back near 2
 
 Not measured: Windows resident memory (d87 passes both corpus programs, which assert at least 100 MB returned),
 a long-running server, and a quiet host for the burst times.
+
+## Emptied small chunks — rtx and m1m, 2026-11-12
+
+`main` is `e21c6e7c3666`, the msc installed on each host with its own runtime; `tree` is a copy of that msc beside
+the runtime of tree `844c75a751e8`, where a freed cell goes back to its own chunk and a small chunk that stayed
+empty for the return age joins the big chunks (ULTRALOCK M10, M12; guard `allocatorReturnsIdlePages`).
+
+Memory: the burst probe of the section above with one more 12.5 s wait, danger builds, both arms running at once
+on rtx under load 35-59, one run:
+
+| runtime | MB at 0.6 s gaps | 2 s | 5 s | after 12.5 s | after 25 s | best burst ms at 0.6 s, 2 s, 5 s gaps |
+|---|---|---|---|---|---|---|
+| main | 367 | 367 | 367 | 194 | 194 | 648, 692, 651 |
+| tree | 368 | 368 | 368 | 194 | 3 | 572, 638, 632 |
+
+The small chunks go back 10 to 22 s after they emptied: the chunks emptied by one burst wait for the generation
+before them to reach its age. Corpus `idleProgramReturnsEmptiedSmallChunks` holds the single-generation case
+(2000000 objects freed, at least 80 MB back within 15 s; red on main).
+
+Time, `collections` and `json` built `--release`, six runs per arm in alternating order on m1m at load 3.5-7.7,
+not pinned. The ratio is the tree's speed over main's (least us/op, most MB/s; above 1 the tree is faster):
+
+| bench | rows | best run, lowest to highest ratio | median run, lowest to highest ratio |
+|---|---|---|---|
+| collections | 18 | 0.981 (`number toString 1k`) to 1.052 (`template literal 1k`) | 0.977 to 1.050 |
+| json | 12 | 0.983 (`stringify large 1 MB`) to 1.033 (`encode typed medium 64 KB`) | 0.983 to 1.060 |
+
+```
+~/metascript/.gate-host/run-remote.sh --mac --cores 2 -- bash -c 'cp "$(command -v msc)" builder
+  for b in collections json; do msc build src/bench/$b/bench.ms --release --output=out/b/$b-main
+    ./builder build src/bench/$b/bench.ms --release --output=out/b/$b-cand; done
+  for b in collections json; do for r in 1 2 3 4 5 6; do <main then cand on odd r, cand then main on even r>; done; done'
+```
+
+The same recipe on rtx under load 27-99 (pinned, best of 6) gave ratios from 0.55 (`array push 10k`) to 2.18
+(`parse large 1 MB`); m1m at low load shows neither, so the rtx rows are not kept.
+
+Allocator alone, a C probe that includes `runtime/allocator.c` (`churn.c`, kept with the runtime-allocator card's
+probes), rtx pinned to one core under load 35-59, best of 5, ns per take-and-free:
+
+| pattern | 32 B main | tree | 256 B main | tree | 1024 B main | tree |
+|---|---|---|---|---|---|---|
+| one cell taken and freed in turn | 6.68 | 4.74 | 6.66 | 4.88 | 6.77 | 4.72 |
+| 200k taken, freed in order | 6.09 | 6.53 | 26.80 | 29.44 | 75.29 | 82.02 |
+| 200k taken, freed in random order | 119.44 | 20.75 | 164.31 | 62.37 | 208.70 | 153.61 |
+| 200k live, a random half freed and retaken | 112.38 | 77.87 | 161.04 | 122.45 | 215.23 | 188.26 |
+
+Two 3000 B cells (one cell a page) taken and freed in turn: 6.69 main, 9.27 tree: each such chunk leaves its class
+when it empties and is reopened from the region's empty chunks. The remote-free probe of `src/bench/io/baseline.md`
+§Remote frees in runs (owner allocates, 1, 2 or 4 threads free; 32, 256 and 1024 B) gave best runs within 16% either way except 1024 B
+with 4 freers (26.8 main, 43.4 tree), and means between 8 and 722 ns under that load: not a measurement.
+
+Not measured: Windows; x86-64 at low load for the two benches and the two probes; a long-running server; how much
+stays resident when freed pages lie between small chunks still in use (a free run under 68 KiB that touches no
+discarded chunk is not discarded, M12).
