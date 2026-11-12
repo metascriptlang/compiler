@@ -60,6 +60,13 @@ function copy(from: string, to: string): void {
 	}
 }
 
+function copyImages(from: string, to: string): void {
+	for (const name of readDir(from)) {
+		if (name.endsWith(".dSYM/")) continue;
+		copy(`${from}/${name}`, `${to}/${name}`);
+	}
+}
+
 function failWith(tag: string, why: string): void {
 	console.log(`FAIL ${tag}: ${why}`);
 	exit(1);
@@ -775,9 +782,7 @@ function arrayOwner(): void {
 	copy(`${FIXTURES}/arrayOwner/logicEdit.ms`, `${reloaded}/logic.ms`);
 	mustBuild(tag, reloaded, ["build", "app.ms", "--hcr", `--output=g2/module${ext}`], "the edited generation did not build");
 	ensureDir(`${reloaded}/run`);
-	for (const image of readDir(`${reloaded}/g1`)) {
-		copy(`${reloaded}/g1/${image}`, `${reloaded}/run/${image}`);
-	}
+	copyImages(`${reloaded}/g1`, `${reloaded}/run`);
 	const ran = execFileResult(`${dir}/${exe}`, ["run", "module"], reloaded);
 	const seen: string[] = [];
 	for (const line of lines(both(ran))) {
@@ -877,9 +882,7 @@ function engine(): void {
 	}
 	mustBuild(tag, dir, ["build", "host.cms", `--output=${exe}`], "thin host build failed");
 	ensureDir(`${dir}/run`);
-	for (const image of readDir(`${dir}/g1`)) {
-		copy(`${dir}/g1/${image}`, `${dir}/run/${image}`);
-	}
+	copyImages(`${dir}/g1`, `${dir}/run`);
 	const ran = execFileResult(`${dir}/${exe}`, ["run", "module"], dir);
 	const seen: string[] = [];
 	for (const line of lines(both(ran))) {
@@ -948,9 +951,7 @@ function asyncLoop(): void {
 	}
 	mustBuild(tag, dir, ["build", "host.cms", `--output=${exe}`], "thin host build failed");
 	ensureDir(`${dir}/run`);
-	for (const image of readDir(`${dir}/g1`)) {
-		copy(`${dir}/g1/${image}`, `${dir}/run/${image}`);
-	}
+	copyImages(`${dir}/g1`, `${dir}/run`);
 	const ran = execFileResult(`${dir}/${exe}`, ["run", "module"], dir);
 	const seen: string[] = [];
 	for (const line of lines(both(ran))) {
@@ -1001,9 +1002,7 @@ function liftKinds(): void {
 	}
 	mustBuild(tag, dir, ["build", "host.cms", `--output=${exe}`], "thin host build failed");
 	ensureDir(`${dir}/run`);
-	for (const image of readDir(`${dir}/g1`)) {
-		copy(`${dir}/g1/${image}`, `${dir}/run/${image}`);
-	}
+	copyImages(`${dir}/g1`, `${dir}/run`);
 	const ran = execFileResult(`${dir}/${exe}`, ["run", "module"], dir);
 	const seen: string[] = [];
 	for (const line of lines(both(ran))) {
@@ -1480,9 +1479,7 @@ function runPrebuilt(tag: string, dir: string, modules: string[], prefix: string
 	mustBuild(tag, dir, ["build", "host.cms", `--output=${exe}`], "thin host build failed");
 	if (SAN) sanRuntime(dir);
 	ensureDir(`${dir}/run`);
-	for (const name of readDir(`${dir}/g1`)) {
-		copy(`${dir}/g1/${name}`, `${dir}/run/${name}`);
-	}
+	copyImages(`${dir}/g1`, `${dir}/run`);
 	for (const moduleId of modules) {
 		const name = `module.${moduleId}${ext}`;
 		copy(`${dir}/g1/${name}`, `${dir}/run/${name}`);
@@ -2319,9 +2316,7 @@ function instanceofReload(): void {
 	mustBuild(tag, dir, ["build", "app.ms", "--hcr", `--output=g2/module${ext}`], "the edited generation did not build");
 	mustBuild(tag, dir, ["build", "host.cms", `--output=${exe}`], "thin host build failed");
 	ensureDir(`${dir}/run`);
-	for (const image of readDir(`${dir}/g1`)) {
-		copy(`${dir}/g1/${image}`, `${dir}/run/${image}`);
-	}
+	copyImages(`${dir}/g1`, `${dir}/run`);
 	const ran = execFileResult(`${dir}/${exe}`, ["run", "module"], dir);
 	const seen: string[] = [];
 	for (const line of lines(both(ran))) {
