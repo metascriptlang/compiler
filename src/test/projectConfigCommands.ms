@@ -399,6 +399,19 @@ const refused = run(hostile, ["build", "--colors=off"]);
 record("configure refuses a host call that writes", "refused, nothing written",
 	refused.includes("Restricted compile-time code") && refused.includes("std/fs.writeFile") && !exists(`${hostile}/leak.txt`) ? "refused, nothing written" : refused);
 
+const restored = `${root}/restored`;
+ensureDir(`${restored}/src`);
+put(`${restored}/build.ms`, "import { executable, path } from \"std/build\";\nexport const app = executable({ entry: path(\"src/main.ms\") });\nexport default app;\n");
+put(`${restored}/src/said.ms`, "export const said = \"one\";\n");
+put(`${restored}/src/main.ms`, `import { said } from "./said";\nconsole.log(\`\${said} of ${root}\`.split(" ")[0]);\n`);
+function builtOrReused(text: string): string {
+	put(`${restored}/src/said.ms`, `export const said = "${text}";\n`);
+	const out = run(restored, ["run", "--colors=off", "app"]);
+	return `${out.includes("reused: app") ? "reused" : "built"}:${lastLine(out)}`;
+}
+record("an executable whose sources are back at an earlier state is that state's stored binary", "built:one|built:two|reused:one|reused:two",
+	[builtOrReused("one"), builtOrReused("two"), builtOrReused("one"), builtOrReused("two")].join("|"));
+
 let failures = 0;
 console.log(`root ${root}`);
 for (const r of results) {
