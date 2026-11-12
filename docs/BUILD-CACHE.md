@@ -92,9 +92,8 @@ filled; the hash only names the file, and the full key text in its header is com
   does not read (a runtime C header, `vendor/`) does not change the key, so the key no longer walks
   the support trees: on RTX, 2026-11-10, keying a hello check took 8.0 ms before and 0.3 ms after
   (5 runs each), and 478 ms before on d87 Windows (not remeasured there).
-- **Collected** by age: a unit no build loaded or wrote for 24 hours is removed by the sweep that
-  runs when a unit is written (`collectUnusedStdUnits`; a load refreshes the unit's age through
-  `markUsed`). Read from the code, not measured.
+- **Collected** by age: a unit no build loaded or wrote for 24 hours is removed by
+  `collectGlobalCache` (§Collection); a load refreshes the unit's age through `markUsed`.
 - **Written** only by a one-shot `msc build` or `msc check` in a fresh process whose prelude checked
   without an error or warning, ran no macro or compile-time code, read no file at compile time and
   left no check in flight; anything else is a counted refusal named on the `stdUnit:` line of
@@ -161,13 +160,14 @@ compilation itself; keep it so.
 
 The global store has no byte budget; an age sweep bounds it. On each invocation, at most once an
 hour per bucket, `collectGlobalCache` removes an entry not written or used for seven days (the
-prelude pack: one day), and a temporary file of an entry left over an hour:
+std unit and the prelude pack: one day), and a temporary file of an entry left over an hour:
 
 | Bucket | Entry | Refreshed on use |
 |---|---|---|
 | `store/<shard>/` | `<key>.m` with its `<key>.o` | yes, at most hourly |
 | `headers/<shard>/` | `<key>.hi` | yes, at most hourly |
 | `stamps/` | `<key>.sum`, `.files`, `.exe` | no; a miss recomputes the memo |
+| `stdunit/<format>/` | `<key>.su`, unused for a day, units of an older format included | yes, at most hourly, on a unit load |
 | `prelude/<stamp>/` | `<key>.pk` with its `.deps`, after each pack write, unused for a day | yes, at most hourly, on a pack hit |
 
 The collector deletes only files with those names, record before companion, so a reader never
