@@ -63,7 +63,7 @@ import { declaringModuleCtx } from "../../checker/instantiate";
 import { lookupSymbol, lookupSymbolInDefiningScope, scopeDefining, hasFlag, SymbolFlag, isTypeSymbol } from "../../checker/symbol";
 import { metaTaggedFor, registeredModuleSymbols, metaNodeType, metaNodeKindType, metaDeclKindType, metaExternKindType } from "./stdTags";
 import { bindMetaBodyNames, metaIntrinsicOf } from "../../checker/bindNames";
-import { anyArgIsParametric, rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf, isDirectiveInvocation } from "../../checker/callResolve";
+import { anyArgIsParametric, rewriteCallAsMacroInvocation, invokedMacroSym, macroDeclOf, macroFormalTypes, isDirectiveInvocation } from "../../checker/callResolve";
 import { macroParamNames } from "../../ast/macroParams";
 import { stillDecoratedMessage, peelToImpl } from "./typeQuery";
 import { callMacroEngineCompiler, EngineMacroResult, registerMacroBodyPreparer, registerComptimeHelperPreparer, pushActiveMetaCtx, popActiveMetaCtx, engineCompiling, engineStdSymbol } from "./callbacks";
@@ -1943,10 +1943,12 @@ function getOrCompileMacroBody(ctx: CheckerContext, regCtx: CheckerContext, macr
 	}
 	const fnBody = createNode(NodeKind.BlockStmt, { statements: fnBodyStmts }, synthToken(loc));
 	const declParamTypes = decl.macroDeclParamTypes;
+	const contracts = macroFormalTypes(regCtx, macroSym, decl, null);
 	const paramTypes: string[] = [];
 	let pti = 0;
 	while (pti < decl.macroDeclParams.length) {
-		paramTypes.push(pti < declParamTypes.length ? declParamTypes[pti] : "");
+		const declared = pti < declParamTypes.length ? declParamTypes[pti] : "";
+		paramTypes.push(pti < contracts.length && contracts[pti] != null ? metaNodeType : declared);
 		pti = pti + 1;
 	}
 	if (params.length > decl.macroDeclParams.length) paramTypes.push(metaNodeType);
