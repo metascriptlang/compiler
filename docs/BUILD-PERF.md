@@ -369,6 +369,47 @@ size being secondary; `--danger` keeps O3 + thin LTO, `--release` keeps O2 + thi
 default build (`msc build`, `msc run`, `msc test`) stays `-O0 -g` without LTO.
 
 
+## Measured 2026-11-12 — what small programs link, and a top-level `await` without the pool
+
+Six programs, `msc build --danger --strip`, source tree `e9d81b35dc9e` (main `e21c6e7c3666`), each built
+by a compiler of that tree on its host: rtx (Linux x86-64), d87 (native Windows x86-64), and this Mac
+(arm64, `__text` by `size -m`).
+
+| program | Linux file | Windows file | macOS `__text` |
+|---|---|---|---|
+| `console.log("hello")` | 8,960 B | 21,504 | 3,456 |
+| a `Map<string, int32>`, a `Set<int32>`, an `int32[]` with `map`/`filter`/`sort`, printed | 39,728 | 52,224 | 23,916 |
+| `JSON.parse<Point>` of a literal, one field changed, `JSON.stringify` | 104,432 | 115,200 | 65,160 |
+| `split`, `toUpperCase`, `replace`, `join`, `indexOf`, a `float64` and an `int32` in a template | 59,528 | not measured | 28,976 |
+| two `await`s of a `setTimeout` promise inside an `async function` | 56,192 | 65,024 | 39,540 |
+| the same two awaits at the top level | 68,760 | 73,216 | 48,956 |
+
+A top-level `await` linked the thread pool although it spawns nothing: `msWaitForReady` calls
+`msPoolRunEdge`, `msPoolCompensate` and `msPoolCompensateEnd`, each of which called `msPoolGet()`,
+whose first call starts the workers, and `msPoolCompensate` names `msPoolStartThread`. On macOS the
+pool functions only the top-level form linked sum to 8,200 B (`msPoolWorkerLoop` 2,064,
+`msPoolCompensate` 1,484, `msPoolRunQueued` 1,232, `msPoolRunEdge` 1,160, six smaller). The pool now
+arms its two wait operations when it starts (`msPoolWaitsArmed` in `runtime/promise/pool.c`), the
+idiom of `msArmExitDrain`, and a wait that finds none armed has no pool to help or compensate:
+
+| top-level `await` program | before | after |
+|---|---|---|
+| Linux file / `.text` (rtx) | 68,760 / 47,771 B | 56,136 / 38,027 B |
+| macOS `__text`, installed compiler with the changed runtime beside it | 48,956 | 38,484 |
+
+The hello and async-function programs keep their bytes (8,960 and 56,192 B on Linux). The spawn and
+top-level-await corpus programs (17, among them `spawnWaitRunsOnlyItsEdge`,
+`spawnResolverLeafOnManyWorkers`, `spawnEdgeLessPileUpFailsLoud`, `spawnTimerWaitStartsNoSpare`,
+`topLevelAwaitOfTimerStartsNoPool`) passed three rounds of 58 cells on that candidate, and 16 of 17
+under SAN with the one recorded xfail. Pinned by the `topLevel` program of
+`src/test/guard/asyncTimerLinksNoPool.ms`. Not measured: the Windows size after the change, and wait
+latency (the wait loops add one atomic load per `msPoolCompensate`, and per `msPoolRunEdge` only
+while tasks are pending).
+
+Windows hello carries 12,662 B of `.text` against 3,662 on Linux with no event loop in either; its
+`.pdata` counts 25 functions of the mingw CRT, 13 of the statically linked winpthreads and 14 of the
+runtime and the program. The byte split between them is not measured.
+
 ## Measured 2026-11-08 — what a hello world links
 
 `console.log("hello world")`, `msc build --danger --strip`. Before = tree `3acc0d784e76`, after =
