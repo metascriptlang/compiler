@@ -20,7 +20,7 @@ Windows-host-only traps: [`docs/WINDOWS-TRAPS.md`](docs/WINDOWS-TRAPS.md).
 
 ## Build Optimization — default `build` is UNOPTIMIZED (`-O0`)
 
-Optimization and LTO are independent: default `-O0 -g`, release `-O2`, danger `-O3` (`src/compiler/cc.ms` `modeFlags`). Before changing LTO/toolchain behavior, read `resolveLto`, `ltoBroken` and [`docs/BUILD-PERF.md`](docs/BUILD-PERF.md) for capability, fallback/diagnostic rules and measurements. Use `--cc=clang` for macOS LTO. Treat macOS/zig and Windows/zig LTO failures as settled; reopen only with a measurement on a changed toolchain, because our flags cannot fix those pairs. GNU gcc has no default LTO (`-flto=auto` when requested); the measured gain is LTO, not choosing clang over zig.
+Optimization and LTO are independent: default `-O0 -g`, release `-O2`, danger `-O3` (`src/compiler/cc.ms` `modeFlags`). Before changing LTO/toolchain behavior, read `resolveLto`, `ltoBroken` and [`docs/BUILD-PERF.md`](docs/BUILD-PERF.md) for capability, fallback/diagnostic rules and measurements. The default compiler, the prepared bundle, links thin LTO in `--release` and `--danger` on Linux, macOS and Windows, so name no `--cc` to get it. `--cc=zig` cannot link LTO for a macOS or Windows target (`ltoBroken`): treat those two failures as settled and reopen only with a measurement on a changed zig, because our flags cannot fix those pairs. GNU gcc has no default LTO (`-flto=auto` when requested); the measured gain is LTO, not choosing clang over zig.
 
 ## Pipeline
 
