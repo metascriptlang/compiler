@@ -3940,10 +3940,10 @@ count pair: on the scene-graph benchmark of `udrcp/step6bench` (200 000 leaf-to-
 round), +8.0% instructions and +3.5% time against an unchecked read (rtx, 2026-11-09). Design the teardown order of
 a structure so that a back edge is not read after its target goes.
 
-A local keeps its object while an edge to it can still be read. A local or parameter of a class or interface type
-that is handed over at its last use (stored into a holder, passed to a `sink` parameter or to a constructor that
-takes it) moves into that receiver only when nothing that runs later in the local's scope can read an `Unowned` edge
-reaching the object or one it owns. When something can (a read of such an edge, a call that may run one, where an
+A local keeps its object while an edge to it can still be read. A local or parameter of a class or interface type,
+or one that is an array, that is handed over at its last use (stored into a holder, passed to a `sink` parameter or
+to a constructor that takes it) moves into that receiver only when nothing that runs later in the local's scope can
+read an `Unowned` edge reaching the object, an element of the array, or an object they own. When something can (a read of such an edge, a call that may run one, where an
 unknown callee or a function value counts, or a destroy hook that does), the hand-over is a copy and the local holds
 the object to the end of its scope, as it does on JS, whatever the receiver does with it:
 
@@ -3966,9 +3966,18 @@ stops on the control's C, danger, Raiser and SAN; `localKeepsItsObjectForADestro
 without JS. The cost is one count pair per hand-over kept as a copy: emitting the compiler's own C runs 0.15% more
 `rc.inc` (`MS_DRC_STAT`, 1,367,908,553 to 1,369,984,716, three runs of each within 0.002%), allocations equal; a
 program that reads no `Unowned` edge of a type pays nothing for locals of that type, and a bench of 48 call shapes
-counts the same on every shape. Not reached: a local that is an array holding the object
-(`const list: P[] = [new P("a")]`, handed to a holder that dies) still stops on C and the Raiser; an edge read after
-every binding and owner is gone is the stop of the table above; a destroy hook of the object's own class is not a
+counts the same on every shape. An array local was measured the same day on oci-u, a candidate against a control of
+one tree: corpus `arrayLocalKeepsItsObjectsWhileAnEdgeToOneCanStillBeRead` (`const list: P[] = [new P("a")]` with an
+edge to `list[0]`, the array handed to a holder in an inner scope, a binding or a field overwritten, a `sink`
+parameter only read, a constructor's object that dies, the read in a callee, a nullable array, an array of arrays,
+an array of objects that own the target, a `sink` array parameter) prints on C, danger, JS, ESM, the Raiser and
+under SAN and stops on the control's C, danger, Raiser and SAN. The kept copy is one count pair on the array and
+copies no element: emitting the compiler's own C runs 0.005% more `rc.inc` (1,395,208,410 to 1,395,281,989, and
+1,395,233,904 to 1,395,307,510 in the runs that allocate 12,000 more), allocations within 300 of 405 million. A
+`Map` or a `Set` local handed over the same way printed on the control too (C and the Raiser; why was not traced).
+Not reached: a tuple local holding the object
+(`const t: [P, int32] = [new P("a"), 1]`, handed to a holder that dies) still stops on C and the Raiser; an edge
+read after every binding and owner is gone is the stop of the table above; a destroy hook of the object's own class is not a
 reader, so with no edge read left in the scope the object still dies at its last receiver. A watch or HCR session
 and the Raiser do not see the whole program and keep the local wherever a call they cannot read follows. Not
 measured: wall time and instructions (the host was loaded and has no counters), threads.
