@@ -1,4 +1,4 @@
-import { option, step, executable, runArtifact, systemCommand, updateSourceFiles, path, Optimize, mscExe, LtoMode, Command, BuildNode } from "std/build";
+import { option, step, executable, runArtifact, systemCommand, updateSourceFiles, writeFiles, path, Optimize, mscExe, LtoMode, Command, BuildNode, Arg, LazyPath } from "std/build";
 
 const optimize = Optimize.ReleaseFast;
 
@@ -43,3 +43,32 @@ export const lsp = runArtifact(msc, ["run", "--target=raiser", "src/test/lsp/run
 const tables = systemCommand(["node", "tools/genStringCaseTables.mjs"], { inputs: [path("tools/genStringCaseTables.mjs")] });
 export const stringCaseTables = updateSourceFiles();
 stringCaseTables.addCopyFileToSource(tables.captureStdOut(), path("runtime/core/stringCaseTables.h"));
+
+const subject = option("subject", "the compiler the gate lanes test; the graph's own msc when unset", "");
+const candidate: Arg = subject == "" ? msc : path(subject);
+const withTrailer = 't0=$SECONDS; "$@" 2>&1; rc=$?; printf "\\nSECS=%d\\nRC=%d\\nEND\\n" $((SECONDS - t0)) $rc';
+
+const selected = option("lanes", "the gate lanes to run, comma-separated; every lane when unset", "");
+export const lanes = writeFiles();
+function lane(name: string, command: Arg[], env: Record<string, Arg> = {}): void {
+	if (selected != "" && !selected.split(",").includes(name.split(".")[0])) return;
+	const argv: Arg[] = ["bash", "-c", withTrailer, name, "env", "-u", "FORCE_COLOR", "NO_COLOR=1"];
+	const log = systemCommand(argv.concat(command), { env, inputs: sources, description: `lane ${name}` }).captureStdOut();
+	lanes.addCopyFile(log, `${name}.log`);
+}
+
+const raiser: Arg[] = [candidate, "run", "--target=raiser"];
+const under: Record<string, Arg> = { MSC: candidate };
+lane("suite", [candidate, "test", "--time", "src/index.ms"]);
+for (const name of ["js", "handoff", "checker3pass", "lang", "fmt", "crypto"]) lane(`tests.${name}`, [candidate, "test", "--time", `src/test/${name}/index.ms`, "--tests-in-dir"], under);
+lane("tests.helpers", [candidate, "test", "--time", "src/test/helpers.ms", "--tests-in-dir"], under);
+for (let i = 0; i < 3; i++) lane(`tests.c${i}`, [candidate, "test", "--time", "src/test/c/index.ms", "--tests-in-dir", `--tests-shard=${i}/3`], under);
+for (let i = 0; i < guardShards; i++) lane(`guard.${i}`, raiser.concat(["src/test/guard/run.ms"]), { MSC: candidate, GUARD_SHARD: `${i}/${guardShards}` });
+const hcrShards = option("hcrShards", "how many hcr runners split the hot-reload tests between them", 4);
+for (let i = 0; i < hcrShards; i++) lane(`hcr.${i}`, raiser.concat(["src/test/hcr/run.ms"]), { MSC: candidate, HCR_SHARD: `${i}/${hcrShards}` });
+lane("fmt", [candidate, "run", "src/test/fmt/run.ms"]);
+lane("lsp", raiser.concat(["src/test/lsp/run.ms"]), under);
+lane("cache", raiser.concat(["src/test/cache/run.ms", candidate]));
+for (const name of ["nativeBuildBoundary", "projectConfigCommands", "preludePackKey"]) lane(`boundary.${name}`, raiser.concat([`src/test/${name}.ms`, candidate]));
+lane("corpus", [corpusRunner], { MSC: candidate, MSCORPUS_RAISER: "1" });
+lane("san", [corpusRunner], { MSC: candidate, MSCORPUS_SAN: "1" });
