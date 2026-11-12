@@ -27,8 +27,8 @@ export function toString(this b: Buffer): string {
 
 // ===== private native bindings =====
 
-@emit(`const msBufWord = new DataView(new ArrayBuffer(8));
-function msBufLoad(b, o, n) {
+@emit("const msBufWord = new DataView(new ArrayBuffer(8));");
+@emit(`function msBufLoad(b, o, n) {
 	for (let i = 0; i < n; i++) msBufWord.setUint8(i, b[o + i]);
 	return msBufWord;
 }

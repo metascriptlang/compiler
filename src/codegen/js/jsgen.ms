@@ -3,10 +3,10 @@
 // Registers emitNodeDispatch callback, provides generateJS entry point.
 // Tests cover the full pipeline: parse → check → transform → generateJS.
 
-import { Node, NodeKind, NodeFlag, ProgramData, ImportDeclData, HiddenDerefData, HiddenStdConvData, FunctionDeclData, ExportDeclData, DecoratedDeclData, VariableDeclData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ProgramData, ImportDeclData, HiddenDerefData, HiddenStdConvData, FunctionDeclData, ExportDeclData, DecoratedDeclData, VariableDeclData, ExprStmtData, MacroInvocationData, StringLiteralData } from "../../ast/node";
 import { JSGenerator, JSHelpers, JsTreeLayout, createJSGenerator, registerEmitNode, finalize, emit, mark, markNamed, lookupModuleSpec, importSpecifier, collectDeclaredLocals, collectInnerLocals, containsOwnAwait } from "./emit";
 import { SourceInfo, shiftLines } from "./sourcemap";
-import { BundleUnit } from "./reach";
+import { BundleUnit, declaresOnlyFunctions } from "./reach";
 import { hasEffect } from "../../transform/walkEffects";
 import { createNodeAt, makeLoc } from "../../ast/node";
 import {
@@ -164,8 +164,23 @@ function isDecorated(stmt: Node): boolean {
 	return stmt.kind == NodeKind.DecoratedDecl;
 }
 
+function rawEmitText(stmt: Node): string {
+	if (stmt.kind != NodeKind.ExprStmt) return "";
+	const expr = (stmt.data as ExprStmtData).expr;
+	if (expr.kind != NodeKind.MacroInvocation) return "";
+	const invocation = expr.data as MacroInvocationData;
+	if (invocation.macroName != "emit") return "";
+	let text = "";
+	for (const arg of invocation.macroArgs) {
+		if (arg.kind != NodeKind.StringLiteral) return "";
+		text = text + (arg.data as StringLiteralData).value;
+	}
+	return text;
+}
+
 function runsOnLoad(stmt: Node): boolean {
 	const decl = declarationOf(stmt);
+	if (declaresOnlyFunctions(rawEmitText(decl))) return false;
 	if (decl.kind == NodeKind.VariableDecl) {
 		const initializer = (decl.data as VariableDeclData).initializer;
 		return initializer != null && hasEffect(initializer);

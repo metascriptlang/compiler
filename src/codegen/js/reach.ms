@@ -54,6 +54,32 @@ function opensABody(code: string, lineStart: int32, end: int32): boolean {
 	return false;
 }
 
+const FUNCTION_OPENERS: string[] = ["async function", "function*", "function"];
+
+// True for raw text that holds nothing but function declarations opened at column 0, the one
+// shape of hand-written JS whose load does no work.
+export function declaresOnlyFunctions(code: string): boolean {
+	let inBody = false;
+	let found = false;
+	let lineStart: int32 = 0;
+	while (lineStart < code.byteLength) {
+		const end = lineEnd(code, lineStart);
+		if (inBody) {
+			inBody = code.byteAt(lineStart) != "}".code;
+		} else if (end > lineStart) {
+			let opens = false;
+			for (const opener of FUNCTION_OPENERS) {
+				if (startsWithAt(code, lineStart, opener) && code.byteAt(lineStart + opener.byteLength) == " ".code) opens = true;
+			}
+			if (!opens || !opensABody(code, lineStart, end)) return false;
+			inBody = true;
+			found = true;
+		}
+		lineStart = (end + 1) as int32;
+	}
+	return found && !inBody;
+}
+
 // The names a unit declares at column 0. `droppable` is false when the unit also holds text
 // that is neither a declaration nor the continuation of one, because that text runs on load.
 // A function or class that opens its body at column 0 owns every line up to the next column-0
@@ -172,6 +198,15 @@ test "a body line at column 0 belongs to its function, and a statement after the
 	assert !topLevelNames("function raw(s) {\nif (s) {\n}\nreturn s;\n}\n", early);
 	const oneLine: string[] = [];
 	assert !topLevelNames("function f() {}\nrun(f);\n", oneLine);
+}
+
+test "raw text is load-free only when every column-0 line opens or closes a function" {
+	assert declaresOnlyFunctions("function a(x) {\n\treturn x;\n}\nasync function b() {\nreturn 1;\n}\n");
+	assert !declaresOnlyFunctions("const word = new DataView(new ArrayBuffer(8));\nfunction a() {\n}\n");
+	assert !declaresOnlyFunctions("function a() {\n}\na();\n");
+	assert !declaresOnlyFunctions("class A {\n}\n");
+	assert !declaresOnlyFunctions("function a() {\n");
+	assert !declaresOnlyFunctions("");
 }
 
 test "a name inside a string or a longer name is read as a whole word" {
