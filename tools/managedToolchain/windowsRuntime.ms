@@ -16,8 +16,9 @@ import {
 } from "./engineFiles";
 import { claimPartial, asciiEngineJson } from "./windowsEngine";
 import {
-	BUILTINS_DISABLED, decimal, mingwVersion, llvmSourceVersion, builtinsDirectory,
-	builtinsCmakeArguments, linkEngineAround,
+	BUILTINS_DISABLED, WINDOWS_SANITIZERS, decimal, mingwVersion, llvmSourceVersion,
+	builtinsDirectory, builtinsCmakeArguments, linkEngineAround, sanitizerArchives,
+	sanitizerCmakeArguments,
 } from "./windowsRuntimePlan";
 import {
 	WindowsTarget, WindowsVariant, windowsTargetName, windowsClangTriple,
@@ -65,6 +66,7 @@ const LIMITS = [
 	"the producer links and inspects; executing the runtime is the bundle's proof on a Windows host",
 	"the archives are a local build of the release sources with the engine's clang, not upstream binaries; two runs on one host gave identical bytes, other hosts are not compared",
 	"aarch64-windows-gnu is not built: no Windows arm64 host consumes it",
+	"of the sanitizers only the standalone UBSan is built: compiler-rt has no mingw ASan or TSan",
 ];
 
 export struct WindowsRuntimeInputs {
@@ -116,6 +118,7 @@ export struct WindowsRuntimeReceipt {
 	notices: string[];
 	producerHost: string;
 	redistributionCertified: boolean;
+	sanitizers: string[];
 	statement: string;
 	targets: string[];
 	tools: ToolReceipt;
@@ -163,6 +166,19 @@ function definedSymbols(nm: string, archive: string): Result<string[], string> {
 		if (line != "" && !line.endsWith(":")) { symbols.push(line); }
 	}
 	return Result.ok(symbols);
+}
+
+// A DWARF section in an archive every sanitized program links hides that program's PDB from debuggers.
+function refuseDwarf(readobj: string, archive: string): Result<void, string> {
+	const done = captureToolUtf8(readobj, ["--sections", archive]);
+	if (!done.ok) { return Result.err(done.error); }
+	if (done.value.returnCode != 0) {
+		return Result.err("llvm-readobj " + archive + ": " + done.value.errorOutput);
+	}
+	if (done.value.output.contains(".debug_info")) {
+		return Result.err(basename(archive) + " carries DWARF");
+	}
+	return Result.ok(null);
 }
 
 export function checkMovedSymbols(
@@ -303,6 +319,8 @@ export function checkWindowsRuntime(
 			[...config, "-O2", "-c", fixture, "-o", object],
 			[...config, object, ...USER_LIBRARIES, "-o", output],
 			[...config, object, ...USER_LIBRARIES, ...MINGW_LIBRARIES, "-o", mingw],
+			[...config, "-O2", "-fsanitize=undefined", fixture, ...USER_LIBRARIES,
+				"-o", join(work, name + "Ubsan" + (dll ? ".dll" : ".exe"))],
 		];
 		if (dll) {
 			steps.push([...config, object, ...USER_LIBRARIES,
@@ -431,6 +449,17 @@ function produce(
 	const builtins = join(build, archive);
 	if (!isFile(builtins)) { return Result.err("the build made no libclang_rt.builtins.a"); }
 	try checkMovedSymbols(tool("llvm-nm"), libraries, builtins);
+	const sanitizerBuild = join(work, "sanitizers");
+	try runStep(inputs.cmake, sanitizerCmakeArguments(target, inputs.llvmSource, stage, config,
+		sanitizerBuild, inputs.ninja, prefixMaps), work, cmakeEnvironment);
+	try runStep(inputs.ninja, ["-C", sanitizerBuild, "-j", String(inputs.jobs),
+		...sanitizerArchives(target)], work, cmakeEnvironment);
+	for (const archive of sanitizerArchives(target)) {
+		const built = join(sanitizerBuild, archive);
+		if (!isFile(built)) { return Result.err("the build made no " + basename(archive)); }
+		try refuseDwarf(tool("llvm-readobj"), built);
+		try engineIo(copyFile(built, join(libraries, basename(archive))));
+	}
 	for (const variant of [WindowsVariant.Exe, WindowsVariant.Dll]) {
 		const directory = windowsVariantDirectory(target, variant);
 		variants.push({
@@ -461,6 +490,7 @@ function produce(
 		mingw: { archiveSha256: inputs.mingwSha256, options: [...HEADER_OPTIONS, ...CRT_OPTIONS, ...WINPTHREADS_OPTIONS],
 			version: try mingwVersion(inputs.mingwSource) },
 		notices, producerHost: host, redistributionCertified: false,
+		sanitizers: WINDOWS_SANITIZERS,
 		statement: "Built with the engine's clang from the named mingw-w64 and llvm-project release " +
 			"sources; no Zig and no prebuilt runtime. Not an upstream-published binary.",
 		targets: [windowsTargetName(target)],

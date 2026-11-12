@@ -7,6 +7,11 @@ export const BUILTINS_DISABLED = [
 	"SANITIZERS", "CRT", "LIBFUZZER", "PROFILE", "MEMPROF", "XRAY", "ORC",
 	"GWP_ASAN", "CTX_PROFILE",
 ];
+export const SANITIZERS_DISABLED = [
+	"BUILTINS", "CRT", "LIBFUZZER", "PROFILE", "MEMPROF", "XRAY", "ORC",
+	"GWP_ASAN", "CTX_PROFILE",
+];
+export const WINDOWS_SANITIZERS = ["ubsan_standalone", "ubsan_standalone_cxx"];
 function io(result: Result<void, IoError>): Result<void, string> {
 	return result.ok ? Result.ok(null) : Result.err(result.error.message);
 }
@@ -87,6 +92,30 @@ export function builtinsCmakeArguments(
 	target: WindowsTarget, source: string, stage: string, config: string,
 	build: string, ninja: string, prefixMaps: string[],
 ): string[] {
+	return compilerRtCmakeArguments(target, source, stage, config, build, ninja, prefixMaps,
+		BUILTINS_DISABLED);
+}
+
+export function sanitizerCmakeArguments(
+	target: WindowsTarget, source: string, stage: string, config: string,
+	build: string, ninja: string, prefixMaps: string[],
+): string[] {
+	return [
+		...compilerRtCmakeArguments(target, source, stage, config, build, ninja, prefixMaps,
+			SANITIZERS_DISABLED),
+		"-DCOMPILER_RT_SANITIZERS_TO_BUILD=ubsan_minimal",
+	];
+}
+
+export function sanitizerArchives(target: WindowsTarget): string[] {
+	return WINDOWS_SANITIZERS.map((name: string): string =>
+		"compiler-rt/lib/" + windowsClangTriple(target) + "/libclang_rt." + name + ".a");
+}
+
+function compilerRtCmakeArguments(
+	target: WindowsTarget, source: string, stage: string, config: string,
+	build: string, ninja: string, prefixMaps: string[], disabled: string[],
+): string[] {
 	const flags = ["--no-default-config", "--config=" + config, "-gcodeview", "-gno-codeview-command-line", "-fdebug-compilation-dir=.", ...prefixMaps].join(" ");
 	const triple = windowsClangTriple(target);
 	const tool = (name: string): string => join(stage, "bin/" + name);
@@ -110,7 +139,7 @@ export function builtinsCmakeArguments(
 		"-DCMAKE_ASM_COMPILER_TARGET=" + triple,
 		"-DCOMPILER_RT_INCLUDE_TESTS=OFF", "-DLLVM_INCLUDE_TESTS=OFF",
 	];
-	for (const name of BUILTINS_DISABLED) {
+	for (const name of disabled) {
 		args.push("-DCOMPILER_RT_BUILD_" + name + "=OFF");
 	}
 	return args;

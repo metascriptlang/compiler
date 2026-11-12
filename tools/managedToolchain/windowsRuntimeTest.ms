@@ -4,7 +4,7 @@ import { resolve } from "std/fs/path";
 import { WindowsTarget } from "./windowsConfig";
 import {
 	mingwVersion, llvmSourceVersion, builtWindowsTarget, builtinsDirectory,
-	builtinsCmakeArguments, linkEngineAround,
+	builtinsCmakeArguments, linkEngineAround, sanitizerArchives, sanitizerCmakeArguments,
 } from "./windowsRuntimePlan";
 
 let checks: int32 = 0;
@@ -59,6 +59,16 @@ function main(): void {
 	check(args.indexOf("-DCOMPILER_RT_BUILD_SANITIZERS=OFF") >= 0, "sanitizers are not built");
 	check(args.indexOf("-DCOMPILER_RT_BUILD_BUILTINS=OFF") < 0, "builtins are built");
 	check(args.indexOf("-DCMAKE_C_COMPILER=/stage/bin/clang") >= 0, "the stage's clang compiles");
+	const sanitizer = sanitizerCmakeArguments(WindowsTarget.X64, "/s", "/stage", "/stage/runtime/windows/x.cfg",
+		"/b", "/n", []);
+	check(sanitizer.indexOf("-DCOMPILER_RT_BUILD_SANITIZERS=OFF") < 0 &&
+		sanitizer.indexOf("-DCOMPILER_RT_BUILD_BUILTINS=OFF") >= 0 &&
+		sanitizer.indexOf("-DCOMPILER_RT_SANITIZERS_TO_BUILD=ubsan_minimal") >= 0,
+		"the sanitizer build makes UBSan alone, through the same config");
+	check(sanitizerArchives(WindowsTarget.X64).join(" ") ==
+		"compiler-rt/lib/x86_64-w64-windows-gnu/libclang_rt.ubsan_standalone.a " +
+		"compiler-rt/lib/x86_64-w64-windows-gnu/libclang_rt.ubsan_standalone_cxx.a",
+		"the standalone UBSan and its C++ half are the archives the MinGW driver names");
 
 	const engine = join(root, "engine");
 	write(join(engine, "bin/clang"), "");
