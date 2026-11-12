@@ -97,7 +97,12 @@ filled; the hash only names the file, and the full key text in its header is com
 - **Written** only by a one-shot `msc build` or `msc check` in a fresh process whose prelude checked
   without an error or warning, ran no macro or compile-time code, read no file at compile time and
   left no check in flight; anything else is a counted refusal named on the `stdUnit:` line of
-  `--time`. A watch or LSP session neither writes nor loads it.
+  `--time`. A watch session (`msc build --watch`, `--hcr`) loads it on its first build and never
+  writes it, so the unit it finds is one a one-shot build with the same options wrote; an LSP
+  session and an embedded interpreter neither write nor load it. A prelude module edited under a
+  watch session rebuilds the session from scratch (`watch: rebuilding from scratch: <module> of
+  the prelude changed`), with or without a unit: before 2026-11-12 that build failed with errors a
+  cold build of the same sources does not report.
 - **Loaded** whole into fresh objects before anything is applied, so a torn, foreign or mismatched
   file is a counted miss and the build checks std from source and writes the unit again.
 - **Every field has a role**: the row codec and the unit declare a role for every field of
@@ -111,7 +116,12 @@ corpus program in one project, 2172 builds, 2167 loading the unit, `verify-diffe
 on `main`); the compiler itself, unit written then loaded, both `verify: 507 C units and 461
 diagnostics equal a cold build`. `src/test/ic/run.ms` check `stdUnit` pins writing, loading, a torn
 file, a foreign key, two directories without a `build.ms` sharing one unit, a runtime file added
-beside a copied compiler (hit) and an edited prelude module (miss), and the off switch.
+beside a copied compiler (hit) and an edited prelude module (miss), the off switch, a watch session
+that loads the unit and stays warm after a body edit, and a prelude module edited under that session.
+RTX Linux, 2026-11-12, a candidate of `5289f2340c37`: the 22 cases of `src/test/ic/cases/` with the
+global cache on for their warm sessions and a unit written by a one-shot `--hcr` build: 22 sessions
+loaded it, every step equal to its cold build, 30 `verify` verdicts equal, and the same 5 rebuilds
+from scratch as without the unit.
 RTX Linux, 2026-11-10, a candidate of `aca9dd8f231` with the project root out of the key: every
 10th single-file corpus program, each in its own directory, 220 builds wrote 1 unit and all 220
 loaded it, 219 `verify` equal; `numberTextComptime` fails its cold build whenever std is checked from
@@ -123,6 +133,12 @@ Measured on the same host, which was shared and noisy (medians of 5): `msc check
 110 to 230 ms of a 12 MB file, most of it linking 106k checked nodes (`MSC_STD_UNIT_PHASES=1`
 prints the split), so a hit still pays about 0.4 of the std check. Not measured: macOS, Windows,
 a quiet host.
+
+The first build of a watch session (`msc build main.ms --hcr --watch-replay`, a two-line program,
+3 runs each, 2026-11-12): graph load and check 1454 to 1515 ms without the unit and 490 to 633 ms
+with it on RTX under load, the whole build 5.3 to 5.7 s and 4.3 to 4.9 s; on d87 Windows 1904 to
+1924 ms and 1060 to 1070 ms, the whole build 4.5 s and 3.7 s. A later build of the session is
+unchanged (it never checked std again).
 
 Code: `src/checker/stdUnit.ms` (`stdUnitKeyText`, `writeStdUnit`, `loadStdUnit`, `applyStdUnit`),
 `src/checker/rowCodec.ms` (`RowWriter`, `RowReader`, the field-role tables),
