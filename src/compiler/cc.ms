@@ -22,7 +22,7 @@ import {
 import { writeFile, ensureDir, exists, readDir, remove, readFileBytes } from "std/fs";
 import { join, dirname, basename } from "std/fs/path";
 import { writeStderr } from "std/io";
-import { CliOptions, CC_PREPARED, MODE_DEBUG, MODE_DANGER, MODE_RELEASE, DEBUG_UB_CHECKS, debugUbChecks, buildCpu, newCliOptions, applyArgs } from "./options";
+import { CliOptions, CC_PREPARED, MODE_DEBUG, MODE_DANGER, MODE_RELEASE, DEBUG_UB_CHECKS, debugUbChecks, buildCpu, namesTarget, newCliOptions, applyArgs } from "./options";
 import { renameReplace, atomicWriteFile, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
 import { resolveRuntimeDir } from "../utils/path";
 import { cacheRoot } from "./package/cache";
@@ -779,7 +779,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 	// clang/gcc: --target=cpu-vendor-os-abi
 	// Trigger when actually crossing (target differs from host OS, or CPU explicit).
 	// "bare" is freestanding (no OS) — needs target flag only if CPU is set.
-	if (!opts.ccConfigOwnsTarget && ((opts.targetOs != platform && opts.targetOs != "bare") || opts.cpuTarget != "" || opts.abi == "musl")) {
+	if (!opts.ccConfigOwnsTarget && namesTarget(opts)) {
 		const useZig = isZigCC(getCompilerName(opts.ccCompiler, opts.ccBinary));
 		const ct = crossTargetFlag(opts.targetOs, opts.cpuTarget, opts.abi, useZig);
 		if (ct != "") flags = appendFlag(flags, ct);

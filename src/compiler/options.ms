@@ -142,6 +142,10 @@ function cpuFloatBytes(cpu: string): int32 {
 	return 8;
 }
 
+export function namesTarget(opts: CliOptions): boolean {
+	return (opts.targetOs != platform && opts.targetOs != "bare") || opts.cpuTarget != "" || opts.abi == "musl";
+}
+
 export function buildCpu(targetOs: string, cpuTarget: string): string {
 	if (cpuTarget != "") return cpuTarget;
 	if (targetOs == "wasm" || targetOs == "emcc") return "wasm32";
