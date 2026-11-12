@@ -203,6 +203,10 @@ export function rootModulePath(modulePath: string, roots: Readonly<ModuleNameRoo
 	return { mark: "", path: relative(roots.project, modulePath) };
 }
 
+export function isStdModule(modulePath: string, roots: Readonly<ModuleNameRoots>): boolean {
+	return pathUnder(modulePath, roots.compiler).startsWith("std/");
+}
+
 export function rootedModuleKey(roots: Readonly<ModuleNameRoots>, modulePath: string): string {
 	const rooted = rootModulePath(modulePath, roots);
 	return rooted.mark == "" ? rooted.path : `//${rooted.mark}/${rooted.path}`;

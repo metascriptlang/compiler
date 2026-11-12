@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 #include "runtime/core/errorf.h"
+#include "runtime/core/export.h"
 #include <stdbool.h>
 #include <string.h>
 

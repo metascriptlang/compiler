@@ -14,7 +14,7 @@ import {
 } from "./context";
 import { genExpr } from "./expressions";
 import { emitCallRaiseCheck, genStmt, isComptimeOnlyVarDecl, readonlyDataBracedInit, resolveEmitArgs } from "./statements";
-import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, paramCName, staticFieldCName, isModuleGlobalVar } from "./names";
+import { mangle, mangledTypeName, mangleFieldName, mangledFunctionName, mangledGlobalName, safeName, paramCName, staticFieldCName, isModuleGlobalVar, isStdModule } from "./names";
 import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, typeInfoRef, ensureRefArrayCellTypeInfo, isHcrImageModule, isNilableValueType, procHeader, assertExternLayout, isOpenArrayParam, returnsBorrow, openArrayDataName, openArrayLenName, isTypeBoundOp, enumCTypeName, hcrTypeInfoRef, zeroInit, defineDeferredElements } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumberLit, cBoolLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
@@ -136,7 +136,9 @@ function genFunctionDecl(g: CGen, node: Readonly<Node>, exported: boolean, inlin
 	// DRC lifecycle hooks need external linkage for cross-module access (reference parity).
 	// Generic instances: not static, not exported — one definition, other modules get forward decl.
 	const isExported = sym != null && (exported || hasFlag(sym, SymbolFlag.Exported) || sym.exportName != "");
-	const exportPrefix = isExported && g.isHcr ? "MS_HCR_EXPORT " : "";
+	const isLibraryApi = sym != null && sym.exportName != "" && !hasFlag(sym, SymbolFlag.ClassInit)
+		&& !isStdModule(g.modulePath, g.emissionFacts.moduleNameRoots!);
+	const exportPrefix = isExported && g.isHcr ? "MS_HCR_EXPORT " : isLibraryApi ? "MS_LIB_EXPORT " : "";
 	const hcrCoreCallable = sym != null && sym.modulePath != "" && g.emissionFacts.hcrCoreUnits.has(g.modulePath);
 	const isTypeBound = sym != null && isTypeBoundOp(sym);
 	const isPublicLinkage = isExported || isExternFn || isDrcHookFn || isGenericInstance || isTypeBound || hcrCoreCallable;

@@ -720,6 +720,12 @@ export function stripUnwindFlags(opts: CliOptions): string {
 	return "-fno-asynchronous-unwind-tables -fno-unwind-tables";
 }
 
+const LIBRARY_HIDES_INTERNALS = "-fvisibility=hidden -DMS_LIB_BUILD";
+
+export function foreignSourceFlags(flags: string): string {
+	return flags.replace(LIBRARY_HIDES_INTERNALS, "-DMS_LIB_BUILD");
+}
+
 export function cliCompileFlags(opts: CliOptions): string {
 	let flags = "";
 	// Solana/SBF: completely different flag set, skip everything else.
@@ -794,6 +800,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 	// Linker DCE: place each function/data in its own section so the linker can strip unused ones
 	flags = appendFlag(flags, "-fdata-sections");
 	flags = appendFlag(flags, "-ffunction-sections");
+	if (!opts.isHcr && (opts.appMode == "lib" || opts.appMode == "staticlib")) flags = appendFlag(flags, LIBRARY_HIDES_INTERNALS);
 	flags = appendFlag(flags, stripUnwindFlags(opts));
 	// LTO strategy — emitted into the compile flags, which also flow to the link
 	// command (allLink = cliLinkFlags(allFlags)); thin bitcode + -flto=thin at
@@ -1990,6 +1997,22 @@ test "a prepared debug build reports signed overflow with the runtime its target
 		library.appMode = app;
 		assert !cliCompileFlags(library).contains("-fsanitize");
 	}
+}
+
+test "a library hides what it does not export, and a C source of the project keeps its own visibility" {
+	for (const app of ["lib", "staticlib"]) {
+		const library = debugUbOptions("linux", MODE_DANGER, "");
+		library.appMode = app;
+		const flags = cliCompileFlags(library);
+		assert flags.contains("-fvisibility=hidden") && flags.contains("-DMS_LIB_BUILD");
+		const foreign = foreignSourceFlags(flags);
+		assert !foreign.contains("-fvisibility=hidden") && foreign.contains("-DMS_LIB_BUILD");
+		library.isHcr = true;
+		assert !cliCompileFlags(library).contains("-DMS_LIB_BUILD");
+	}
+	const program = cliCompileFlags(debugUbOptions("linux", MODE_DANGER, ""));
+	assert !program.contains("-fvisibility=hidden") && !program.contains("-DMS_LIB_BUILD");
+	assert foreignSourceFlags(`${program} -fvisibility=hidden`).contains("-fvisibility=hidden");
 }
 
 test "the default math library follows the link target, not the host" {

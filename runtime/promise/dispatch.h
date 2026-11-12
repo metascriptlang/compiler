@@ -8,6 +8,7 @@
 #define MS_DISPATCH_H
 
 #include "future.h"
+#include "runtime/core/export.h"
 #include <stdint.h>
 #include <stdbool.h>
 #if !defined(MSOS_EMCC) && !defined(MSOS_WASM) && !defined(MSOS_BARE)
@@ -115,8 +116,8 @@ typedef void (*msExitHookFn)(void);
 #endif
 void msSetActorExitHook(msExitHookFn hook);
 void msArmExitDrain(void);
-void msDrainAtExit(void);
-int msReportOrphanFailures(void);
+MS_LIB_EXPORT void msDrainAtExit(void);
+MS_LIB_EXPORT int msReportOrphanFailures(void);
 void msNoteOrphanFailure(void* fut);
 void msAdoptOrphanFailure(void* fut);
 void msCompletionQueuePushOrphanNote(void* fut);

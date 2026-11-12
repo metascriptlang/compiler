@@ -254,8 +254,8 @@ function genModuleInitFns(g: CGen, output: CModuleOutput): void {
 	const skipGuard = ost == "solana" || ost == "bare";
 
 	// DatInit000: data/type initialization (non-static for cross-module visibility)
-	addLine(hdrs, `void ${datInitName}(void);`);
-	addLine(procs, `void ${datInitName}(void) {`);
+	addLine(hdrs, `MS_LIB_EXPORT void ${datInitName}(void);`);
+	addLine(procs, `MS_LIB_EXPORT void ${datInitName}(void) {`);
 	if (!skipGuard) {
 		addLine(procs, `  static MS_BOOL ${datInitName}_guard_ = 0;`);
 		addLine(procs, `  if (${datInitName}_guard_) return;`);
@@ -268,8 +268,8 @@ function genModuleInitFns(g: CGen, output: CModuleOutput): void {
 	addNewline(procs);
 
 	// Init000: user top-level code (non-static for cross-module visibility)
-	addLine(hdrs, `void ${initName}(void);`);
-	addLine(procs, `void ${initName}(void) {`);
+	addLine(hdrs, `MS_LIB_EXPORT void ${initName}(void);`);
+	addLine(procs, `MS_LIB_EXPORT void ${initName}(void) {`);
 	if (!skipGuard) {
 		addLine(procs, `  static MS_BOOL ${initName}_guard_ = 0;`);
 		addLine(procs, `  if (${initName}_guard_) return;`);
@@ -383,7 +383,7 @@ export function genProjectDispatcher(
 
 	// MsMain — exposed for targets where user provides own entry point
 	if (targetOs == "solana") addLine(b, "#ifdef MS_SOL_MAIN_NOINLINE\n__attribute__((noinline))\n#endif");
-	addLine(b, "void MsMain(void) {");
+	addLine(b, "MS_LIB_EXPORT void MsMain(void) {");
 	addLine(b, "  MsPreMainInner();");
 	addLine(b, "  MsMainInner();");
 	addLine(b, "  msTestErrorFlag();");
@@ -393,7 +393,7 @@ export function genProjectDispatcher(
 	addLine(b, "}");
 	addNewline(b);
 
-	addLine(b, "void MsDestroyGlobals(void) {");
+	addLine(b, "MS_LIB_EXPORT void MsDestroyGlobals(void) {");
 	b.indent += 1;
 	if (plan.records.length > 0) addLine(b, "msModuleDeinitLazy();");
 	if (deinits.has(entryPath)) addLine(b, `${mangleModuleName(buildModuleNameRoots(), entryPath)}__Deinit000();`);

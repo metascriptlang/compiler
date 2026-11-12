@@ -32,6 +32,7 @@
 #include <stddef.h>
 
 #include "runtime/types.h"
+#include "runtime/core/export.h"
 
 #ifndef MS_LIB_PRIVATE
 #if defined(_WIN32)
