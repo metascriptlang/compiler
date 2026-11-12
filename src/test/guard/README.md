@@ -137,6 +137,12 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   on tree `939e207b0891` (Linux x86-64, rtx: `msPoolWorkerLoop` at both modes, reached through
   `msPoolWakeWorker` → `msPoolGet`), GREEN with the wake reading `gPool` (rtx, 2026-11-12); that
   program's `__text` at `--danger --lto=off` 54,032 → 47,968 B (macOS arm64).
+  The same program with its awaits at the top level is held to the same symbols: a blocking wait
+  reaches the pool only through the wait operations `msPoolInit` arms (`msPoolWaitsArmed`), so
+  `msWaitForReady` may not call `msPoolGet()` or `msPoolStartThread` through `msPoolRunEdge`,
+  `msPoolCompensate` or `msPoolCompensateEnd`. Proven RED on the runtime of `e21c6e7c3666` (rtx:
+  `topLevel` links `msPoolWorkerLoop` at both modes), GREEN with the armed operations (rtx,
+  2026-11-12).
 - **`caseDirectionLinksItsTablesOnly.ms`** — a program that calls only `toUpperCase` links no
   lower-case table or Final_Sigma span, and one that calls only `toLowerCase` no upper-case table,
   because the case kernels in `runtime/core/stringCase.c` are expanded once per direction, as Nim

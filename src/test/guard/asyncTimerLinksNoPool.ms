@@ -23,16 +23,23 @@ const dir = `${root}/out/guardAsyncTimerLinksNoPool`;
 const FORBIDDEN = "msPoolWorkerLoop";
 const REQUIRED = "msRunOnce";
 const MODES = ["--danger", "--release"];
-const PROGRAM = `function delay(ms: int32): Promise<int32> {
+const DELAY = `function delay(ms: int32): Promise<int32> {
 	return new Promise<int32>((resolve) => { setTimeout(() => resolve(ms), ms); });
 }
-async function run(): Promise<void> {
+`;
+const PROGRAMS: [string, string][] = [
+	["timers", `${DELAY}async function run(): Promise<void> {
 	const a = await delay(5);
 	const b = await delay(10);
 	console.log("done", a + b);
 }
 run();
-`;
+`],
+	["topLevel", `${DELAY}const a = await delay(5);
+const b = await delay(10);
+console.log("done", a + b);
+`],
+];
 
 let failed = 0;
 
@@ -47,42 +54,45 @@ if (platform == "windows") {
 
 removeAll(dir);
 ensureDir(dir);
-writeFile(`${dir}/timers.ms`, PROGRAM);
 
-for (const mode of MODES) {
-	const binary = `${dir}/timers${mode.replace("--", "-")}`;
-	const build = execFileResult(msc, ["build", "timers.ms", "--mm=drc", mode, "--lto=off", `--output=${binary}`], dir);
-	if (build.exitCode != 0) {
-		console.log(`GUARD-FAIL ${mode}: build failed\n${build.output}${build.errorOutput}`);
-		failed = failed + 1;
-		continue;
-	}
-	const path = exists(`${binary}.exe`) ? `${binary}.exe` : binary;
-	if (!exists(path)) {
-		console.log(`GUARD-FAIL ${mode}: ${msc} exited 0 without writing ${path}`);
-		failed = failed + 1;
-		continue;
-	}
-	const run = execFileResult(path, []);
-	if (run.exitCode != 0 || run.output.trim() != "done 15") {
-		console.log(`GUARD-FAIL ${mode}: the program exited ${run.exitCode} printing "${run.output.trim()}", expected "done 15"`);
-		failed = failed + 1;
-	}
-	const symbols = execFileResult("nm", [path]);
-	let sawRequired = false;
-	for (const line of symbols.output.split("\n")) {
-		const fields = line.trim().split(" ");
-		const symbol = fields[fields.length - 1];
-		const name = symbol.startsWith("_") ? symbol.slice(1) : symbol;
-		if (name == REQUIRED) sawRequired = true;
-		if (name == FORBIDDEN) {
-			console.log(`GUARD-FAIL ${mode}: an await on timers links ${name} (${line.trim()})`);
+for (const [name, source] of PROGRAMS) {
+	writeFile(`${dir}/${name}.ms`, source);
+	for (const mode of MODES) {
+		const label = `${name} ${mode}`;
+		const binary = `${dir}/${name}${mode.replace("--", "-")}`;
+		const build = execFileResult(msc, ["build", `${name}.ms`, "--mm=drc", mode, "--lto=off", `--output=${binary}`], dir);
+		if (build.exitCode != 0) {
+			console.log(`GUARD-FAIL ${label}: build failed\n${build.output}${build.errorOutput}`);
+			failed = failed + 1;
+			continue;
+		}
+		const path = exists(`${binary}.exe`) ? `${binary}.exe` : binary;
+		if (!exists(path)) {
+			console.log(`GUARD-FAIL ${label}: ${msc} exited 0 without writing ${path}`);
+			failed = failed + 1;
+			continue;
+		}
+		const run = execFileResult(path, []);
+		if (run.exitCode != 0 || run.output.trim() != "done 15") {
+			console.log(`GUARD-FAIL ${label}: the program exited ${run.exitCode} printing "${run.output.trim()}", expected "done 15"`);
 			failed = failed + 1;
 		}
-	}
-	if (!sawRequired) {
-		console.log(`GUARD-FAIL ${mode}: no ${REQUIRED} in the symbol table, so the check read nothing`);
-		failed = failed + 1;
+		const symbols = execFileResult("nm", [path]);
+		let sawRequired = false;
+		for (const line of symbols.output.split("\n")) {
+			const fields = line.trim().split(" ");
+			const symbol = fields[fields.length - 1];
+			const symbolName = symbol.startsWith("_") ? symbol.slice(1) : symbol;
+			if (symbolName == REQUIRED) sawRequired = true;
+			if (symbolName == FORBIDDEN) {
+				console.log(`GUARD-FAIL ${label}: an await on timers links ${symbolName} (${line.trim()})`);
+				failed = failed + 1;
+			}
+		}
+		if (!sawRequired) {
+			console.log(`GUARD-FAIL ${label}: no ${REQUIRED} in the symbol table, so the check read nothing`);
+			failed = failed + 1;
+		}
 	}
 }
 
