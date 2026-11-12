@@ -51,12 +51,18 @@ const withTrailer = 't0=$SECONDS; "$@" 2>&1; rc=$?; printf "\\nSECS=%d\\nRC=%d\\
 const selected = option("lanes", "the gate lanes to run, comma-separated; every lane when unset", "");
 export const lanes = writeFiles();
 const noColourVariable = ["suite", "tests", "fmt", "cache", "crypto", "tools"];
-function lane(name: string, command: Arg[], env: Record<string, Arg> = {}, inputs: LazyPath[] = sources): void {
-	if (selected != "" && !selected.split(",").includes(name.split(".")[0])) return;
+function wanted(name: string): boolean {
+	return selected == "" || selected.split(",").includes(name.split(".")[0]);
+}
+function laneNode(name: string, command: Arg[], env: Record<string, Arg> = {}, inputs: LazyPath[] = sources): Command {
 	const colour: Arg[] = noColourVariable.includes(name.split(".")[0]) ? ["-u", "NO_COLOR"] : ["NO_COLOR=1"];
 	const argv: Arg[] = ["bash", "-c", withTrailer, name, "env", "-u", "FORCE_COLOR"];
-	const log = systemCommand(argv.concat(colour).concat(command), { env, inputs, description: `lane ${name}` }).captureStdOut();
-	lanes.addCopyFile(log, `${name}.log`);
+	const node = systemCommand(argv.concat(colour).concat(command), { env, inputs, description: `lane ${name}` });
+	lanes.addCopyFile(node.captureStdOut(), `${name}.log`);
+	return node;
+}
+function lane(name: string, command: Arg[], env: Record<string, Arg> = {}, inputs: LazyPath[] = sources): void {
+	if (wanted(name)) laneNode(name, command, env, inputs);
 }
 
 const raiser: Arg[] = [candidate, "run", "--target=raiser"];
@@ -89,6 +95,42 @@ const solanaNative = ["test.ms", "hostTest.ms", "token.ms", "index.ms", "vrf.ms"
 for (const file of solanaNative.concat(solanaBoth)) solanaTest(`std/solana/${file}`, []);
 for (const entry of ["examples/escrow/program.ms", "examples/escrow/idl.cms", "examples/anchorBench/helloworld/program.ms"]) solanaTest(entry, []);
 for (const file of solanaBoth.concat(["memoryMachineTest.jms", "kernelTest.jms"])) solanaTest(`std/solana/${file}`, ["--target=js"]);
+
+const checked = 'name=$1; shift; "$@"; rc=$?; [ $rc -eq 0 ] || printf "FAIL solana %s: exit %d\\n" "$name" $rc; exit $rc';
+const afterBuilds = 'name=$1; shift; for built in "${@:3}"; do [ -s "${built##*:}" ] || exit 0; done; "$@"; rc=$?; [ $rc -eq 0 ] || printf "FAIL solana %s: exit %d\\n" "$name" $rc; exit $rc';
+const programSources = sources.concat([path("examples")]).concat(glob("tools/solana/*.ms"));
+const replaySources = glob("tools/solana/*.mjs").concat([path("tools/solana/package-lock.json")]);
+function program(name: string, entry: string, flags: string[], file: string): LazyPath {
+	const command: Arg[] = ["bash", "-c", checked, "solana", name, candidate, "build", entry];
+	for (const flag of flags) command.push(flag);
+	return laneNode(`solana.${name}`, command, {}, programSources).addPrefixedOutputFileArg("--output=", file);
+}
+function replay(name: string, script: string, programs: LazyPath[], prefix: string = "", env: Record<string, Arg> = {}): void {
+	const node = laneNode(`solana.${name}`, ["bash", "-c", afterBuilds, "solana", name, "node", `tools/solana/${script}.mjs`], env, replaySources);
+	for (const built of programs) node.addPrefixedFileArg(prefix, built);
+}
+if (wanted("solana")) {
+	const onChain = ["--os=solana"];
+	const release = ["--os=solana", "--release"];
+	replay("fields-replay", "accountValues", [program("fields-build", "tools/solana/accountValuesProbe.ms", release, "accountValues.so")]);
+	const idlTool = program("idl-build", "examples/escrow/idl.cms", [], "escrow-idl");
+	const idlRun = laneNode("solana.idl-run", ["bash", "-c", 'name=$1; [ -s "$2" ] || exit 0; "$2" >"$3"; rc=$?; [ $rc -eq 0 ] || printf "FAIL solana %s: exit %d\\n" "$name" $rc; exit $rc', "solana", "idl-run", idlTool], {}, []);
+	const idl = idlRun.addOutputFileArg("escrow-idl.json");
+	replay("escrow-replay", "escrow", [program("escrow-build", "examples/escrow/program.ms", onChain, "escrow.so"), idl]);
+	replay("escrow-release-replay", "escrow", [program("escrow-release-build", "examples/escrow/program.ms", release, "escrowRelease.so"), idl]);
+	replay("multisig-oncurve-replay", "anchorBench", [program("multisig-build", "examples/anchorBench/multisig/program.ms", release, "multisig.so")], "multisig:std:anchor:", { BENCH_REFUSALS: "1" });
+	replay("heap-replay", "heapExhausted", [program("heap-build", "tools/solana/heapProbe.ms", onChain, "heapProbe.so")]);
+	replay("resize-replay", "resizeAfterCpi", [program("resize-build", "tools/solana/resizeProbe.ms", onChain, "resizeProbe.so")]);
+	replay("fidelity-replay", "hostFidelity", [program("fidelity-build", "tools/solana/hostFidelityProbe.ms", release, "hostFidelityProbe.so")]);
+	replay("token-replay", "tokenOps", [program("token-build", "tools/solana/tokenOpsProbe.ms", release, "tokenOpsProbe.so")]);
+	for (const pin of ["logText", "createAccountPrefund", "failFirst", "arrayCount", "tokenInterface", "pow"]) {
+		replay(`${pin}-replay`, pin, [program(`${pin}-build`, `tools/solana/${pin}Probe.ms`, release, `${pin}Probe.so`)]);
+	}
+	replay("accountLimit-replay", "accountLimit", [
+		program("accountLimit-build", "tools/solana/accountLimitProbe.ms", release.concat(["--passC=-DMS_SOL_MAX_ACCOUNTS=2"]), "accountLimit2.so"),
+		program("accountLimit-default-build", "tools/solana/accountLimitProbe.ms", release, "accountLimit.so"),
+	]);
+}
 
 const named = 'label=$1; shift; "$@"; rc=$?; [ $rc -eq 0 ] || printf "FAIL %s\\n" "$label"; exit $rc';
 function tool(label: string, command: Arg[], inputs: LazyPath[]): void {
