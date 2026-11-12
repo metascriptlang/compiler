@@ -1,8 +1,10 @@
-import { Node, NodeFlag, NodeKind, Symbol, SymbolKind, Type, TypeKind, CallingConvention, ProgramData, ExportDeclData, DecoratedDeclData, FunctionDeclData, BinaryExprData, CallExprData, MemberExprData, ObjectLiteralData, ArrayLiteralData, IfStmtData, ConditionalExprData } from "../ast/node";
+import { Node, NodeFlag, NodeKind, Symbol, SymbolKind, Type, TypeKind, CallingConvention, ProgramData, ExportDeclData, DecoratedDeclData, FunctionDeclData, BinaryExprData, CallExprData, MemberExprData, ObjectLiteralData, ArrayLiteralData } from "../ast/node";
 import { Visit, anyDescendant, forEachChild } from "../ast/visitor";
 import { RoutineFlag, hasFlag, routineFlagSet, SymbolFlag } from "../checker/symbol";
 import { dispatchEntryFor, dispatchOverrideTable } from "../checker/context";
 import { calledRoutineType } from "../checker/effects";
+import { forEachNodeRunBeforeAnyExit } from "../checker/everyExit";
+import { callMayRaise, newMayRaise } from "../checker/raises";
 import { boundElement, createSink, getElementType, isUncountedElement } from "../checker/types";
 import { TransformContext } from "../transform/context";
 import { classifyType } from "./classify";
@@ -71,52 +73,38 @@ function countedSlot(t: Type | null, ctx: TransformContext): boolean {
 	return t != null && classifyType(t, ctx).needsCleanup;
 }
 
-function findSinks(n: Node, params: Symbol[], hits: boolean[], branched: boolean, ctx: TransformContext): void {
-	if (n.kind == NodeKind.FunctionDecl || n.kind == NodeKind.ArrowFunction || n.kind == NodeKind.FunctionExpr) return;
-	if (!branched) {
-		if (n.kind == NodeKind.BinaryExpr) {
-			const d = n.data as BinaryExprData;
-			const at = paramIndex(d.right, params);
-			if (d.operator == "=" && at >= 0 && !isLocalOfFrame(d.left) && countedSlot(d.left.nodeType, ctx)) hits[at] = true;
-		} else if (n.kind == NodeKind.CallExpr) {
-			const d = n.data as CallExprData;
-			const formals = calledRoutineType(n)?.typeChildren ?? null;
-			if (formals != null) {
-				for (let i = 0; i < d.arguments.length && i < formals.length; i += 1) {
-					const at = paramIndex(d.arguments[i], params);
-					if (at >= 0 && formals[i].kind == TypeKind.Sink && !isUncountedElement(boundElement(formals, i, d.arguments, null, d.callee))) hits[at] = true;
-				}
-			}
-		} else if (n.kind == NodeKind.ObjectLiteral) {
-			const od = n.data as ObjectLiteralData;
-			for (let i = 0; i < od.properties.length; i += 1) {
-				const at = paramIndex(od.properties[i], params);
-				if (at >= 0 && !(i < od.keys.length && isPtrField(n.nodeType, od.keys[i]))) hits[at] = true;
-			}
-		} else if (n.kind == NodeKind.ArrayLiteral) {
-			const counted = n.nodeType != null && !isUncountedElement(getElementType(n.nodeType));
-			for (const e of (n.data as ArrayLiteralData).elements) {
-				const at = paramIndex(e, params);
-				if (at >= 0 && counted) hits[at] = true;
+function noteSinkSite(n: Node, params: Symbol[], hits: boolean[], ctx: TransformContext): void {
+	if (n.kind == NodeKind.BinaryExpr) {
+		const d = n.data as BinaryExprData;
+		const at = paramIndex(d.right, params);
+		if (d.operator == "=" && at >= 0 && !isLocalOfFrame(d.left) && countedSlot(d.left.nodeType, ctx)) hits[at] = true;
+	} else if (n.kind == NodeKind.CallExpr) {
+		const d = n.data as CallExprData;
+		const formals = calledRoutineType(n)?.typeChildren ?? null;
+		if (formals != null) {
+			for (let i = 0; i < d.arguments.length && i < formals.length; i += 1) {
+				const at = paramIndex(d.arguments[i], params);
+				if (at >= 0 && formals[i].kind == TypeKind.Sink && !isUncountedElement(boundElement(formals, i, d.arguments, null, d.callee))) hits[at] = true;
 			}
 		}
+	} else if (n.kind == NodeKind.ObjectLiteral) {
+		const od = n.data as ObjectLiteralData;
+		for (let i = 0; i < od.properties.length; i += 1) {
+			const at = paramIndex(od.properties[i], params);
+			if (at >= 0 && !(i < od.keys.length && isPtrField(n.nodeType, od.keys[i]))) hits[at] = true;
+		}
+	} else if (n.kind == NodeKind.ArrayLiteral) {
+		const counted = n.nodeType != null && !isUncountedElement(getElementType(n.nodeType));
+		for (const e of (n.data as ArrayLiteralData).elements) {
+			const at = paramIndex(e, params);
+			if (at >= 0 && counted) hits[at] = true;
+		}
 	}
-	if (n.kind == NodeKind.IfStmt) {
-		const d = n.data as IfStmtData;
-		findSinks(d.condition, params, hits, branched, ctx);
-		if (d.consequent != null) findSinks(d.consequent, params, hits, true, ctx);
-		if (d.alternate != null) findSinks(d.alternate, params, hits, true, ctx);
-		return;
-	}
-	if (n.kind == NodeKind.ConditionalExpr) {
-		const d = n.data as ConditionalExprData;
-		findSinks(d.ternaryCondition, params, hits, branched, ctx);
-		findSinks(d.ternaryConsequent, params, hits, true, ctx);
-		findSinks(d.ternaryAlternate, params, hits, true, ctx);
-		return;
-	}
-	const inside = branched || n.kind == NodeKind.SwitchStmt || n.kind == NodeKind.MatchExpr || n.kind == NodeKind.MatchStmt;
-	forEachChild(n, (c: Node): void => findSinks(c, params, hits, inside, ctx));
+}
+
+function loweredCallMayRaise(call: Node): boolean {
+	if (call.kind == NodeKind.NewExpr) return newMayRaise(call);
+	return !call.flags.has(NodeFlag.IntCheck) && callMayRaise(call);
 }
 
 function movable(t: Type, ctx: TransformContext): boolean {
@@ -156,7 +144,7 @@ export function inferSinkParams(trees: Node[], ctxs: TransformContext[]): void {
 		if (anyDescendant(body, (n: Node): Visit => n.flags.has(NodeFlag.Closure) ? Visit.Hit : Visit.Descend)) continue;
 		const hits: boolean[] = [];
 		for (let i = 0; i < params.length; i += 1) hits.push(false);
-		findSinks(body, params, hits, false, r.ctx);
+		forEachNodeRunBeforeAnyExit([body], loweredCallMayRaise, (n: Node): void => noteSinkSite(n, params, hits, r.ctx));
 		for (let i = 0; i < formals.length; i += 1) {
 			const byAddress = i < 31 && (r.sym.mutatedParams & (1 << (i as int32))) != 0;
 			if (hits[i] && !byAddress && r.sym.symbolType.typeNames[i] != "this" && movable(formals[i], r.ctx)) formals[i] = createSink(formals[i]);
