@@ -154,7 +154,7 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   2026-11-12).
 - **`caseDirectionLinksItsTablesOnly.ms`** — a program that calls only `toUpperCase` links no
   lower-case table or Final_Sigma span, and one that calls only `toLowerCase` no upper-case table,
-  because the case kernels in `runtime/core/stringCase.c` are expanded once per direction, as Nim
+  because the case kernels in `std/core/string/caseCore.ms` are expanded once per direction, as Nim
   expands its `convertRune` template per direction. Builds both at `--danger` and `--release` with
   `--lto=off` and reads the symbol table. Proven RED on tree `939e207b0891` (Linux x86-64: the upper
   program links `msLowerFull`, `msCasedSpans`, `msCaseIgnorableSpans`), GREEN on the fix (Linux

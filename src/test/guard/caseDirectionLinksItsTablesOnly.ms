@@ -8,11 +8,12 @@
 // WHY A SUBPROCESS: the observable is the linked binary's symbols. The compiler under test is
 // $MSC, else `./msc`. A host without `nm` prints GUARD-SKIP, which the runner reports as unscored.
 //
-// RED MEANS: the case kernels in runtime/core/stringCase.c take the direction at run time again
+// RED MEANS: the case kernels of std/core/string/caseCore.ms take the direction at run time again
 // in a body both entry points share, so every program that converts case carries both directions'
 // tables (7,880 B of lower-case data in an upper-only program on macOS arm64).
-// RED PRE-FIX: the upper program links `msLowerFull`, `msLowerRuns`, `msCasedSpans`,
-// `msCaseIgnorableSpans`; the lower program `msUpperFull`, `msUpperRuns`. GREEN POST-FIX: GUARD-OK.
+// RED PRE-FIX: the upper program links `lowerFull`, `lowerRuns`, `casedSpans`,
+// `caseIgnorableSpans`; the lower program `upperFull`, `upperRuns`. GREEN POST-FIX: GUARD-OK.
+// A symbol is matched by its MetaScript name followed by the `__` of its module suffix.
 
 import { execFileResult, cwd, exit, env, cmdExists, platform } from "std/process";
 import { writeFile, ensureDir, removeAll, exists } from "std/fs";
@@ -22,12 +23,17 @@ const mscEnv = env.get("MSC");
 const msc = mscEnv == "" ? `${root}/msc` : mscEnv.startsWith(".") ? `${root}/${mscEnv}` : mscEnv;
 const dir = `${root}/out/guardCaseDirectionLinksItsTablesOnly`;
 
-const UPPER_TABLES = ["msUpperFull", "msUpperRuns"];
-const LOWER_TABLES = ["msLowerFull", "msLowerRuns", "msCasedSpans", "msCaseIgnorableSpans"];
+const UPPER_TABLES = ["upperFull", "upperRuns"];
+const LOWER_TABLES = ["lowerFull", "lowerRuns", "casedSpans", "caseIgnorableSpans"];
 const PROGRAMS = [
-	{ name: "upper", call: "toUpperCase", required: ["msStringToUpperCase", "msUpperRuns"], forbidden: LOWER_TABLES },
-	{ name: "lower", call: "toLowerCase", required: ["msStringToLowerCase", "msLowerRuns"], forbidden: UPPER_TABLES },
+	{ name: "upper", call: "toUpperCase", required: ["toUpperCase", "upperRuns"], forbidden: LOWER_TABLES },
+	{ name: "lower", call: "toLowerCase", required: ["toLowerCase", "lowerRuns"], forbidden: UPPER_TABLES },
 ];
+
+function msName(symbol: string): string {
+	const at = symbol.indexOf("__");
+	return at > 0 ? symbol.slice(0, at) : "";
+}
 const MODES = ["--danger", "--release"];
 
 let failed = 0;
@@ -68,7 +74,7 @@ for (const program of PROGRAMS) {
 		for (const line of execFileResult("nm", [path]).output.split("\n")) {
 			const fields = line.trim().split(" ");
 			const symbol = fields[fields.length - 1];
-			const name = (symbol.startsWith("_") ? symbol.slice(1) : symbol).split(".")[0];
+			const name = msName((symbol.startsWith("_") ? symbol.slice(1) : symbol).split(".")[0]);
 			if (program.forbidden.includes(name) && !linked.has(name)) {
 				console.log(`GUARD-FAIL ${tag}: links ${name} (${line.trim()})`);
 				failed = failed + 1;

@@ -1496,16 +1496,11 @@ function registerArrayKernels(): void {
 
 function registerStringCallbacks(): void {
 	registerInPlaceHostFn("std/core/string/shared.clampIndex",   _callbackClampIndex, HostCapability.Pure);
-	registerInPlaceHostFn("std/core/string.trim",                _bridgeMsStringTrim, HostCapability.Pure);
-	registerInPlaceHostFn("std/core/string.trimStart",           _bridgeMsStringTrimStart, HostCapability.Pure);
-	registerInPlaceHostFn("std/core/string.trimEnd",             _bridgeMsStringTrimEnd, HostCapability.Pure);
-	registerInPlaceHostFn("std/core/string.toLowerCase",         bridgeMsStringToLower, HostCapability.Pure);
-	registerInPlaceHostFn("std/core/string.toUpperCase",         bridgeMsStringToUpper, HostCapability.Pure);
-	registerInPlaceHostFn("msStringTrim",                        _bridgeMsStringTrim, HostCapability.Pure);
-	registerInPlaceHostFn("msStringTrimStart",                   _bridgeMsStringTrimStart, HostCapability.Pure);
-	registerInPlaceHostFn("msStringTrimEnd",                     _bridgeMsStringTrimEnd, HostCapability.Pure);
-	registerInPlaceHostFn("msStringToLowerCase",                 bridgeMsStringToLower, HostCapability.Pure);
-	registerInPlaceHostFn("msStringToUpperCase",                 bridgeMsStringToUpper, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/string/caseText.trim",       _bridgeMsStringTrim, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/string/caseText.trimStart",  _bridgeMsStringTrimStart, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/string/caseText.trimEnd",    _bridgeMsStringTrimEnd, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/string/caseText.toLowerCase", bridgeMsStringToLower, HostCapability.Pure);
+	registerInPlaceHostFn("std/core/string/caseText.toUpperCase", bridgeMsStringToUpper, HostCapability.Pure);
 	registerInPlaceHostFn("std/core/string/shared.repeat",       _callbackRepeat, HostCapability.Pure);
 	registerInPlaceHostFn("std/core/string/shared.reverse",      _callbackReverse, HostCapability.Pure);
 	registerInPlaceHostFn("std/core/string/shared.equalsIgnoreCase", _callbackEqualsIgnoreCase, HostCapability.Pure);

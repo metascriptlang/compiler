@@ -4,7 +4,6 @@
 
 @include("runtime/core/string.h");
 @compile("runtime/core/string.c");
-@compile("runtime/core/stringCase.c");
 
 // ===== Operators =====
 // Primitive operators (C runtime)
@@ -191,11 +190,7 @@ import { clampIndex } from "./shared";
 import { parseFloatPrefix, parseIntPrefix } from "../number/parse";
 export { repeat, reverse, equalsIgnoreCase } from "./shared";
 
-export extern function trim(this s: string): string from "msStringTrim";
-export extern function trimStart(this s: string): string from "msStringTrimStart";
-export extern function trimEnd(this s: string): string from "msStringTrimEnd";
-export extern function toLowerCase(this s: string): string from "msStringToLowerCase";
-export extern function toUpperCase(this s: string): string from "msStringToUpperCase";
+export { trim, trimStart, trimEnd, toLowerCase, toUpperCase } from "./caseText";
 export { indexOf, lastIndexOf, startsWith, endsWith, includes, contains, count } from "./search";
 import "./utf16";
 export { replace, replaceAll, padStart, padEnd, split } from "./editNative";

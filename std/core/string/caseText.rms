@@ -1,0 +1,37 @@
+// Trim and case conversion for the Raiser: each result is built in a byte array and becomes a string once.
+
+import { asBytes, byteSlice, wellFormedString } from "./bytes";
+import { upperLength, upperInto } from "./caseUpper";
+import { lowerLength, lowerInto } from "./caseLower";
+import { trimmedRange } from "./caseCore";
+
+export function toUpperCase(this s: string): string {
+	const src = s.asBytes();
+	const out = new Array<uint8>(upperLength(src));
+	upperInto(src, out);
+	return wellFormedString(out);
+}
+
+export function toLowerCase(this s: string): string {
+	const src = s.asBytes();
+	const out = new Array<uint8>(lowerLength(src));
+	lowerInto(src, out);
+	return wellFormedString(out);
+}
+
+function trimmed(s: string, lead: boolean, trail: boolean): string {
+	const range = trimmedRange(s.asBytes(), lead, trail);
+	return s.byteSlice(range.start as int32, range.end as int32);
+}
+
+export function trim(this s: string): string {
+	return trimmed(s, true, true);
+}
+
+export function trimStart(this s: string): string {
+	return trimmed(s, true, false);
+}
+
+export function trimEnd(this s: string): string {
+	return trimmed(s, false, true);
+}

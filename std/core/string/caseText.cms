@@ -1,0 +1,62 @@
+// Trim and case conversion for the C backend: each result is written straight into its new string.
+
+import { asBytes, byteIsAscii } from "./bytes";
+import { upperLength, upperInto } from "./caseUpper";
+import { lowerLength, lowerInto } from "./caseLower";
+import { asciiCaseInto, trimmedRange } from "./caseCore";
+
+extern function newBytes(length: int64): string from "msStringNewUninit";
+extern function msStringMarkAscii(s: string): void;
+extern function msStringKnownAscii(s: string): boolean;
+extern function copyBytes(dst: Ptr<uint8>, at: int64, src: Readonly<Span<uint8>>, from: int64, n: int64): void from "msMemCopyTo";
+
+function asciiCaseOf(s: string, from: uint8): string {
+	const src = s.asBytes();
+	const length = src.length as int64;
+	const result = newBytes(length);
+	asciiCaseInto(src, ((result as cstring) as Ptr<uint8>)[0..length], from);
+	msStringMarkAscii(result);
+	return result;
+}
+
+export function toUpperCase(this s: string): string {
+	const src = s.asBytes();
+	if (src.length == 0) return newBytes(0);
+	if (byteIsAscii(s)) return asciiCaseOf(s, 0x61);
+	const length = upperLength(src);
+	const result = newBytes(length);
+	if (length > 0) upperInto(src, ((result as cstring) as Ptr<uint8>)[0..length]);
+	return result;
+}
+
+export function toLowerCase(this s: string): string {
+	const src = s.asBytes();
+	if (src.length == 0) return newBytes(0);
+	if (byteIsAscii(s)) return asciiCaseOf(s, 0x41);
+	const length = lowerLength(src);
+	const result = newBytes(length);
+	if (length > 0) lowerInto(src, ((result as cstring) as Ptr<uint8>)[0..length]);
+	return result;
+}
+
+function trimmed(s: string, lead: boolean, trail: boolean): string {
+	const src = s.asBytes();
+	const range = trimmedRange(src, lead, trail);
+	const length = range.end - range.start;
+	const result = newBytes(length);
+	if (length > 0) copyBytes((result as cstring) as Ptr<uint8>, 0, src, range.start, length);
+	if (msStringKnownAscii(s)) msStringMarkAscii(result);
+	return result;
+}
+
+export function trim(this s: string): string {
+	return trimmed(s, true, true);
+}
+
+export function trimStart(this s: string): string {
+	return trimmed(s, true, false);
+}
+
+export function trimEnd(this s: string): string {
+	return trimmed(s, false, true);
+}
