@@ -86,7 +86,7 @@ import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER, MODE_RELEASE, MODE_DEBUG } from "./options";
 import { emitDeclarations, DeclarationModule } from "./declarations";
-import { callsWasmWrapper, wasmFunctionNames, withoutWasmFunctions } from "./wasmBoundary/placement";
+import { callsWasmWrapper, wasmFunctionNames, withoutJsSideCode, withoutUnreadInitializers, withoutWasmFunctions } from "./wasmBoundary/placement";
 import { buildWasmHalf } from "./wasmBoundary/placementBuild";
 import { manifestFor, memberFunctions, BoundaryFunction, BoundaryRefusal, MemberAccess, MemberUse } from "./wasmBoundary/manifest";
 import { wasmEntrySource } from "./wasmBoundary/wasmSide";
@@ -4020,6 +4020,20 @@ resetLiftedOps();
 		checkedMods.push({ program: checked.program, ctx: checked.ctx, modPath, source: mod.rawSource });
 		programByPath.set(modPath, checked.program);
 	}
+	let uninitialized: Symbol[] = [];
+	if (opts.wasmHalf) {
+		const owners: Node[] = [];
+		const readers: Node[] = [];
+		for (const cm of checkedMods) {
+			if (cm.modPath == entryPath) {
+				readers.push(cm.program);
+			} else if (isOutsideResolvedStd(cm.ctx, cm.modPath)) {
+				owners.push(withoutJsSideCode(cm.program));
+				readers.push(cm.program);
+			}
+		}
+		uninitialized = withoutUnreadInitializers(owners, readers);
+	}
 
 	const reloadable: string[] = opts.isHcr ? hcrModulePaths : [];
 	const routeOrder: Node[] = [];
@@ -4258,6 +4272,11 @@ resetLiftedOps();
 		false, false, compileTimeModules(transformedPaths, config.stdPath));
 	flowStop("b.alive", fAlive);
 	refuseRuntimeCompileTimeReach(aliveSet);
+	for (const sym of uninitialized) {
+		if (!aliveSetHasDecl(aliveSet, sym, sym.name)) continue;
+		printError(`internal: the wasm half left module variable '${sym.name}' of ${sym.modulePath} uninitialized because no code it keeps names it, yet wasm-placed code reaches it`);
+		throw new Error(BUILD_STOPPED);
+	}
 	// Release DCE input arrays - no longer needed after alive set computed.
 	transformedPrograms = [];
 	transformedPaths = [];

@@ -167,6 +167,7 @@ export function buildWasmHalf(
 		"--target=c",
 		"--os=emcc",
 		"--app=lib",
+		"--wasm-half",
 		`--output=${mjs}`,
 		`--passL=${linkFlags}`,
 	];
