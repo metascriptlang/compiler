@@ -223,3 +223,83 @@ with 4 freers (26.8 main, 43.4 tree), and means between 8 and 722 ns under that 
 Not measured: Windows; x86-64 at low load for the two benches and the two probes; a long-running server; how much
 stays resident when freed pages lie between small chunks still in use (a free run under 68 KiB that touches no
 discarded chunk is not discarded, M12).
+
+## A second free refused, a return in turns — rtx, d87, m1m and the gate Mac, 2026-11-12
+
+`main` is `runtime/allocator.c`, `allocator.h` and `allocatorPages.c` of main `58fc7c4361b2`; `tree` is tree
+`16b1a9932e1d`, where a freed small cell carries a mark that refuses its second free, an owner's big free
+checks the in-use bit (`msHeapFreedTwice`), and a timed return does one loop turn's share
+(`MS_HEAP_TURN_CELLS`, `MS_HEAP_TURN_PAGES`; guards `allocatorCoreContracts`, `allocatorReturnsIdlePages`).
+Both arms are built by one candidate of the tree and differ in those three files.
+
+One return, before the share (tree `c88529ca1b9b`), rtx under load 44, three runs: 100000 emptied small
+chunks (400 MB) took 6.5-7.5 ms to route home when another thread freed them, 1.4-1.9 ms to release and
+14-22 ms to discard; 1000000 took 60-68, 16-17 and 196-229 ms. With the share, a C probe that frees 1008 B
+cells and then runs the loop's returns until none is due (`sweep.c`, kept with the runtime-allocator card's
+probes), three runs each, longest loop turn in ms:
+
+| emptied chunks | freed by | rtx, load 21-27 | d87, load 6 | gate Mac, load 21 |
+|---|---|---|---|---|
+| 10000 | their owner | 0.43-0.67 | 1.86-1.91 | 0.19-0.94 |
+| 100000 | their owner | 1.01-1.46 | 2.36-2.58 | 0.66-1.19 |
+| 1000000 (Mac: 500000) | their owner | 1.23-1.36 | 3.22-4.01 | 0.73-6.97 |
+| 10000 | another thread | 0.42-0.67 | 1.88-2.09 | 0.25-0.59 |
+| 100000 | another thread | 1.20-1.37 | 4.26-5.00 | 5.02-6.35 |
+| 1000000 (Mac: 500000) | another thread | 3.79-4.17 | 35.83-38.87 | 27.45-28.33 |
+
+The last row's long turn is the owner's one exchange of its shared list, which counts the list a step per run
+(`msHeapFetchRemoteCells`): 250000 runs at 1000000 chunks. Main takes the same step at an allocation. All
+chunks are back 10.7 to 11.3 s after their owner freed them and 21.7 to 22.3 s after another thread did, in 4
+to 490 turns. At a share of 8192 pages d87's longest turn was 4.5-8.8 ms, which set the share to 4096.
+
+Time, `collections` and `json` built `--release`, six runs per arm in alternating order on m1m under load
+15-23, not pinned; the ratio is the tree's speed over main's:
+
+| bench | rows | best run, lowest to highest ratio | median run, lowest to highest ratio |
+|---|---|---|---|
+| collections | 18 | 0.919 (`split 1k fields`) to 1.097 (`array slice 10k`) | 0.922 to 1.064 |
+| json | 12 | 0.936 (`parse medium 64 KB`) to 1.020 (`stringify strings 64 KB`) | 0.919 to 1.084 |
+
+Five rows are under 0.97 in both columns: `split 1k fields` 0.919 and 0.922, `number toString 1k` 0.934 and
+0.942, `Map set/get string 10k` 0.965 and 0.965, `parse medium 64 KB` 0.936 and 0.963, `parse numbers 64 KB`
+0.946 and 0.919. The section above measured the tree before the mark at 0.981 to 1.052 on the same host at
+load 3.5-7.7, so the mark is the likely cause and the load is not excluded.
+
+Allocator alone (`churn.c`), m1m under load 14-19, not pinned, best of 7, ns per take-and-free. `no check` is
+the tree without the mark, its check and its clearing; `count` is a variant that was measured and not built:
+no mark, the free list of a chunk counted when the chunk empties:
+
+| pattern | main | no check | count | tree |
+|---|---|---|---|---|
+| one cell taken and freed in turn, 32 B | 5.76 | 5.43 | 5.85 | 6.71 |
+| 200k taken, freed in order, 32 B | 6.12 | 6.07 | 8.00 | 8.22 |
+| 200k taken, freed in random order, 32 B | 15.25 | 7.95 | 11.26 | 9.92 |
+| 200k live, a random half freed and retaken, 32 B | 15.35 | 10.24 | 10.62 | 12.88 |
+| one cell taken and freed in turn, 256 B | 5.79 | 5.36 | 5.80 | 6.71 |
+| 200k taken, freed in order, 256 B | 18.82 | 13.49 | 22.92 | 20.31 |
+| 200k taken, freed in random order, 256 B | 102.59 | 21.20 | 39.01 | 27.53 |
+| 200k live, a random half freed and retaken, 256 B | 71.55 | 47.94 | 46.74 | 54.36 |
+| one cell taken and freed in turn, 1024 B | 5.79 | 5.37 | 5.82 | 6.71 |
+| 200k taken, freed in order, 1024 B | 49.15 | 29.61 | 28.51 | 36.74 |
+| 200k taken, freed in random order, 1024 B | 135.33 | 63.35 | 62.84 | 68.32 |
+| 200k live, a random half freed and retaken, 1024 B | 95.98 | 77.94 | 87.27 | 79.31 |
+| two 3000 B cells taken and freed in turn | 6.29 | 8.44 | 9.05 | 9.14 |
+
+The mark costs 1.3 ns on a cell that is in the cache and 1.4 to 7.1 ns where the probe frees a cell it last
+touched 200000 cells earlier, because the free now reads the cell. Rejected with these rows: the mark without
+clearing it when the cell is taken (73.77 and 259.92 ns for 32 B freed in order and in random order: a cell
+whose second word the program never wrote still matches, and each such free walks its chunk's list); counting
+on empty in place of the mark (slower than the mark in 4 of the 13 rows, and it stops a second free only when
+its chunk empties).
+
+```
+~/metascript/.gate-host/run-remote.sh --mac --cores 2 -- env BURST=0 bash probeSmall/bench.sh
+~/metascript/.gate-host/run-remote.sh --mac --cores 2 --no-msc -- bash probeSmall/parts.sh
+~/metascript/.gate-host/run-remote.sh --windows --cores 2 --no-msc -- bash probeSweep/sweep.sh
+```
+
+`probeSmall/` and `probeSweep/` are the card's `small/tree` and `small/sweep` copied into the tree for the run.
+
+Not measured: the two benches and the churn probe on x86-64 at low load (a quiet window on rtx was asked for
+at 15:30 and had not opened by 22:00); the remote-free probe on this tree; the cost of the mark in a program
+that frees cold buffers.
