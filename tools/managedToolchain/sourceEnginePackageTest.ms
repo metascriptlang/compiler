@@ -74,7 +74,7 @@ function fixture(dir: string, host: string, aliasTarget: string): string[] {
 	written(join(install, libraries.slice(0, libraries.lastIndexOf("/")) + "/libclang_rt.lsan.a"), "lsan");
 	written(join(install, "PROVENANCE.json"), "{\"cacheFile\": \"llvmEngine.cmake\", " +
 		"\"cacheSha256\": \"" + "a".repeat(64) + "\", \"llvmVersion\": \"1.2.3\", " +
-		"\"sourceSha256\": \"" + "b".repeat(64) + "\", " +
+		"\"sourceEdits\": [], \"sourceSha256\": \"" + "b".repeat(64) + "\", " +
 		"\"sourceTarball\": \"llvm-project-1.2.3.src.tar.xz\"}\n");
 	written(join(source, "cmake/Modules/LLVMVersion.cmake"),
 		"set(LLVM_VERSION_MAJOR 1)\nset(LLVM_VERSION_MINOR 2)\nset(LLVM_VERSION_PATCH 3)\n");

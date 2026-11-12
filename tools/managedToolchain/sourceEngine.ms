@@ -7,6 +7,7 @@ import { sha256File } from "./fileDigest";
 import { absoluteEnginePath, engineIo, writeEngineText } from "./engineFiles";
 import { MINIMUM_MACOS_VERSION } from "./darwinConfig";
 import { captureToolUtf8 } from "./processCapture";
+import { readUtf8File } from "./textFile";
 
 const SOURCE_PREFIX = "llvm-project-";
 const SOURCE_SUFFIX = ".src.tar.xz";
@@ -38,13 +39,51 @@ export struct SourceEngineRequest {
 	tools: SourceTools;
 }
 
+export struct SourceEdit {
+	file: string;
+	reason: string;
+	before: string;
+	after: string;
+}
+
+export struct SourceEditRecord {
+	file: string;
+	reason: string;
+	sha256: string;
+}
+
 export struct SourceProvenance {
 	cacheFile: string;
 	cacheSha256: string;
 	llvmVersion: string;
+	sourceEdits: SourceEditRecord[];
 	sourceSha256: string;
 	sourceTarball: string;
 }
+
+export const LLVM_SOURCE_EDITS: SourceEdit[] = [{
+	file: "clang/tools/driver/driver.cpp",
+	reason: "In a multicall build a hard link or a copy named clang resolves to itself, and clang " +
+		"prepended its own name when it ran itself again, so the child read that name as an input " +
+		"file and refused -cc1 and -cc1as. The name is now prepended only when the resolved " +
+		"executable is not the one invoked.",
+	before: "  // If -canonical-prefixes is set, GetExecutablePath will have resolved Path\n" +
+		"  // to the llvm driver binary, not clang. In this case, we need to use\n" +
+		"  // PrependArg which should be clang-*. Checking just CanonicalPrefixes is\n" +
+		"  // safe even in the normal case because PrependArg will be null so\n" +
+		"  // setPrependArg will be a no-op.\n" +
+		"  if (ToolContext.NeedsPrependArg || CanonicalPrefixes)\n" +
+		"    TheDriver.setPrependArg(ToolContext.PrependArg);\n",
+	after: "  // If -canonical-prefixes is set, GetExecutablePath resolves a symbolic link\n" +
+		"  // named clang-* to the llvm driver binary, which needs PrependArg to run\n" +
+		"  // clang again. A hard link or a copy named clang-* resolves to itself and\n" +
+		"  // must not get it: the llvm driver would read it as an input file.\n" +
+		"  if (ToolContext.NeedsPrependArg ||\n" +
+		"      (CanonicalPrefixes && ToolContext.PrependArg &&\n" +
+		"       !llvm::sys::path::stem(Path).equals_insensitive(\n" +
+		"           llvm::sys::path::stem(ToolContext.Path))))\n" +
+		"    TheDriver.setPrependArg(ToolContext.PrependArg);\n",
+}];
 
 export function digitsOnly(text: string): boolean {
 	if (text == "") { return false; }
@@ -188,6 +227,32 @@ export function tarExtractArgs(tarball: string, dest: string, hostOs: string, gn
 	return args;
 }
 
+export function applySourceEdits(source: string, edits: SourceEdit[]): Result<void, string> {
+	for (const edit of edits) {
+		const path = join(source, edit.file);
+		const parts = (try readUtf8File(path)).split(edit.before);
+		if (parts.length != 2) {
+			return Result.err(path + " has the text of its source edit " +
+				String(parts.length - 1) + " times, expected once");
+		}
+		try writeEngineText(path, parts[0] + edit.after + parts[1]);
+	}
+	return Result.ok(null);
+}
+
+export function sourceEditRecords(
+	source: string, edits: SourceEdit[],
+): Result<SourceEditRecord[], string> {
+	const records: SourceEditRecord[] = [];
+	for (const edit of edits) {
+		records.push({
+			file: edit.file, reason: edit.reason,
+			sha256: try sha256File(join(source, edit.file)),
+		});
+	}
+	return Result.ok(records);
+}
+
 export function extractLlvmSource(
 	tarball: string, version: string, work: string,
 ): Result<string, string> {
@@ -213,6 +278,7 @@ export function extractLlvmSource(
 	if (!isDir(source)) {
 		return Result.err(tarball + " did not extract to " + source);
 	}
+	try applySourceEdits(source, LLVM_SOURCE_EDITS);
 	return Result.ok(source);
 }
 
@@ -247,6 +313,7 @@ export function prepareSourceEngine(
 		cacheFile: basename(cache),
 		cacheSha256: try sha256File(cache),
 		llvmVersion: version,
+		sourceEdits: try sourceEditRecords(source, LLVM_SOURCE_EDITS),
 		sourceSha256: request.sha256,
 		sourceTarball: basename(tarball),
 	};

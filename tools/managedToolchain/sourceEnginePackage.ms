@@ -266,6 +266,13 @@ export function packageSourceEngine(
 		return Result.err("source tree is LLVM " + treeVersion +
 			", the install was built from " + provenance.llvmVersion);
 	}
+	for (const edit of provenance.sourceEdits) {
+		const actual = try sha256File(join(source, edit.file));
+		if (actual != edit.sha256) {
+			return Result.err(join(source, edit.file) + " is not the edited file the install " +
+				"was built from: sha256 " + actual + ", expected " + edit.sha256);
+		}
+	}
 	const partial = try claimPartial(output);
 	const staged = stage(install, source, partial, host, provenance);
 	if (!staged.ok) {

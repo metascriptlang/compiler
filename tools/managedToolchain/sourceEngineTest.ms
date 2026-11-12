@@ -3,10 +3,11 @@ import { ensureDir, exists, join, removeAll, writeFile } from "std/fs";
 import { randomUUIDSync } from "std/crypto";
 import { sha256File } from "./fileDigest";
 import {
-	SourceEngineRequest, SourceTools,
-	buildCommand, configureCommand, isSha256Hex, llvmSourceVersion, onlySymlinkFailures, pathWithToolDir, tarExtractArgs,
-	prepareSourceEngine,
+	LLVM_SOURCE_EDITS, SourceEdit, SourceEngineRequest, SourceTools,
+	applySourceEdits, buildCommand, configureCommand, isSha256Hex, llvmSourceVersion, onlySymlinkFailures,
+	pathWithToolDir, tarExtractArgs, prepareSourceEngine, sourceEditRecords,
 } from "./sourceEngine";
+import { readUtf8File } from "./textFile";
 
 const TOOLS: SourceTools = { cc: "clang", cxx: "clang++", linker: "lld" };
 let cases: int32 = 0;
@@ -160,11 +161,34 @@ function refusalCases(dir: string): void {
 		"--cmake", "a missing cmake");
 }
 
+function editCases(dir: string): void {
+	const edit: SourceEdit = { file: "a/driver.cpp", reason: "r", before: "old line\n", after: "new line\n" };
+	const made = ensureDir(join(dir, "a"));
+	if (!made.ok) { throw new Error(made.error.message); }
+	const path = written(join(dir, "a/driver.cpp"), "head\nold line\ntail\n");
+	expect(applySourceEdits(dir, [edit]).ok, "a text present once is replaced");
+	const edited = readUtf8File(path);
+	expect(edited.ok && edited.value == "head\nnew line\ntail\n", "only that text changes");
+	const digest = sha256File(path);
+	const records = sourceEditRecords(dir, [edit]);
+	expect(digest.ok && records.ok && records.value.length == 1 &&
+		records.value[0].sha256 == digest.value && records.value[0].reason == "r",
+		"the record carries the edited file's digest and the reason");
+	expectRefusal(applySourceEdits(dir, [edit]), "0 times, expected once", "a second application");
+	written(path, "old line\nold line\n");
+	expectRefusal(applySourceEdits(dir, [edit]), "2 times, expected once", "an ambiguous text");
+	for (const shipped of LLVM_SOURCE_EDITS) {
+		expect(shipped.before != shipped.after && shipped.reason != "" &&
+			!shipped.after.contains(shipped.before), "a shipped edit changes its text for a stated reason");
+	}
+}
+
 function run(): void {
 	versionCases();
 	commandCases();
 	const dir = scratch();
 	refusalCases(dir);
+	editCases(dir);
 	const cleaned = removeAll(dir);
 	if (!cleaned.ok) { throw new Error(cleaned.error.message); }
 	console.log("sourceEngine: " + String(cases) + " cases OK");
