@@ -3,6 +3,7 @@ import { ensureDir, exists, isFile, join, removeAll, symlink, writeFile } from "
 import { randomUUIDSync } from "std/crypto";
 import { readUtf8File } from "./textFile";
 import { readStoredSiblingName } from "./nativeAlias";
+import { samePhysicalFile } from "./nativePath";
 import { writeEngineContract } from "./engineFiles";
 import { engineHostKey } from "./sourceEnginePackage";
 import { assembleBundle, linuxConfigTriples } from "./bundleAssembly";
@@ -130,6 +131,32 @@ function assemblyCases(dir: string, host: string): void {
 	expect(!exists(join(dir, "clashed")), "a refused overlay publishes nothing");
 }
 
+function storedOnceCases(dir: string, host: string): void {
+	const fresh = join(dir, "engine");
+	for (const tool of ["llvm.exe", "clang.exe", "ld.lld.exe"]) {
+		written(join(fresh, "bin/" + tool), "multicall");
+	}
+	written(join(fresh, "bin/other.exe"), "another tool");
+	written(join(fresh, "notices/provenance.json"), "{}\n");
+	sealed(fresh, host, "1.2.3");
+	const old = join(dir, "old");
+	written(join(old, "runtime/windows/x86_64-windows-gnu.cfg"), "-target x86_64-w64-windows-gnu\n");
+	written(join(old, "notices/bundle-provenance.json"), "{\"kind\": \"local-bundle-assembly\"}\n");
+	sealed(old, host, "1.2.3");
+	const output = join(dir, "bundle");
+	const assembled = assembleBundle(fresh, old, output);
+	if (!assembled.ok) { throw new Error("assembly refused: " + assembled.error); }
+	const clang = samePhysicalFile(join(output, "bin/llvm.exe"), join(output, "bin/clang.exe"));
+	const linker = samePhysicalFile(join(output, "bin/llvm.exe"), join(output, "bin/ld.lld.exe"));
+	const other = samePhysicalFile(join(output, "bin/llvm.exe"), join(output, "bin/other.exe"));
+	expect(clang.ok && clang.value && linker.ok && linker.value,
+		"tool names with the same bytes are one file under several names");
+	expect(other.ok && !other.value, "a tool with other bytes stays its own file");
+	const text = readUtf8File(join(output, "bin/clang.exe"));
+	expect(text.ok && text.value == "multicall" && assembled.value.contract.files == 9,
+		"every name is in the contract with the tool's bytes");
+}
+
 function run(): void {
 	pureCases();
 	const host = engineHostKey(platform, arch);
@@ -137,7 +164,8 @@ function run(): void {
 		const token = randomUUIDSync();
 		if (!token.ok) { throw new Error(token.error.message); }
 		const dir = join(join(cwd(), "out"), "bundleAssemblyTest-" + token.value);
-		assemblyCases(dir, host.value);
+		storedOnceCases(join(dir, "storedOnce"), host.value);
+		if (!host.value.endsWith("-windows")) { assemblyCases(dir, host.value); }
 		if (!removeAll(dir).ok) { throw new Error("cannot remove " + dir); }
 	}
 	console.log("bundleAssembly: " + String(cases) + " cases OK");
