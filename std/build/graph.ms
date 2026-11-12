@@ -352,6 +352,30 @@ export function runArtifact(artifact: Executable, args: string[] = []): Command 
 	return c;
 }
 
+export interface TestOptions {
+	entry: LazyPath;
+	testsInDir?: boolean;
+	optimize?: Optimize;
+	compiler?: Executable;
+	args?: string[];
+	maxRss?: number;
+}
+
+export function test(o: TestOptions): Command {
+	const compiler = o.compiler ?? null;
+	const c = compiler == null ? systemCommand([mscExe(), "test"]) : runArtifact(compiler, ["test"]);
+	c.addFileArg(o.entry);
+	if (o.testsInDir ?? false) c.addArgs(["--tests-in-dir"]);
+	const optimize = o.optimize ?? Optimize.Debug;
+	if (optimize == Optimize.ReleaseSafe) c.addArgs(["--release"]);
+	if (optimize == Optimize.ReleaseFast) c.addArgs(["--danger"]);
+	c.addArgs(o.args ?? []);
+	c.addPrefixedDepFileOutputArg("--depfile=", "inputs.d");
+	c.expectExitCode(0);
+	c.maxRss = o.maxRss ?? 0;
+	return c;
+}
+
 export function installArtifact(artifact: BuildNode): Install {
 	return new Install(artifact);
 }
