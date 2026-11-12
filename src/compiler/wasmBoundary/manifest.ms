@@ -156,6 +156,29 @@ export function writesBack(p: BoundaryParam): boolean {
 	return p.mode == BoundaryMode.Ref || p.mode == BoundaryMode.Out;
 }
 
+export function leafLetters(leaves: BoundaryLeaf[]): string {
+	let letters = "";
+	for (const leaf of leaves) {
+		letters += (leaf.nullable ? "i" : "") + signatureLetter(leaf.kind);
+	}
+	return letters;
+}
+
+const SLOT_LETTERS = "ijfd";
+
+export function structResultInSlots(f: BoundaryFunction): boolean {
+	if (f.result != BoundaryKind.Struct) return false;
+	const letters = leafLetters(f.resultLeaves);
+	for (let i = 0; i < letters.length; i += 1) {
+		if (!SLOT_LETTERS.includes(letters.slice(i, i + 1))) return false;
+	}
+	return true;
+}
+
+export function allocatesInWasm(f: BoundaryFunction): boolean {
+	return copiesArgsIn(f) || structResultInSlots(f);
+}
+
 export function copiesArgsIn(f: BoundaryFunction): boolean {
 	for (const p of f.params) {
 		if (crossesAsPointerAndLength(p.kind)) return true;

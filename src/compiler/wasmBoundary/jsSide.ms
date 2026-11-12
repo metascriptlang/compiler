@@ -13,7 +13,9 @@ import {
 	BoundaryParam,
 	Manifest,
 	MemberAccess,
-	copiesArgsIn,
+	allocatesInWasm,
+	leafLetters,
+	structResultInSlots,
 	leafLiteral,
 	writesBack,
 } from "./manifest";
@@ -392,6 +394,29 @@ function takerOf(f: BoundaryFunction): string {
 	return `(${names.join(", ")}) => { r = ${literal}; }`;
 }
 
+function slotRead(letter: string, k: int32): string {
+	if (letter == "j") return `__msbMod.HEAP64[(rp >> 3) + ${k}]`;
+	if (letter == "d") return `__msbMod.HEAPF64[(rp >> 3) + ${k}]`;
+	if (letter == "f") return `__msbMod.HEAPF32[(rp >> 2) + ${2 * k}]`;
+	return `__msbMod.HEAP32[(rp >> 2) + ${2 * k}]`;
+}
+
+function slotsToResult(f: BoundaryFunction): string {
+	const letters = leafLetters(f.resultLeaves);
+	const wires: string[] = [];
+	for (let k = 0; k < letters.length; k += 1) {
+		wires.push(`x${k} = ${slotRead(letters.slice(k, k + 1), k)}`);
+	}
+	const values: string[] = [];
+	let w = 0;
+	for (const leaf of f.resultLeaves) {
+		const read = wireRead(leaf.kind, leaf.nullable, w);
+		values.push(read.value);
+		w += read.width;
+	}
+	return `{ const ${wires.join(", ")}; r = ${leafLiteral(f.resultLeaves, values, 0)}; }`;
+}
+
 function cellTaker(p: BoundaryParam, i: int32): string {
 	if (p.kind != BoundaryKind.Struct) {
 		const read = wireRead(p.kind, p.nullable, 0);
@@ -647,7 +672,14 @@ function wrapperLines(
 		cleanup.push("__msb.cell = cell;");
 	}
 	const sig = sigs.join(", ");
-	const call = `__msbMod._${f.exportSymbol}(${argList.join(", ")})`;
+	const slots = structResultInSlots(f);
+	if (slots) {
+		encoded.push("rp");
+		encodes.push(`\t\trp = __msbAlloc(${8 * leafLetters(f.resultLeaves).length});`);
+		cleanup.push("if (rp) __msbFree(rp);");
+	}
+	const wasmArgs = slots ? ["rp", ...argList] : argList;
+	const call = `__msbMod._${f.exportSymbol}(${wasmArgs.join(", ")})`;
 	const guardedCall = (target: string): string => {
 		return `try { ${target}${call}; } catch (e) { throw __msb.die(e); }`;
 	};
@@ -659,8 +691,11 @@ function wrapperLines(
 			| BoundaryKind.Vec
 			| BoundaryKind.Typed => {
 			lines.push(f.resultNullable ? "	let r = null;" : "	let r;");
-			takers.push(takerOf(f));
-			[guardedCall(""), ...writes, "if (__msb.dirty) __msb.leave();", "return r;"]
+			if (!slots) takers.push(takerOf(f));
+			const flagged = slots && f.resultNullable;
+			const head = flagged ? ["let v;", guardedCall("v = ")] : [guardedCall("")];
+			const read = !slots ? [] : flagged ? [`if (v !== 0) ${slotsToResult(f)}`] : [slotsToResult(f)];
+			[...head, ...writes, "if (__msb.dirty) __msb.leave();", ...read, "return r;"]
 		},
 		_ => {
 			const keep = [
@@ -805,7 +840,7 @@ export function jsBindings(
 	for (const f of m.functions) {
 		if (f.result == BoundaryKind.Handle) handles = true;
 		for (const p of f.params) if (p.kind == BoundaryKind.Handle) handles = true;
-		if (copiesArgsIn(f)) scratch = true;
+		if (allocatesInWasm(f)) scratch = true;
 		if (functionSharesViews(f)) viewsIn = true;
 		for (const p of f.params) {
 			if (p.kind == BoundaryKind.Callback && callbackSharesCopies(p.callback!)) {

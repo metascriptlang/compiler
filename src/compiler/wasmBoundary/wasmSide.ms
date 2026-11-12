@@ -13,7 +13,9 @@ import {
 	BoundaryMode,
 	BoundaryParam,
 	MemberAccess,
+	leafLetters,
 	leafLiteral,
+	structResultInSlots,
 	writesBack,
 } from "./manifest";
 
@@ -131,14 +133,6 @@ function callbackImportJs(signature: string): string {
 	const fail = `catch (e) { return ${REGISTRY}.fail(e, ${zero}); }`;
 	const list = ["id", ...wire].join(", ");
 	return `\tmsb_cb_${signature}: (${list}) => { try { return ${call}; } ${fail} },`;
-}
-
-function leafLetters(leaves: BoundaryLeaf[]): string {
-	let letters = "";
-	for (const leaf of leaves) {
-		letters += (leaf.nullable ? "i" : "") + signatureLetter(leaf.kind);
-	}
-	return letters;
 }
 
 function zeroOf(kind: BoundaryKind): string {
@@ -540,8 +534,19 @@ function wrapperLines(
 				wires.push(wireArgsOut(leaf.kind, leaf.nullable, value, zero));
 			}
 			const letters = leafLetters(f.resultLeaves);
-			const take = `msb_rs_${letters}(${wires.join(", ")});`;
-			guardedExport(f, sig, keeps, "void", takenBody(f, call, take), "", cells, backs)
+			if (!structResultInSlots(f)) {
+				const take = `msb_rs_${letters}(${wires.join(", ")});`;
+				guardedExport(f, sig, keeps, "void", takenBody(f, call, take), "", cells, backs)
+			} else {
+				const slotSig = sig == "" ? "msbRet: uint32" : `msbRet: uint32, ${sig}`;
+				const put = `msbPut_${letters}(msbRet, ${wires.join(", ")});`;
+				if (f.resultNullable) {
+					const body = [`const r = ${call};`, "if (r != null) {", "\t" + put, "\treturn 1;", "}", "return 0;"];
+					guardedExport(f, slotSig, keeps, "int32", body, "0", cells, backs)
+				} else {
+					guardedExport(f, slotSig, keeps, "void", [`const r = ${call};`, put], "", cells, backs)
+				}
+			}
 		},
 		BoundaryKind.Vec => {
 			const t = valueTypeOf(f.resultElement);
@@ -663,6 +668,7 @@ interface EntryUsage {
 	vecElements: BoundaryKind[];
 	typedClasses: string[];
 	resultImports: string[];
+	resultSlots: string[];
 	callbacks: BoundaryCallback[];
 	keeps: boolean;
 	handles: string[];
@@ -703,6 +709,7 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 		vecElements: [],
 		typedClasses: [],
 		resultImports: [],
+		resultSlots: [],
 		callbacks: [],
 		keeps: false,
 		handles: [],
@@ -744,8 +751,13 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 		}
 		if (f.result == BoundaryKind.Struct) {
 			const letters = leafLetters(f.resultLeaves);
-			if (letters.includes("s")) usage.hasString = true;
-			addResultImport("msb_rs_" + letters);
+			if (structResultInSlots(f)) {
+				usage.copiesIn = true;
+				if (!usage.resultSlots.includes(letters)) usage.resultSlots.push(letters);
+			} else {
+				usage.hasString = true;
+				addResultImport("msb_rs_" + letters);
+			}
 		}
 		for (const p of f.params) {
 			if (p.handle != null) addHandle(usage, f, p.handle!, p.element);
@@ -828,6 +840,35 @@ function moduleImportLines(
 	return lines;
 }
 
+const SLOT_BYTES = 8;
+
+function slotPutLines(letters: string): string[] {
+	const params = ["at: uint32"];
+	const stores: string[] = [];
+	for (let i = 0; i < letters.length; i += 1) {
+		const type = wireTypes(letters.slice(i, i + 1)).msType;
+		params.push(`a${i}: ${type}`);
+		stores.push(`\t((at + ${i * SLOT_BYTES}) as uint64 as Ptr<${type}>)[0..1][0] = a${i};`);
+	}
+	return [`function msbPut_${letters}(${params.join(", ")}): void {`, ...stores, "}"];
+}
+
+const SLOT_HEAPS = ["iHEAP32", "jHEAP64", "fHEAPF32", "dHEAPF64"];
+
+function runtimeMethodsOf(usage: EntryUsage): string[] {
+	const methods = usage.copiesFloat32
+		? ["HEAPU8", "HEAPF32"]
+		: usage.hasString || usage.readsHeap || usage.viewElements.length > 0
+		? ["HEAPU8"]
+		: [];
+	for (const heap of SLOT_HEAPS) {
+		const name = heap.slice(1);
+		const read = usage.resultSlots.some((letters) => letters.includes(heap.slice(0, 1)));
+		if (read && !methods.includes(name)) methods.push(name);
+	}
+	return methods;
+}
+
 function resultLettersOf(name: string): string {
 	if (name == "msb_rv") return "ii";
 	return name == "msb_rt" ? "iiii" : name.slice("msb_rs_".length);
@@ -902,6 +943,9 @@ function entryLines(
 	for (const name of usage.resultImports) {
 		for (const l of importLines(name, resultLettersOf(name), "v", false)) lines.push(l);
 	}
+	for (const letters of usage.resultSlots) {
+		for (const l of slotPutLines(letters)) lines.push(l);
+	}
 	if (usage.typedClasses.length > 0) {
 		for (const l of typedResultLines(usage.typedClasses)) lines.push(l);
 	}
@@ -961,10 +1005,6 @@ export function wasmEntrySource(
 		source: entryLines(fns, usage, importPathOf).join("\n") + "\n",
 		exportedFunctions: exportedSymbolsOf(fns, usage),
 		jsLibrary: jsLibraryOf(usage),
-		runtimeMethods: usage.copiesFloat32
-			? ["HEAPU8", "HEAPF32"]
-			: usage.hasString || usage.readsHeap || usage.viewElements.length > 0
-			? ["HEAPU8"]
-			: [],
+		runtimeMethods: runtimeMethodsOf(usage),
 	};
 }

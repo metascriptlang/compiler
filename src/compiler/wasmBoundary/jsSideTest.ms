@@ -12,6 +12,7 @@ const SOURCE = `
 struct Point { x: float64; y: float64; }
 struct Label { at: Point; text: string; count: int32; }
 export function tag(l: Label): Label { return l; }
+export function mid(p: Point): Point { return p; }
 export function scale(xs: Vec<float32>, k: float32): Vec<uint16> { const out: Vec<uint16> = []; return out; }
 export function total(xs: Readonly<Span<float32>>): float32 { return 0; }
 export function fill(xs: Span<boolean>, at: int32): void {}
@@ -51,6 +52,7 @@ export function rampF(n: int32): Float32Array { return new Float32Array(n); }
 
 const NULLABLE = `
 struct Pos { x: int32; y: int32 | null; }
+export function near(p: Pos): Pos | null { return p; }
 struct Item { id: int32; note: string | null; score: float64 | null; ok: boolean | null; at: Pos; }
 export function orMinus(a: int32 | null): int32 { return a ?? -1; }
 export function sumBig(a: int64 | null, b?: int64): int64 { return 0; }
@@ -395,6 +397,20 @@ test "js side: the string glue allocates the exact UTF-8 length of a long string
 	if (!r.started) throw new Error("could not start node");
 	if (r.exitCode != 0 || r.signal != 0) throw new Error("glue check failed: " + r.errorOutput + r.output);
 	assert r.output.trim() == "ok";
+}
+
+test "js side: a struct result of scalar leaves is read from a slot the wrapper takes from the scratch arena" {
+	const b = bindingsFor(["mid"]);
+	const js = b.modules[0].code;
+	assert js.includes("\tlet rp;\n\tconst mark = __msbTop;\n\ttry {\n\t\trp = __msbAlloc(16);\n\t\ttry { __msbMod._msb_calc_mid(rp, a0.x, a0.y); } catch (e) { throw __msb.die(e); }\n");
+	assert js.includes("\t\t{ const x0 = __msbMod.HEAPF64[(rp >> 3) + 0], x1 = __msbMod.HEAPF64[(rp >> 3) + 1]; r = { x: x0, y: x1 }; }\n\t\treturn r;\n");
+	assert js.includes("\t\t__msbTop = mark;\n\t\tif (rp) __msbFree(rp);\n");
+	assert !js.includes("takes.push");
+	assert b.prelude.includes("const __msbBase = __msbMod._malloc(16384);");
+	const maybe = nullableBindings(["near"]).modules[0].code;
+	assert maybe.includes("\t\ttry { v = __msbMod._msb_calc_near(rp, ");
+	assert maybe.includes("if (v !== 0) { const x0 = __msbMod.HEAP32[(rp >> 2) + 0], x1 = __msbMod.HEAP32[(rp >> 2) + 2], x2 = __msbMod.HEAP32[(rp >> 2) + 4]; r = ");
+	assert maybe.includes("\tlet r = null;\n");
 }
 
 test "js side: a struct is passed leaf by leaf and its result is built by a taker pushed for the call" {

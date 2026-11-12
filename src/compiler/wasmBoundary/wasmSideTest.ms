@@ -9,6 +9,7 @@ const SOURCE = `
 struct Point { x: float64; y: float64; }
 struct Label { at: Point; text: string; count: int32; }
 export function tag(l: Label): Label { return l; }
+export function mid(p: Point): Point { return p; }
 export function scale(xs: Vec<float32>, k: float32): Vec<uint16> { const out: Vec<uint16> = []; return out; }
 export function total(xs: Readonly<Span<float32>>): float32 { return 0; }
 export function fill(xs: Span<boolean>, at: int32): void {}
@@ -38,6 +39,7 @@ export function rampF2(n: int32): Float32Array { return new Float32Array(n); }
 
 const NULLABLE = `
 struct Pos { x: int32; y: int32 | null; }
+export function near(p: Pos): Pos | null { return p; }
 struct Item { id: int32; note: string | null; score: float64 | null; ok: boolean | null; at: Pos; }
 export function orMinus(a: int32 | null): int32 { return a ?? -1; }
 export function widthOf(a: int8 | null): int8 | null { return a; }
@@ -358,6 +360,20 @@ test "wasm entry: a nullable Vec parameter is rebuilt only when present and a nu
 	assert s.includes("export function msb_calc_headOr(xsSome: int32, xsPtr: uint32, xsLen: int32): int32 {\n\ttry {\n\t\treturn msbm0_headOr((xsSome != 0 ? msbVecFrom_int32(xsPtr, xsLen) : null));\n\t} catch (e) {\n\t\tmsbEscape(e.message);\n\t\treturn 0;\n\t}\n}");
 	assert s.includes("export function msb_calc_upTo(n: int32): void {\n\ttry {\n\t\tconst r = msbm0_upTo(n);\n\t\tif (r != null) {\n\t\t\tmsb_rv((r as Span<float32>) as Ptr<void> as uint64 as int32, r.length as int32);\n\t\t}\n\t} catch (e) {\n\t\tmsbEscape(e.message);\n\t}\n}");
 	assert s.includes("msbRetSome") == false;
+}
+
+test "wasm entry: a struct result of scalar leaves is stored in the slot JS passes, with no result import" {
+	const e = entryFor(["mid"]);
+	assert e.source.includes("export function msb_calc_mid(msbRet: uint32, p_0: float64, p_1: float64): void {\n\ttry {\n\t\tconst r = msbm0_mid({ x: p_0, y: p_1 });\n\t\tmsbPut_dd(msbRet, r.x, r.y);\n");
+	assert e.source.includes("function msbPut_dd(at: uint32, a0: float64, a1: float64): void {\n\t((at + 0) as uint64 as Ptr<float64>)[0..1][0] = a0;\n\t((at + 8) as uint64 as Ptr<float64>)[0..1][0] = a1;\n}");
+	assert !e.source.includes("msb_rs_dd");
+	assert !e.jsLibrary.includes("msb_rs_dd");
+	assert e.runtimeMethods.includes("HEAPF64");
+	assert e.exportedFunctions.includes("_malloc") && e.exportedFunctions.includes("_free");
+	const maybe = nullableEntryFor(["near"]).source;
+	assert maybe.includes("): int32 {\n\ttry {\n\t\tconst r = msbm0_near(");
+	assert maybe.includes("\t\tif (r != null) {\n\t\t\tmsbPut_iii(msbRet, r.x, (r.y != null ? 1 : 0), ");
+	assert maybe.includes("\t\t\treturn 1;\n\t\t}\n\t\treturn 0;\n\t} catch (e) {\n\t\tmsbEscape(e.message);\n\t\treturn 0;\n");
 }
 
 test "wasm entry: a nullable struct and its nullable fields carry flags in leaf order, and the result import names them" {
