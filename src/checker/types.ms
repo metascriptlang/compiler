@@ -5,7 +5,7 @@ import { bareAfterDelim, splitTopLevel, numericLiteralIsFloat, parseNumberLitera
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { mangleSeparatedProperty, ModuleNameRoots, buildModuleNameRoots, mangleModuleName } from "../codegen/c/names";
 import { isAssignable, sameNominal, sameType } from "./compat";
-import { Type, TypeKind, TypeFlag, SymbolKind, SymbolFlag, SymbolState, CallingConvention, AttachedOp, Symbol, Node, NodeKind, TypeAliasDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, DecoratedDeclData, ExportDeclData, BuiltinKind } from "../ast/node";
+import { Type, TypeKind, TypeFlag, SymbolKind, SymbolFlag, SymbolState, CallingConvention, AttachedOp, Symbol, Node, NodeKind, MemberExprData, TypeAliasDeclData, InterfaceDeclData, ClassDeclData, PropertyDeclData, DecoratedDeclData, ExportDeclData, BuiltinKind } from "../ast/node";
 
 // =====================================================================
 // Type Storage Schema — what each Type field means per TypeKind
@@ -4950,6 +4950,27 @@ export function isUncountedElement(elem: Readonly<Type | null>): boolean {
 	if (elem == null) return false;
 	const bare = elem.kind == TypeKind.Union ? unwrapRefNullUnion(elem) : elem;
 	return bare != null && (bare.kind == TypeKind.Cursor || (bare.kind == TypeKind.Ptr && !isCountedRef(bare.typeReturn)));
+}
+
+export function boundElement(formals: Type[], i: int32, args: Node[], receiverFormal: Type | null, callee: Node): Type | null {
+	const formal = formals[i].typeReturn;
+	if (formal == null || formal.kind != TypeKind.GenericParam) return null;
+	const allFormals = receiverFormal == null ? formals : [receiverFormal, ...formals];
+	const allArgs = receiverFormal == null ? args : [(callee.data as MemberExprData).object, ...args];
+	for (let j = 0; j < allFormals.length && j < allArgs.length; j += 1) {
+		const f = peelSlot(allFormals[j]);
+		if (f == null || f.kind != TypeKind.Array || f.typeReturn == null || f.typeReturn.kind != TypeKind.GenericParam || f.typeReturn.typeName != formal.typeName) continue;
+		const arr = peelSlot(allArgs[j].nodeType);
+		if (arr != null && arr.kind == TypeKind.Array) return arr.typeReturn;
+	}
+	return null;
+}
+
+function peelSlot(t: Type | null): Type | null {
+	let cur = t;
+	while (cur != null && cur.typeReturn != null
+		&& (cur.kind == TypeKind.Sink || cur.kind == TypeKind.Var || cur.kind == TypeKind.Lent || cur.kind == TypeKind.Ref)) cur = cur.typeReturn;
+	return cur;
 }
 
 export function countedEvictElement(elemType: Type | null): Type | null {

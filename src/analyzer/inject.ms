@@ -15,7 +15,7 @@ import { flowStart, flowStop } from "../compiler/flows";
 import { wrapElseIfWhen } from "../transform/lowering/jumpRetarget";
 import { Node, NodeKind, DecoratedDeclData, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, UpdateExprData, OutExprData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, TryCatchStmtData, ThrowStmtData, AssertStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, UnaryExprData, CallExprData, IdentifierData, NumberLiteralData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NewExprData, ExportDeclData, ClassDeclData, PropertyDeclData, DoWhileStmtData, MoveExprData, AwaitExprData, TypeAssertionData, HiddenDerefData, HiddenStdConvData, MatchStmtData, MatchCaseData, TestDeclData, Symbol, Type, TypeKind, SymbolKind, createNodeAt, AttachedOp } from "../ast/node";
 import { forEachChild, anyDescendant, Visit } from "../ast/visitor";
-import { isSinkTypeForParam, unownedSlotOf, createPrimitive, typeDisplayName, unwrapRefNullUnion, isUncountedElement, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType, isBoolType, declGenericParams, hasNullMember } from "../checker/types";
+import { isSinkTypeForParam, boundElement, unownedSlotOf, createPrimitive, typeDisplayName, unwrapRefNullUnion, isUncountedElement, isMaybeType, isTagCarriedUnion, matchUnionBehindInstance, unwrapMaybeType, isAwaitable, isUnresolvedType, isAtomicRef, noneType, isBoolType, declGenericParams, hasNullMember } from "../checker/types";
 import { holdsNonNullRef } from "../checker/visibility";
 import { declaredTypeOfLocation } from "../checker/fit";
 import { getOpByKey } from "../codegen/c/types";
@@ -516,27 +516,6 @@ function keepOperandOrder(kids: Node[], marks: Node[], dctx: DrcContext): void {
 		}
 		i -= 1;
 	}
-}
-
-export function boundElement(formals: Type[], i: int32, args: Node[], receiverFormal: Type | null, callee: Node): Type | null {
-	const formal = formals[i].typeReturn;
-	if (formal == null || formal.kind != TypeKind.GenericParam) return null;
-	const allFormals = receiverFormal == null ? formals : [receiverFormal, ...formals];
-	const allArgs = receiverFormal == null ? args : [(callee.data as MemberExprData).object, ...args];
-	for (let j = 0; j < allFormals.length && j < allArgs.length; j += 1) {
-		const f = peelSlot(allFormals[j]);
-		if (f == null || f.kind != TypeKind.Array || f.typeReturn == null || f.typeReturn.kind != TypeKind.GenericParam || f.typeReturn.typeName != formal.typeName) continue;
-		const arr = peelSlot(allArgs[j].nodeType);
-		if (arr != null && arr.kind == TypeKind.Array) return arr.typeReturn;
-	}
-	return null;
-}
-
-function peelSlot(t: Type | null): Type | null {
-	let cur = t;
-	while (cur != null && cur.typeReturn != null
-		&& (cur.kind == TypeKind.Sink || cur.kind == TypeKind.Var || cur.kind == TypeKind.Lent || cur.kind == TypeKind.Ref)) cur = cur.typeReturn;
-	return cur;
 }
 
 function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {

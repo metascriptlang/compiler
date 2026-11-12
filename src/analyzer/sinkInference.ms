@@ -3,10 +3,10 @@ import { Visit, anyDescendant, forEachChild } from "../ast/visitor";
 import { RoutineFlag, hasFlag, routineFlagSet, SymbolFlag } from "../checker/symbol";
 import { dispatchEntryFor, dispatchOverrideTable } from "../checker/context";
 import { calledRoutineType } from "../checker/effects";
-import { createSink, getElementType, isUncountedElement } from "../checker/types";
+import { boundElement, createSink, getElementType, isUncountedElement } from "../checker/types";
 import { TransformContext } from "../transform/context";
 import { classifyType } from "./classify";
-import { boundElement, isGeneratorBody, isPtrField } from "./inject";
+import { isGeneratorBody, isPtrField } from "./inject";
 
 class Routine {
 	decl: Node;
