@@ -251,8 +251,13 @@ own graph, `--summary` with `msc run <node>`.
 calls it, so a library's build function in another package names its own files. `glob("src/*.ms")`
 lists the files under that directory, sorted, never entering a dot-directory.
 
-**Options.** `option(name, description)` reads `-Dname=value` (a bare `-Dname` is `"true"`);
-`--release`/`--danger` give `standardOptimizeOption()` ReleaseSafe/ReleaseFast, and `--os`,
+**Options.** `option(name, description)` reads `-Dname=value` as text (a bare `-Dname` is
+`"true"`) and is null when the command line does not name it. `option(name, description,
+fallback)` has the fallback's type, `number`, `boolean` or `string`, and its value when the
+command line is silent; text that is not of that type stops configure and names the option
+(`shards: 'many' is not a number`, `fast: 'maybe' is not true or false`), and `--list` shows the
+fallback. `--release`/`--danger` give `standardOptimizeOption()` ReleaseSafe/ReleaseFast, and
+`--os`,
 `--cpu`, `--abi` give `standardTargetOptions()`. An option the command line gives and `build.ms`
 never asks for stops the build: `the command line gives the option 'nope', which build.ms does
 not declare; it declares greeting, optimize`. `msc build --list` names each export and option:
@@ -277,8 +282,9 @@ merging by shape gives that result without intercepting calls (`keepOne`,
 - The graph is cached in `out/.configure.json`, keyed by the compiler and the `-D` options, and
   reused while every file the evaluation loaded hashes the same and every `glob` lists the same
   files. Measured 2026-11-09 on a candidate of `01744ec89`, host load 60–150:
-  configure 1.57 s, cached 0.008 s. A graph whose plan runs a `step` configures again, because
-  the step's closure lives in the VM.
+  configure 1.57 s, cached 0.008 s. A graph whose plan runs a `step` with `make` configures
+  again, because the closure lives in the VM; a `step({ description, inputs })` without `make`
+  only groups its inputs and runs from the cached graph.
 - A command or `writeFiles` output lives in the global store under `build/o/<digest>` and is
   reused while its tool, arguments and input content are the same ([BUILD-CACHE.md](BUILD-CACHE.md)
   "What a worktree reuses from another"); `--dry-run` prints `reused:` for each. Input hashes are
@@ -304,6 +310,75 @@ merging by shape gives that result without intercepting calls (`keepOne`,
 - `updateSourceFiles` writes a generated file into the source tree only when its content changed.
 
 **Commands, checks and runs** follow Zig's `Run` step (`hasSideEffects`, `Step.writeManifest`):
+- `systemCommand(argv, options)` and `runArtifact(app, args, options)` take in one call what the
+  methods below set one by one. An element of `argv` is text, a `path()` or an executable node;
+  the last two are passed as their file and make the command depend on it, as `addFileArg` and
+  `addArtifactArg` do. `options` is `{ env, cwd, inputs, expectExitCode, description, maxRss }`,
+  each field doing what `setEnvironmentVariable`, `setCwd`, `addFileInput`, `expectExitCode`,
+  `describe` and the `maxRss` field do: a node written each way is one node in the graph. A
+  value in `env` (and the value `setEnvironmentVariable` takes) can also be a path or an
+  executable node; the command then depends on it and runs again when its content changes. Zig's
+  environment values are text only. `--dry-run` and a failure print the command with its
+  environment. Measured 2026-11-12 on rtx, candidate of tree `6e5190f123f4`, with `tool` printing
+  `tool ran`:
+
+  ```ms
+  const shards = option("shards", "how many runners", 2);
+  const fast = option("fast", "skip the slow part", false);
+  export const tool = executable({ entry: path("src/tool.ms") });
+  export const same = systemCommand(["cmp", path("note.txt"), path("note.txt")], { expectExitCode: 0 });
+  export const ran = runArtifact(tool, ["--quiet"], { cwd: path("src"), expectExitCode: 0 });
+  export const viaEnv = systemCommand(["sh", "-c", "\"$TOOL\"; cat \"$NOTE\"; echo $MODE"], {
+  	env: { TOOL: tool, NOTE: path("note.txt"), MODE: `${shards} shards, ${fast ? "fast" : "full"}` },
+  });
+  export const all = step({ description: "all", inputs: [same, ran, viaEnv] });
+  ```
+
+  ```
+  $ msc build --colors=off --list
+  tool  executable
+  same  command
+  ran  command
+  viaEnv  command
+  all  all
+  -Dshards=…  how many runners (default 2)
+  -Dfast=…  skip the slow part (default false)
+  $ msc build --colors=off -j1 --summary=all all
+  Built 13 module(s) → /tmp/claude-1000/probe/doc/out/tool
+  tool ran
+  tool ran
+  note
+  2 shards, full
+  Build Summary: 5/5 steps succeeded
+  all success 0ms
+  +- same success 2ms
+  +- ran success 0ms
+  |  +- tool success 4s MaxRSS:381M
+  +- viaEnv success 5ms
+     +- tool (shown above)
+  $ msc build --colors=off -Dshards=5 -Dfast viaEnv
+  tool ran
+  note
+  5 shards, fast
+  reused: tool
+  $ msc build --colors=off --dry-run -Dshards=5 viaEnv
+  (cd /tmp/claude-1000/probe/doc && TOOL=/tmp/claude-1000/probe/doc/out/tool NOTE=/tmp/claude-1000/probe/doc/note.txt MODE=5 shards, full sh -c "$TOOL"; cat "$NOTE"; echo $MODE)
+  $ msc build --colors=off -Dshards=many all
+  error: /tmp/claude-1000/probe/doc/build.ms: unhandled exception: shards: 'many' is not a number
+  $ msc build --colors=off -Dfast=maybe all
+  error: /tmp/claude-1000/probe/doc/build.ms: unhandled exception: fast: 'maybe' is not true or false
+  ```
+
+  Pinned by 19 cases, red on the candidate before the change and green on this one (104 of 104,
+  129–175 s), in `src/test/projectConfigCommands.ms`. Recompiler's own `build.ms` is written this
+  way: `msc build --summary=all fixpoint` (`systemCommand(["cmp", stage2, stage3], {
+  expectExitCode: 0 })`) gave 4/4 in 134 s at host load 37 falling to 15 and a second run reused
+  all four in 1 s; `msc build lsp` (`env: { MSC: msc }`) ran its 69 scenarios green in 56 s.
+  Limits: `addArgs` and the `args` of `runArtifact` take `string[]` only, because array elements
+  are invariant ([LANG.md](LANG.md) "Elements are invariant"); `systemCommand` accepts a
+  `string[]` variable as well as a mixed list. A command with `env` fails on Windows
+  (`setEnvironmentVariable is not supported on Windows yet`, read in `runCommand`, not run). Not
+  verified: macOS.
 - A command with no output file, no captured stdout and no check runs every time, streams its
   output and gets no stdin; `hasSideEffects = true` makes any command run every time.
 - `expectExitCode(n)` makes the command a check: it is reused only after it passed, and a failure
