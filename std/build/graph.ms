@@ -368,8 +368,13 @@ export function addFileInput(this c: Command, p: LazyPath): void {
 }
 
 export function addOutputFileArg(this c: Command, name: string): LazyPath {
+	return c.addPrefixedOutputFileArg("", name);
+}
+
+export function addPrefixedOutputFileArg(this c: Command, prefix: string, name: string): LazyPath {
+	if (name == "") throw new Error("an output file argument needs a file name");
 	const out = generated(c, name);
-	c.argv.push({ kind: ArgKind.OutputFile, text: "", path: out });
+	c.argv.push({ kind: ArgKind.OutputFile, text: prefix, path: out });
 	return out;
 }
 

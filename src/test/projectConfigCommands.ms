@@ -461,7 +461,23 @@ record("an input that changed while its command ran keeps the output out of the 
 const forgetful = errorLine(run(racing, ["build", "--colors=off", "forgetful"]));
 record("a command that leaves its depfile unwritten fails the build", "did not write its depfile copy.d", forgetful.includes("did not write its depfile copy.d") ? "did not write its depfile copy.d" : forgetful);
 
+const prefixed = `${root}/prefixed`;
+ensureDir(prefixed);
+put(`${prefixed}/build.ms`, [
+	"import { systemCommand } from \"std/build\";",
+	"export const writer = systemCommand([\"sh\", \"-c\", \"printf %s \\\"${1%%=*}\\\" > \\\"${1#*=}\\\"\", \"sh\"]);",
+	"writer.addPrefixedOutputFileArg(\"--output=\", \"made.txt\");",
+	"",
+].join("\n"));
+const writerOut = run(prefixed, ["build", "--colors=off", "writer"]);
+const made = readFile(`${writerOut.split(" → ").pop()}/made.txt`);
+record("addPrefixedOutputFileArg passes the prefix joined to the output's path", "--output", made.ok ? made.value : writerOut);
+put(`${prefixed}/build.ms`, "import { systemCommand } from \"std/build\";\nexport const writer = systemCommand([\"true\"]);\nwriter.addOutputFileArg(\"\");\n");
+record("an output file argument with no name stops configure", "an output file argument needs a file name",
+	errorLine(run(prefixed, ["build", "--colors=off", "writer"])).split("unhandled exception: ").pop().split("\n")[0]);
+
 const tested = `${root}/tested`;
+
 ensureDir(`${tested}/src`);
 put(`${tested}/build.ms`, "import { test, path } from \"std/build\";\nexport const aTests = test({ entry: path(\"src/a.ms\") });\n");
 put(`${tested}/src/a.ms`, `import { two } from "./b";\nconst home = "${root}";\ntest "two is two" { assert two() == 2 && home != ""; }\n`);
