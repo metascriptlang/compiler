@@ -285,7 +285,27 @@ no mark, the free list of a chunk counted when the chunk empties:
 | 200k live, a random half freed and retaken, 1024 B | 95.98 | 77.94 | 87.27 | 79.31 |
 | two 3000 B cells taken and freed in turn | 6.29 | 8.44 | 9.05 | 9.14 |
 
-The mark costs 1.3 ns on a cell that is in the cache and 1.4 to 7.1 ns where the probe frees a cell it last
+The same probe on rtx, pinned to one core under load 18-25, best of 7:
+
+| pattern | main | no check | count | tree |
+|---|---|---|---|---|
+| one cell taken and freed in turn, 32 B | 3.82 | 3.21 | 3.14 | 2.90 |
+| 200k taken, freed in order, 32 B | 3.82 | 4.30 | 4.94 | 4.42 |
+| 200k taken, freed in random order, 32 B | 95.02 | 6.84 | 14.75 | 7.22 |
+| 200k live, a random half freed and retaken, 32 B | 55.85 | 18.51 | 9.94 | 12.76 |
+| one cell taken and freed in turn, 256 B | 4.14 | 3.24 | 2.89 | 2.80 |
+| 200k taken, freed in order, 256 B | 28.61 | 26.89 | 30.78 | 27.42 |
+| 200k taken, freed in random order, 256 B | 147.51 | 39.46 | 60.20 | 56.04 |
+| 200k live, a random half freed and retaken, 256 B | 135.06 | 98.14 | 87.13 | 111.34 |
+| one cell taken and freed in turn, 1024 B | 3.56 | 2.97 | 2.83 | 2.90 |
+| 200k taken, freed in order, 1024 B | 86.99 | 79.20 | 78.60 | 75.60 |
+| 200k taken, freed in random order, 1024 B | 189.75 | 130.98 | 146.57 | 129.70 |
+| 200k live, a random half freed and retaken, 1024 B | 241.59 | 175.33 | 156.30 | 178.59 |
+| two 3000 B cells taken and freed in turn | 3.93 | 6.89 | 6.11 | 6.07 |
+
+On rtx the mark shows no cost on a cell that is in the cache (the tree is within 0.4 ns of `no check`, on either
+side); in the nine rows that free cold cells the tree differs from `no check` by -5.8 to +16.6 ns, on either
+side, which that load does not resolve. On m1m the mark costs 1.3 ns on a cell that is in the cache and 1.4 to 7.1 ns where the probe frees a cell it last
 touched 200000 cells earlier, because the free now reads the cell. Rejected with these rows: the mark without
 clearing it when the cell is taken (73.77 and 259.92 ns for 32 B freed in order and in random order: a cell
 whose second word the program never wrote still matches, and each such free walks its chunk's list); counting
@@ -295,11 +315,12 @@ its chunk empties).
 ```
 ~/metascript/.gate-host/run-remote.sh --mac --cores 2 -- env BURST=0 bash probeSmall/bench.sh
 ~/metascript/.gate-host/run-remote.sh --mac --cores 2 --no-msc -- bash probeSmall/parts.sh
+~/metascript/.gate-host/run-remote.sh --host rtx --cores 2 --no-msc -- bash probeSmall/parts.sh
 ~/metascript/.gate-host/run-remote.sh --windows --cores 2 --no-msc -- bash probeSweep/sweep.sh
 ```
 
 `probeSmall/` and `probeSweep/` are the card's `small/tree` and `small/sweep` copied into the tree for the run.
 
-Not measured: the two benches and the churn probe on x86-64 at low load (a quiet window on rtx was asked for
+Not measured: the two benches on x86-64, and the churn probe there at low load (a quiet window on rtx was asked for
 at 15:30 and had not opened by 22:00); the remote-free probe on this tree; the cost of the mark in a program
 that frees cold buffers.
