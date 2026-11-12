@@ -1,10 +1,12 @@
-import { Node, NodeKind, NodeFlag, Symbol, SymbolKind, Type, TypeKind, BinaryExprData, CallExprData, NewExprData, MemberExprData, MoveExprData, ObjectLiteralData, ArrayLiteralData, IfStmtData, ConditionalExprData, ConstructorDeclData, FunctionDeclData } from "../ast/node";
+import { Node, NodeKind, NodeFlag, Symbol, SymbolKind, Type, TypeKind, BinaryExprData, BlockStmtData, CallExprData, DecoratedDeclData, ExportDeclData, ExprStmtData, IdentifierData, NewExprData, MoveExprData, ObjectLiteralData, ArrayLiteralData, ConstructorDeclData, FunctionDeclData, PropertyDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { ModuleGraph, findModule } from "../module/graph";
 import { CheckerContext } from "./context";
 import { SymbolFlag, hasFlag } from "./symbol";
 import { calledRoutineType } from "./effects";
 import { boundElement, getElementType, isSinkTypeForParam, isUncountedElement, isUnownedSlot, unwrapRefNullUnion } from "./types";
+import { forEachNodeRunBeforeAnyExit } from "./everyExit";
+import { membersOf } from "./unitsInCheck";
 
 // Bit 0 of `sunkParams`, the receiver's position: the bits are final.
 const SETTLED: int32 = 1;
@@ -19,7 +21,6 @@ class Forward {
 class SunkScan {
 	params: Symbol[];
 	bits: int32;
-	returned: boolean;
 	forwards: Forward[];
 	home: string;
 	graph: ModuleGraph | null;
@@ -165,43 +166,36 @@ function sinkSites(n: Node, st: SunkScan): void {
 	}
 }
 
-const CONDITIONAL_KINDS = [
-	NodeKind.SwitchStmt, NodeKind.MatchExpr, NodeKind.MatchStmt, NodeKind.WhileStmt, NodeKind.DoWhileStmt,
-	NodeKind.ForStmt, NodeKind.ForOfStmt, NodeKind.ForInStmt, NodeKind.TryCatchStmt, NodeKind.TryExpr, NodeKind.DeferStmt,
-];
-const SHORT_CIRCUITS = ["&&", "||", "??", "&&=", "||=", "??="];
+function takeWrittenMoves(n: Node | null, st: SunkScan): void {
+	if (n == null || n.kind == NodeKind.FunctionDecl || n.kind == NodeKind.ArrowFunction || n.kind == NodeKind.FunctionExpr || n.kind == NodeKind.ClassDecl) return;
+	if (n.kind == NodeKind.MoveExpr) take(paramAt((n.data as MoveExprData).moveArg, st), st);
+	else forEachChild(n, (c: Node): void => takeWrittenMoves(c, st));
+}
 
-function scan(n: Node | null, st: SunkScan, conditional: boolean): void {
-	if (n == null) return;
-	if (n.kind == NodeKind.FunctionDecl || n.kind == NodeKind.ArrowFunction || n.kind == NodeKind.FunctionExpr || n.kind == NodeKind.ClassDecl) return;
-	if (n.kind == NodeKind.MoveExpr) {
-		take(paramAt((n.data as MoveExprData).moveArg, st), st);
-		return;
+function classDeclOf(owner: Symbol | null): Node | null {
+	let decl = owner != null ? owner.declNode : null;
+	while (decl != null && (decl.kind == NodeKind.ExportDecl || decl.kind == NodeKind.DecoratedDecl)) {
+		decl = decl.kind == NodeKind.ExportDecl ? (decl.data as ExportDeclData).exportedDecl : (decl.data as DecoratedDeclData).decoratedNode;
 	}
-	if (!conditional && !st.returned) sinkSites(n, st);
-	if (n.kind == NodeKind.IfStmt) {
-		const d = n.data as IfStmtData;
-		scan(d.condition, st, conditional);
-		scan(d.consequent, st, true);
-		scan(d.alternate, st, true);
-		return;
+	return decl != null && decl.kind == NodeKind.ClassDecl ? decl : null;
+}
+
+function fieldInitializers(owner: Symbol | null): Node[] {
+	const cls = classDeclOf(owner);
+	const inits: Node[] = [];
+	if (cls == null) return inits;
+	for (const m of membersOf(cls)) {
+		if (m.kind != NodeKind.PropertyDecl) continue;
+		const pd = m.data as PropertyDeclData;
+		if (!pd.propIsStatic && pd.propInitializer != null) inits.push(pd.propInitializer);
 	}
-	if (n.kind == NodeKind.ConditionalExpr) {
-		const d = n.data as ConditionalExprData;
-		scan(d.ternaryCondition, st, conditional);
-		scan(d.ternaryConsequent, st, true);
-		scan(d.ternaryAlternate, st, true);
-		return;
-	}
-	if (n.kind == NodeKind.BinaryExpr && SHORT_CIRCUITS.includes((n.data as BinaryExprData).operator)) {
-		scan((n.data as BinaryExprData).left, st, conditional);
-		scan((n.data as BinaryExprData).right, st, true);
-		return;
-	}
-	const optional = n.flags.has(NodeFlag.OptionalLink) || (n.kind == NodeKind.MemberExpr && (n.data as MemberExprData).isOptional);
-	const inside = conditional || optional || CONDITIONAL_KINDS.includes(n.kind);
-	forEachChild(n, (c: Node): void => scan(c, st, inside));
-	if (n.kind == NodeKind.ReturnStmt) st.returned = true;
+	return inits;
+}
+
+function isSuperCallStmt(stmt: Node): boolean {
+	const expr = stmt.kind == NodeKind.ExprStmt ? (stmt.data as ExprStmtData).expr : null;
+	const callee = expr != null && expr.kind == NodeKind.CallExpr ? (expr.data as CallExprData).callee : null;
+	return callee != null && callee.kind == NodeKind.Identifier && (callee.data as IdentifierData).name == "super";
 }
 
 function everyParam(params: Symbol[] | null): int32 {
@@ -249,9 +243,25 @@ export function settleCtorSunkParams(): void {
 	if (_unsettled.length > 0) settle(true);
 }
 
+function everyCallMayRaise(call: Node): boolean {
+	return true;
+}
+
+function scanCtor(d: ConstructorDeclData, params: Symbol[], owner: Symbol | null, st: SunkScan): void {
+	const stmts = d.ctorBody.kind == NodeKind.BlockStmt ? (d.ctorBody.data as BlockStmtData).statements : [d.ctorBody];
+	const beforeFields = stmts.length > 0 && isSuperCallStmt(stmts[0]) ? [stmts[0]] : [];
+	for (let i = 0; beforeFields.length == 0 && i < d.ctorParamProps.length && i + 1 < params.length; i += 1) {
+		if (d.ctorParamProps[i] != null && ownsWhatItHolds(params[i + 1].symbolType)) take(i + 1, st);
+	}
+	takeWrittenMoves(d.ctorBody, st);
+	const inOrder = beforeFields.concat(fieldInitializers(owner)).concat(stmts.slice(beforeFields.length));
+	forEachNodeRunBeforeAnyExit(inOrder, everyCallMayRaise, (n: Node): void => sinkSites(n, st));
+}
+
 // Called where the body of a constructor has just been checked. Bit i of `sunkParams` is set when
-// the body moves parameter i into an owning place on every path that completes normally before a
-// `return`: a store into a slot that holds a count, an argument of a `sink` formal, an element of
+// the body moves parameter i into an owning place on every path, before anything that can leave
+// the constructor (a `return`, a `throw`, a call that may raise, a field initializer included):
+// a store into a slot that holds a count, an argument of a `sink` formal, an element of
 // an object or array literal, a parameter property, a written `move`, or an argument of a
 // constructor that keeps it. A parameter kept only through an Unowned or uncounted slot or
 // stored under a condition stays lent. An actor's constructor takes every parameter, because
@@ -263,11 +273,8 @@ export function noteCtorSunkParams(ctx: CheckerContext, routine: Symbol, ctor: N
 	if (d.ctorBody == null || params == null || (owner != null && owner.symbolKind == SymbolKind.Actor)) {
 		routine.sunkParams = everyParam(params) | SETTLED;
 	} else {
-		const st: SunkScan = { params, bits: 0, returned: false, forwards: [], home: routine.modulePath, graph: ctx.moduleGraph };
-		for (let i = 0; i < d.ctorParamProps.length && i + 1 < params.length; i += 1) {
-			if (d.ctorParamProps[i] != null && ownsWhatItHolds(params[i + 1].symbolType)) take(i + 1, st);
-		}
-		scan(d.ctorBody, st, false);
+		const st: SunkScan = { params, bits: 0, forwards: [], home: routine.modulePath, graph: ctx.moduleGraph };
+		scanCtor(d, params, owner, st);
 		routine.sunkParams = st.bits;
 		if (st.forwards.length == 0) routine.sunkParams = routine.sunkParams | SETTLED;
 		else _unsettled.push({ routine, forwards: st.forwards });
