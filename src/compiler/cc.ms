@@ -653,7 +653,18 @@ export function tsanBroken(cc: string, targetOs: string): boolean {
 // Runs right after resolveCC, before the header root is read from opts.ccCompiler.
 // An auto-detected compiler that cannot run TSan is swapped for clang with a
 // notice; an explicit --cc= against a proven-broken pair fails loud.
+export function wasmSanitizerGap(opts: CliOptions): string {
+	const wasm = opts.targetOs == "wasm" || (opts.targetOs == "bare" && opts.cpuTarget == "wasm32");
+	if (opts.sanitize == "" || !wasm) return "";
+	return `--sanitize=${opts.sanitize} is not available on wasm: a wasm build links no sanitizer runtime.\n  → drop --sanitize, or run the sanitizer on a native build.`;
+}
+
 export function resolveSanitizerCC(opts: CliOptions): void {
+	const gap = wasmSanitizerGap(opts);
+	if (gap != "") {
+		writeStderr(`error: ${gap}\n`);
+		stopBuild();
+	}
 	if (!opts.sanitize.split(",").includes("thread")) return;
 	const cc = getCompilerName(opts.ccCompiler, opts.ccBinary);
 	if (!tsanBroken(cc, opts.targetOs)) return;
@@ -2034,6 +2045,24 @@ test "an explicit clang with --sanitize=thread on macOS is kept" {
 	assert applyArgs(clang, ["--sanitize=thread", "--cc=clang", "--os=macos"], 0).ok;
 	resolveSanitizerCC(clang);
 	assert clang.ccCompiler == 1;
+}
+
+test "a wasm build refuses every --sanitize by name, and a native one does not" {
+	for (const args of [["--os=wasm"], ["--os=bare", "--cpu=wasm32"]]) {
+		for (const san of ["address", "undefined", "thread", "undefined,address"]) {
+			const opts = newCliOptions();
+			assert applyArgs(opts, [`--sanitize=${san}`, ...args], 0).ok;
+			assert wasmSanitizerGap(opts).startsWith(`--sanitize=${san} is not available on wasm`);
+		}
+		const plain = newCliOptions();
+		assert applyArgs(plain, args, 0).ok;
+		assert wasmSanitizerGap(plain) == "";
+	}
+	for (const os of ["linux", "macos", "windows", "bare"]) {
+		const native = newCliOptions();
+		assert applyArgs(native, ["--sanitize=undefined", `--os=${os}`], 0).ok;
+		assert wasmSanitizerGap(native) == "";
+	}
 }
 
 test "a build without thread sanitizing keeps its auto-detected compiler" {
