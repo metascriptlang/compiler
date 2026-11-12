@@ -4,8 +4,8 @@
 //   → while (i < E [&& i < F]) {
 //       const $end = msBlockEndOf(i, min(E, F), 1024);
 //       DECLS and TERM over $j in [i, $end) with every raising operation sticky, the terms summed in $sum and
-//       bounded by [$min, $max] (constants when the term's range is known narrow);
-//       if (!$bad && msBlockRangeFits(acc, $end - i, $min, $max)) { acc = msBlockSumOf(acc, $sum); i = $end; }
+//       bounded by [-$hi - 1, $hi] from the OR of their x ^ (x >> sign) (constants when the term's range is known narrow);
+//       if (!$bad && msBlockRangeFits(acc, $end - i, -$hi - 1, $hi)) { acc = acc + $sum, wrapped; i = $end; }
 //       else while (i < $end) BODY
 //     }
 //
@@ -442,28 +442,22 @@ function sumLoop(s: SumLoop, loop: Node, ctx: TransformContext): Node {
 	const termCopy = cloneFresh(s.term, renames, ctx, true);
 	const termRange = rangeOf(termCopy, f);
 	const narrowTerm = termRange != null && small(termRange, 2147483648) && termRange.lo * REDUCE_BLOCK > -2147483648 && termRange.hi * REDUCE_BLOCK < 2147483647;
-	const sumType = getSysType(narrowTerm ? TypeKind.Int32 : TypeKind.Int64);
 	const folded = narrowTerm ? null : foldedCheck(termCopy, f);
-	const value = folded != null ? wideValue(termCopy, f, loc) : convert(sticky(termCopy, f), sumType, loc);
+	const valueRange = folded != null ? computedRange(termCopy, f) : termRange;
+	const nonNegative = valueRange != null && valueRange.lo >= 0;
+	const i32 = getSysType(TypeKind.Int32);
+	const value = narrowTerm ? convert(sticky(termCopy, f), i32, loc) : folded != null ? wideValue(termCopy, f, loc) : sticky(termCopy, f);
+	const termType = value.nodeType!;
+	const sumType = narrowTerm ? i32 : wrappingSumType(termType);
 	const sum = declareLocal(head, ctx, "sum", sumType, zero(sumType, loc), DeclKind.Let, loc);
-	const termSym = freshTempSym(ctx, "t", sumType);
+	const termSym = freshTempSym(ctx, "t", termType);
 	const termDecl = makeVarDecl(termSym.name, value, DeclKind.Const, loc);
 	termDecl.resolvedSym = termSym;
-	termDecl.nodeType = sumType;
+	termDecl.nodeType = termType;
 	fast.push(termDecl);
-	fast.push(assignTo(sum, typed(makeBinary(makeIdentResolved(sum, loc), "+", makeIdentResolved(termSym, loc), loc), sumType), loc));
-	let lowest = int64(narrowTerm ? termRange!.lo : 0, loc);
-	let highest = int64(narrowTerm ? termRange!.hi : 0, loc);
-	let tracked: Symbol[] = [];
-	if (!narrowTerm) {
-		const low = declareLocal(head, ctx, "min", i64, int64(0, loc), DeclKind.Let, loc);
-		const high = declareLocal(head, ctx, "max", i64, int64(0, loc), DeclKind.Let, loc);
-		fast.push(assignTo(low, extreme(termSym, "<", low, loc), loc));
-		fast.push(assignTo(high, extreme(termSym, ">", high, loc), loc));
-		lowest = makeIdentResolved(low, loc);
-		highest = makeIdentResolved(high, loc);
-		tracked = [low, high];
-	}
+	fast.push(assignTo(sum, typed(makeBinary(makeIdentResolved(sum, loc), "+", convert(makeIdentResolved(termSym, loc), sumType, loc), loc), sumType), loc));
+	const magnitude = narrowTerm ? null : declareLocal(head, ctx, "mag", termType, zero(termType, loc), DeclKind.Let, loc);
+	if (magnitude != null) fast.push(assignTo(magnitude, typed(makeBinary(makeIdentResolved(magnitude, loc), "|", magnitudeBits(termSym, nonNegative, loc), loc), termType), loc));
 	const one = makeIntNumber(1, loc);
 	one.nodeType = indexType;
 	fast.push(makeExprStmt(makeAssign(makeIdentResolved(j, loc), typed(makeBinary(makeIdentResolved(j, loc), "+", one, loc), indexType), loc), loc));
@@ -477,19 +471,22 @@ function sumLoop(s: SumLoop, loop: Node, ctx: TransformContext): Node {
 		head.push(markBad(bad, typed(makeBinary(below, "||", above, loc), booleanType()), loc));
 	}
 	head.push(makeWhile(typed(makeBinary(wide(makeIdentResolved(j, loc), loc), "<", makeIdentResolved(end, loc), loc), booleanType()), makeBlock(fast, loc), loc));
+	const hi = magnitude == null ? null : declareLocal(head, ctx, "hi", i64, typed(makeCall(runtimeRef("msBlockMagnitude", loc), [makeIdentResolved(magnitude, loc)], loc), i64), DeclKind.Const, loc);
 	if (folded != null) {
-		const below = typed(makeBinary(makeIdentResolved(tracked[0], loc), "<", int64(folded.lo, loc), loc), booleanType());
-		const above = typed(makeBinary(makeIdentResolved(tracked[1], loc), ">", int64(folded.hi, loc), loc), booleanType());
+		const below = typed(makeBinary(blockLow(hi, nonNegative, termRange, loc), "<", int64(folded.lo, loc), loc), booleanType());
+		const above = typed(makeBinary(blockHigh(hi, termRange, loc), ">", int64(folded.hi, loc), loc), booleanType());
 		head.push(markBad(bad, typed(makeBinary(below, "||", above, loc), booleanType()), loc));
 	}
 
 	const accType = s.acc.nodeType!;
 	const accRange = typeRange(accType)!;
 	const count = typed(makeBinary(makeIdentResolved(end, loc), "-", wide(cloneIdent(s.index, loc), loc), loc), i64);
-	const fitsCall = typed(makeCall(runtimeRef("msBlockRangeFits", loc), [cloneIdent(s.acc, loc), count, lowest, highest, makeBool(s.sub, loc), int64(accRange.lo, loc), int64(accRange.hi, loc)], loc), booleanType());
+	const fitsCall = typed(makeCall(runtimeRef("msBlockRangeFits", loc), [cloneIdent(s.acc, loc), count, blockLow(hi, nonNegative, termRange, loc), blockHigh(hi, termRange, loc), makeBool(s.sub, loc), int64(accRange.lo, loc), int64(accRange.hi, loc)], loc), booleanType());
 	const clean = typed(makeUnaryNot(makeIdentResolved(bad, loc), loc), booleanType());
 	const fits = typed(makeBinary(clean, "&&", fitsCall, loc), booleanType());
-	const total = typed(makeCall(runtimeRef("msBlockSumOf", loc), [cloneIdent(s.acc, loc), makeIdentResolved(sum, loc), makeBool(s.sub, loc)], loc), i64);
+	const total = narrowTerm
+		? typed(makeCall(runtimeRef("msBlockSumOf", loc), [cloneIdent(s.acc, loc), makeIdentResolved(sum, loc), makeBool(s.sub, loc)], loc), i64)
+		: typed(makeBinary(makeHiddenStdConv(cloneIdent(s.acc, loc), sumType, loc), s.sub ? "-" : "+", makeIdentResolved(sum, loc), loc), sumType);
 	const take = makeBlock([
 		makeExprStmt(makeAssign(cloneIdent(s.acc, loc), makeHiddenStdConv(total, accType, loc), loc), loc),
 		makeExprStmt(makeAssign(cloneIdent(s.index, loc), narrow(makeIdentResolved(end, loc), indexType, loc), loc), loc),
@@ -500,12 +497,12 @@ function sumLoop(s: SumLoop, loop: Node, ctx: TransformContext): Node {
 	return makeWhile(w.whileCondition, makeBlock(head, loc), loc);
 }
 
-// The block's min and max start at 0, so only a check that lets 0 through can be tested on them.
+// The block's magnitude bound always holds -1 and 0, so only a check that lets both through can be tested on it.
 function foldedCheck(term: Node, f: Fast): Range | null {
 	if (term.kind != NodeKind.CallExpr || stickyName(term) == "") return null;
 	if (term.flags.has(NodeFlag.IntCheck) && typeRange(term.nodeType) == null) return null;
 	const r = acceptedRange(term, f);
-	return r != null && r.lo <= 0 && r.hi >= 0 ? r : null;
+	return r != null && r.lo < 0 && r.hi >= 0 ? r : null;
 }
 
 function wideValue(n: Node, f: Fast, loc: SourceLocation): Node {
@@ -518,10 +515,28 @@ function wideValue(n: Node, f: Fast, loc: SourceLocation): Node {
 	return typed(makeBinary(wide(args[0], loc), arithOp(name), wide(args[1], loc), loc), i64);
 }
 
-function extreme(term: Symbol, side: string, current: Symbol, loc: SourceLocation): Node {
-	const t = current.symbolType!;
-	const wins = typed(makeBinary(wide(makeIdentResolved(term, loc), loc), side, makeIdentResolved(current, loc), loc), booleanType());
-	return typed(makeConditional(wins, wide(makeIdentResolved(term, loc), loc), makeIdentResolved(current, loc), loc), t);
+function wrappingSumType(t: Type): Type {
+	const r = peelToRepr(t);
+	return getSysType(r != null && bitsOfKind(r.kind) == 64 ? TypeKind.Uint64 : TypeKind.Uint32);
+}
+
+function magnitudeBits(term: Symbol, nonNegative: boolean, loc: SourceLocation): Node {
+	const t = term.symbolType!;
+	const k = peelToRepr(t)!.kind;
+	if (nonNegative || !isSignedKind(k)) return makeIdentResolved(term, loc);
+	const sign = makeIntNumber(bitsOfKind(k) - 1, loc);
+	sign.nodeType = t;
+	const fill = typed(makeBinary(makeIdentResolved(term, loc), ">>", sign, loc), t);
+	return typed(makeBinary(makeIdentResolved(term, loc), "^", fill, loc), t);
+}
+
+function blockLow(hi: Symbol | null, nonNegative: boolean, r: Range | null, loc: SourceLocation): Node {
+	if (hi == null) return int64(r!.lo, loc);
+	return nonNegative ? int64(0, loc) : typed(makeBinary(int64(-1, loc), "-", makeIdentResolved(hi, loc), loc), getSysType(TypeKind.Int64));
+}
+
+function blockHigh(hi: Symbol | null, r: Range | null, loc: SourceLocation): Node {
+	return hi == null ? int64(r!.hi, loc) : makeIdentResolved(hi, loc);
 }
 
 function assignTo(sym: Symbol, value: Node, loc: SourceLocation): Node {

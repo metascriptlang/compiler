@@ -42,13 +42,14 @@ test "E2E C: a reduction with a call, a division, a read of its sum, a wide sum 
 	}
 }
 
-test "E2E C: a sticky block runs proven checks unchecked, checks a counter's range once, and bounds its terms by their range or their min and max" {
+test "E2E C: a sticky block runs proven checks unchecked, checks a counter's range once, and bounds its terms by their range or the OR of their magnitudes" {
 	const cases: string[][] = [
-		["function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const x of upTo(n)) t += (x ^ n) & 1023; return t; }", "int32_t dollarsum", "dollarmin|msSticky"],
-		["function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const x of upTo(n)) t += -(x & 7); return t; }", "int32_t dollarsum", "dollarmin|msSticky"],
-		["function f(xs: int32[], n: int32): int16 { let t: int16 = 0; for (let x: int32 = 0; x < n; x++) t += ((x & 7) - 3) as int16; return t; }", "int32_t dollarsum", "msSticky"],
-		["function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const [k, x] of xs.entries()) t += x + ((k as int32) & 1); return t; }", "> 2147483648LL|dollarmin|int64_t dollarsum", "msSticky"],
-		["function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const x of upTo(n)) t -= x * 3 + 1; return t; }", "msStickyMulI32(|dollarmin", "msStickyAddI32("],
+		["function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const x of upTo(n)) t += (x ^ n) & 1023; return t; }", "int32_t dollarsum", "dollarmag|msSticky"],
+		["function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const x of upTo(n)) t += -(x & 7); return t; }", "int32_t dollarsum", "dollarmag|msSticky"],
+		["function f(xs: int32[], n: int32): int16 { let t: int16 = 0; for (let x: int32 = 0; x < n; x++) t += ((x & 7) - 3) as int16; return t; }", "int32_t dollarsum", "dollarmag|msSticky"],
+		["function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const k of xs.keys()) t += xs[k]; return t; }", "uint32_t dollarsum|int32_t dollarmag|msBlockMagnitude(", "dollarmin|int64_t dollarsum|int64_t dollarmag"],
+		["function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const [k, x] of xs.entries()) t += x + ((k as int32) & 1); return t; }", "> 2147483648LL|int64_t dollarmag|uint64_t dollarsum", "msSticky|dollarmin"],
+		["function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const x of upTo(n)) t -= x * 3 + 1; return t; }", "msStickyMulI32(|dollarmag", "msStickyAddI32(|dollarmin"],
 	];
 	for (const [fn, kept, dropped] of cases) {
 		const c = built("ranges", fn);
