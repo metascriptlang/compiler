@@ -260,6 +260,17 @@ merging by shape gives that result without intercepting calls (`keepOne`,
 - `expectExitCode(n)` makes the command a check: it is reused only after it passed, and a failure
   prints `exited with 3, expected 0` and runs again next time. Its key holds the content of every
   artifact and `addFileInput` it names, so editing one input reruns it and reverting reuses it.
+- `expectStdOutEqual(bytes)` and `expectStdErrEqual(bytes)` compare a stream byte for byte, as
+  Zig's `Run` checks do (`Run.zig` `expectStdOutEqual`, `expect_stdout_exact` at 738d2be9d):
+  the stdout one also expects exit code 0 unless a code was named, the stderr one leaves the
+  exit code alone, so `echo careful >&2; exit 4` with `expectStdErrEqual("careful\n")` passes.
+  `expectStdOutMatch(text)` / `expectStdErrMatch(text)` are Zig's `expect_stdout_match` /
+  `expect_stderr_match`, which Zig reaches through `addCheck` only. A failure prints Zig's
+  frame (`========= expected this stdout: =========`, the bytes, `========= but found:
+  ====================`, the stream); a checked stream is not printed when the check passes.
+  Measured 2026-11-12, candidate of tree `55d4b0200539`, in
+  `src/test/projectConfigCommands.ms` (the `expectStd…` cases, red before the executor read
+  the checks).
 - `runArtifact(app, args)` is a command whose program is `app`; `addArtifactArg(app)` and
   `addPrefixedArtifactArg("--msc=", app)` pass an artifact's path and key the command by its
   content; `getEmittedBin()` names the binary as a file argument.
