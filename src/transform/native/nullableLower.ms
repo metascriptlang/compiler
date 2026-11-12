@@ -60,6 +60,8 @@ export function checkMaybeReads(program: Node): void {
 }
 
 function checkMaybeRead(n: Node): void {
+	const located = n.kind == NodeKind.MemberExpr && (n.data as MemberExprData).object != null
+		&& isLocation(withoutIdentityCasts((n.data as MemberExprData).object));
 	forEachChild(n, checkMaybeRead);
 	if (n.kind != NodeKind.MemberExpr || !n.flags.has(NodeFlag.ConvCheck)) return;
 	const d = n.data as MemberExprData;
@@ -67,7 +69,7 @@ function checkMaybeRead(n: Node): void {
 	if (d.property != "value" || carrier == null || !isMaybeType(carrier)) return;
 	const loc = n.location;
 	d.object = withoutIdentityCasts(d.object);
-	const check = isLocation(d.object) ? "msMaybeAccess" : "msMaybeAccessVal";
+	const check = located ? "msMaybeAccess" : "msMaybeAccessVal";
 	const call = makeCall(runtimeRef(check, loc), [d.object, makeString(nullAccessHead(carrier), loc), makeString("null", loc)], loc);
 	call.nodeType = carrier;
 	d.object = call;
