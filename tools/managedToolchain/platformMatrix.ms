@@ -67,6 +67,8 @@ const CONSUMERS: Consumer[] = [
 	{ name: "ubsanDefault", source: "ubsanCompanion.ms", flags: "", kind: "exe", expect: "", code: 0, report: "overflow" },
 	{ name: "ubsanSan", source: "ubsanCompanion.ms", flags: "--sanitize=undefined", kind: "exe", expect: "", code: 0, report: "overflow" },
 	{ name: "ubsanRelease", source: "ubsanCompanion.ms", flags: "--release", kind: "exe", expect: "matrix-ub *", code: 0, report: "" },
+	{ name: "stackSmash", source: "stackSmash.ms", flags: "", kind: "smash", expect: "", code: 0, report: "" },
+	{ name: "stackSmashOff", source: "stackSmash.ms", flags: "--passC=-fno-stack-protector", kind: "exe", expect: "matrix-smash 65*", code: 0, report: "" },
 	{ name: "hcr", source: "hcr.ms", flags: "--hcr", kind: "hcr", expect: "matrix-hcr 42", code: 0, report: "" },
 	{ name: "libraryOrder", source: "hello.ms", flags: "--passL=-Wl,--no-as-needed --passL=-lutil", kind: "order", expect: "libutil.so.1 libc.so.6", code: 0, report: "" },
 	{ name: "libraryOrderShared", source: "sharedLibrary.ms", flags: "--app=lib --passL=-Wl,--no-as-needed --passL=-lutil", kind: "orderLib", expect: "libutil.so.1 libc.so.6", code: 0, report: "" },
@@ -295,7 +297,7 @@ function runCell(results: string, host: string, consumer: Consumer, target: stri
 	}
 	const reported = ran.out + ran.err;
 	const printed = consumer.expect.endsWith("*") ? ran.out.startsWith(consumer.expect.slice(0, consumer.expect.length - 1)) : ran.out.trim() == consumer.expect;
-	const good = consumer.report != "" ? ran.code != 0 && (reported.contains(consumer.report)) : ran.code == consumer.code && printed;
+	const good = consumer.kind == "smash" ? ran.code != 0 && !ran.out.contains("survived") : consumer.report != "" ? ran.code != 0 && (reported.contains(consumer.report)) : ran.code == consumer.code && printed;
 	const detail = consumer.report != "" ? `${observed}; stderr: ${oneLine(ran.err, 160)}` : observed;
 	const why = good ? "" : `expected rc=${consumer.code} out=${consumer.expect}; stderr: ${oneLine(ran.err, 160)}`;
 	note(results, [consumer.name, target, compiler, "run", host, good ? "ok" : "FAIL", String(ran.seconds), detail, why]);
@@ -341,7 +343,11 @@ function buildCell(out: string, results: string, cells: string, host: string, ho
 		note(results, [consumer.name, target.name, compiler, "build", host, "n/a", "0", "", "no shared library on wasm32-wasi"]);
 		return;
 	}
-	if (consumer.name == "ubsanDefault" && target.os == "wasm") {
+	if (consumer.name == "stackSmash" && target.os == "windows" && compiler == "bundle") {
+		note(results, [consumer.name, target.name, compiler, "build", host, "n/a", "0", "", "msc passes no stack protector on Windows until a bundle's runtime has libssp.a"]);
+		return;
+	}
+	if ((consumer.name == "ubsanDefault" || consumer.name == "stackSmash") && target.os == "wasm") {
 		note(results, [consumer.name, target.name, compiler, "build", host, "n/a", "0", "", "a wasm build is forced to release, with zig as well"]);
 		return;
 	}
