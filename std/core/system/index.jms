@@ -198,9 +198,7 @@ export class AbortSignal {
 	}
 
 	throwIfAborted(): void {
-		if (this.aborted) {
-			unreachable;
-		}
+		if (this.aborted) throw new Error("AbortError");
 	}
 
 	static abort(reason: string = "AbortError: This operation was aborted"): AbortSignal {

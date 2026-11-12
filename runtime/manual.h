@@ -784,7 +784,4 @@ MS_TLS_EXTERN(msCallSoonFn, msCallSoonProc);
 MS_TLS_EXTERN(void*, msErrPayload);
 #endif
 
-/* ===== Abort stub ===== */
-static inline void msAbortThrow(void) { msErr = true; }
-
 #endif /* SYSTEM_H */

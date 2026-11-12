@@ -495,7 +495,6 @@ static inline void* msUnownedGiveRo(void* p) {
 #include "runtime/promise/thread.h"
 
 /* AbortController / AbortSignal (needs msString + msThrow above) */
-#include "runtime/core/abort.h"
 
 /* Promise combinators (Promise.all, Promise.race) */
 #include "runtime/promise/combinator.h"

@@ -128,9 +128,6 @@ extern function msFutureReadBool(fut: Ptr<void>): boolean from "msFutureReadBool
 @compilerFunc @throws
 extern function msFutureReadString(fut: Ptr<void>): string from "msFutureReadString";
 
-@throws
-extern function msAbortThrow(): void from "msAbortThrow";
-
 @compilerFunc
 extern function msFutureCompleteT(fut: Ptr<void>, sink value: Ptr<void>): void from "msFutureCompleteT";
 
@@ -297,9 +294,7 @@ export class AbortSignal {
 	}
 
 	throwIfAborted(): void {
-		if (this.aborted) {
-			msAbortThrow();
-		}
+		if (this.aborted) throw new Error("AbortError");
 	}
 
 	static abort(reason: string = "AbortError: This operation was aborted"): AbortSignal {
