@@ -595,6 +595,70 @@ An edit rebuild was equal on both. msc built by the bundle runs 2–11% faster. 
 without `-g` (a danger msc is 221 MB against 33 MB), which is why the A/B has a `-g0` zig arm. `-O2` against `-O3`
 for release differs by under 1% on all three hosts, so release keeps `-O2`.
 
+## Measured 2026-11-12 — a JS bundle keeps only what runs
+
+`msc build <program> --target=js` writes one file. It held every declaration of every module in the
+import graph, the 51 prelude modules included: `console.log("hello")` was 329,486 B, of which
+`std/meta/node` 44,153, `std/serialize/json/parser` 43,469 and `std/core/buffer/codec` 34,433. The
+bundle now keeps a top-level function, class, enum or effect-free binding only when something that
+runs names it.
+
+rtx, Linux x86-64; old = the compiler of tree `e9d81b35dc9e`, new = a candidate of tree
+`6a53c2abfdf1` with the change; bundle size in bytes, default mode. Every pair printed the same output with
+the same exit code. The programs are those of §Measured 2026-11-12 — what small programs link.
+
+| program | old | new | modules with anything kept |
+|---|---|---|---|
+| hello | 329,486 | 2,044 | 6 |
+| Map/Set/array | 331,934 | 5,398 | 7 |
+| JSON parse and stringify | 331,876 | 82,633 | 20 |
+| strings | 330,308 | 4,892 | 6 |
+| two awaits in an async function | 330,201 | 3,728 | 7 |
+| the same awaits at the top level | 330,002 | 3,788 | 7 |
+| iterator helpers (`iteratorHelpersMatchNode.ms`) | 395,111 | 69,157 | 7 |
+
+hello at `--danger`: 302,089 → 2,044 B. The whole corpus built on `MSCORPUS_LANES=js,esm` with the
+candidate (the `js` lane is this bundle, `esm` the `--split` tree, which is not changed): 6,637 cells
+pass, 39 xfail, 8 fail. The 8 are 4 programs red on both lanes: `762-bitSetMacro` (in
+`known-red.json`), `callbackReadersOnWorkers` and `readonlyMapReaders` (the old compiler refuses
+them with the same checker error) and `plainObjectTrait` (same stdout mismatch on both lanes).
+Source maps: for a three-line program and the JSON program, the lines holding `"start"`, `"boom"`,
+`function inner`, `function msDefect`, `function parseString__` and `function appendJson__` map to
+the same `.ms` file and line under both compilers (`p9map.ms:5`, `:2`, `:1`, `index.jms:80`,
+`parser.ms:396`, `stringify.ms:22`), although `"start"` moved from generated line 6,376 to 80.
+
+How it decides (`src/codegen/js/reach.ms`, `runsOnLoad` and `bundleUnits` in
+`src/codegen/js/jsgen.ms`, the filter in `cmdBuildJS`):
+- A unit is one top-level statement of a module, or one helper the generator adds.
+- A unit runs on load, and is always kept, when it is a statement, a binding whose initializer has
+  an effect (`hasEffect`: a call, `new`, `await`, an assignment), a class with a static block or an
+  initialized static field, a decorated or actor declaration, anything in a module loaded through
+  `import()`, or text in which a line at column 0 is not the start of a declaration.
+- Every other unit is kept when a kept unit, the bundle's `export { … }` list, the module
+  evaluator or a wasm binding names one of the names it declares at column 0. Uses are read from the
+  emitted text, word by word, so a name inside a string also keeps its declaration: the rule can
+  keep too much and cannot drop something a kept unit spells.
+
+The reference does this in its JS backend: a proc is generated when a symbol use reaches it
+(`compiler/jsgen.nim` `genProcForSymIfNeeded`, called from `genSym`), a `const` likewise
+(`genConstant`), a top-level proc only when exported, and every top-level statement and `var`/`let`
+always (`genVarStmt`); Nim `15dd34468`. One difference: an unused top-level binding with an
+effect-free initializer is dropped here and kept there. With the reference's rule alone the hello
+bundle is about 98 KB, because the prelude declares 724 such bindings (measured on the emitted
+bundle with a prototype of the rule); no program's output depends on an unread binding.
+
+What still fills the 2,044 B of hello: three raw-JS functions of the prelude whose bodies are
+written at column 0, which the text rule reads as statements, and what they name. For comparison,
+esbuild `--bundle --tree-shaking=true` over the old hello bundle leaves 307 B and over the old JSON
+bundle 78,410 B (same output under node).
+
+Not changed: the `--split` module tree (`msc build --target=js --split`, `msc run`/`msc test
+--target=js`), which a bundler or node consumes module by module. Not measured: build time of the
+filter, a bundle with `@wasm` functions, and bundles of the sibling repositories.
+
+Pinned by `src/test/guard/jsBundleKeepsOnlyWhatRuns.ms` and the inline tests of
+`src/codegen/js/reach.ms`.
+
 ## Measured 2026-10-29 — the native toolchain bundle against managed zig
 
 Self-host `msc build src/index.ms` (450 modules) on RTX (WSL2, 24 threads, pinned to 16 CPUs,
