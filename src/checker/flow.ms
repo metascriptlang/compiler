@@ -18,7 +18,7 @@ import {
 	ArrayLiteralData, ObjectLiteralData, SpreadExprData, SymbolFlag,
 	Symbol, SymbolKind, DestructuringDeclData, MoveExprData,
 	FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData,
-	BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData,
+	BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData, SatisfiesExprData,
 } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { isLogicalAssignOp } from "../ast/operators";
@@ -144,8 +144,10 @@ function appendIfUnique(types: Type[], t: Type | null): void {
 
 function skipReferenceHidden(n: Node): Node {
 	let walk: Node = n;
-	while (walk.kind == NodeKind.HiddenDeref || walk.kind == NodeKind.HiddenAddr || walk.kind == NodeKind.HiddenSubConv) {
-		walk = walk.kind == NodeKind.HiddenSubConv ? (walk.data as HiddenStdConvData).convExpr : (walk.data as { expr: Node }).expr;
+	while (walk.kind == NodeKind.HiddenDeref || walk.kind == NodeKind.HiddenAddr || walk.kind == NodeKind.HiddenSubConv || walk.kind == NodeKind.SatisfiesExpr) {
+		walk = walk.kind == NodeKind.HiddenSubConv ? (walk.data as HiddenStdConvData).convExpr
+			: walk.kind == NodeKind.SatisfiesExpr ? (walk.data as SatisfiesExprData).satisfiesExpr
+			: (walk.data as { expr: Node }).expr;
 	}
 	return walk;
 }
@@ -1107,6 +1109,7 @@ export function narrowType(t: Type | null, expr: Node | null, refNode: Node, ass
 }
 
 function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: boolean): Type | null {
+	if (expr.kind == NodeKind.SatisfiesExpr) return narrowType(t, (expr.data as SatisfiesExprData).satisfiesExpr, refNode, assumeTrue);
 	if (expr.kind == NodeKind.UnaryExpr) {
 		const d = expr.data as UnaryExprData;
 		if (d.unaryOp == "!") {

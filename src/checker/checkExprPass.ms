@@ -4,7 +4,7 @@
 import { membersOf } from "./unitsInCheck";
 import { refuseUnassignedRead, refuseHookValue, refusePatternExternValue, requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, declaresReadonlyField, hiddenPrivateField, declaringSymOf, fieldDeclarer, befriend, unfriend, expansionOf, markExpansion } from "./visibility";
 import { callCheckStmt, checkInTypeSlot, registerCheckExpr, registerReadonlyFieldWrite, callDemandReturn, callDemandBinding, callUndefinedVariableMessage, callExpandMacroInvocation, callEvalComptimeBlock, callInstantiateGeneric } from "./checkerCallbacks";
-import { Node, NodeKind, NodeData, DeclKind, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, TestDeclData, WhileStmtData, DoWhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData, AttachedOp, BuiltinKind } from "../ast/node";
+import { Node, NodeKind, NodeData, DeclKind, createNode, createNodeAt, NodeFlag, makeLoc, SourceLocation, IdentifierData, TestDeclData, WhileStmtData, DoWhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SatisfiesExprData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, BigIntLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, MethodDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, SpliceManyData, VariableDeclData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts, JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData, AttachedOp, BuiltinKind } from "../ast/node";
 import { getIdentId } from "./idents";
 import { isAssignOp, isLogicalAssignOp } from "../ast/operators";
 import { TokenKind, Token, createToken } from "../lexer/token";
@@ -853,6 +853,7 @@ function checkExprKind(ctx: CheckerContext, node: Node, expectedType: Type | nul
 		NodeKind.FunctionExpr => checkFuncExpr(ctx, node, expectedType),
 		NodeKind.ConditionalExpr => { checkConditionalExpr(ctx, node, expectedType); return; },
 		NodeKind.TypeAssertion => { checkTypeAssertion(ctx, node, expectedType); return; },
+		NodeKind.SatisfiesExpr => { checkSatisfiesExpr(ctx, node); return; },
 		NodeKind.SpreadExpr => {
 			const d = node.data as SpreadExprData;
 			checkExpr(ctx, d.spreadArg, null);
@@ -2888,6 +2889,44 @@ function checkConstAssertion(ctx: CheckerContext, node: Node, d: TypeAssertionDa
 	node.typeArg = operand.typeArg;
 	node.flowNode = operand.flowNode;
 	node.nodeType = member != null ? member : literal != null ? literal : operand.nodeType;
+}
+
+// The node takes every field of its operand, so the operand's own node never outlives the check.
+function becomeOperand(node: Node, operand: Node): void {
+	node.kind = operand.kind;
+	node.location = operand.location;
+	node.nodeType = operand.nodeType;
+	node.resolvedSym = operand.resolvedSym;
+	node.flags = operand.flags;
+	node.variantSlot = operand.variantSlot;
+	node.typeExpr = operand.typeExpr;
+	node.typeExprs = operand.typeExprs;
+	node.genericDefaults = operand.genericDefaults;
+	node.baseExprs = operand.baseExprs;
+	node.paramLocations = operand.paramLocations;
+	node.paramSyms = operand.paramSyms;
+	node.typeArg = operand.typeArg;
+	node.flowNode = operand.flowNode;
+	node.nodeTypeAst = operand.nodeTypeAst;
+	node.inlineFrame = operand.inlineFrame;
+	node.data = operand.data;
+}
+
+// `e satisfies T` checks e with T as its contextual type and keeps e's own type.
+// The relation is into Readonly<T> because satisfies makes no alias of e.
+function checkSatisfiesExpr(ctx: CheckerContext, node: Node): void {
+	const d = node.data as SatisfiesExprData;
+	const typeLoc = node.typeExpr != null ? node.typeExpr.location : node.location;
+	const target = annotatedType(d.satisfiesType, node.typeExpr, ctx, typeLoc.line, typeLoc.column);
+	resolveTypeExpr(node.typeExpr, ctx);
+	becomeOperand(node, d.satisfiesExpr);
+	const resolved = !isUnresolvedType(target) && target.kind != TypeKind.Error;
+	const operandMark = ctx.errors.length;
+	checkExpr(ctx, node, resolved ? target : null);
+	const own = node.nodeType;
+	if (resolved && !reportedErrorSince(ctx, operandMark) && own != null && !isUnresolvedType(own) && own.kind != TypeKind.Error && !isAssignable(own, createReadonlyView(target))) {
+		addError(ctx, "Type '" + typeDisplayName(own) + "' does not satisfy the expected type '" + typeDisplayName(target) + "'", node.location.line, node.location.column);
+	}
 }
 
 function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
