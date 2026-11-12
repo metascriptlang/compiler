@@ -352,41 +352,6 @@ static inline msString msProcessCwd(void) {
 	return MS_EMPTY_STRING;
 }
 
-// =============================================================================
-// File I/O
-// =============================================================================
-
-/**
- * Read entire file as string. Returns empty string on failure.
- */
-static inline msString msProcessReadFile(msString path) {
-	const char* cpath = msStringToCString(path);
-	FILE* f = fopen(cpath, "rb");
-	if (!f) return MS_EMPTY_STRING;
-	fseek(f, 0, SEEK_END);
-	long size = ftell(f);
-	fseek(f, 0, SEEK_SET);
-	if (size <= 0) { fclose(f); return MS_EMPTY_STRING; }
-	char* buf = (char*)msMemAlloc(size + 1);
-	size_t nread = fread(buf, 1, size, f);
-	fclose(f);
-	buf[nread] = '\0';
-	msString result = msStringFromCStr(buf);
-	msMemFree(buf);
-	return result;
-}
-
-/**
- * Check if file exists (can be opened for reading).
- */
-static inline double msProcessFileExists(msString path) {
-	const char* cpath = msStringToCString(path);
-	FILE* f = fopen(cpath, "r");
-	if (!f) return 0.0;
-	fclose(f);
-	return 1.0;
-}
-
 /* Note: legacy `msProcessExec` (exit-code-only `system()` wrapper) removed.
  * std/process.exec() now uses msProcessSpawnSync — rich result with captured
  * stdout, stderr, exit code, and signal. Wrap via Result<string, ProcessError>. */
@@ -2065,20 +2030,6 @@ static inline int32_t msProcChildSignal(int64_t h) { (void)h; return 0; }
 static inline void msProcChildClose(int64_t h) { (void)h; }
 static inline void msProcChildFree(int64_t h) { (void)h; }
 #endif
-
-/**
- * Write string to file. Returns 1.0 on success, 0.0 on failure.
- */
-static inline double msProcessWriteFile(msString path, msString content) {
-	const char* cpath = msStringToCString(path);
-	FILE* f = fopen(cpath, "wb");
-	if (!f) return 0.0;
-	const char* data = msStringToCString(content);
-	size_t len = msStrLen(content);
-	size_t written = fwrite(data, 1, len, f);
-	fclose(f);
-	return (written == len) ? 1.0 : 0.0;
-}
 
 // =============================================================================
 // Environment variables
