@@ -759,10 +759,29 @@ new = a candidate of tree `9d52061d018f`, `--danger --strip`, file bytes:
 | `console.log("done", 15, 2.5)` | 36,328 → 36,328 | 55,872 → 57,152 | 45,247 → 26,730 |
 | a `Map`, a `Set` and an array, five values printed | 32,576 → 32,576 | 52,016 → 53,280 | 47,407 → 28,860 |
 
-Each glibc pair is byte-identical. The two musl programs that allocate grow by the writer and
-keep the formatter, because `runtime/allocator.c` still calls `fprintf` in `msHeapFree` and
-`msHeapCloseRuns`: that file was left to the arc rewriting it, and converting its calls is what
-turns those rows into a saving. With the writer on every target instead (measured first), each
+Each glibc pair is byte-identical. In that table the two musl programs that allocate grew by the
+writer and kept the formatter, because `runtime/allocator.c` still called `fprintf` in two
+reports. With those two through `msErrorf` as well (rtx, 2026-11-12, one candidate of tree
+`7a33ff261e89` building each program against `runtime/allocator.c` without and with the two calls
+converted, `--danger --strip`, file bytes; the starting sizes differ from the table above because
+`main` moved between the two measurements):
+
+| program | glibc, dynamic | musl, static | WASI |
+|---|---|---|---|
+| `console.log("hello")` | 8,480, same bytes | 13,056, same bytes | 7,321, same bytes |
+| `console.log("done", 15, 2.5)` | 34,440, same bytes | 55,280 → 42,064 | 24,843, same bytes |
+| a `Map`, a `Set` and an array, five values printed | 32,640, same bytes | 53,488 → 40,272 | 29,979, same bytes |
+| a `Map` and a `Set`, three values printed (the guard's) | 29,984, same bytes | 50,640 → 37,424 | 25,639, same bytes |
+
+"Same bytes" is `cmp` of the pair. Each musl program that allocates loses 13,216 B and the
+formatter's prefix table, and every glibc and musl binary printed its line. On d87, where a
+Windows host cross-builds musl from its own bundle, the three lose 16,464, 16,480 and 16,480 B,
+and a Windows-native pair differs in one byte, offset 129, the same byte two links of one hello
+differ in. Comparing the installed compiler with a candidate instead showed glibc pairs that
+differ, because 45 other commits of `main` lay between the two; the comparison above holds the
+compiler fixed. Not measured: the two reports printing through the writer (a pointer the
+allocator did not hand out, a remote run past the 48-bit span; neither was triggered), macOS.
+With the writer on every target instead (measured first), each
 glibc program grew by about 2.5 KB (hello 11,032), which is why it stays off where `fprintf` is
 free. The writer against libc: compiled alone it prints the same line for every specifier above,
 `INT_MIN`, `LLONG_MIN`, `ULLONG_MAX`, a NULL `%s` and a 599-byte string (development Mac); with it

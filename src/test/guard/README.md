@@ -148,7 +148,10 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   targets and looks for the formatter's prefix table (`-0X+0X 0X-0x+0x 0x`) in the binary, since a
   stripped binary has no names and an unstripped musl one names `printf_core` in its debug strings
   whether or not it links it. Proven RED on the compiler of `7b6e64e1f852` (rtx, both targets),
-  GREEN on the fix (rtx, 2026-11-12).
+  GREEN on the fix (rtx, 2026-11-12). A second program, a `Map` and a `Set`, holds the allocator's
+  reports to the same check: RED on musl with `runtime/allocator.c` calling `fprintf`, GREEN with
+  it calling `msErrorf`, one candidate compiler for both (rtx and d87, 2026-11-12); on WASI it
+  was green before, because the managed heap is not built there.
 - **`acyclicProgramLinksNoCycleCollector.ms`** — a program none of whose types can form a cycle
   (a `Map<string, int32>` and a `Set<int32>`) links no `msRegisterCycle`, at `--mm=drc` and at
   `--mm=none`: outside the counted mode a failed constructor releases nothing, so the cyclic
