@@ -4,6 +4,10 @@ const NOISE = 1.10;
 const PAIRS = [["mixed", "wasmbindgen", "node"], ["mixed-chrome", "wasmbindgen-chrome", "chrome"]];
 const REFERENCE = "neon";
 const PARKED = new Map([["node\tprimes 2M", "compiler card 2026-11-08-wasm-sieve-13-percent-behind-rust-wasm"]]);
+const WASM_BINDGEN_BEST_SEEN = new Map([
+	["node\tadd x1000", 2.515], ["node\tadd64 x1000", 4.248], ["node\tmethod x1000", 3.348], ["node\tfield x1000", 2.849],
+	["chrome\tadd x1000", 3.475], ["chrome\tadd64 x1000", 4.653], ["chrome\tmethod x1000", 4.472], ["chrome\tfield x1000", 4.268],
+]);
 const path = process.argv[2] ?? "out/bench/wasmBoundary/runs.tsv";
 
 const values = new Map();
@@ -41,14 +45,17 @@ for (const [ours, bar, runtime] of pairs) {
 	console.log("row".padEnd(28) + ours.padStart(14) + bar.padStart(20) + (ref ? REFERENCE.padStart(14) : "") + "  verdict");
 	for (const row of rows) {
 		const mine = median(ours, row);
-		const theirs = median(bar, row);
-		if (mine === null || theirs === null) continue;
+		const measured = median(bar, row);
+		if (mine === null || measured === null) continue;
+		const seen = WASM_BINDGEN_BEST_SEEN.get(runtime + "\t" + row) ?? measured;
+		const theirs = Math.min(measured, seen);
+		const against = seen < measured ? `${bar}'s recorded best ${seen}` : bar;
 		const ok = mine <= theirs * NOISE;
 		const parked = PARKED.get(runtime + "\t" + row);
 		missed += ok || parked ? 0 : 1;
 		parkedMisses += !ok && parked ? 1 : 0;
-		const verdict = parked ? (ok ? "ok, parked on " + parked + ": unpark it" : "slower, parked on " + parked) : ok ? "ok" : "slower than " + bar;
-		console.log(row.padEnd(28) + cell(mine) + cell(theirs).padStart(20) + (ref ? cell(median(REFERENCE, row)) : "") + "  " + verdict);
+		const verdict = parked ? (ok ? "ok, parked on " + parked + ": unpark it" : "slower, parked on " + parked) : ok ? (seen < measured ? "ok against " + against : "ok") : "slower than " + against;
+		console.log(row.padEnd(28) + cell(mine) + cell(measured).padStart(20) + (ref ? cell(median(REFERENCE, row)) : "") + "  " + verdict);
 	}
 	const total = rows.filter((row) => median(ours, row) !== null && median(bar, row) !== null).length;
 	console.log(`accept ${runtime}: ${total - missed - parkedMisses}/${total} rows meet ${bar} (${ours} at most ${Math.round((NOISE - 1) * 100)}% above)` + (parkedMisses ? `, ${parkedMisses} slower row(s) parked on a card` : ""));
