@@ -55,6 +55,8 @@ const CONSUMERS: Consumer[] = [
 	{ name: "crypto", source: "crypto.ms", flags: "", kind: "exe", expect: CRYPTO, code: 0, report: "" },
 	{ name: "cCompanion", source: "cCompanion.ms", flags: "", kind: "exe", expect: "matrix-c 1428", code: 0, report: "" },
 	{ name: "cppCompanion", source: "cppCompanion.ms", flags: "", kind: "exe", expect: "matrix-cpp 48", code: 0, report: "" },
+	{ name: "objcCompanion", source: "objcCompanion.ms", flags: "", kind: "exe", expect: "matrix-objc 8", code: 0, report: "" },
+	{ name: "objcRelease", source: "objcCompanion.ms", flags: "--release", kind: "exe", expect: "matrix-objc 8", code: 0, report: "" },
 	{ name: "sharedLibrary", source: "sharedLibrary.ms", flags: "--app=lib", kind: "lib", expect: "matrix-lib 42", code: 0, report: "" },
 	{ name: "debugLine", source: "debugLine.ms", flags: "", kind: "debug", expect: "matrix-debug 41", code: 0, report: "" },
 	{ name: "helloRelease", source: "hello.ms", flags: "--release", kind: "exe", expect: HELLO, code: 3, report: "" },
@@ -342,6 +344,10 @@ function buildCell(out: string, results: string, cells: string, host: string, ho
 	}
 	if (consumer.kind == "lib" && target.lib == "") {
 		note(results, [consumer.name, target.name, compiler, "build", host, "n/a", "0", "", "no shared library on wasm32-wasi"]);
+		return;
+	}
+	if (consumer.source == "objcCompanion.ms" && target.os != "macos") {
+		note(results, [consumer.name, target.name, compiler, "build", host, "n/a", "0", "", "Objective-C and Foundation are a macOS target's"]);
 		return;
 	}
 	if (consumer.name == "stackSmash" && target.os == "windows" && compiler == "bundle") {
