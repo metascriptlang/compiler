@@ -96,6 +96,15 @@ export function valueDump<T>(x: T, color: boolean): string {
 	return out;
 }
 
+function arrayDump<T>(xs: T[], color: boolean): string {
+	let out = "[";
+	for (let i = 0; i < xs.length; i = i + 1) {
+		if (i > 0) out = out + separator(color);
+		out = out + valueDump(xs[i], color);
+	}
+	return out + "]";
+}
+
 function arrayDump<T>(xs: Readonly<Span<T>>, color: boolean): string {
 	let out = "[";
 	for (let i = 0; i < xs.length; i = i + 1) {
