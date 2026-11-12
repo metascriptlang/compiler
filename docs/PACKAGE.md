@@ -198,6 +198,55 @@ that touches a marker left no marker after `check`, `test` and `--list`). `msc b
 runs the nodes it needs with the user's full rights, `-j<n>` at once (one per cpu by default);
 `--dry-run` prints every command line and runs none.
 
+**A failed node.** The build keeps going, as `zig build` does: a failed node prints its own
+`error:` line when it fails, every node that does not depend on it still runs, a node below it
+never starts, and the build exits 1 after a summary of what did not succeed. `--summary=<mode>`
+chooses what the end of the build lists: `failures` (the default: nothing when all is well),
+`all` (every node with `success` or `reused`, its wall time and its peak memory), `new` (`all`
+without the nodes taken from the store), `line` (the count only), `none`. Zig's words for
+`reused` and `(shown above)` are `cached` and `(reused)`; `reused` here already means "taken
+from the store". Measured 2026-11-12, candidate of tree `9c637f36f1e2`, where `after` reads
+`bad`'s output and `good` and `worse` depend on nothing:
+
+```
+$ msc build --colors=off all
+from-bad
+error: bad: sh -c echo from-bad; exit 3 sh exited with 3, expected 0
+error: worse: sh -c exit 4 sh exited with 4, expected 0
+Build Summary: 1/5 steps succeeded (2 failed)
+all transitive failure
++- bad failure
++- after transitive failure
+|  +- bad (shown above)
++- worse failure
+$ msc build --colors=off --summary=all fine
+reused: said
+Build Summary: 3/3 steps succeeded
+fine success 0ms
++- good success 1s
++- said reused 53ms
+```
+
+On recompiler itself, same candidate, `msc build --summary=all tests` (the gate's tests lane as
+ten nodes, 5645 tests passed, 777.8 s at host load 9 rising to 73) names each tier's wall time
+and peak, and a second run reuses all of them in 5.6 s:
+
+```
+Build Summary: 12/12 steps succeeded
+tests success 1ms
++- tests src/test/js/index.ms success 5m MaxRSS:3G
+|  +- msc success 1m MaxRSS:5G
++- tests src/test/handoff/index.ms success 11m MaxRSS:3G
+|  +- msc (shown above)
++- tests src/test/fmt/index.ms success 21s
+|  +- msc (shown above)
++- tests src/test/c/index.ms --tests-shard=0/3 success 6m MaxRSS:3G
+   +- msc (shown above)
+```
+
+(seven tiers between these cut). Not verified: Windows and macOS, a failure on recompiler's
+own graph, `--summary` with `msc run <node>`.
+
 **Paths.** `path("x")` resolves like Node's `path.resolve` against the directory of the file that
 calls it, so a library's build function in another package names its own files. `glob("src/*.ms")`
 lists the files under that directory, sorted, never entering a dot-directory.
@@ -304,6 +353,12 @@ merging by shape gives that result without intercepting calls (`keepOne`,
   after the other; a command whose peak passes its own bound fails (`greedy: sh -c … peaked at 193 MiB, above
   its declared maxRss of 19 MiB`). The peak is `ChildProcess.peakRss()`: `ru_maxrss` on POSIX,
   `PeakWorkingSetSize` on Windows (compiled and linked with zig for x86_64-windows-gnu, not run).
+  On Linux a child's `ru_maxrss` starts from the peak of the process that spawned it (measured
+  2026-11-12 on rtx: a C parent holding 300 MiB spawns `true` and reads 307724 KiB for it,
+  under `fork` and `vfork` alike), so a peak no higher than `msc`'s own at the spawn reads as
+  unknown: the summary names no `MaxRSS` for it and a `maxRss` bound below `msc`'s own size
+  (20–170 MB in these runs) is not enforced. Before, `true` with `maxRss = 20e6` failed as
+  `peaked at 20 MiB`. Not verified: whether macOS inherits the same way.
 
 Each of these is pinned in `src/test/projectConfigCommands.ms` (59 tests, candidate of tree
 `f8042fd5e`, rtx, 2026-11-10). A draft recompiler `build.ms` measured on a candidate of `b009bd13a`: `msc`
