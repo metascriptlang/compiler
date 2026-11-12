@@ -307,6 +307,18 @@ put(`${checks}/build.ms`, [
 	"named.addPrefixedArtifactArg(\"--msc=\", app);",
 	"named.captureStdOut();",
 	"export const echoed = systemCommand([\"echo\", \"args\"]);",
+	`export const said = systemCommand(["sh", "-c", "echo ${root} >> said.txt; echo hello"]);`,
+	"said.expectStdOutEqual(\"hello\\n\");",
+	`export const missaid = systemCommand(["sh", "-c", ": ${root}; echo hullo"]);`,
+	"missaid.expectStdOutEqual(\"hello\\n\");",
+	`export const saidThenFailed = systemCommand(["sh", "-c", ": ${root}; echo hello; exit 2"]);`,
+	"saidThenFailed.expectStdOutEqual(\"hello\\n\");",
+	`export const warned = systemCommand(["sh", "-c", ": ${root}; echo careful >&2; exit 4"]);`,
+	"warned.expectStdErrEqual(\"careful\\n\");",
+	`export const mentions = systemCommand(["sh", "-c", ": ${root}; echo one two three"]);`,
+	"mentions.expectStdOutMatch(\"two\");",
+	`export const silent = systemCommand(["sh", "-c", ": ${root}; echo quiet >&2"]);`,
+	"silent.expectStdErrMatch(\"loud\");",
 	"",
 ].join("\n"));
 
@@ -335,6 +347,19 @@ const namedOut = storedStdout(run(checks, ["build", "--colors=off", "named"]));
 record("addPrefixedArtifactArg passes the built executable's path", "--msc=/tmp/…/checks/out/app", namedOut.startsWith("--msc=/tmp/") && namedOut.endsWith("/checks/out/app") ? "--msc=/tmp/…/checks/out/app" : namedOut);
 record("mscExe() is the msc that runs the build", compiler, storedStdout(run(checks, ["build", "--colors=off", "self"])));
 record("arguments after -- reach the command node msc build names", "args a b", lastLine(run(checks, ["build", "--colors=off", "echoed", "--", "a", "b"])));
+run(checks, ["build", "--colors=off", "said"]);
+record("expectStdOutEqual passes on the bytes it names and is reused", "1|reused: said",
+	`${lines(`${checks}/said.txt`)}|${run(checks, ["build", "--colors=off", "said"]).split("\n")[0]}`);
+const missaid = run(checks, ["build", "--colors=off", "missaid"]);
+record("expectStdOutEqual fails on other bytes and shows both", "expected this stdout: hello, found: hullo",
+	missaid.includes("========= expected this stdout: =========\nhello\n") && missaid.includes("========= but found: ====================\nhullo") ? "expected this stdout: hello, found: hullo" : missaid);
+const saidThenFailed = run(checks, ["build", "--colors=off", "saidThenFailed"]);
+record("expectStdOutEqual expects exit code 0 as well", "exited with 2, expected 0", saidThenFailed.includes("exited with 2, expected 0") ? "exited with 2, expected 0" : saidThenFailed);
+record("expectStdErrEqual checks stderr and leaves the exit code alone", "passed", passes(run(checks, ["build", "--colors=off", "warned"])));
+record("expectStdOutMatch passes when stdout contains the text", "passed", passes(run(checks, ["build", "--colors=off", "mentions"])));
+const silent = run(checks, ["build", "--colors=off", "silent"]);
+record("expectStdErrMatch fails when stderr lacks the text", "expected to find in stderr: loud",
+	silent.includes("========= expected to find in stderr: =========\nloud\n") && silent.includes("========= but stderr does not contain it: =====\nquiet") ? "expected to find in stderr: loud" : silent);
 
 const staged = `${root}/staged`;
 ensureDir(`${staged}/src`);
