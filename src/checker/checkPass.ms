@@ -27,6 +27,7 @@ import { monoBaseName } from "../monomorphize/registry";
 import { takeUnits, putUnits, membersOf } from "./unitsInCheck";
 import { lookupModuleCtx, registerModuleCtx, enterModuleCheck, leaveModuleCheck, forgetInstances, swapModuleCtxRegistry, createModuleCtxRegistry, preludeBodyCtx, instantiateParentClass, pickBodyCtx, lookupModuleProgram, declareLocalGeneric, takeLocalInstances } from "./instantiate";
 import { startCtorCapture, endCtorCapture } from "./ctorRoutine";
+import { noteCtorSunkParams, settleCtorSunkParams } from "./ctorSunkParams";
 import { isParamProperty } from "./paramProperty";
 import { isBuiltinDirective, decoratorNamed, isWasmPlacementStmt } from "./decoratorHelpers";
 import { isComputedGotoMark, computedGotoMarks, isRegisteredMark, refuseComputedGotoMisuse, refuseComputedGotoDecorator } from "./computedGoto";
@@ -2195,6 +2196,7 @@ function checkClassMemberNode(ctx: CheckerContext, node: Node, className: string
 			}
 			if (extendsParentClass(classType)) refuseThisBeforeSuper(ctx, d.ctorBody);
 			node.paramSyms = checkFunctionBody(ctx, ctorSym, ctorParams, d.ctorBody, ctorLocs, ctorDefaults);
+			noteCtorSunkParams(ctx, ctorSym, node, classType.sym);
 		},
 		NodeKind.BlockStmt => checkStaticBlockMember(ctx, node, classType.sym),
 		_ => {},
@@ -4800,6 +4802,7 @@ export function finishModuleCheck(bound: BoundModule): CheckerContext {
 	} finally {
 		if (visibleInCheck) leaveModuleCheck(ctx.modulePath);
 	}
+	settleCtorSunkParams();
 	rewindTemplateGensym(outerGensym);
 	collectDirectives(ctx, program);
 	if (!isEngineCheckMode()) stampHeaderPaths(ctx);

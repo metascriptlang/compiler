@@ -397,6 +397,7 @@ export class Symbol {
 	overloadIdx: int32;    // Index within overload set (0=primary, 1+=overload)
 	disamb: int32;         // Per-(module, name) ordinal minted at declaration; the C name's _u suffix. Distinct from overloadIdx: a name that never joins an overload set still needs one, and it must travel with the symbol across module boundaries rather than be recomputed from position.
 	mutatedParams: int32;  // Bitfield: bit i = param i is mutated in body (gates const-ptr promotion)
+	sunkParams: int32;  // Bitfield of a constructor: bit i = the body keeps param i in an owning place, so a caller hands that argument over; bit 0 = the bits are final
 	staticFields: Owned<Symbol>[];  // Static properties (only for class symbols)
 	fieldDecoratorNames: string[];
 	fieldDecorators: Unowned<Node>[][];

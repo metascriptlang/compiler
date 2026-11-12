@@ -4293,6 +4293,7 @@ function makeSymbol(name: string, kind: SymbolKind): Symbol {
 		overloadIdx: 0 as int32,
 		disamb: 0 as int32,
 		mutatedParams: 0 as int32,
+		sunkParams: 0 as int32,
 		staticFields: [],
 		fieldDecoratorNames: [],
 		fieldDecorators: [],

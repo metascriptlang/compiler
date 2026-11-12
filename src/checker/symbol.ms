@@ -534,6 +534,7 @@ export function makeSymbolState(name: string, kind: SymbolKind, symType: Type | 
 		overloadIdx: 0,
 		disamb: 0,
 		mutatedParams: 0,
+		sunkParams: 0,
 		staticFields: [],
 		fieldDecoratorNames: [],
 		fieldDecorators: [],
@@ -579,6 +580,7 @@ export function initSymbol(sym: Symbol, name: string, kind: SymbolKind, symType:
 	sym.nonisolatedFields = [];
 	sym.duVariantSlot = 0;
 	sym.mutatedParams = 0;
+	sym.sunkParams = 0;
 	sym.itemModule = -1;
 	sym.item = 0;
 	sym.instantiatedFrom = null;

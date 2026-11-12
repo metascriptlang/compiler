@@ -108,6 +108,7 @@ function putRoutine(st: DigestState, out: TaText, sym: Symbol): TaText {
 	out = putString(out, sym.headerPath);
 	out = putString(out, sym.jsModulePath);
 	out = putInt(out, sym.mutatedParams);
+	out = putInt(out, sym.sunkParams);
 	out = putNodes(out, strongNodes(sym.defaultParams));
 	out = putTypes(st, out, sym.typeParams);
 	out = putStrings(out, sym.fieldDecoratorNames);
@@ -123,7 +124,7 @@ function putRoutine(st: DigestState, out: TaText, sym: Symbol): TaText {
 		out = putType(st, out, field.symbolType);
 		out = putFlags(out, field.symFlags.excl(SymbolFlag.Used));
 	}
-	out = sym.ctorRoutine != null ? putType(st, out, sym.ctorRoutine.symbolType) : hNull(out);
+	out = sym.ctorRoutine != null ? putInt(putType(st, out, sym.ctorRoutine.symbolType), sym.ctorRoutine.sunkParams) : hNull(out);
 	out = putType(st, out, sym.symbolType);
 	if (sym.declNode == null) return hNull(out);
 	const refs: Symbol[] = [];

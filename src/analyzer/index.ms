@@ -62,7 +62,7 @@ function copySymbol(s: Symbol): Symbol {
 		name: s.name, nameId: s.nameId, symbolKind: s.symbolKind, symbolType: s.symbolType, state: s.state, location: s.location,
 		declNode: s.declNode, overloads: s.overloads, nativeName: s.nativeName, exportName: s.exportName, builtinKind: s.builtinKind,
 		symFlags: s.symFlags, defaultParams: s.defaultParams, modulePath: s.modulePath, headerPath: s.headerPath, jsModulePath: s.jsModulePath,
-		overloadIdx: s.overloadIdx, disamb: s.disamb, mutatedParams: s.mutatedParams, staticFields: s.staticFields,
+		overloadIdx: s.overloadIdx, disamb: s.disamb, mutatedParams: s.mutatedParams, sunkParams: s.sunkParams, staticFields: s.staticFields,
 		fieldDecoratorNames: s.fieldDecoratorNames, fieldDecorators: s.fieldDecorators, metaKeys: s.metaKeys, metaValues: s.metaValues,
 		nonisolatedFields: s.nonisolatedFields, duVariantSlot: s.duVariantSlot, itemModule: s.itemModule, item: s.item,
 		instantiatedFrom: s.instantiatedFrom, borrowedFrom: s.borrowedFrom, staticOwner: s.staticOwner, typeParamOwner: s.typeParamOwner, typeParams: s.typeParams,

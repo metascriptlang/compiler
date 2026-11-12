@@ -829,6 +829,7 @@ export const SYMBOL_FIELD_ROLES: { [K in keyof Symbol]-?: FieldRole } = {
 	overloadIdx: encoded("S overloadIdx"),
 	disamb: encoded("S disamb"),
 	mutatedParams: encoded("S mutatedParams"),
+	sunkParams: encoded("S sunkParams"),
 	staticFields: encoded("S staticCsv"),
 	fieldDecoratorNames: encoded("S fieldDecoratorNamesCsv"),
 	fieldDecorators: encoded("S fieldDecoratorRows"),
@@ -897,7 +898,7 @@ export const NODE_FIELD_ROLES: { [K in keyof Node]-?: FieldRole } = {
 //   T idx kind flags value callConv typeName typeNamesCsv childrenCsv ret extra symIdx optionalFieldsCsv
 //     opsCsv readonlyView mutableView typeInst typeParamDefault ownedType plainType wellKnown
 //   N idx kind flags l c el ec typeIdx symIdx typeExprIdx typeExprsCsv paramLocsCsv typeArg variantSlot paramSymsCsv baseExprsCsv genericDefaultsCsv typeAstIdx <payload...>
-//   S idx kind state flags overloadIdx mutatedParams duVariantSlot
+//   S idx kind state flags overloadIdx mutatedParams sunkParams duVariantSlot
 //     locLine locCol locEndLine locEndCol inScope
 //     name modulePath nativeName builtinKind headerPath jsModulePath
 //     typeIdx overloadsCsv staticCsv declIdx dpCsv disamb exportName
@@ -1125,7 +1126,7 @@ export function emitObjectRows(this w: RowWriter, lines: string[]): void {
 		const nullList = symbolNullList(s);
 		if (nullList != "") throw nullListError(`symbol ${i} (${s.name})`, nullList);
 		const loc = s.location;
-		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint64}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${w.roots.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(builtinKindName(s.builtinKind))}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${w.idxType(s.symbolType)}\t${w.symIdxs(s.overloads)}\t${w.symIdxs(s.staticFields)}\t${w.idxNode(s.declNode)}\t${w.idxs(strongOrNull(s.defaultParams))}\t${s.disamb}\t${escapeP(s.exportName)}\t${w.idxSym(s.staticOwner)}\t${w.typeIdxs(s.typeParams)}\t${w.idxSym(s.instantiatedFrom)}\t${w.idxSym(s.typeParamOwner)}\t${w.typeIdxs(s.instanceArgs)}\t${w.typeIdxs(s.instanceParams)}\t${strListText(s.fieldDecoratorNames)}\t${nestedIdxsP(strongRows(s.fieldDecorators))}\t${strListText(s.metaKeys)}\t${w.idxs(strongOrNull(s.metaValues))}\t${strListText(s.nonisolatedFields)}\t${s.itemModule}\t${s.item}\t${w.idxSym(s.ctorRoutine)}\t${w.idxSym(s.ctorOwner)}\t${w.idxSym(s.borrowedFrom)}\t${w.typeIdxs(s.subclasses)}`);
+		lines.push(`S\t${i}\t${s.symbolKind as int32}\t${s.state as int32}\t${s.symFlags as uint64}\t${s.overloadIdx}\t${s.mutatedParams}\t${s.sunkParams}\t${s.duVariantSlot}\t${loc !== null ? loc.line : 0}\t${loc !== null ? loc.column : 0}\t${loc !== null ? loc.endLine : 0}\t${loc !== null ? loc.endColumn : 0}\t${w.roots.has(s) ? 1 : 0}\t${escapeP(s.name)}\t${escapeP(s.modulePath)}\t${escapeP(s.nativeName)}\t${escapeP(builtinKindName(s.builtinKind))}\t${escapeP(s.headerPath)}\t${escapeP(s.jsModulePath)}\t${w.idxType(s.symbolType)}\t${w.symIdxs(s.overloads)}\t${w.symIdxs(s.staticFields)}\t${w.idxNode(s.declNode)}\t${w.idxs(strongOrNull(s.defaultParams))}\t${s.disamb}\t${escapeP(s.exportName)}\t${w.idxSym(s.staticOwner)}\t${w.typeIdxs(s.typeParams)}\t${w.idxSym(s.instantiatedFrom)}\t${w.idxSym(s.typeParamOwner)}\t${w.typeIdxs(s.instanceArgs)}\t${w.typeIdxs(s.instanceParams)}\t${strListText(s.fieldDecoratorNames)}\t${nestedIdxsP(strongRows(s.fieldDecorators))}\t${strListText(s.metaKeys)}\t${w.idxs(strongOrNull(s.metaValues))}\t${strListText(s.nonisolatedFields)}\t${s.itemModule}\t${s.item}\t${w.idxSym(s.ctorRoutine)}\t${w.idxSym(s.ctorOwner)}\t${w.idxSym(s.borrowedFrom)}\t${w.typeIdxs(s.subclasses)}`);
 	}
 }
 
@@ -1264,6 +1265,7 @@ export function readObjectRow(this a: RowReader, tag: int32, rd: PackReader): bo
 		const symFlags = rd.int() as uint64 as BitSet<SymbolFlag>;
 		const overloadIdx = rd.int() as int32;
 		const mutatedParams = rd.int() as int32;
+		const sunkParams = rd.int() as int32;
 		const duVariantSlot = rd.int() as int32;
 		const l = rd.int() as int32;
 		const c = rd.int() as int32;
@@ -1275,6 +1277,7 @@ export function readObjectRow(this a: RowReader, tag: int32, rd: PackReader): bo
 		s.symFlags = symFlags;
 		s.overloadIdx = overloadIdx;
 		s.mutatedParams = mutatedParams;
+		s.sunkParams = sunkParams;
 		s.duVariantSlot = duVariantSlot;
 		s.location = makeLocRange(l, c, el, ec);
 		s.modulePath = unescapeP(rd.str());
@@ -1696,6 +1699,16 @@ test "rowCodec: a symbol keeps its noted subclasses, none noted apart from an em
 	assert subclassesRoundtrip([getSysType(TypeKind.Int32), getSysType(TypeKind.String)]);
 	assert subclassesRoundtrip([]);
 	assert subclassesRoundtrip(null);
+}
+
+test "rowCodec: a constructor routine keeps the parameters its body takes" {
+	const s = makeSymbolState("K_init", SymbolKind.Function, null, false, SymbolState.Checked);
+	s.mutatedParams = 1;
+	s.sunkParams = 6;
+	const w = new RowWriter();
+	w.enqSym(s, true);
+	const r = roundtripRows(w);
+	assert r != null && r.syms[w.idxSym(s)].mutatedParams == 1 && r.syms[w.idxSym(s)].sunkParams == 6;
 }
 
 test "rowCodec: a node's header lists keep null, the empty list and null entries" {
