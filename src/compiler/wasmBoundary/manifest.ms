@@ -47,6 +47,10 @@ import {
 import { dirname, relative } from "std/fs/path";
 import { BoundaryKind, signatureLetter } from "./boundaryKinds";
 
+function storedInline(kind: BoundaryKind): boolean {
+	return (kind as int32) <= (BoundaryKind.F64 as int32);
+}
+
 export interface BoundaryEnum {
 	name: string;
 	low: int32;
@@ -173,6 +177,16 @@ export function structResultInSlots(f: BoundaryFunction): boolean {
 		if (!SLOT_LETTERS.includes(letters.slice(i, i + 1))) return false;
 	}
 	return true;
+}
+
+export function fieldInWasmMemory(f: BoundaryFunction): BoundaryKind {
+	if (f.member == null) return BoundaryKind.Void;
+	if (f.member!.access == MemberAccess.Get) {
+		return storedInline(f.result) && !f.resultNullable ? f.result : BoundaryKind.Void;
+	}
+	if (f.member!.access != MemberAccess.Set || f.params.length != 2) return BoundaryKind.Void;
+	const value = f.params[1];
+	return storedInline(value.kind) && !value.nullable ? value.kind : BoundaryKind.Void;
 }
 
 export function allocatesInWasm(f: BoundaryFunction): boolean {

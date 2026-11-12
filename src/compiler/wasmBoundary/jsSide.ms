@@ -14,6 +14,7 @@ import {
 	Manifest,
 	MemberAccess,
 	allocatesInWasm,
+	fieldInWasmMemory,
 	leafLetters,
 	structResultInSlots,
 	leafLiteral,
@@ -495,6 +496,26 @@ function declared(encoded: string[], wasmOwns: boolean): string {
 	return (wasmOwns ? encoded.concat(["sent = false"]) : encoded).join(", ");
 }
 
+function fieldWrapperLines(f: BoundaryFunction, bundleName: string, kind: BoundaryKind, checked: boolean): string[] {
+	const facts = scalarFacts(kind, "wasm heap view");
+	const offset = `${bundleName}$at`;
+	const index = facts.heapShift == 0 ? `p0 + ${offset}` : `(p0 + ${offset}) >> ${facts.heapShift}`;
+	const cell = `__msbMod.${facts.heap}[${index}]`;
+	const reads = f.member!.access == MemberAccess.Get;
+	const bool = kind == BoundaryKind.Bool;
+	const out = [`let ${offset} = -1;`, `function ${bundleName}(${reads ? "a0" : "a0, a1"}) {`];
+	if (checked) {
+		for (const c of paramChecks(f)) out.push(`	${c}`);
+	}
+	out.push("	if (__msb.lent !== 0) __msb.enter();");
+	out.push("	const p0 = __msb.at(a0.ptr);");
+	out.push(`	if (${offset} < 0) ${offset} = __msbMod._${f.exportSymbol}(p0);`);
+	if (reads) out.push(bool ? `	return ${cell} !== 0;` : `	return ${cell};`);
+	else out.push(bool ? `	${cell} = a1 ? 1 : 0;` : `	${cell} = a1;`);
+	out.push("}");
+	return out;
+}
+
 function wrapperLines(
 	f: BoundaryFunction,
 	bundleName: string,
@@ -503,6 +524,8 @@ function wrapperLines(
 	keeps: boolean,
 	proxies: string[],
 ): string[] {
+	const field = fieldInWasmMemory(f);
+	if (field != BoundaryKind.Void) return fieldWrapperLines(f, bundleName, field, checked);
 	const cleanup: string[] = [];
 	const copyBacks: string[] = [];
 	const backRanges: string[] = [];

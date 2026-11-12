@@ -1,6 +1,7 @@
 import {
 	BoundaryKind,
 	msTypeOf,
+	scalarFacts,
 	signatureLetter,
 	unwiredKind,
 } from "./boundaryKinds";
@@ -13,6 +14,7 @@ import {
 	BoundaryMode,
 	BoundaryParam,
 	MemberAccess,
+	fieldInWasmMemory,
 	leafLetters,
 	leafLiteral,
 	structResultInSlots,
@@ -457,6 +459,9 @@ function wrapperLines(
 	const cells: string[] = [];
 	const backs: string[] = [];
 	const prefix = `msbm${modules.indexOf(f.modulePath)}_`;
+	if (fieldInWasmMemory(f) != BoundaryKind.Void) {
+		return fieldOffsetEntry(f, handleAliasOf(modules, f, f.params[0].handle!));
+	}
 	for (let i = 0; i < f.params.length; i += 1) {
 		const p: BoundaryParam = f.params[i];
 		const some = `${p.name}Some`;
@@ -593,6 +598,20 @@ function wrapperLines(
 	};
 }
 
+function fieldOffsetEntry(f: BoundaryFunction, target: string): string[] {
+	const place = "${self." + f.member!.property + "}";
+	const receiver = f.params[0].name;
+	return [
+		`@exportName("${f.exportSymbol}")`,
+		`export function ${f.exportSymbol}(${receiver}: uint32): uint32 {`,
+		`\tconst self: Cursor<${target}> = (${receiver} as uint64 as Ptr<void>) as ${target};`,
+		"\tlet at: uint32 = 0;",
+		"\t@emit(`${at} = (uint32_t)(uintptr_t)&" + place + ";`);",
+		`\treturn at - ${receiver};`,
+		"}",
+	];
+}
+
 function receiverHeldByCaller(target: string, at: string): string {
 	return `((${at}) as ${target} as Cursor<${target}>)`;
 }
@@ -669,6 +688,7 @@ interface EntryUsage {
 	typedClasses: string[];
 	resultImports: string[];
 	resultSlots: string[];
+	fieldHeaps: string[];
 	callbacks: BoundaryCallback[];
 	keeps: boolean;
 	handles: string[];
@@ -710,6 +730,7 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 		typedClasses: [],
 		resultImports: [],
 		resultSlots: [],
+		fieldHeaps: [],
 		callbacks: [],
 		keeps: false,
 		handles: [],
@@ -723,6 +744,11 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 	for (const f of fns) {
 		if (!usage.modules.includes(f.modulePath)) {
 			usage.modules.push(f.modulePath);
+		}
+		const field = fieldInWasmMemory(f);
+		if (field != BoundaryKind.Void) {
+			const heap = scalarFacts(field, "wasm heap view").heap;
+			if (!usage.fieldHeaps.includes(heap)) usage.fieldHeaps.push(heap);
 		}
 		if (f.result == BoundaryKind.String) {
 			usage.hasString = true;
@@ -865,6 +891,9 @@ function runtimeMethodsOf(usage: EntryUsage): string[] {
 		const name = heap.slice(1);
 		const read = usage.resultSlots.some((letters) => letters.includes(heap.slice(0, 1)));
 		if (read && !methods.includes(name)) methods.push(name);
+	}
+	for (const heap of usage.fieldHeaps) {
+		if (!methods.includes(heap)) methods.push(heap);
 	}
 	return methods;
 }

@@ -806,9 +806,12 @@ test "js side: a field read and write are a getter and a setter of the proxy" {
 	const b = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: (name) => false, dev: false });
 	assert b.prelude.includes("\tset n(a1) { bundled_bump({ ptr: this[__msbSelf] }, a1); }\n"
 		+ "\tget n() { return bundled_peek({ ptr: this[__msbSelf] }); }\n");
-	const entry = wasmEntrySource(m.functions, (path) => path).source;
-	assert entry.includes("((h as uint64 as Ptr<void>) as msbm0_Counter as Cursor<msbm0_Counter>).n = by;");
-	assert entry.includes("return ((h as uint64 as Ptr<void>) as msbm0_Counter as Cursor<msbm0_Counter>).n;");
+	assert b.modules[0].code.includes("let bundled_peek$at = -1;\nfunction bundled_peek(a0) {\n\tif (__msb.lent !== 0) __msb.enter();\n\tconst p0 = __msb.at(a0.ptr);\n\tif (bundled_peek$at < 0) bundled_peek$at = __msbMod._msb_calc_peek(p0);\n\treturn __msbMod.HEAP32[(p0 + bundled_peek$at) >> 2];\n}");
+	assert b.modules[0].code.includes("function bundled_bump(a0, a1) {\n\tif (__msb.lent !== 0) __msb.enter();\n\tconst p0 = __msb.at(a0.ptr);\n\tif (bundled_bump$at < 0) bundled_bump$at = __msbMod._msb_calc_bump(p0);\n\t__msbMod.HEAP32[(p0 + bundled_bump$at) >> 2] = a1;\n}");
+	const e = wasmEntrySource(m.functions, (path) => path);
+	assert e.source.includes("export function msb_calc_peek(h: uint32): uint32 {\n\tconst self: Cursor<msbm0_Counter> = (h as uint64 as Ptr<void>) as msbm0_Counter;\n\tlet at: uint32 = 0;\n\t@emit(`${at} = (uint32_t)(uintptr_t)&${self.n};`);\n\treturn at - h;\n}");
+	assert e.source.includes("export function msb_calc_bump(h: uint32): uint32 {\n\tconst self: Cursor<msbm0_Counter> = ");
+	assert e.runtimeMethods.includes("HEAP32");
 }
 
 test "js side: a Handle result is owned with its declaration label in a dev bundle and an empty one in a release bundle" {

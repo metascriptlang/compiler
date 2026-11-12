@@ -37,6 +37,8 @@ export interface ScalarFacts {
 	range: ScalarRange | null;
 	typedArray: string;
 	jsZero: string;
+	heap: string;
+	heapShift: int32;
 }
 
 export function scalarFacts(kind: BoundaryKind, what: string): ScalarFacts {
@@ -48,6 +50,8 @@ export function scalarFacts(kind: BoundaryKind, what: string): ScalarFacts {
 			range: null,
 			typedArray: "Uint8Array",
 			jsZero: "0",
+			heap: "HEAPU8",
+			heapShift: 0,
 		}),
 		BoundaryKind.I8 => ({
 			msType: "int8",
@@ -56,6 +60,8 @@ export function scalarFacts(kind: BoundaryKind, what: string): ScalarFacts {
 			range: { low: "-128", high: "127" },
 			typedArray: "Int8Array",
 			jsZero: "0",
+			heap: "HEAP8",
+			heapShift: 0,
 		}),
 		BoundaryKind.I16 => ({
 			msType: "int16",
@@ -64,6 +70,8 @@ export function scalarFacts(kind: BoundaryKind, what: string): ScalarFacts {
 			range: { low: "-32768", high: "32767" },
 			typedArray: "Int16Array",
 			jsZero: "0",
+			heap: "HEAP16",
+			heapShift: 1,
 		}),
 		BoundaryKind.I32 => ({
 			msType: "int32",
@@ -72,6 +80,8 @@ export function scalarFacts(kind: BoundaryKind, what: string): ScalarFacts {
 			range: { low: "-2147483648", high: "2147483647" },
 			typedArray: "Int32Array",
 			jsZero: "0",
+			heap: "HEAP32",
+			heapShift: 2,
 		}),
 		BoundaryKind.U8 => ({
 			msType: "uint8",
@@ -80,6 +90,8 @@ export function scalarFacts(kind: BoundaryKind, what: string): ScalarFacts {
 			range: { low: "0", high: "255" },
 			typedArray: "Uint8Array",
 			jsZero: "0",
+			heap: "HEAPU8",
+			heapShift: 0,
 		}),
 		BoundaryKind.U16 => ({
 			msType: "uint16",
@@ -88,6 +100,8 @@ export function scalarFacts(kind: BoundaryKind, what: string): ScalarFacts {
 			range: { low: "0", high: "65535" },
 			typedArray: "Uint16Array",
 			jsZero: "0",
+			heap: "HEAPU16",
+			heapShift: 1,
 		}),
 		BoundaryKind.U32 => ({
 			msType: "uint32",
@@ -96,6 +110,8 @@ export function scalarFacts(kind: BoundaryKind, what: string): ScalarFacts {
 			range: { low: "0", high: "4294967295" },
 			typedArray: "Uint32Array",
 			jsZero: "0",
+			heap: "HEAPU32",
+			heapShift: 2,
 		}),
 		BoundaryKind.I64 => ({
 			msType: "int64",
@@ -107,6 +123,8 @@ export function scalarFacts(kind: BoundaryKind, what: string): ScalarFacts {
 			},
 			typedArray: "BigInt64Array",
 			jsZero: "0n",
+			heap: "HEAP64",
+			heapShift: 3,
 		}),
 		BoundaryKind.U64 => ({
 			msType: "uint64",
@@ -115,6 +133,8 @@ export function scalarFacts(kind: BoundaryKind, what: string): ScalarFacts {
 			range: { low: "0n", high: "18446744073709551615n" },
 			typedArray: "BigUint64Array",
 			jsZero: "0n",
+			heap: "HEAPU64",
+			heapShift: 3,
 		}),
 		BoundaryKind.F32 => ({
 			msType: "float32",
@@ -123,6 +143,8 @@ export function scalarFacts(kind: BoundaryKind, what: string): ScalarFacts {
 			range: null,
 			typedArray: "Float32Array",
 			jsZero: "0",
+			heap: "HEAPF32",
+			heapShift: 2,
 		}),
 		BoundaryKind.F64 => ({
 			msType: "float64",
@@ -131,6 +153,8 @@ export function scalarFacts(kind: BoundaryKind, what: string): ScalarFacts {
 			range: null,
 			typedArray: "Float64Array",
 			jsZero: "0",
+			heap: "HEAPF64",
+			heapShift: 3,
 		}),
 		BoundaryKind.Void
 			| BoundaryKind.Callback
