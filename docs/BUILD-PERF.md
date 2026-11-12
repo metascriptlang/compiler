@@ -736,7 +736,43 @@ pending, each followed by an indirect call where a direct one was.
 
 Windows hello carries 12,662 B of `.text` against 3,662 on Linux with no event loop in either; its
 `.pdata` counts 25 functions of the mingw CRT, 13 of the statically linked winpthreads and 14 of the
-runtime and the program. The byte split between them is not measured.
+runtime and the program. The split, from the link map of that build (d87, the compiler of
+`e3f94f82fda4`): mingw CRT 5,170 B (`pseudo-reloc`, `crt2`, `pesect`, `tlsthrd`), winpthreads 2,766
+(`mutex.o` and `misc.o`; about 3.2 KB with their data and unwind rows), the runtime 3,317, the
+program 381. winpthreads comes in through the pthread mutexes of `runtime/drc.c`
+(`msOrphanRootsLock`, `gDsMutex`) and `runtime/core/system.c` (`_msSpawnCreateLock`);
+`runtime/allocator.c` already takes an SRW lock there. Not done: native locks at those sites would
+save at most that 3.2 KB of 21,504.
+
+## Measured 2026-11-12 — a static build without the libc formatter
+
+Where libc is linked statically, one `fprintf` links its whole formatter: in a static musl hello,
+stdio and printf were 12,510 B of 27,455 B of sized symbols (`printf_core` 7,663, the `strerror`
+table 1,914), all of it through one call, the owner-violation report `msUnregisterCycle` inlines.
+A program that allocates reaches 8 more reports, an async one 6 more. The runtime's reports now
+go through `msErrorf` (`runtime/core/errorf.h`), which is `fprintf(stderr, …)` where libc is
+dynamic and its own 1,293 B writer (`runtime/core/system.c`; the runtime's formats use only
+`%s %d %ld %lld %lu %llu %p %.*s`) on WASI and musl. rtx, old = the compiler of `e3f94f82fda4`,
+new = a candidate of tree `9d52061d018f`, `--danger --strip`, file bytes:
+
+| program | glibc, dynamic | musl, static | WASI |
+|---|---|---|---|
+| `console.log("hello")` | 8,480 → 8,480 | 24,992 → 13,056 | 25,848 → 7,321 |
+| `console.log("done", 15, 2.5)` | 36,328 → 36,328 | 55,872 → 57,152 | 45,247 → 26,730 |
+| a `Map`, a `Set` and an array, five values printed | 32,576 → 32,576 | 52,016 → 53,280 | 47,407 → 28,860 |
+
+Each glibc pair is byte-identical. The two musl programs that allocate grow by the writer and
+keep the formatter, because `runtime/allocator.c` still calls `fprintf` in `msHeapFree` and
+`msHeapCloseRuns`: that file was left to the arc rewriting it, and converting its calls is what
+turns those rows into a saving. With the writer on every target instead (measured first), each
+glibc program grew by about 2.5 KB (hello 11,032), which is why it stays off where `fprintf` is
+free. The writer against libc: compiled alone it prints the same line for every specifier above,
+`INT_MIN`, `LLONG_MIN`, `ULLONG_MAX`, a NULL `%s` and a 599-byte string (development Mac); with it
+on every target the 179 corpus programs that assert error output passed (843 cells, 140 xfail);
+18 error programs print the same stderr and exit code as a static musl build and as a glibc one.
+Pinned by `src/test/guard/helloCallsNoPrintf.ms`. Not converted: `runtime/hcr.c` and
+`runtime/hcrHost.c` (host tools), bare and Solana builds. Not measured: Emscripten, a static
+Windows or macOS link, WASI programs run under a WASI host (sizes only).
 
 ## Measured 2026-11-08 — what a hello world links
 

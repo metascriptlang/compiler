@@ -142,6 +142,13 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   (2026-11-10, macOS arm64, all six at both modes): LLVM 23 turns a call through a static slot that is
   only ever stored one function into a direct call, so every arming store hides its function with
   `MS_HIDE_FROM_OPTIMIZER` (`runtime/promise/dispatch.h`); hello `__text` at `--danger` 26,220 → 2,856 B.
+- **`helloCallsNoPrintf.ms`** — a hello built for a target that links libc statically (`--os=wasm`,
+  `--os=linux --abi=musl`) holds no libc formatter: the runtime's error reports go through
+  `msErrorf`, which has its own small writer there. Builds hello at `--danger --strip` for both
+  targets and looks for the formatter's prefix table (`-0X+0X 0X-0x+0x 0x`) in the binary, since a
+  stripped binary has no names and an unstripped musl one names `printf_core` in its debug strings
+  whether or not it links it. Proven RED on the compiler of `7b6e64e1f852` (rtx, both targets),
+  GREEN on the fix (rtx, 2026-11-12).
 - **`acyclicProgramLinksNoCycleCollector.ms`** — a program none of whose types can form a cycle
   (a `Map<string, int32>` and a `Set<int32>`) links no `msRegisterCycle`, at `--mm=drc` and at
   `--mm=none`: outside the counted mode a failed constructor releases nothing, so the cyclic
