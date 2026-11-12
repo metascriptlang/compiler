@@ -2,7 +2,8 @@
 // Uses AST parsing to extract config from build.ms (no Raiser VM needed).
 
 import { platform } from "std/process";
-import { exists, readFile, ensureDir, writeFile, removeAll } from "std/fs";
+import { ensureDir, writeFile, removeAll } from "std/fs";
+import { exists, readFile } from "../utils/system";
 import { registerCoreParsers } from "../parser/statements/core";
 import { parseSource } from "../parser/statements/validation";
 import { resolveImportWithConfig, createDefaultConfig, Backend } from "../module/resolver";

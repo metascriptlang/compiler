@@ -1,7 +1,7 @@
 import { Node, NodeKind, Symbol, SymbolKind, ProgramData, ExportDeclData, ImportDeclData, FunctionDeclData, ClassDeclData, VariableDeclData, ExternDeclData, DecoratedDeclData } from "../ast/node";
 import { parseSource } from "../parser/statements/validation";
 import "../parser/statements/core";
-import { exists, readFile } from "std/fs";
+import { exists, readFile } from "../utils/system";
 import { dirname, join, normalize } from "std/fs/path";
 import { resolveRuntimeDir } from "../utils/path";
 

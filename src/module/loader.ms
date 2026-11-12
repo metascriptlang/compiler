@@ -31,13 +31,14 @@ import { callStateProgramParser } from "../parser/statements/callbacks";
 import "../parser/statements/core";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData, CallExprData, IdentifierData, StringLiteralData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { readFile, writeFile, ensureDir, realpath, readDir, removeAll } from "std/fs";
+import { writeFile, ensureDir, readDir, removeAll } from "std/fs";
+import { readFile, realpath, cwd } from "../utils/system";
 import { translateHeaderModule, HeaderTranslation, registerCompleteStruct, completeStructKey, registerHeaderIncludes } from "./cimport/emit";
 import { Diagnostic, DiagSeverity } from "./cparse/error";
 import { TargetInfo, targetFor, hostTarget } from "./cparse/target";
 import { resolveRuntimeDir, builtinIncludeDir, isBuiltinStubHeader } from "../utils/path";
 import { isAbsolute, dirname, join, normalize } from "std/fs/path";
-import { cwd, env, platform } from "std/process";
+import { env, platform } from "std/process";
 import { hashContent } from "../utils/contentHash";
 import { TIER_EXTENSIONS, TIER_NAMES, raiserRefusal } from "./tiers";
 // (utils/string imports removed — using native .slice)
