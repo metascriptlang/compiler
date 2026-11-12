@@ -102,13 +102,51 @@ Traps of the source build, each fixed in `sourceEngine.ms` or the cache:
   compiler-rt needs `LLVM_BUILTIN_TARGETS`/`LLVM_RUNTIME_TARGETS`, since `COMPILER_RT_DEFAULT_TARGET_ONLY` conflicts
   with the triple the runtimes build passes.
 
-Open: in a multicall build on Windows clang re-runs itself as `clang.exe clang.exe -cc1`, so every out-of-process job
-(an `.S` assemble) fails "unknown argument: '-cc1'". At llvmorg-23.1.4 `llvm/tools/llvm-driver/llvm-driver.cpp`
-`MakeDriverArgs` hands clang a non-null PrependArg when NeedsPrependArg is false, and
-`clang/tools/driver/driver.cpp` sets it whenever canonical prefixes are on; a POSIX symlink canonicalizes to `llvm`,
-which makes the prepend right there, while a Windows hardlink or copy does not. On LLVM main `ToolSession::makeContext`
-(`llvm/lib/Support/Driver.cpp`) computes NeedsPrependArg from the resolved executable, but `driver.cpp` still adds
-`|| CanonicalPrefixes`. `-no-canonical-prefixes` avoids it and was rejected as a band-aid; the fix belongs in LLVM.
+Fixed in the source the engine is built from (`LLVM_SOURCE_EDITS`, `tools/managedToolchain/sourceEngine.ms`): in a
+multicall build clang re-ran itself as `clang.exe clang.exe -cc1`, so every out-of-process job (an `.S` assemble)
+failed "unknown argument: '-cc1'". At llvmorg-23.1.4 `llvm/tools/llvm-driver/llvm-driver.cpp` `MakeDriverArgs` hands
+clang a non-null PrependArg when NeedsPrependArg is false, and `clang/tools/driver/driver.cpp` set it whenever
+canonical prefixes are on; a POSIX symlink canonicalizes to `llvm`, which makes the prepend right there, while a hard
+link or a copy named clang resolves to itself. LLVM main still has `|| CanonicalPrefixes` in `driver.cpp`. The edit
+prepends only when the resolved executable is not the one invoked (their stems differ). With it, on d87 and on rtx, a
+hard-linked and a copied `clang`/`clang++` assemble an `.S` and compile with `-fno-integrated-cc1`, rc 0 with and
+without `-no-canonical-prefixes`; the symlinked `clang`, `clang++` and `x86_64-linux-gnu-clang` on rtx and
+`llvm clang` on both keep working (`.probe/winPatchVerify.sh`, `.probe/linuxPatchVerify.sh`, final stage rebuilt
+incrementally, 19 s and 14 s). Not verified: macOS, and an engine built by the whole producer from the edited source.
+
+## Measured 2026-11-12 — what zig builds for each target, and the order of the C runtime libraries
+
+`tools/managedToolchain/platformMatrix.ms build --compilers=zig` on rtx, msc `e21c6e7c3666`, zig 0.16.0, all nine
+targets, 18 consumers each (rows kept in `out/zigBaseline-rtx.tsv` of the worktree, not in git). Only the native
+target ran; the others were built, not run.
+
+| target | built | zig fails |
+|---|---|---|
+| linux-glibc-x86_64, linux-glibc-arm64, linux-musl-x86_64, linux-musl-arm64 | 17 | `--sanitize=address` (no ASan runtime) |
+| macos-arm64, macos-x64 | 15 | full LTO, `--sanitize=address`, `--sanitize=thread` |
+| windows-x64, windows-arm64 | 15 | full LTO, `--sanitize=address`, `--sanitize=thread` |
+| wasm32-wasi | 15 | the C++ companion (zig's libc++ does not compile there) |
+
+Each installed bundle carries its own target only (read on rtx, d87, m1m and the Mac the same day), so the other
+eight targets of every host still build with zig.
+
+The glibc config of the installed rtx bundle (`8e018abb167f`, copied from a zig link line) names libm, libc, ld,
+libpthread and the rest as leading linker inputs, ahead of everything the build line adds. A `--passL` library was
+therefore needed after libc, and one that reaches libc through `dlsym(RTLD_NEXT, ...)` lost it
+(`.inbox/compiler/2026-11-12-a-passl-library-is-linked-after-libc-so-rtld-next-interposers-lose-libc.md`).
+`assembleBundle` now moves the libraries a top-level config names behind the build's inputs (`runtimeLibrariesLast`,
+`tools/managedToolchain/runtimeConfig.ms`). On rtx, the `libraryOrder` and `libraryOrderShared` cells
+(`--passL=-Wl,--no-as-needed --passL=-lutil`, executable and `--app=lib`):
+
+| bundle | needed, in order | other cells of linux-glibc-x86_64 |
+|---|---|---|
+| installed `8e018abb167f` | libm, libc, ld-linux, libpthread, libutil | 31 ok |
+| reassembled from it, PGO engine | libutil, libpthread, libm, libc, ld-linux | the same 31 ok |
+
+The card's own repro on the reassembled bundle lists `libfoo.so` first and `libc.so.6` after it, and runs. On both
+bundles `--sanitize=address`, `--sanitize=undefined` and `--sanitize=thread` fail to link on rtx: the bundle has no
+`libclang_rt.asan_static.a`, `ubsan_standalone.a` or `tsan.a`. zig builds the last two. Not verified: arm64, a
+bundle installed on a host, the Wings test of the card.
 
 ## Measured 2026-11-09 — a ref release disposes through one call
 
