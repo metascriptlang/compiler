@@ -473,7 +473,8 @@ function sumLoop(s: SumLoop, loop: Node, ctx: TransformContext): Node {
 		const above = typed(makeBinary(makeIdentResolved(end, loc), ">", int64(r.hi + 1, loc), loc), booleanType());
 		head.push(markBad(bad, typed(makeBinary(below, "||", above, loc), booleanType()), loc));
 	}
-	head.push(makeWhile(typed(makeBinary(wide(makeIdentResolved(j, loc), loc), "<", makeIdentResolved(end, loc), loc), booleanType()), makeBlock(fast, loc), loc));
+	const fastLoop = makeWhile(typed(makeBinary(wide(makeIdentResolved(j, loc), loc), "<", makeIdentResolved(end, loc), loc), booleanType()), makeBlock(fast, loc), loc);
+	head.push(makeIf(typed(makeUnaryNot(makeIdentResolved(bad, loc), loc), booleanType()), makeBlock([fastLoop], loc), null, loc));
 	const hi = magnitude == null ? null : declareLocal(head, ctx, "hi", i64, typed(makeCall(runtimeRef("msBlockMagnitude", loc), [makeIdentResolved(magnitude, loc)], loc), i64), DeclKind.Const, loc);
 	if (wrapped != null) {
 		head.push(markBad(bad, typed(makeBinary(makeIdentResolved(wrapped.overflow, loc), "<", zero(i32, loc), loc), booleanType()), loc));
