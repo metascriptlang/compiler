@@ -732,9 +732,11 @@ How it decides (`src/codegen/js/reach.ms`, `runsOnLoad` and `bundleUnits` in
 `src/codegen/js/jsgen.ms`, the filter in `cmdBuildJS`):
 - A unit is one top-level statement of a module, or one helper the generator adds.
 - A unit runs on load, and is always kept, when it is a statement, a binding whose initializer has
-  an effect (`hasEffect`: a call, `new`, `await`, an assignment), a class with a static block or an
-  initialized static field, a decorated or actor declaration, anything in a module loaded through
-  `import()`, or text in which a line at column 0 is not the start of a declaration.
+  an effect (`hasEffect`: a call, `new`, `await`, an assignment), a class with a static block or a
+  static field whose initializer has an effect, a decorated or actor declaration, anything in a
+  module loaded through `import()`, or text in which a line at column 0 is not the start of a
+  declaration. A function or class that opens its body at column 0 owns every line up to the next
+  column-0 `}`, so a raw-JS body written at column 0 stays part of its declaration.
 - Every other unit is kept when a kept unit, the bundle's `export { … }` list, the module
   evaluator or a wasm binding names one of the names it declares at column 0. Uses are read from the
   emitted text, word by word, so a name inside a string also keeps its declaration: the rule can
@@ -748,10 +750,27 @@ effect-free initializer is dropped here and kept there. With the reference's rul
 bundle is about 98 KB, because the prelude declares 724 such bindings (measured on the emitted
 bundle with a prototype of the rule); no program's output depends on an unread binding.
 
-What still fills the 2,044 B of hello: three raw-JS functions of the prelude whose bodies are
-written at column 0, which the text rule reads as statements, and what they name. For comparison,
-esbuild `--bundle --tree-shaking=true` over the old hello bundle leaves 307 B and over the old JSON
-bundle 78,410 B (same output under node).
+The first version kept 2,038 B in hello: three raw-JS prelude functions whose `@emit` bodies
+continue at column 0, which the text rule read as statements, the `Math` class, whose literal
+static fields counted as load-time work, and two top-level `@emit` blocks. The body rule and the
+static-initializer rule above remove the first two (rtx, old = the compiler of `e3f94f82fda4`,
+new = a candidate of tree `c420c3229b99`; six programs written for this run, each pair printing the
+same under node):
+
+| program | old | new |
+|---|---|---|
+| hello | 2,038 | 716 |
+| Map/Set/array | 5,231 | 4,596 |
+| JSON parse and stringify | 82,556 | 82,158 |
+| strings, with a `parseInt` | 6,638 | 6,328 |
+| two top-level awaits, reading `Math.PI` | 3,956 | 3,200 |
+| iterator helpers (`iteratorHelpersMatchNode.ms`) | 68,150 | 67,427 |
+
+The corpus `js` lane on that candidate: 2,211 cells pass, 23 xfail, 4 fail, the four programs red on
+main. What fills the 716 B: the buffer module's top-level `@emit` (a `new DataView` binding and four
+functions in one statement) and `const HashMap = Map; const HashSet = Set;`, raw statements the
+filter cannot judge. For comparison, esbuild `--bundle --tree-shaking=true` over the unfiltered
+hello bundle leaves 307 B and over the unfiltered JSON bundle 78,410 B (same output under node).
 
 Not changed: the `--split` module tree (`msc build --target=js --split`, `msc run`/`msc test
 --target=js`), which a bundler or node consumes module by module.

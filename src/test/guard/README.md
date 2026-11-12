@@ -86,7 +86,9 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   bundle export, or a declaration already kept, as the reference's JS backend emits a proc and a
   const on use and every top-level statement always. Builds a hello and a `JSON.parse` program as
   bundles (default and `--danger`), runs each under node and reads the text: hello holds no JSON
-  parser and no `Error` class, the JSON program holds the parser and its used class and neither its
+  parser, no `Error` class, no `intPrefix` (a prelude function whose raw body continues at column 0)
+  and no `Math` class (static fields with literal initializers; both RED on the compiler of
+  `e3f94f82fda4`), the JSON program holds the parser and its used class and neither its
   unused class nor the function only that class calls. A host without `node` prints GUARD-SKIP.
   Proven RED on the compiler of `e21c6e7c3666` (rtx: every bundle holds the whole prelude), GREEN
   on the fix (rtx, 2026-11-12).
