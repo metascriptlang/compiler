@@ -140,3 +140,29 @@ async function countJsonItems(): Promise<int32> {
 test "narrowed variant read: a nullable union local in an async frame keeps its variant slot" {
 	assert await countJsonItems() == 1;
 }
+
+enum GlyphKind { Dot, Line, Poly }
+
+struct Glyph = match (kind: GlyphKind) {
+	GlyphKind.Dot => { x: int32 },
+	GlyphKind.Line => { x: int32, y: int32 },
+	GlyphKind.Poly => { points: int32[] },
+};
+
+type MaybeGlyph = Glyph | null;
+
+function pickGlyph(): MaybeGlyph {
+	return { kind: GlyphKind.Poly, points: [1, 2, 3] };
+}
+
+async function countPoints(): Promise<int32> {
+	const held = pickGlyph();
+	let n = 0;
+	if (held != null && held.kind == GlyphKind.Poly) n = held.points.length;
+	await sleepAsync(1);
+	return n;
+}
+
+test "narrowed variant read: a nullable alias of a variant union in an async frame keeps its slot" {
+	assert await countPoints() == 3;
+}
