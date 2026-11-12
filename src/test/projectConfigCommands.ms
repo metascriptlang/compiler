@@ -387,6 +387,8 @@ put(`${bounded}/build.ms`, [
 	"export const huge = exclusive(\"huge\", 1e18);",
 	"export const greedy = systemCommand([\"sh\", \"-c\", \"held=$(head -c 100000000 /dev/zero | tr \\\\\\\\0 a); echo ${#held}\"]);",
 	"greedy.maxRss = 20e6;",
+	"export const modest = systemCommand([\"true\"]);",
+	"modest.maxRss = 20e6;",
 	"export const crashed = systemCommand([\"sh\", \"-c\", \"kill -SEGV $$\"]);",
 	`export const crashedChecked = systemCommand([\"sh\", \"-c\", \"kill -SEGV $$; : ${bounded}\"]);`,
 	"crashedChecked.expectExitCode(0);",
@@ -409,6 +411,9 @@ record("a node above --maxrss stops the build before anything runs", "huge: decl
 	errorLine(run(bounded, ["build", "--colors=off", "--maxrss=1000", "huge"])));
 const greedy = errorLine(run(bounded, ["build", "--colors=off", "greedy"]));
 record("a command that peaks above its maxRss fails the build", "peaked above maxRss of 19 MiB", greedy.includes(" peaked at ") && greedy.endsWith("above its declared maxRss of 19 MiB") ? "peaked above maxRss of 19 MiB" : greedy);
+record("a command far below its maxRss passes though msc itself holds more", "passed", passes(run(bounded, ["build", "--colors=off", "modest"])));
+const modestPeak = run(bounded, ["build", "--colors=off", "--summary=all", "modest"]).split("\n").filter((l: string): boolean => l.startsWith("modest "));
+record("the summary names no peak for a command that stayed below msc's own", "modest success", modestPeak.length == 1 && modestPeak[0].includes(" success") && !modestPeak[0].includes("MaxRSS") ? "modest success" : modestPeak.join("|"));
 const aboveTotal = errorLine(run(bounded, ["build", "--colors=off", "huge"]));
 record("without --maxrss the bound is the machine's memory", "MiB this build may use", aboveTotal.endsWith("MiB this build may use (--maxrss)") ? "MiB this build may use" : aboveTotal);
 for (const name of ["crashed", "crashedChecked"]) {
@@ -470,6 +475,55 @@ record("a test node runs again only when a module its entry imports changed, and
 	testedAfter("b.ms", two("2")), testedAfter("b.ms", two("2")), testedAfter("b.ms", two("3")), testedAfter("b.ms", two("3")),
 	testedAfter("b.ms", two("2")), testedAfter("b.ms", two("1 + 1")), testedAfter("c.ms", "export const unrelated = 2;\n"),
 ].join("|"));
+
+const kept = `${root}/kept`;
+ensureDir(kept);
+put(`${kept}/build.ms`, [
+	"import { systemCommand, step, Command } from \"std/build\";",
+	"function sh(script: string): Command {",
+	"\treturn systemCommand([\"sh\", \"-c\", script, \"sh\"]);",
+	"}",
+	"export const bad = sh(\"echo from-bad; exit 3\");",
+	"bad.expectExitCode(0);",
+	"export const after = sh(\"touch after.txt\");",
+	"after.addFileArg(bad.captureStdOut());",
+	"export const good = sh(\"touch good.txt\");",
+	"export const worse = sh(\"exit 4\");",
+	"worse.expectExitCode(0);",
+	"export const all = step({ description: \"all\", inputs: [bad, after, good, worse], make: (): void => {} });",
+	`export const said = systemCommand(["echo", "${kept}"]);`,
+	`said.expectStdOutEqual("${kept}\\n");`,
+	"export const fine = step({ description: \"fine\", inputs: [good, said], make: (): void => {} });",
+	"",
+].join("\n"));
+function summaryOf(out: string): string {
+	const at = out.indexOf("Build Summary:");
+	if (at < 0) return "no summary";
+	return out.slice(at, out.length).split("\n").map((l: string): string => {
+		for (const word of [" success", " reused"]) {
+			if (l.includes(word)) return `${l.split(word)[0]}${word}`;
+		}
+		return l;
+	}).join("|");
+}
+const keptOut = run(kept, ["build", "--colors=off", "-j1", "all"]);
+record("a failed node leaves the nodes that do not depend on it running, and its dependents unrun", "exit 1, good ran, after did not",
+	`${keptOut.startsWith("exit 1: ") ? "exit 1" : "exit 0"}, good ${exists(`${kept}/good.txt`) ? "ran" : "did not run"}, after ${exists(`${kept}/after.txt`) ? "ran" : "did not"}`);
+record("every failed node is reported with its own error", "bad: sh -c echo from-bad; exit 3 sh exited with 3, expected 0|worse: sh -c exit 4 sh exited with 4, expected 0",
+	keptOut.split("\n").filter((l: string): boolean => l.startsWith("error: ")).map((l: string): string => l.slice(7, l.length)).join("|"));
+record("a failed build ends with the summary of the nodes that did not succeed",
+	"Build Summary: 1/5 steps succeeded (2 failed)|all transitive failure|+- bad failure|+- after transitive failure||  +- bad (shown above)|+- worse failure", summaryOf(keptOut));
+record("--summary=line keeps the count and drops the tree", "Build Summary: 1/5 steps succeeded (2 failed)", summaryOf(run(kept, ["build", "--colors=off", "-j1", "--summary=line", "all"])));
+record("--summary=none prints no summary", "no summary", summaryOf(run(kept, ["build", "--colors=off", "-j1", "--summary=none", "all"])));
+record("a build with no failure prints no summary by default", "no summary", summaryOf(run(kept, ["build", "--colors=off", "-j1", "good"])));
+record("--summary=all names every node with what happened to it", "Build Summary: 3/3 steps succeeded|fine success|+- good success|+- said success",
+	summaryOf(run(kept, ["build", "--colors=off", "-j1", "--summary=all", "fine"])));
+record("--summary=all marks a node taken from the store", "Build Summary: 3/3 steps succeeded|fine success|+- good success|+- said reused",
+	summaryOf(run(kept, ["build", "--colors=off", "-j1", "--summary=all", "fine"])));
+record("--summary=new leaves out the nodes taken from the store", "Build Summary: 3/3 steps succeeded|fine success|+- good success",
+	summaryOf(run(kept, ["build", "--colors=off", "-j1", "--summary=new", "fine"])));
+record("an unknown --summary mode names the modes", "--summary=some: --summary takes all, new, failures, line or none",
+	errorLine(run(kept, ["build", "--colors=off", "--summary=some", "fine"])));
 
 let failures = 0;
 console.log(`root ${root}`);
