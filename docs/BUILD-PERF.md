@@ -697,8 +697,14 @@ esbuild `--bundle --tree-shaking=true` over the old hello bundle leaves 307 B an
 bundle 78,410 B (same output under node).
 
 Not changed: the `--split` module tree (`msc build --target=js --split`, `msc run`/`msc test
---target=js`), which a bundler or node consumes module by module. Not measured: build time of the
-filter, a bundle with `@wasm` functions, and bundles of the sibling repositories.
+--target=js`), which a bundler or node consumes module by module.
+
+Bundles with `@wasm` functions, macOS arm64, emcc 5.0.5, a candidate of tree `932d18079eb6`:
+`src/test/wasmmix/check.sh` is green, its 8 unit modules pass (194 tests) and all 100 wasmmix
+programs pass (the same stdout in each column a program names: all-C, all-JS, mixed, tree); `scalars`'s
+all-JS bundle is 4,621 B and its mixed bundle 13,878 B beside an 18,791 B `.wasm`. Not measured:
+those bundles' sizes before the change, wasmmix on Linux (rtx has no installed emcc, and no gate
+lane runs it), build time of the filter, and bundles of the sibling repositories.
 
 Pinned by `src/test/guard/jsBundleKeepsOnlyWhatRuns.ms` and the inline tests of
 `src/codegen/js/reach.ms`.
