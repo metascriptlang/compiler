@@ -1334,7 +1334,13 @@ function recordImplRead(db: TransAmDb, readId: int32): void {
 }
 
 function recordParseRead(db: TransAmDb, readId: int32): void {
-	recordDependency(db.depStack, createQueryKey(TaQueryKind.Parse, readId));
+	const parseKey = createQueryKey(TaQueryKind.Parse, readId);
+	if (cacheGet(db.cache, parseKey) != null) {
+		recordDependency(db.depStack, parseKey);
+		return;
+	}
+	recordDependency(db.depStack, createQueryKey(TaQueryKind.FileText, readId));
+	recordDurability(db.depStack, getFileDurability(db.fileInput, readId));
 }
 
 function storeImpl(db: TransAmDb, fileId: int32, impl: string): void {
@@ -2567,6 +2573,30 @@ test "an edited module checks clean again and stays registered for its importers
 		assert ctx.errors.length == 0, ctx.errors.map((e: CheckerError): string => e.message).join("\n");
 		assert lookupModuleCtx("/p/b.ms") == ctx;
 	}
+}
+
+const STD_BODY_READER = 'export const same: boolean = valueEquals<[int32, int32]>([1, 2], [1, 3]);\n';
+
+test "a module reading a body the shared prelude parsed stays green across an edit of another module" {
+	resetInstantiationState();
+	const db = createTransAmDb(100);
+	const std = resolveRuntimeDir() + "/std";
+	dbSetStdPath(db, std);
+	const value = std + "/core/value/index.ms";
+	dbSetFileText(db, value, try readStdFile(value) catch "");
+	dbSetFileText(db, "/p/a.ms", STD_BODY_READER);
+	dbSetFileText(db, "/p/b.ms", "const y = 1;\n");
+	const first = dbTypeCheck(db, "/p/a.ms");
+	assert first.errors.length == 0, first.errors.map((e: CheckerError): string => e.message).join("\n");
+	const entry = cacheGet(db.cache, createQueryKey(TaQueryKind.TypeCheck, getFileId(db.fileInput, "/p/a.ms")));
+	let readsUnparsedStd = false;
+	for (const dep of entry.dependencies) {
+		const unparsed = cacheGet(db.cache, createQueryKey(TaQueryKind.Parse, dep.fileId)) == null;
+		if (unparsed && getFilePath(db.fileInput, dep.fileId).startsWith(std)) readsUnparsedStd = true;
+	}
+	assert readsUnparsedStd, "the check of /p/a.ms records no read of a std module the db did not parse";
+	dbSetFileText(db, "/p/b.ms", "const y = 2;\n");
+	assert dbTypeCheck(db, "/p/a.ms") == first;
 }
 
 test "a module the shared prelude imports stays registered when checked, as a build registers it" {
