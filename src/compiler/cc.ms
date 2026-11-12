@@ -715,6 +715,15 @@ export function debugUbFlags(opts: CliOptions): string {
 	return `${checks} -fsanitize-minimal-runtime -fno-sanitize-recover=undefined`;
 }
 
+// zig cc guards every frame that holds an array in a -O0 build that links libc; the prepared toolchain passes
+// the same pair. A wasm build is forced to release, so it has none. Windows waits for a bundle whose runtime
+// has libssp.a and libssp_nonshared.a, which clang's MinGW driver links for a protected frame.
+export function debugStackProtector(opts: CliOptions): string {
+	if (opts.ccCompiler != CC_PREPARED || opts.mode != MODE_DEBUG) return "";
+	if (opts.targetOs != "linux" && opts.targetOs != "macos" && opts.targetOs != "darwin") return "";
+	return "-fstack-protector-strong --param ssp-buffer-size=4";
+}
+
 export function stripUnwindFlags(opts: CliOptions): string {
 	if (!opts.strip || opts.targetOs != "linux" || opts.sanitize != "") return "";
 	return "-fno-asynchronous-unwind-tables -fno-unwind-tables";
@@ -797,6 +806,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 		flags = appendFlag(flags, "-fno-sanitize-recover=undefined");
 	}
 	flags = appendFlag(flags, debugUbFlags(opts));
+	flags = appendFlag(flags, debugStackProtector(opts));
 	// Linker DCE: place each function/data in its own section so the linker can strip unused ones
 	flags = appendFlag(flags, "-fdata-sections");
 	flags = appendFlag(flags, "-ffunction-sections");
@@ -2013,6 +2023,21 @@ test "a library hides what it does not export, and a C source of the project kee
 	const program = cliCompileFlags(debugUbOptions("linux", MODE_DANGER, ""));
 	assert !program.contains("-fvisibility=hidden") && !program.contains("-DMS_LIB_BUILD");
 	assert foreignSourceFlags(`${program} -fvisibility=hidden`).contains("-fvisibility=hidden");
+}
+
+test "a prepared debug build guards its stack frames on Linux and macOS, and nothing else does" {
+	for (const os of ["linux", "macos", "darwin"]) {
+		assert cliCompileFlags(debugUbOptions(os, MODE_DEBUG, "")).contains("-fstack-protector-strong --param ssp-buffer-size=4");
+		assert cliCompileFlags(debugUbOptions(os, MODE_DEBUG, "address")).contains("-fstack-protector-strong");
+		for (const mode of [MODE_RELEASE, MODE_DANGER]) assert !cliCompileFlags(debugUbOptions(os, mode, "")).contains("stack-protector");
+	}
+	const library = debugUbOptions("linux", MODE_DEBUG, "");
+	library.appMode = "lib";
+	assert cliCompileFlags(library).contains("-fstack-protector-strong");
+	for (const os of ["windows", "wasm", "bare"]) assert !cliCompileFlags(debugUbOptions(os, MODE_DEBUG, "")).contains("stack-protector");
+	const zig = debugUbOptions("linux", MODE_DEBUG, "");
+	zig.ccCompiler = 0;
+	assert !cliCompileFlags(zig).contains("stack-protector");
 }
 
 test "the default math library follows the link target, not the host" {
