@@ -3919,7 +3919,7 @@ test "the IDL's arguments read the bytes args<T>() reads for a struct that exten
 	}
 }
 
-function decodeBase64(text: string): uint8[] {
+function decodeBase64(text: string): Buffer {
 	return Buffer.fromString(text, "base64");
 }
 
