@@ -1,39 +1,11 @@
 import { samePhysicalFile, containsExistingRoot } from "./nativePath";
+import { hardLink } from "./nativeAlias";
 import {
 	ensureDir, join, removeAll, resolve, symlink, writeFile,
 } from "std/fs";
 import { argv, cwd, platform } from "std/process";
 import { IoError } from "std/io/errors";
 import { createDirectoryExclusive } from "./nativePublication";
-
-when (windows) {
-	@include("windows.h");
-	import { freeWide, widePath } from "std/fs/widePath";
-	extern function CreateHardLinkW(
-		path: Ptr<uint16>, target: Ptr<uint16>, reserved: Ptr<void> | null,
-	): int32;
-
-	function makeHardLink(target: string, path: string): boolean {
-		const wideTarget = widePath(target);
-		const widePathname = widePath(path);
-		if (wideTarget == null || widePathname == null) {
-			freeWide(wideTarget);
-			freeWide(widePathname);
-			return false;
-		}
-		const made = CreateHardLinkW(widePathname, wideTarget, null) != 0;
-		freeWide(wideTarget);
-		freeWide(widePathname);
-		return made;
-	}
-} else {
-	@include("unistd.h");
-	extern function cLink(target: cstring, path: cstring): int32 from "link";
-
-	function makeHardLink(target: string, path: string): boolean {
-		return cLink(target as cstring, path as cstring) == 0;
-	}
-}
 
 let checks: int32 = 0;
 let skipped: int32 = 0;
@@ -88,9 +60,7 @@ function main(): void {
 	const fileLinked = symlink(a, fileAlias);
 	const directoryLinked = symlink(source, directoryAlias);
 	const nestedLinked = symlink(nested, nestedAlias);
-	if (!makeHardLink(a, hardAlias)) {
-		throw new Error("hardlink fixture failed");
-	}
+	must(hardLink(a, hardAlias));
 
 	same(a, a, true, "file identity");
 	same(a, b, false, "same content is not same identity");

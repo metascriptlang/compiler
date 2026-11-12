@@ -1,10 +1,10 @@
 import {
-	isDir, isFile, isLinkLike, readDirNames, writeFile, copyFile,
+	isDir, isExecutable, isFile, isLinkLike, readDirNames, writeFile, copyFile,
 	ensureDir, dirname, join, fileSize,
 } from "std/fs";
 import { IoError } from "std/io/errors";
 import { containsExistingRoot, absoluteNativePath } from "./nativePath";
-import { isSymbolicLink } from "./nativeAlias";
+import { hardLink, isSymbolicLink } from "./nativeAlias";
 import { sha256File } from "./fileDigest";
 import { readUtf8File } from "./textFile";
 import {
@@ -141,6 +141,18 @@ export function copyEngineFile(
 ): Result<void, string> {
 	try engineIo(ensureDir(dirname(target)));
 	return engineIo(copyFile(source, target));
+}
+
+export function copyOnceByContent(
+	source: string, target: string, stored: Map<string, string>,
+): Result<void, string> {
+	const sameBytesAndMode = (try sha256File(source)) + (isExecutable(source) ? " x" : " -");
+	const first = stored.get(sameBytesAndMode);
+	if (first == null) {
+		stored.set(sameBytesAndMode, target);
+		return copyEngineFile(source, target);
+	}
+	return engineIo(hardLink(first, target));
 }
 
 export function writeEngineContract(

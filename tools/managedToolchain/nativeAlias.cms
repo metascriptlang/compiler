@@ -38,6 +38,9 @@ when (windows) {
 		security: Ptr<void> | null, disposition: uint32, flags: uint32,
 		template: Ptr<void> | null,
 	): Ptr<void>;
+	extern function CreateHardLinkW(
+		path: Ptr<uint16>, target: Ptr<uint16>, reserved: Ptr<void> | null,
+	): int32;
 	extern function DeviceIoControl(
 		handle: Ptr<void>, code: uint32, input: Ptr<void> | null,
 		inputLength: uint32, output: Ptr<void>, outputLength: uint32,
@@ -144,6 +147,24 @@ when (windows) {
 		return Result.err(ioError(IoErrorKind.Unknown, path,
 			"reading a symlink's name is not implemented on Windows: " + path));
 	}
+
+	function hardLinkKernel(target: string, path: string): Result<void, IoError> {
+		const wideTarget = widePath(target);
+		const widePathname = widePath(path);
+		if (wideTarget == null || widePathname == null) {
+			freeWide(wideTarget);
+			freeWide(widePathname);
+			return Result.err(ioErrorFromErrno(EINVAL, path));
+		}
+		const made = CreateHardLinkW(widePathname, wideTarget, null);
+		const error = made == 0 ? GetLastError() : 0;
+		freeWide(wideTarget);
+		freeWide(widePathname);
+		if (made == 0) {
+			return Result.err(ioErrorFromErrno(msFsErrnoFromWin32(error), path));
+		}
+		return Result.ok(null);
+	}
 } else {
 	@include("unistd.h");
 
@@ -151,6 +172,15 @@ when (windows) {
 	extern function cReadlink(
 		path: cstring, output: Ptr<void>, size: uint64,
 	): int64 from "readlink";
+	extern function cLink(target: cstring, path: cstring): int32 from "link";
+
+	function hardLinkKernel(target: string, path: string): Result<void, IoError> {
+		if (cLink(target as cstring, path as cstring) != 0) {
+			const error = errno;
+			return Result.err(ioErrorFromErrno(error, path));
+		}
+		return Result.ok(null);
+	}
 
 	function verifyKernel(path: string, target: string): Result<void, IoError> {
 		const expected = target.asBytes();
@@ -185,6 +215,13 @@ export function isSymbolicLink(path: string): Result<boolean, IoError> {
 	if (!linked.ok || !linked.value) { return linked; }
 	when (windows) { return symbolicLinkKernel(path); }
 	return linked;
+}
+
+export function hardLink(target: string, path: string): Result<void, IoError> {
+	if (target.indexOf("\0") >= 0 || path.indexOf("\0") >= 0) {
+		return Result.err(ioErrorFromErrno(EINVAL, path));
+	}
+	return hardLinkKernel(target, path);
 }
 
 function siblingName(target: string): boolean {
