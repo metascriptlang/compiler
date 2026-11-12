@@ -32,6 +32,39 @@ test "a sized array element read is checked" {
 	assert result.value.contains("a[(((i >= 0) && (i < a.length)) ? i : msIndexFail(i, a.length))]");
 }
 
+test "a constant index into a sized array is not checked, on a read and on a write" {
+	const result = compileToJSBare("function f(): int32 { let a: int32[3] = [1, 2, 3]; a[1] = 5; return a[2]; }");
+	assert result.ok;
+	assert !result.value.contains("msIndexFail"), result.value;
+	assert result.value.contains("a[1] = 5"), result.value;
+	assert result.value.contains("return a[2]"), result.value;
+}
+
+test "a constant index into a growable array is checked" {
+	const result = compileToJSBare("function f(a: int32[]): int32 { return a[2]; }");
+	assert result.ok;
+	assert result.value.contains("msIndexFail(2, a.length)"), result.value;
+}
+
+test "a uint8 index into a sized array of 256 is not checked" {
+	const result = compileToJSBare("function f(t: uint32[256], b: uint8): uint32 { return t[b]; }");
+	assert result.ok;
+	assert !result.value.contains("msIndexFail"), result.value;
+	assert result.value.contains("return t[b]"), result.value;
+}
+
+test "a uint8 index into a sized array of 255 is checked" {
+	const result = compileToJSBare("function f(t: uint32[255], b: uint8): uint32 { return t[b]; }");
+	assert result.ok;
+	assert result.value.contains("msIndexFail(b, t.length)"), result.value;
+}
+
+test "an int8 index into a sized array of 256 is checked" {
+	const result = compileToJSBare("function f(t: uint32[256], b: int8): uint32 { return t[b]; }");
+	assert result.ok;
+	assert result.value.contains("msIndexFail(b, t.length)"), result.value;
+}
+
 test "a span element read is checked through the view" {
 	const result = compileToJSBare("function f(xs: Span<int32>, i: int32): int32 { return xs[i]; }");
 	assert result.ok;

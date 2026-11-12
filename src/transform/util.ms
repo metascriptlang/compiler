@@ -4,10 +4,11 @@
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, BinaryExprData, UpdateExprData, UnaryExprData, NumberLiteralData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, MemberExprData, noFieldDecorators, BuiltinKind } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
 import { stdSymbol } from "../checker/context";
-import { literalBase, isOrdinalEnum, createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr, spelled, isAffineAwaitable, createClosureType, createVar, unwrapRefNullUnion, literalUnionBase, distinctBody, isNumeric, peelTransparentInstance } from "../checker/types";
+import { literalBase, isOrdinalEnum, createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr, spelled, isAffineAwaitable, createClosureType, createVar, unwrapRefNullUnion, literalUnionBase, distinctBody, isNumeric, peelTransparentInstance, peelToRepr } from "../checker/types";
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
 import { requireOpByKey } from "../codegen/c/types";
 import { forEachChild } from "../ast/visitor";
+import { peelStdConv } from "../ast/shape";
 import { isAssignOp } from "../ast/operators";
 import { mangleQualified, mangleModuleName, buildModuleNameRoots } from "../codegen/c/names";
 import { IdentCache, getIdentId, createIdentCache } from "../checker/idents";
@@ -627,6 +628,21 @@ export function markBoundedCounterStep(sym: Symbol, test: Node, body: Node[], st
 		const sum = assign.right.data as BinaryExprData;
 		if (sum.operator == "+" && namesSymbol(sum.left, sym) && isOne(sum.right)) assign.right.flags = assign.right.flags.incl(NodeFlag.NoOverflowCheck);
 	}
+}
+
+export function indexCannotLeave(index: Node, size: int32): boolean {
+	const n = peelStdConv(index);
+	if (n.kind == NodeKind.NumberLiteral) {
+		const lit = n.data as NumberLiteralData;
+		return !lit.isFloat && lit.intVal >= 0 && lit.intVal < size;
+	}
+	const t = peelToRepr(n.nodeType);
+	if (t == null) return false;
+	return match (t.kind) {
+		TypeKind.Uint8 => size >= 256,
+		TypeKind.Uint16 => size >= 65536,
+		_ => false,
+	};
 }
 
 function isOne(node: Node): boolean {

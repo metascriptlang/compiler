@@ -6,7 +6,7 @@ import { addError } from "../../checker/context";
 import { peelTransparentInstance, unknownType, peelToRepr, isIntegerType, isFloatType, isWideInteger } from "../../checker/types";
 import { walkNode, walkWithinStatement, walkExpandBlocks } from "../walker";
 import { isAssignOp } from "../../ast/operators";
-import { makeBinary, makeCall, makeMember, makeArrayAccess, makeAssign, makeVarDecl, makeNull, makeNumber, makeConditional, jsGlobalRef, makeIdentResolved, runtimeRef, isRuntimeProcCall } from "../util";
+import { makeBinary, makeCall, makeMember, makeArrayAccess, makeAssign, makeVarDecl, makeNull, makeNumber, makeConditional, jsGlobalRef, makeIdentResolved, runtimeRef, isRuntimeProcCall, indexCannotLeave } from "../util";
 import { cloneIfPure } from "../place";
 import { asUnknown } from "./nullishCoalesce";
 
@@ -195,15 +195,20 @@ function checkedArrayPlace(arr: Node, index: Node, loc: SourceLocation): Node | 
 
 function checkedAccess(node: Node): Node {
 	const d = node.data as ArrayAccessData;
-	if (isRange(d.index) || indexedType(d.array) == null) return node;
+	const t = indexedType(d.array);
+	if (isRange(d.index) || t == null) return node;
 	const loc = node.location;
-	const span = isSpan(d.array);
-	const inBounds = node.flags.has(NodeFlag.InBounds);
+	const span = t.kind == TypeKind.Span;
+	const inBounds = node.flags.has(NodeFlag.InBounds) || sizedIndexCannotLeave(t, d.index);
 	if (inBounds && !span) return node;
 	let access = span ? checkedSpanPlace(d.array, d.index, inBounds, loc) : checkedArrayPlace(d.array, d.index, loc);
 	if (access == null) access = makeCall(runtimeRef(span ? "msSpanAt" : "msArrayAt", loc), [d.array, d.index], loc);
 	access.nodeType = node.nodeType;
 	return access;
+}
+
+function sizedIndexCannotLeave(t: Type, index: Node): boolean {
+	return t.kind == TypeKind.SizedArray && !isWideInteger(peelToRepr(index.nodeType)) && indexCannotLeave(index, t.typeValue);
 }
 
 function refuseReadOnlyPlace(target: Node, ctx: TransformContext): void {

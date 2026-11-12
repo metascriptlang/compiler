@@ -14,13 +14,13 @@
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
 import { Node, NodeKind, NodeFlag, ArrayAccessData, CallExprData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, NewExprData, Symbol, Type, TypeKind, SymbolKind, SourceLocation, createNode, makeLoc } from "../../ast/node";
-import { isNumeric, distinctWidenBody, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, countedEvictElement, readonlyCountedElement, isUnownedSlot, isReadonlyUnownedSlot, isReadonlyView, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type } from "../../checker/types";
+import { isNumeric, distinctWidenBody, unwrapRefNullUnion, isAtomicRef, isLockedRef, peelTransparentInstance, setRepr, countedEvictElement, readonlyCountedElement, isUnownedSlot, isReadonlyUnownedSlot, isReadonlyView, createArray, createSizedArray, createSpan, createRef, createStruct, int32Type, getSysType } from "../../checker/types";
 import { findChar } from "../../utils/string";
 import { TransformContext } from "../context";
 import { isAcyclicRefElement } from "../cycles";
 import { makeCtx } from "../testUtil";
 import { walkNode } from "../walker";
-import { makeCall, makeNumber, makeMember, syntheticToken, runtimeRef, generatedRef, makeTypedIdentResolved, makeArrayAccess, makeHiddenSubConv, isRuntimeProcCall } from "../util";
+import { makeCall, makeNumber, makeMember, syntheticToken, runtimeRef, generatedRef, makeTypedIdentResolved, makeArrayAccess, makeHiddenSubConv, isRuntimeProcCall, indexCannotLeave } from "../util";
 import { checkVariantReads } from "./unionProjectLower";
 import { makeSymbol } from "../../checker/symbol";
 import { checkMaybeReads } from "./nullableLower";
@@ -200,7 +200,8 @@ function rewriteArrayAccess(node: Node, boundChecks: boolean): Node {
 
 	if (arrType.kind == TypeKind.SizedArray) {
 		const size = arrType.typeValue;
-		const result = makeCall(generatedRef(boundChecks ? "msSizedArrayAccess" : "msSizedArrayAccessUnchecked", loc), [d.array, d.index, makeNumber(size, loc)], loc);
+		const checked = boundChecks && !indexCannotLeave(d.index, size);
+		const result = makeCall(generatedRef(checked ? "msSizedArrayAccess" : "msSizedArrayAccessUnchecked", loc), [d.array, d.index, makeNumber(size, loc)], loc);
 		result.nodeType = node.nodeType;
 		return result;
 	}
@@ -419,10 +420,14 @@ function testLocal(name: string, t: Type, loc: SourceLocation): Node {
 }
 
 function loweredAccess(arrType: Type, boundChecks: boolean): Node {
+	return loweredAccessAt(arrType, testLocal("i", int32Type(), makeLoc(1, 1)), boundChecks);
+}
+
+function loweredAccessAt(arrType: Type, index: Node, boundChecks: boolean): Node {
 	const loc = makeLoc(1, 1);
 	const ctx = makeCtx();
 	ctx.boundChecks = boundChecks;
-	return rewriteAccess(makeArrayAccess(testLocal("xs", arrType, loc), makeNumber(0, loc), loc), ctx);
+	return rewriteAccess(makeArrayAccess(testLocal("xs", arrType, loc), index, loc), ctx);
 }
 
 function leafRef(): Type {
@@ -438,6 +443,18 @@ test "ref array index is bound-checked when bound checks are on" { assert isRunt
 test "ref array index is unchecked when bound checks are off" { assert isRuntimeProcCall(loweredAccess(createArray(leafRef()), false), "msRefArrayAccessUnchecked"); }
 
 test "sized array index is bound-checked when bound checks are on" { assert isRuntimeProcCall(loweredAccess(createSizedArray(int32Type(), 4), true), "msSizedArrayAccess"); }
+
+test "a constant index inside a sized array is unchecked" { assert isRuntimeProcCall(loweredAccessAt(createSizedArray(int32Type(), 4), makeNumber(3, makeLoc(1, 1)), true), "msSizedArrayAccessUnchecked"); }
+
+test "a constant index into a growable array is bound-checked" { assert isRuntimeProcCall(loweredAccessAt(createArray(int32Type()), makeNumber(3, makeLoc(1, 1)), true), "msArrayAccess"); }
+
+test "a uint8 index into a sized array of 256 is unchecked" { assert isRuntimeProcCall(loweredAccessAt(createSizedArray(int32Type(), 256), testLocal("b", getSysType(TypeKind.Uint8), makeLoc(1, 1)), true), "msSizedArrayAccessUnchecked"); }
+
+test "a uint8 index into a sized array of 255 is bound-checked" { assert isRuntimeProcCall(loweredAccessAt(createSizedArray(int32Type(), 255), testLocal("b", getSysType(TypeKind.Uint8), makeLoc(1, 1)), true), "msSizedArrayAccess"); }
+
+test "a uint16 index into a sized array of 65536 is unchecked" { assert isRuntimeProcCall(loweredAccessAt(createSizedArray(int32Type(), 65536), testLocal("w", getSysType(TypeKind.Uint16), makeLoc(1, 1)), true), "msSizedArrayAccessUnchecked"); }
+
+test "an int8 index into a sized array of 256 is bound-checked" { assert isRuntimeProcCall(loweredAccessAt(createSizedArray(int32Type(), 256), testLocal("b", getSysType(TypeKind.Int8), makeLoc(1, 1)), true), "msSizedArrayAccess"); }
 
 test "sized array index is unchecked when bound checks are off" { assert isRuntimeProcCall(loweredAccess(createSizedArray(int32Type(), 4), false), "msSizedArrayAccessUnchecked"); }
 
