@@ -7,7 +7,7 @@ import { RaiserModule } from "../raiser/module";
 import { RaiserContext } from "../raiser/context";
 import { RaiserValue, RaiserValueKind } from "../raiser/value";
 import { RaiserHostFn, RaiserHostValue, boxVoid, copyToHost, copyToVm } from "../raiser/marshal";
-import { registerHostFn, raiseFromHost, activeHostArrayHeap, activeHostObjectHeap, setActiveHostHeaps } from "../raiser/hostRegistry";
+import { registerHostFn, routeHostFnThroughSystem, raiseFromHost, activeHostArrayHeap, activeHostObjectHeap, setActiveHostHeaps } from "../raiser/hostRegistry";
 import { RaiserVM, RaiserInPlaceHostFn, registerInPlaceHostFn, vmCallHeld, vmDumpStack, vmReleaseRun } from "../raiser/vm";
 import { liveCellBlocks } from "../raiser/memory";
 import { ledgerAudits } from "../raiser/ledger";
@@ -250,6 +250,7 @@ export function implementRoutine(nativeName: string, impl: RaiserHostFn): void {
 			return boxVoid();
 		}
 	});
+	routeHostFnThroughSystem(nativeName);
 }
 
 export function implementRoutineInPlace(nativeName: string, impl: RaiserInPlaceHostFn): void {
@@ -264,6 +265,7 @@ export function implementRoutineInPlace(nativeName: string, impl: RaiserInPlaceH
 		}
 		setActiveHostHeaps(outerObjects, outerArrays);
 	});
+	routeHostFnThroughSystem(nativeName);
 }
 
 export function unboxValue(v: RaiserValue): RaiserHostValue {
@@ -879,6 +881,21 @@ test "an interpreter given a system compiles an import only that system holds, a
 	files.set("/virtual/app/lib.ms", `export function twice(n: int32): int32 { return n * 3; }\n`);
 	assert evalModule(interp, "/virtual/app/main.ms").ok;
 	assert intCall(interp, routineOf(interp, "doubled"), [hostValue(boxInt(21))]) == 63;
+}
+
+test "a sandboxed guest calls the routines its embedder implements" {
+	implementRoutine("embedTest.sandboxPing", (args: RaiserValue[]): RaiserValue => boxInt(unboxInt(args[0]) + 1));
+	implementRoutineInPlace("embedTest.sandboxPong", (vm: RaiserVM): void => { hostReturnInt(vm, hostArgInt(vm, 0) * 2); });
+	const files = new Map<string, string>();
+	files.set("/virtual/app/main.ms", `extern function ping(n: int32): int32 from "embedTest.sandboxPing";\n`
+		+ `extern function pong(n: int32): int32 from "embedTest.sandboxPong";\n`
+		+ `export function both(n: int32): int32 { return ping(n) + pong(n); }\n`);
+	const created = createInterpreter(resolveRuntimeDir(), [], memorySystem(files, "/home/guest"));
+	if (!created.ok) throw new Error(created.error);
+	const interp = created.value;
+	const r = evalModule(interp, "/virtual/app/main.ms");
+	assert r.ok, r.ok ? "" : r.error[0].message;
+	assert intCall(interp, routineOf(interp, "both"), [hostValue(boxInt(20))]) == 61;
 }
 
 test "an interpreter created without a system reads the real disk beside one given a system" {
