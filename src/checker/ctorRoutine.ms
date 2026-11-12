@@ -1,13 +1,14 @@
 import { membersOf } from "./unitsInCheck";
-import { Node, NodeKind, ActorDeclData, DecoratedDeclData, ConstructorDeclData, Symbol, SymbolKind, Type, TypeKind, backEdges } from "../ast/node";
+import { Node, NodeKind, ActorDeclData, DecoratedDeclData, ConstructorDeclData, Symbol, SymbolKind, Type, TypeKind, backEdges, createNodeAt, makeLoc } from "../ast/node";
 import { CheckerContext, addError, newSym } from "./context";
-import { RoutineFlag, SymbolFlag, classDeclNodeOf, hasFlag, initFnName, routineFlagSet, setFlag } from "./symbol";
+import { RoutineFlag, SymbolFlag, classDeclNodeOf, hasFlag, initFnName, routineFlagSet, setFlag, makeSymbol } from "./symbol";
 import { createFunction, setMinArity, voidType } from "./types";
 import { pickBodyCtx } from "./instantiate";
 
 export interface CtorRow {
 	owner: Symbol;
 	routine: Symbol;
+	routineDecl: Node | null;
 }
 
 let _capture: CtorRow[] | null = null;
@@ -45,9 +46,10 @@ export function signatureRoutine(sig: Symbol): Symbol | null {
 }
 
 export function linkSignatureRoutine(sig: Symbol, routine: Symbol): void {
-	if (_capture != null) _capture.push({ owner: sig, routine });
+	const routineDecl: Node | null = routine.declNode != null && routine.declNode.kind == NodeKind.ConstructorDecl ? routine.declNode : null;
+	if (_capture != null) _capture.push({ owner: sig, routine, routineDecl });
 	sig.ctorRoutine = routine;
-	if (routine.declNode != null && routine.declNode.kind == NodeKind.ConstructorDecl && !_variantDecls.has(routine)) _variantDecls.set(routine, routine.declNode);
+	if (routineDecl != null && !_variantDecls.has(routine)) _variantDecls.set(routine, routineDecl);
 	const receiver = routine.symbolType.typeChildren[0];
 	const body = receiver.kind == TypeKind.Ref && receiver.typeReturn != null ? receiver.typeReturn : receiver;
 	if (routine.ctorOwner == null && body.sym != null) routine.ctorOwner = body.sym;
@@ -99,7 +101,7 @@ export function mintCtorVariant(ctx: CheckerContext, owner: Symbol, thisType: Ty
 }
 
 function registerCtorRoutine(owner: Symbol, routine: Symbol): void {
-	if (_capture != null) _capture.push({ owner, routine });
+	if (_capture != null) _capture.push({ owner, routine, routineDecl: null });
 	owner.ctorRoutine = routine;
 	routine.ctorOwner = owner;
 }
@@ -213,4 +215,24 @@ export function requiredCtorArgs(formals: Type[], defaults: Node[] | null): int3
 		if (!hasDefault && formals[i].kind != TypeKind.Varargs) required = i + 1;
 	}
 	return required;
+}
+
+function linkFreshVariant(sig: Symbol, variant: Symbol): void {
+	const loc = makeLoc(1, 1);
+	variant.declNode = createNodeAt(NodeKind.ConstructorDecl, { ctorParams: [], ctorParamTypes: [], ctorBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, loc), ctorDefaults: [], ctorVisibility: "", ctorParamProps: [], ctorFlags: "" }, loc);
+	linkSignatureRoutine(sig, variant);
+}
+
+test "ctorRoutine: a captured signature row keeps its routine's declaration alive after the routines are reset, so a replay reads it" {
+	const sig = makeSymbol("Held_init", SymbolKind.Function, createFunction([voidType()], ["this"], voidType()), false);
+	setFlag(sig, SymbolFlag.OverloadSig);
+	const variant = makeSymbol("Held_init", SymbolKind.Function, createFunction([voidType()], ["this"], voidType()), false);
+	const outer = startCtorCapture();
+	linkFreshVariant(sig, variant);
+	const rows = endCtorCapture(outer);
+	resetCtorRoutines();
+	replayCtorRoutines(rows);
+	assert rows.length == 1 && sig.ctorRoutine == variant;
+	assert ctorVariantDecl(variant).kind == NodeKind.ConstructorDecl;
+	resetCtorRoutines();
 }
