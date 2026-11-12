@@ -298,6 +298,50 @@ after one shared finally body the code must tell the raise path from the normal 
 was built by `tailReturnFinallyEmit.ms` (red 3/3 without, green 3/3 with); the step and its pin are
 `~/metascript/.wt/handoff/runtime-dce-tailreturn.patch` and `runtime-dce-tailReturnFinallyEmit.ms`.
 
+## Rejected 2026-11-11 — link ICF, and emitting C only for the functions a program reaches
+
+rtx (Linux x86-64, the prepared `ld.lld`) and m1m (M1 Pro, the prepared `ld64.lld`); builder
+`63cca29efba8` (tree `293ff251b1f4`) building the `runtime-dce` worktree of that day, whose tree
+was not recorded. One build per arm, then the same objects linked again per mode, so the sizes are
+exact and no time below is an A/B.
+
+**Link ICF**, `--passL=-Wl,--icf=<mode>`, the compiler's own text section:
+
+| mode | Linux `.text`, thin LTO | Linux, `--lto=off` | macOS `__text`, thin LTO | macOS, `--lto=off` |
+|---|---|---|---|---|
+| none | 18,816,034 | 17,121,038 | 17,357,924 | 16,098,372 |
+| `safe` | 18,645,906 (−0.90%) | 16,517,678 (−3.52%) | 17,191,236 (−0.96%) | 16,098,372 (0) |
+| `all` | 17,624,882 (−6.33%) | 16,134,222 (−5.76%) | 16,111,716 (−7.18%) | 15,063,108 (−6.43%) |
+| `safe_thunks` (ld64 only) | | | 16,214,612 (−6.59%) | 15,231,260 (−5.39%) |
+
+`all` is refused because it changes what `===` answers. A program holding two named functions with
+the same body and two arrows with the same body, each compared with `===`, counts 4 distinct
+functions without ICF and under `safe`, and 2 under `all`, on both platforms and in both LTO modes.
+`safe` keeps identity through the address-significance table: every one of the 583 Linux objects of
+the `--lto=off` build carries `.llvm_addrsig`, no macOS object carries `__llvm_addrsig`, hence the 0.
+It was not taken for 0.9% of the shape a release ships; the 3.5% of Linux `--lto=off` (2,920 folded
+sections, 579,431 B) is a shape no release ships. A small program gains less: the JSON bench
+94,192 → 94,112 B under `safe` with thin LTO on Linux. The macOS identity probe ran on the
+development Mac. Not measured: run speed under any mode (the Linux `all` compilers pass
+`check src/index.ms`), identity under `safe_thunks`, Windows.
+
+**Emitting C only for reached functions** would not shrink a binary: every object has one section
+per function and the link drops the unreached ones, so hello's link keeps 5 of the 375 functions
+its 14 generated C files define, and 13 of those files contribute nothing. What it could save is
+the compile of those files, and that is bounded by `phase.C` (emit and compile of C) on a build
+that restores no object. Three cold builds without the global object store, rtx on 8 cores, load
+rising from 3.7 to 45 during the run:
+
+| program | `phase.setup` + `phase.graph` + `phase.A`, share of total | `phase.C` | `phase.C` warm |
+|---|---|---|---|
+| hello, 13 modules | 81–90% of 4.5–12.0 s | 338–1,831 ms | 42–76 ms |
+| JSON, 28 modules | 78–83% of 9.0–12.1 s | 1,303–2,346 ms | 99–129 ms |
+
+With the global object store primed by one hello build, a fresh project's hello spends 155–207 ms
+in `phase.C`, and ten corpus programs each restored 11–12 std modules and compiled 0–2. So the
+saving exists only on a build that finds no stored object, where the front end is four fifths of
+the wall. Not measured: the saving itself (nothing was built), and macOS.
+
 ## Measured 2026-11-10 — the root unregister leaves the release site, over randomized layouts
 
 The 2026-11-09 slowdown is code placement. In a `perf record` of `check` on rtx, `msStringConcatArr`,
