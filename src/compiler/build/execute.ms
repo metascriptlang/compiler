@@ -168,11 +168,34 @@ function runCompile(x: Execution, n: GraphNode, staticLib: boolean): Job | null 
 		x.digests.set(n.id, `dry:${n.id}`);
 		return null;
 	}
+	let key = `${STORE_FORMAT}\ncompile\n${platform}\n${x.projectRoot}\n${n.compiler >= 0 ? x.digests.get(n.compiler)! : hashFile(execPath)}\n${keyPath(x, entry)}\n${n.name}\n`;
+	for (const flag of args.slice(3, args.length)) key = `${key}${flag.startsWith("--passL=") ? "" : flag}\n`;
+	for (const libId of n.link) key = `${key}link:${x.digests.get(libId)!}\n`;
+	const store = storeDir(x);
+	const known = storedOutput(store, key, (path: string): string => {
+		x.hashed.push(rootedPath(x, path));
+		return hashFile(rootedPath(x, path));
+	});
+	if (known != "") {
+		const stored = join(known, basename(out));
+		if ((!exists(out) || hashFile(out) != hashFile(stored)) && !atomicCopyFile(stored, out)) throw new Error(`${label(n)}: cannot restore ${out} from ${stored}`);
+		x.outputs.set(n.id, out);
+		x.digests.set(n.id, hashFile(out));
+		x.reused.push(label(n));
+		return null;
+	}
+	const tmp = storeScratch(store, key);
+	const depFile = join(tmp, "inputs.d");
+	args.push(`--depfile=${depFile}`);
 	return job(n, compiler, args, x.projectRoot, `${n.compiler >= 0 ? compiler : "msc"} build ${entry}`, (j: Job): void => {
 		x.outputs.set(n.id, out);
 		x.digests.set(n.id, hashFile(out));
 		x.ran.push(label(n));
-	}, (): void => {});
+		const read = depFileInputs(depFile, x.projectRoot).map((input: string): string => `${keyPath(x, input)}\t${hashFile(input)}`);
+		removeAll(depFile);
+		if (read.length == 0 || !atomicCopyFile(out, join(tmp, basename(out)))) return removeAll(tmp);
+		storePublish(store, key, tmp, treeHash(tmp, []).slice(2), read);
+	}, (): void => removeAll(tmp));
 }
 
 // The prerequisites of a make-style depfile (`out: a b \\\n c`), as absolute paths.
