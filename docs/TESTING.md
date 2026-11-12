@@ -391,6 +391,8 @@ Measured 2026-11-06 with the host's copied compiler: m1m (Darwin arm64), default
 
 Measured per-file costs of edit-loop checks, and the checks that do not fit the 60 s budget (`src/test/CLAUDE.md` §Edit loop).
 
+- **Meta frame throw and VM ownership pins, 2026-11-13:** Linux candidate, 8 declared cores, tree of `wt/fix-meta-frame-throw` (aac8953b2946): `msc test src/test/handoff/metaFrameThrow.ms --tests-in-dir` and `metaVmOwnership.ms` each compile the whole 242-file handoff import graph, about **190 s** per file (`Tests 5413 passed (5413)` / `5415`); `msc test src/compiler/meta/hostPolicy.ms --tests-in-dir` about **13 s**. Measured once by the lane; host load not controlled. Slow checks, not under-60 s edit-loop recipes.
+
 - **`MSC_FLOWS=<file>` splits a test run** into graph, phases A/B/C, cc, link and the run of the test binary. `msc test src/analyzer/inject.ms --tests-in-dir` on lc-1 alone, tree 54af0f26a, ms:
 
   | run | graph | A | B | C | cc | link | test run | total |
