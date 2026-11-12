@@ -196,6 +196,24 @@ runtime.` The wasm32-wasi cells are then 11 built and 10 ran ok for zig and for 
 cells `n/a (msc refuses…)`, the C++ companion the one `FAIL` of both. This replaces the 15 built and 13 ran of
 the table above, which counted the four `--sanitize` cells as built and the three `san*` ones as run.
 
+## Measured 2026-11-12 — the source-built Windows engine has no packager yet
+
+On d87, the install of the final PGO stage built from the edited LLVM 23.1.4 source (multicall `llvm.exe`, no
+runtimes: the builtins come from the mingw runtime bundle), msc `d7cb5337a11f`:
+
+- `prepareWindowsEngine --llvm-root <install> --license llvm/LICENSE.TXT` stops with
+  `missing lib/clang/23/lib/windows/clang_rt.builtins-x86_64.lib`: it packages the layout of an upstream release,
+  which carries its own builtins. `packageSourceEngine` names Linux and macOS hosts only (`engineHostKey`,
+  `tools/managedToolchain/sourceEnginePackage.ms`).
+- Every tool name in the install's `bin/` is its own 101,355,520-byte copy of `llvm.exe` (link count 1). LLVM
+  installs a tool alias with `cmake -E copy` unless `LLVM_USE_SYMLINKS` is on, and that defaults to
+  `CMAKE_HOST_UNIX` (`llvm/CMakeLists.txt`, `llvm_install_symlink` in `llvm/cmake/modules/AddLLVM.cmake`).
+- `C:\Windows\System32\tar.exe` (bsdtar 3.8.4, the tar `tarProgram` of `src/compiler/toolchain.ms` installs a
+  bundle with) keeps hard links: three hard-linked names of a 5,000,000-byte file make a 5,003,776-byte archive,
+  and extraction gives link count 3 with the same bytes.
+
+Not verified: that `verifyStagedBundle` accepts hard-linked tools, and an install of such a bundle through msc.
+
 ## Measured 2026-11-12 — what zig builds for each target, and the order of the C runtime libraries
 
 `tools/managedToolchain/platformMatrix.ms build --compilers=zig` on rtx, msc `e21c6e7c3666`, zig 0.16.0, all nine
