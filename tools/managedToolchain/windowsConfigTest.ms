@@ -5,7 +5,6 @@ import {
 } from "./windowsConfig";
 
 const EXE = "-target x86_64-w64-windows-gnu\n" +
-	"-Xclang -target-cpu -Xclang x86-64\n" +
 	"-nostdinc\n" +
 	"-isystem <CFGDIR>/../../lib/clang/23/include\n" +
 	"-isystem <CFGDIR>/include/libc/mingw-w64\n" +
@@ -52,9 +51,7 @@ for (const target of [WindowsTarget.X64, WindowsTarget.Arm64]) {
 		throw new Error("target parse changed");
 	}
 	cases += 1;
-	const targetExe = target == WindowsTarget.X64 ? EXE : EXE
-		.replaceAll("x86_64", "aarch64")
-		.replaceAll("x86-64", "generic");
+	const targetExe = target == WindowsTarget.X64 ? EXE : EXE.replaceAll("x86_64", "aarch64");
 	for (const major of [22, 23]) {
 		for (const variant of [WindowsVariant.Exe, WindowsVariant.Dll]) {
 			let golden = targetExe.replaceAll("/23", "/" + String(major));

@@ -14,7 +14,7 @@ import { isSymbolicLink, readStoredSiblingName } from "./nativeAlias";
 import { renameNoReplace } from "./nativePublication";
 import { asciiEngineJson, claimPartial } from "./windowsEngine";
 import { engineHostKey } from "./sourceEnginePackage";
-import { runtimeLibrariesLast } from "./runtimeConfig";
+import { runtimeLibrariesLast, withoutCpuPin } from "./runtimeConfig";
 import { foldFileName } from "./fileCaseFold";
 import {
 	EngineContract, FileLinks, absoluteEnginePath, copyEngineFile, copyOnceByContent, engineIo,
@@ -178,7 +178,7 @@ function orderRuntimeLibraries(partial: string): Result<void, string> {
 		const path = join(runtime, name);
 		if (!name.endsWith(".cfg") || !isFile(path)) { continue; }
 		const text = try readUtf8File(path);
-		const ordered = runtimeLibrariesLast(text);
+		const ordered = runtimeLibrariesLast(withoutCpuPin(text));
 		if (ordered != text) { try writeEngineText(path, ordered); }
 	}
 	return Result.ok(null);
@@ -199,7 +199,8 @@ function writeReceipt(
 	}
 	setDynamicField(receipt, "statement", jsonString("Engine copied unchanged, " +
 		(runtimeBundle == "" ? "" : "runtime/ copied from the runtime bundle, with the " +
-		"libraries its top-level configs name moved behind the inputs of the build, ") +
+		"libraries its top-level configs name moved behind the inputs of the build and the CPU " +
+		"they pinned left to the driver, ") +
 		"each overlay's target runtime added whole; the contract files were rewritten " +
 		"over the whole bundle. Not an upstream-controlled build."));
 	setDynamicField(receipt, "host", jsonString(host));

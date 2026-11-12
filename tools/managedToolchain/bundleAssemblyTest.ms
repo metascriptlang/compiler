@@ -59,7 +59,8 @@ function runtimeBundle(dir: string, host: string, version: string, receipt: stri
 	written(join(root, "bin/clang"), "old engine");
 	written(join(root, "lib/clang/1/lib/linux/libclang_rt.builtins-x86_64.a"), "old rt");
 	written(join(root, "runtime/x86_64-linux-gnu.2.31.cfg"),
-		"-target x86_64-unknown-linux5.10.0-gnu2.31.0\n--sysroot=<CFGDIR>/x86_64-linux-gnu.2.31\n");
+		"-target x86_64-unknown-linux5.10.0-gnu2.31.0\n-Xclang -target-cpu -Xclang x86-64\n" +
+		"--sysroot=<CFGDIR>/x86_64-linux-gnu.2.31\n-Xclang -target-feature -Xclang -avx2\n");
 	written(join(root, "runtime/x86_64-linux-gnu.2.31/libc.so.6"), "libc");
 	if (!symlink("libc.so.6", join(root, "runtime/x86_64-linux-gnu.2.31/libc.so")).ok) {
 		throw new Error("symlink");
@@ -80,6 +81,10 @@ function assemblyCases(dir: string, host: string): void {
 		!exists(join(output, "lib/clang/1/lib/linux")), "the engine replaces the old engine whole");
 	const libc = readStoredSiblingName(join(output, "runtime/x86_64-linux-gnu.2.31/libc.so"));
 	expect(libc.ok && libc.value == "libc.so.6", "runtime aliases stay sibling links");
+	const config = readUtf8File(join(output, "runtime/x86_64-linux-gnu.2.31.cfg"));
+	expect(config.ok && config.value == "-target x86_64-unknown-linux5.10.0-gnu2.31.0\n" +
+		"--sysroot=<CFGDIR>/x86_64-linux-gnu.2.31\n",
+		"a copied config names no CPU, so the build's -march reaches the compiler");
 	const text = readUtf8File(join(output, "notices/bundle-provenance.json"));
 	expect(text.ok && text.value.contains("runtime/notices/r.json") &&
 		text.value.contains("\"runtimeBundleIdentity\""),

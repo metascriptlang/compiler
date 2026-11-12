@@ -75,16 +75,8 @@ export function renderRuntimeConfig(
 	const target = spec.clangTarget == "" ? compile.target : spec.clangTarget;
 	const lines: string[] = [];
 	lines.push(try configLine(["-target", target]));
-	lines.push(try configLine([
-		"-Xclang", "-target-cpu", "-Xclang", compile.cpu,
-	]));
 	if (spec.sysroot) {
 		lines.push(try configLine(["--sysroot=<CFGDIR>/" + directory]));
-	}
-	for (const feature of compile.features) {
-		lines.push(try configLine([
-			"-Xclang", "-target-feature", "-Xclang", feature,
-		]));
 	}
 	if (compile.pic.length > 0) { lines.push(try configLine(compile.pic)); }
 	for (const define of compile.defines) {
@@ -136,6 +128,18 @@ function linksLibrary(value: string): boolean {
 		}
 	}
 	return true;
+}
+
+// A config names no CPU: a -target-cpu or -target-feature given through -Xclang reaches the compiler after the
+// driver's own, so it would override every -march and -mcpu of the build. The baseline is the driver's default.
+export function withoutCpuPin(configText: string): string {
+	const kept: string[] = [];
+	for (const line of configText.split("\n")) {
+		if (line == "" || line.startsWith("-Xclang -target-cpu ") ||
+			line.startsWith("-Xclang -target-feature ")) { continue; }
+		kept.push(line);
+	}
+	return kept.join("\n") + "\n";
 }
 
 export function runtimeLibrariesLast(configText: string): string {

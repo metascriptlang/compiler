@@ -68,17 +68,12 @@ export function renderWindowsSourceConfig(
 	const directory = windowsVariantDirectory(target, variant);
 	const resourceDirectory = "<CFGDIR>/../../lib/clang/" + String(major);
 	const triple = windowsClangTriple(target);
-	const cpu = match (target) {
-		WindowsTarget.X64 => "x86-64",
-		WindowsTarget.Arm64 => "generic",
-	};
 	const imageBase = match (variant) {
 		WindowsVariant.Exe => "0x140000000",
 		WindowsVariant.Dll => "0x180000000",
 	};
 	const lines = [
 		"-target " + triple,
-		"-Xclang -target-cpu -Xclang " + cpu,
 		"-nostdinc",
 		"-isystem " + resourceDirectory + "/include",
 		"-isystem <CFGDIR>/include/libc/mingw-w64",

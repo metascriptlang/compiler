@@ -2,6 +2,7 @@ import {
 	configLine,
 	renderRuntimeConfig,
 	runtimeLibrariesLast,
+	withoutCpuPin,
 	RuntimeConfigInput,
 } from "./runtimeConfig";
 import { ElfLinkItemKind } from "./elfLinkPlan";
@@ -86,6 +87,18 @@ function libraryOrderCases(): void {
 		throw new Error("a config that names no library changed");
 	}
 	cases += 1;
+	const pinned = "-target x86_64-unknown-linux5.10.0-gnu2.31.0\n-Xclang -target-cpu -Xclang x86-64\n" +
+		"--sysroot=<CFGDIR>/x86_64-linux-gnu.2.31\n-Xclang -target-feature -Xclang -avx2\n" +
+		"-Xclang -target-feature -Xclang +sse2\n-fno-PIE -fPIC\n";
+	if (withoutCpuPin(pinned) != "-target x86_64-unknown-linux5.10.0-gnu2.31.0\n" +
+		"--sysroot=<CFGDIR>/x86_64-linux-gnu.2.31\n-fno-PIE -fPIC\n") {
+		throw new Error("a config kept the CPU or a feature it pinned past the driver");
+	}
+	cases += 1;
+	if (withoutCpuPin(windows) != windows) {
+		throw new Error("a config that pins no CPU changed");
+	}
+	cases += 1;
 }
 
 function run(): void {
@@ -103,9 +116,6 @@ function run(): void {
 	}
 	const expected = [
 		"-target wasm32-wasip1",
-		"-Xclang -target-cpu -Xclang lime1",
-		"-Xclang -target-feature -Xclang -atomics",
-		"-Xclang -target-feature -Xclang +sign-ext",
 		"-fno-PIE -fno-PIC",
 		"-nostdinc",
 		"-isystem <CFGDIR>/../engine/lib/clang/22/include",
@@ -147,7 +157,6 @@ function run(): void {
 		cases += 1;
 	}
 	let duplicates = baseInput();
-	duplicates.compile.features = ["+sse4.2", "+sse4.2"];
 	duplicates.items = [
 		{ kind: ElfLinkItemKind.InputPath, value: "/cache/lib.a" },
 		{ kind: ElfLinkItemKind.UserObject, value: "" },
@@ -155,9 +164,7 @@ function run(): void {
 		{ kind: ElfLinkItemKind.Argument, value: "--defsym=x=1,y=2" },
 	];
 	const repeated = rendered(duplicates);
-	if (repeated.indexOf("-Xclang -target-feature -Xclang +sse4.2\n" +
-		"-Xclang -target-feature -Xclang +sse4.2\n") < 0 ||
-		repeated.indexOf("-Xlinker <CFGDIR>/wasm32-wasi/lib.a\n" +
+	if (repeated.indexOf("-Xlinker <CFGDIR>/wasm32-wasi/lib.a\n" +
 		"-Xlinker <CFGDIR>/wasm32-wasi/lib.a\n" +
 		"-Xlinker --defsym=x=1,y=2\n") < 0) {
 		throw new Error("order, duplicates, commas or user-object elision changed");
@@ -171,7 +178,7 @@ function run(): void {
 	minimal.spec.driverFlags = [];
 	minimal.items = [];
 	const plain = rendered(minimal);
-	if (plain.indexOf("target-feature") >= 0 || plain.indexOf("\n\n") >= 0 ||
+	if (plain.indexOf("-Xclang") >= 0 || plain.indexOf("\n\n") >= 0 ||
 		!plain.endsWith("\n")) {
 		throw new Error("empty optional groups changed");
 	}
@@ -182,12 +189,6 @@ function run(): void {
 		refused(request);
 	}
 	let bad = baseInput();
-	bad.compile.cpu = "two words";
-	refused(bad);
-	bad = baseInput();
-	bad.compile.features = ["+bad feature"];
-	refused(bad);
-	bad = baseInput();
 	bad.compile.pic = ["a;b"];
 	refused(bad);
 	bad = baseInput();
