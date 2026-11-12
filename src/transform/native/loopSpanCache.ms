@@ -5,8 +5,9 @@
 // bound to a const, whose body keeps the same rule with no array of its own. A checked build caches
 // only a loop that stores an element: a read-only loop gains nothing, and its reduction is blockReduce's.
 
-import { Node, NodeKind, DeclKind, Symbol, SymbolKind, Type, TypeKind, ProgramData, BlockStmtData, HiddenDerefData, HiddenStdConvData, VariableDeclData, BinaryExprData, UnaryExprData, UpdateExprData, ArrayAccessData, MemberExprData, WhileStmtData, CallExprData, FunctionDeclData, ReturnStmtData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, Symbol, SymbolKind, SymbolFlag, Type, TypeKind, ProgramData, BlockStmtData, HiddenDerefData, HiddenStdConvData, VariableDeclData, BinaryExprData, UnaryExprData, UpdateExprData, ArrayAccessData, MemberExprData, WhileStmtData, CallExprData, FunctionDeclData, ReturnStmtData } from "../../ast/node";
 import { isRoutineNode } from "../../ast/shape";
+import { setFlag } from "../../checker/symbol";
 import { peelTransparentInstance, peelToRepr, createSpan, isNumeric } from "../../checker/types";
 import { forEachChild } from "../../ast/visitor";
 import { isAssignOp } from "../../ast/operators";
@@ -193,6 +194,7 @@ function note(sym: Symbol, elem: Type, viaDeref: boolean, st: LoopCache): void {
 		if (c.array == sym) return;
 	}
 	const span = newLoweredSym(st.ctx, SymbolKind.Variable, freshTemp(st.ctx, "span"), createSpan(elem));
+	setFlag(span, SymbolFlag.WholeArrayView);
 	st.cached.push({ array: sym, viaDeref, elem, span });
 }
 
