@@ -6002,6 +6002,7 @@ export function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, 
 			const fieldType = findFieldInVariant(variant, key);
 			if (fieldType != null) {
 				callCheckExpr(ctx, d.properties[fi], fieldType);
+				d.properties[fi] = fitNode(ctx, d.properties[fi], fieldType, d.properties[fi].nodeType);
 			} else {
 				callCheckExpr(ctx, d.properties[fi], null);
 				addError(ctx, "Field '" + key + "' does not exist on variant " + unionType.typeNames[variantIdx + 1] + " of '" + unionType.typeName + "'", node.location.line, node.location.column);
