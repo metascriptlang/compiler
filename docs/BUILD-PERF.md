@@ -57,6 +57,59 @@ median difference +0.6% at noise 0.3% (no mark); wall time noise 17% and max rss
 time and rss under that load show nothing. Not measured: Linux (`perf stat` and the `/usr/bin/time -f`
 fallback are written, not run), and `rt:` programs.
 
+## Measured 2026-11-12 — the source-built engine against the installed engines
+
+`tools/managedToolchain/llvmEngine.cmake` builds the engine the way LLVM's own releases are built:
+`clang/cmake/caches/Release.cmake` with `LLVM_RELEASE_ENABLE_PGO` (stage1 → stage2-instrumented trained on
+`clang/utils/perf-training` → stage2 with the profile and ThinLTO). A single plain `-O3` stage was tried first and
+rejected: on m1m its cc phase took 31.6 s against 24.6 s for the upstream release engine (one run, loaded host).
+
+Each A/B runs one msc (built from tree `acf4b6737caf` on rtx and m1m, `915af4044166` on d87) against two bundles that
+differ only in the engine, the installed one and the source one, three reps, alternating arms, in a `run-remote --quiet`
+window; foreign load is the CPU the rest of the host used meanwhile. Seconds are wall; CPU is the build's own.
+
+| host (installed engine) | foreign | cold self-build `--lto=off` | thin-LTO self-build | 39-object cold build | edits | produced msc |
+|---|---|---|---|---|---|---|
+| rtx x86_64-linux (plain source engine) | < 2 cores (last two reps) | 54-55 / 61-65 s, CPU 266 / 336 s | 56 / 58 s | 4.2 / 4.6 s | equal | equal |
+| m1m aarch64-macos (upstream LLVM-23.1.4-macOS-ARM64) | 1.3-2 cores | 78.8-79.7 / 78.3-78.5 s, CPU 232 / 232 s | 87.6 / 87.1 s | 5.90-5.99 / 5.35-5.49 s | equal | equal |
+| d87 x86_64-windows (upstream MSVC release) | 0.4-1.5 cores | 127.7-129.3 / 125.1-125.6 s, CPU 541 / 515 s | 149.0 / 143.7 s | 7.51-7.57 / 7.40-7.51 s | equal | equal |
+
+Compressed size (`tar | xz -6`) of the bundle with the source engine against the installed one: rtx 37.2 / 66.7 MB,
+m1m 28.8 / 107.5 MB, d87 54.0 / 207.2 MB. Each source bundle passes `platformMatrix.ms` on its host, and its msc
+builds a g2 that checks `src/index.ms` clean.
+
+What the numbers carry:
+- Small C compiles are 10% slower on m1m. Upstream's training is C++ (perf-training builds LLVMSupport);
+  `CLANG_PGO_TRAINING_DATA_SOURCE_DIR` can add msc's emitted C to it, untried.
+- The Windows engine is built with mingw-w64 and libc++, because d87 has no MSVC. Upstream's Windows release sets
+  `LLVM_ENABLE_RPMALLOC`, which needs the static MSVC CRT (`llvm/CMakeLists.txt` at llvmorg-23.1.4, the
+  `LLVM_ENABLE_RPMALLOC` and `LLVM_INTEGRATED_CRT_ALLOC` blocks), so the mingw engine runs on the UCRT heap; the 2-5%
+  above is that difference plus the build.
+- On first use per global cache msc hashes every manifest entry (`verifyBundlePayload`, `src/compiler/toolchain.ms`),
+  so a Windows bundle whose 26 tool names are hardlinks of one 101 MB `llvm.exe` hashes 2.6 GB once per machine:
+  24.5 s against 13.5 s on d87. The A/B warms each arm's stamps before its cold cells for that reason.
+
+Traps of the source build, each fixed in `sourceEngine.ms` or the cache:
+- perf-training's `llvm-support/build.test` runs `cmake -G Ninja` and finds ninja on PATH, so the producer puts the
+  given ninja first on PATH.
+- On an arm64 Mac the engine stage's universal sanitizer dylibs fail `lipo` (x86_64 and x86_64h, "same
+  architectures"); LLVM's release workflow (`.github/workflows/release-binaries.yml` at llvmorg-23.1.4, issue 99767)
+  builds compiler-rt for arm64 alone there, and so does the producer.
+- Windows: Git's GNU tar reads `C:` as a remote host without `--force-local`, and cannot create the symbolic links
+  the source carries (test inputs and mlgo-utils scripts the build never reads; the release bat extracts with 7z).
+- Windows: `CLANG_ENABLE_BOOTSTRAP` switches its next stage to clang-cl, so the Windows stages follow
+  `llvm/utils/release/build_llvm_release.bat` (instrument, train on Sema.cpp, merge, final) as separate builds; in-tree
+  compiler-rt needs `LLVM_BUILTIN_TARGETS`/`LLVM_RUNTIME_TARGETS`, since `COMPILER_RT_DEFAULT_TARGET_ONLY` conflicts
+  with the triple the runtimes build passes.
+
+Open: in a multicall build on Windows clang re-runs itself as `clang.exe clang.exe -cc1`, so every out-of-process job
+(an `.S` assemble) fails "unknown argument: '-cc1'". At llvmorg-23.1.4 `llvm/tools/llvm-driver/llvm-driver.cpp`
+`MakeDriverArgs` hands clang a non-null PrependArg when NeedsPrependArg is false, and
+`clang/tools/driver/driver.cpp` sets it whenever canonical prefixes are on; a POSIX symlink canonicalizes to `llvm`,
+which makes the prepend right there, while a Windows hardlink or copy does not. On LLVM main `ToolSession::makeContext`
+(`llvm/lib/Support/Driver.cpp`) computes NeedsPrependArg from the resolved executable, but `driver.cpp` still adds
+`|| CanonicalPrefixes`. `-no-canonical-prefixes` avoids it and was rejected as a band-aid; the fix belongs in LLVM.
+
 ## Measured 2026-11-09 — a ref release disposes through one call
 
 rtx, Linux x86-64. One g1, built from tree `9966bc7d6d35` with the host `msc`, built every arm; the arms
