@@ -1,4 +1,4 @@
-import { option, step, executable, runArtifact, systemCommand, updateSourceFiles, writeFiles, path, Optimize, mscExe, LtoMode, Command, BuildNode, Arg, LazyPath } from "std/build";
+import { option, step, executable, runArtifact, systemCommand, updateSourceFiles, writeFiles, path, Optimize, mscExe, LtoMode, Command, BuildNode, Arg } from "std/build";
 
 const optimize = Optimize.ReleaseFast;
 
@@ -72,3 +72,6 @@ lane("cache", raiser.concat(["src/test/cache/run.ms", candidate]));
 for (const name of ["nativeBuildBoundary", "projectConfigCommands", "preludePackKey"]) lane(`boundary.${name}`, raiser.concat([`src/test/${name}.ms`, candidate]));
 lane("corpus", [corpusRunner], { MSC: candidate, MSCORPUS_RAISER: "1" });
 lane("san", [corpusRunner], { MSC: candidate, MSCORPUS_SAN: "1" });
+
+const gateTool = executable({ entry: path("tools/gate.ms"), optimize });
+export const gate = systemCommand([gateTool, lanes.getDirectory(), path("src/test/known-red.json")], { expectExitCode: 0, description: "the verdict over the lane logs" });
