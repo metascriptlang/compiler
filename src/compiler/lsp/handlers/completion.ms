@@ -764,6 +764,11 @@ test "object completion: argument with no enclosing variable" {
 	assert r.indexOf("colorX", 0) >= 0;
 }
 
+test "object completion: a satisfies operand offers the checked type" {
+	const r = completionFixtureAt("const s = {  } satisfies Style;\n", 4, 11);
+	assert r.indexOf("colorX", 0) >= 0, r;
+}
+
 test "object completion: return position" {
 	const r = completionFixtureAt("function give(): Style { return {  }; }\n", 4, 33);
 	assert r.indexOf("colorX", 0) >= 0;

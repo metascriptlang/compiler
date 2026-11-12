@@ -696,3 +696,10 @@ test "references and rename cover the candidates they are given instead of the d
 	const none = handleReferences("1", params, db, []) + handleRename("2", params, db, []);
 	assert none.indexOf("kept.ms") < 0 && none.indexOf("lib.ms") >= 0, none;
 }
+
+test "hover on a value checked with satisfies shows the operand's own type" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/sat/main.ms", "type Kind = \"circle\" | \"square\";\nconst k = \"circle\" satisfies Kind;\nconsole.log(k);");
+	const r = handleHover("1", `{"textDocument":{"uri":"file:///sat/main.ms"},"position":{"line":1,"character":6}}`, db);
+	assert r.indexOf("const k: \\\"circle\\\"") >= 0 || r.indexOf("k: \\\"circle\\\"") >= 0, r;
+}
