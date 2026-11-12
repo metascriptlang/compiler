@@ -21,6 +21,7 @@ import {
 	pickAtomicAccessor,
 	unwrapType,
 	implementationOf,
+	distinctBase,
 	literalMembers,
 } from "../discDetect";
 
@@ -67,6 +68,11 @@ function mapFieldDecode(raw: Node, fname: string): MapFieldRead {
 }
 
 export macro jsonValueToStruct(jv: Node, witness: Node): Node {
+	const baseRead = (jv: Node, witness: Node, base: Node): Node => ({
+		kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+		callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "jsonValueToStruct" },
+		arguments: [jv, { kind: NodeKind.MemberExpr, line: jv.line, column: jv.column, object: witness, property: "base", nodeType: base, isOptional: false }],
+	});
 	let tt = implementationOf(witness);
 	// Peel `T | null` Union → T (single non-null variant). For multi-variant
 	// unions (DU), keep tt as TypeUnion and fall through to the DU branch
@@ -84,6 +90,14 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 			tt = implementationOf(firstNonNull);
 		}
 		// nonNullCount >= 2: leave tt as TypeUnion → DU branch below
+	}
+	const rootBase = distinctBase(tt);
+	if (rootBase != null) {
+		return {
+			kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+			callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonDistinct" },
+			arguments: [baseRead(jv, witness, rootBase)],
+		};
 	}
 	// Peel Ref<Struct> wrapper (interface/class types are reference-typed).
 	tt = unwrapType(tt);
@@ -180,6 +194,22 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 			continue;
 		}
 		const ftype: Node = implementationOf(fieldTypes[i]);
+		const fieldRead: Node = {
+			kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+			callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" },
+			arguments: [jv, { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname }],
+		};
+		const fieldBase = rootValue ? null : distinctBase(ftype);
+		if (fieldBase != null) {
+			keyNodes.push(fname);
+			valueNodes.push({
+				kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+				callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonDistinct" },
+				arguments: [baseRead(fieldRead, witness, fieldBase)],
+			});
+			i = i + 1;
+			continue;
+		}
 
 		// Nested struct field: peel Ref<Struct> → TypeObject, then emit a
 		// recursive jsonValueToStruct call with the witness
@@ -280,6 +310,26 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 				i = i + 1;
 				continue;
 			}
+			const optBase: Node | null = optSawNull && optCount == 1 && optMember != null ? distinctBase(optMember) : null;
+			if (optBase != null) {
+				keyNodes.push(fname);
+				valueNodes.push({
+					kind: NodeKind.ConditionalExpr, line: jv.line, column: jv.column,
+					ternaryCondition: {
+						kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+						callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonIsNull" },
+						arguments: [fieldRead],
+					},
+					ternaryConsequent: { kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true },
+					ternaryAlternate: {
+						kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+						callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonDistinctNull" },
+						arguments: [baseRead(fieldRead, witness, optBase)],
+					},
+				});
+				i = i + 1;
+				continue;
+			}
 			if (optSawNull && optCount == 1 && optMember != null && optMember.kind == NodeKind.Identifier) {
 				const a = pickAtomicAccessor(optMember.name);
 				const optFnameLit: Node = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname };
@@ -350,6 +400,7 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 			let en: string = "";
 			let elemIsStruct: boolean = false;
 			const elemIsArray: boolean = elemType.kind == NodeKind.TypeArray;
+			const elemIsDistinct: boolean = distinctBase(elemType) != null;
 			const toVec: boolean = typeKind(arrayDecl) == TypeKind.Array;
 			const getCall: Node = rootValue ? jv : {
 				kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
@@ -379,7 +430,7 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 				i = i + 1;
 				continue;
 			}
-			if (elemIsArray) {
+			if (elemIsArray || elemIsDistinct) {
 			} else if (elemType.kind == NodeKind.Identifier) {
 				en = elemType.name;
 				elemIsStruct = namesStruct(elemType);
@@ -414,7 +465,7 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 
 			// A Vec destination takes a Vec<T>: its elements re-enter this macro.
 			if (toVec) {
-				if (!elemIsArray && !elemIsStruct && !isBuiltin) {
+				if (!elemIsArray && !elemIsDistinct && !elemIsStruct && !isBuiltin) {
 					error("jsonValueToStruct: field '" + fname + "' is a Vec of " + en + "; a Vec element is a string, boolean, number, sized integer, struct or array", witness);
 				}
 				keyNodes.push(fname);
@@ -438,14 +489,14 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 			// `as <Elem> | null` annotation needed — that path required
 			// scope to see `Elem` (failed for user-file types referenced
 			// from prelude macro expansion). See bug024 for full rationale.
-			if (elemIsArray || elemIsStruct || !isBuiltin) {
+			if (elemIsArray || elemIsDistinct || elemIsStruct || !isBuiltin) {
 				const witnessNode: Node = {
 					kind: NodeKind.NullLiteral,
 					line: jv.line,
 					column: jv.column,
 					nullPlaceholder: true,
 				};
-				const helperName: string = elemIsArray || elemIsStruct ? "_jsonToArrayOfValues" : "_jsonToIntArray";
+				const helperName: string = elemIsArray || elemIsDistinct || elemIsStruct ? "_jsonToArrayOfValues" : "_jsonToIntArray";
 				const arrFieldAccess: Node = {
 					kind: NodeKind.CallExpr,
 					line: jv.line,
@@ -615,6 +666,11 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 // Element-level strictness for atomic-element arrays is deferred: the array
 // itself is kind-checked via reqArray, elements convert leniently.
 export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node): Node {
+	const baseRead = (jv: Node, witness: Node, base: Node, errs: Node, pfx: Node): Node => ({
+		kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+		callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "jsonValueToStructE" },
+		arguments: [jv, { kind: NodeKind.MemberExpr, line: jv.line, column: jv.column, object: witness, property: "base", nodeType: base, isOptional: false }, errs, pfx],
+	});
 	let tt = implementationOf(witness);
 	if (tt.kind == NodeKind.TypeUnion) {
 		let nonNullCount: int32 = 0;
@@ -636,6 +692,14 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 			}
 			tt = implementationOf(firstNonNull);
 		}
+	}
+	const rootBase = distinctBase(tt);
+	if (rootBase != null) {
+		return {
+			kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+			callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonDistinct" },
+			arguments: [baseRead(jv, witness, rootBase, errs, pfx)],
+		};
 	}
 	tt = unwrapType(tt);
 	if (tt.kind == NodeKind.TypeGeneric) tt = unwrapType(tt);
@@ -780,6 +844,24 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 		}
 		const ftype: Node = implementationOf(fieldTypes[i]);
 		const fnameLit: Node = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname };
+		const fieldRead: Node = {
+			kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+			callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" },
+			arguments: [jv, fnameLit],
+		};
+		const fieldPath: Node = { kind: NodeKind.BinaryExpr, line: jv.line, column: jv.column, operator: "+", left: pfx, right: fnameLit };
+
+		const fieldBase = rootValue ? null : distinctBase(ftype);
+		if (fieldBase != null) {
+			keyNodes.push(fname);
+			valueNodes.push({
+				kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+				callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonDistinct" },
+				arguments: [baseRead(fieldRead, witness, fieldBase, errs, fieldPath)],
+			});
+			i = i + 1;
+			continue;
+		}
 
 		// Peel ownership wrappers: reference-typed fields (arrays,
 		// interfaces) arrive as TypeGeneric("Ref", [inner]).
@@ -825,6 +907,26 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 				if (m.kind == NodeKind.Identifier && m.name == "null") { optSawNull = true; continue; }
 				if (optMember == null) optMember = m;
 				optCount = optCount + 1;
+			}
+			const optBase: Node | null = optSawNull && optCount == 1 && optMember != null ? distinctBase(optMember) : null;
+			if (optBase != null) {
+				keyNodes.push(fname);
+				valueNodes.push({
+					kind: NodeKind.ConditionalExpr, line: jv.line, column: jv.column,
+					ternaryCondition: {
+						kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+						callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonIsNull" },
+						arguments: [fieldRead],
+					},
+					ternaryConsequent: { kind: NodeKind.NullLiteral, line: jv.line, column: jv.column, nullPlaceholder: true },
+					ternaryAlternate: {
+						kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+						callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonDistinctNull" },
+						arguments: [baseRead(fieldRead, witness, optBase, errs, fieldPath)],
+					},
+				});
+				i = i + 1;
+				continue;
 			}
 			const optImpl: Node | null = optSawNull && optCount == 1 && optMember != null ? getTypeImpl(optMember) : null;
 			if (optImpl != null && optImpl.kind == NodeKind.TypeObject) {
@@ -1022,6 +1124,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 			let en: string = "";
 			let elemIsStruct: boolean = false;
 			let elemIsEnum: boolean = false;
+			let elemIsDistinct: boolean = false;
 			const elemIsArray: boolean = ec.kind == NodeKind.TypeArray
 				|| (ec.kind == NodeKind.TypeGeneric && ec.typExprBase.kind == NodeKind.Identifier && ec.typExprBase.name == "Array");
 			if (elemIsArray) {
@@ -1032,6 +1135,8 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 				elemIsStruct = namesStruct(ec);
 			} else if (ec.kind == NodeKind.TypeObject) {
 				elemIsStruct = true;
+			} else if (distinctBase(ec) != null) {
+				elemIsDistinct = true;
 			} else {
 				error("jsonValueToStructE: unsupported array element kind=" + ec.kind + " (field '" + fname + "')", witness);
 			}
@@ -1063,7 +1168,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 			// A Vec destination takes a Vec<T>: its elements re-enter this macro.
 			if (typeKind(arrayDecl) == TypeKind.Array) {
 				if (elemIsEnum) error("jsonValueToStructE: field '" + fname + "' is a Vec of the enum " + ec.enumName + "; declare it " + ec.enumName + "[]", witness);
-				if (!elemIsArray && !elemIsStruct && !isBuiltin) {
+				if (!elemIsArray && !elemIsDistinct && !elemIsStruct && !isBuiltin) {
 					error("jsonValueToStructE: field '" + fname + "' is a Vec of " + en + "; a Vec element is a string, boolean, number, sized integer, struct or array", witness);
 				}
 				keyNodes.push(fname);
@@ -1077,7 +1182,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 				i = i + 1;
 				continue;
 			}
-			if (elemIsArray) {
+			if (elemIsArray || elemIsDistinct) {
 				keyNodes.push(fname);
 				pushField({
 					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,

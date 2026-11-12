@@ -173,6 +173,16 @@ test "_jsonEnumOrdE — a name the enum does not declare is an error naming the 
 	assert errs.length == 1 && errs[0] == "field 'c': 'red' is not a member of Color";
 }
 
+// The distinct type binds from the slot the result lands in: `D | null` for a nullable
+// field, whose slot would otherwise bind `D` to the nullable itself.
+export function _jsonDistinct<D, B>(base: B): D {
+	return base as D;
+}
+
+export function _jsonDistinctNull<D, B>(base: B): D | null {
+	return base as D;
+}
+
 export function _jsonIsNull(v: JsonValue): boolean {
 	return v == null || v.kind == JsonKind.Null;
 }

@@ -36,6 +36,15 @@ export function unwrapType(n: Node): Node {
 	return impl;
 }
 
+// The base type node when `n` names a distinct type, else null. A distinct reads and
+// writes as its base: `unwrapType` already peels one, so a caller that must convert
+// back asks here first.
+export function distinctBase(n: Node): Node | null {
+	const impl = implementationOf(n);
+	if (impl.kind != NodeKind.TypeGeneric || typeKind(impl) != TypeKind.Distinct) return null;
+	return (impl as TypeGenericData).typExprArgs[0];
+}
+
 export interface DiscVariant {
 	key: string;     // disc value: "circle" | "true" | "Click" etc.
 	member: Node;    // peeled variant struct (TypeObject; no Ref wrapper)
