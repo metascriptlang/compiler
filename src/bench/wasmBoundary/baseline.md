@@ -359,3 +359,55 @@ The other rows keep the run's own wasm-bindgen as their bar: they do not change 
 tables differ by the load of each run only, and a minimum over those would turn noise into a miss
 (`makeVec 1k` in Chrome: 1.149 measured here against a lowest recorded 1.052). The recorded numbers come from runs of
 different load, so they move only by hand, when a table of this file shows a lower one.
+
+## 2026-11-12, m1m, a wrapper holding its export in a closure: measured and not kept
+
+Each wrapper emitted as `const name = ((wasm) => function name(…) { … wasm(…) … })(__msbMod._export)`
+instead of a function declaration that reads `__msbMod._export` on every call. Compiler sources of
+main `27db20347291`; `base` is that compiler, `closure` the same with the wrapper form changed.
+Node 24.1.0, Chrome 149.0.7827.114, load 11 to 17. us/op.
+
+The bench run (5 rounds, Node) and the same two bundles in Chrome (3 interleaved rounds, each
+round shown):
+
+| row | Node base | Node closure | Chrome base | Chrome closure |
+|---|---|---|---|---|
+| add x1000 | 2.876 | 2.71 | 3.169 3.152 3.143 | 3.324 3.219 3.171 |
+| add64 x1000 | 5.051 | 4.996 | 4.28 4.403 4.358 | 4.294 4.294 4.357 |
+| strLen16 x1000 | 23.892 | 23.924 | 24.42 24.282 24.17 | 24.031 24.14 24 |
+| echo16 x1000 | 130.764 | 132.926 | 138.131 141.16 136.745 | 139.866 136.254 135.314 |
+| mid x1000 | 5.155 | 5.062 | 5.671 5.704 5.653 | 9.09 8.952 9.06 |
+| callback 1k | 6.987 | 6.901 | 8.548 8.448 8.557 | 8.449 8.481 8.356 |
+| method x1000 | 3.174 | 3.073 | 3.731 3.656 3.655 | 3.752 3.704 3.727 |
+| field x1000 | 1.506 | 1.502 | 1.173 1.176 1.181 | 1.171 1.168 1.162 |
+| construct x1000 | 51.152 | 50.767 | 43.154 42.748 43.099 | 43.532 42.632 43.088 |
+
+Hand-edited copies of the base bundle, to try the form only on the wrappers that have no cleanup
+(8 of 16: `add`, `add64`, `primes`, `makeBox`, `scaleBox`, `peek`, the constructor, `bump`).
+Median of 5 interleaved rounds on Node and of 3 in Chrome:
+
+| row | Node base | all | no cleanup | Chrome base | all | no cleanup |
+|---|---|---|---|---|---|---|
+| add x1000 | 2.857 | 2.719 | 2.735 | 3.149 | 3.268 | 3.261 |
+| add64 x1000 | 5.071 | 5.005 | 4.942 | 4.242 | 4.36 | 4.422 |
+| mid x1000 | 5.256 | 5.1 | 5.133 | 5.635 | 9.378 | 5.843 |
+| method x1000 | 3.205 | 3.056 | 2.991 | 3.733 | 3.698 | 3.842 |
+| field x1000 | 1.535 | 1.535 | 1.482 | 1.173 | 1.176 | 1.173 |
+| callback 1k | 6.92 | 6.91 | 6.962 | 8.552 | 8.536 | 8.386 |
+
+On Node the form is worth 4 to 6% on `add` and 3 to 7% on `method`, and with it `add x1000` met
+wasm-bindgen for the first time (2.71 against 2.582 in the run). In Chrome it is worth nothing and
+costs: `mid` 60 to 66% with every wrapper changed, `add` and `add64` 3 to 4% with the narrowed set (their
+round ranges touch the base's, 3.143-3.216 against 3.209-3.327 for `add`, in both Chrome runs). No
+variant leaves every row as fast, so the wrappers stay as they are. Not explained: why Chrome
+slows `mid`; `mid` in the narrowed set (not changed there) reads 5.84 against 5.64, the noise of
+three rounds.
+
+**Main since the morning.** `add64 x1000` reads 5.05 on Node with the base compiler here, against
+4.59 in the table of the direct field access, with the same row and wrapper text; the bundle went
+from 6950 to 805 lines in between (main removes unused units from a bundle now). Not traced. With
+the bar of the section above, the base compiler's verdict from this run is `accept node: 12/15`:
+`add x1000` 11% above the run's wasm-bindgen, `add64 x1000` 19% above its recorded best 4.248, and
+the parked `primes`. Chrome was not run through `accept.mjs` for the base compiler; its rounds
+above are under wasm-bindgen's on every row shown.
+
