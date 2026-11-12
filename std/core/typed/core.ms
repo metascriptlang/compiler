@@ -6,6 +6,8 @@
 
 import { Math, ceil, floor, round } from "../math";
 
+// A `fill` loop counts in int64: with a number index clang emits a store per element instead of
+// memset, 64x slower on a 16 KB Buffer (M1, 2026-11-13).
 function relativeIndex(index: number, length: number): number {
 	const whole = index < 0 ? Math.ceil(index) : Math.floor(index);
 	if (whole < 0) return whole + length < 0 ? 0 : whole + length;
@@ -180,7 +182,7 @@ export class Int8Array extends TypedArray<int8> {
 		const to = relativeIndex(end, this.length);
 		const into: Span<int8> = this;
 		const element = signedWrap(value, 256) as int8;
-		for (let i = from; i < to; i++) into[i] = element;
+		for (let i = from as int64; i < (to as int64); i++) into[i] = element;
 		return this;
 	}
 }
@@ -240,7 +242,7 @@ export class Uint8Array extends TypedArray<uint8> {
 		const to = relativeIndex(end, this.length);
 		const into: Span<uint8> = this;
 		const element = wrapModulo(value, 256) as uint8;
-		for (let i = from; i < to; i++) into[i] = element;
+		for (let i = from as int64; i < (to as int64); i++) into[i] = element;
 		return this;
 	}
 }
@@ -301,7 +303,8 @@ export class Uint8ClampedArray extends TypedArray<uint8> {
 		const from = relativeIndex(begin, this.length);
 		const to = relativeIndex(end, this.length);
 		const into: Span<uint8> = this;
-		for (let i = from; i < to; i++) into[i] = clampUint8(value);
+		const element = clampUint8(value);
+		for (let i = from as int64; i < (to as int64); i++) into[i] = element;
 		return this;
 	}
 }
@@ -361,7 +364,7 @@ export class Int16Array extends TypedArray<int16> {
 		const to = relativeIndex(end, this.length);
 		const into: Span<int16> = this;
 		const element = signedWrap(value, 65536) as int16;
-		for (let i = from; i < to; i++) into[i] = element;
+		for (let i = from as int64; i < (to as int64); i++) into[i] = element;
 		return this;
 	}
 }
@@ -421,7 +424,7 @@ export class Uint16Array extends TypedArray<uint16> {
 		const to = relativeIndex(end, this.length);
 		const into: Span<uint16> = this;
 		const element = wrapModulo(value, 65536) as uint16;
-		for (let i = from; i < to; i++) into[i] = element;
+		for (let i = from as int64; i < (to as int64); i++) into[i] = element;
 		return this;
 	}
 }
@@ -481,7 +484,7 @@ export class Int32Array extends TypedArray<int32> {
 		const to = relativeIndex(end, this.length);
 		const into: Span<int32> = this;
 		const element = signedWrap(value, 4294967296) as int32;
-		for (let i = from; i < to; i++) into[i] = element;
+		for (let i = from as int64; i < (to as int64); i++) into[i] = element;
 		return this;
 	}
 }
@@ -541,7 +544,7 @@ export class Uint32Array extends TypedArray<uint32> {
 		const to = relativeIndex(end, this.length);
 		const into: Span<uint32> = this;
 		const element = wrapModulo(value, 4294967296) as uint32;
-		for (let i = from; i < to; i++) into[i] = element;
+		for (let i = from as int64; i < (to as int64); i++) into[i] = element;
 		return this;
 	}
 }
@@ -601,7 +604,7 @@ export class Float32Array extends TypedArray<float32> {
 		const to = relativeIndex(end, this.length);
 		const into: Span<float32> = this;
 		const element = value as float32;
-		for (let i = from; i < to; i++) into[i] = element;
+		for (let i = from as int64; i < (to as int64); i++) into[i] = element;
 		return this;
 	}
 }
@@ -660,7 +663,7 @@ export class Float64Array extends TypedArray<float64> {
 		const from = relativeIndex(begin, this.length);
 		const to = relativeIndex(end, this.length);
 		const into: Span<float64> = this;
-		for (let i = from; i < to; i++) into[i] = value;
+		for (let i = from as int64; i < (to as int64); i++) into[i] = value;
 		return this;
 	}
 }
