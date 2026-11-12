@@ -96,6 +96,7 @@ module.exports = grammar({
     [$._type_identifier, $._expression, $.pattern_property],
     // Type assertion: 'as' keyword vs 'as' contextual identifier
     [$.type_assertion_expression, $._expression],
+    [$.satisfies_expression, $._expression],
     // Type assertion + generic: expr as Identifier<T> vs expr as Identifier < expr
     [$.type, $.generic_type],
     // Intersection type conflicts (& is also bitwise AND in expressions)
@@ -895,6 +896,7 @@ module.exports = grammar({
       $.macro_emit_expr,
       $.match_expression,
       $.type_assertion_expression,
+      $.satisfies_expression,
       $.update_expression,
       // JSX expressions
       $.jsx_element,
@@ -1065,6 +1067,13 @@ module.exports = grammar({
     type_assertion_expression: $ => prec.left(1, seq(
       $._expression,
       'as',
+      $.type,
+    )),
+
+    // expr satisfies Type: checked against Type, keeps expr's own type
+    satisfies_expression: $ => prec.left(1, seq(
+      $._expression,
+      'satisfies',
       $.type,
     )),
 
@@ -1369,6 +1378,7 @@ module.exports = grammar({
       alias('finally', $.identifier),
       alias('from', $.identifier),
       alias('as', $.identifier),
+      alias('satisfies', $.identifier),
       alias('async', $.identifier),
       alias('await', $.identifier),
       alias('test', $.identifier),

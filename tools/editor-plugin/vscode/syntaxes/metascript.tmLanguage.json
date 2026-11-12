@@ -904,9 +904,9 @@
     },
 
     "type-assertion": {
-      "comment": "Type assertion: expr as Type",
-      "begin": "(?<![_$[:alnum:]])\\b(as)\\b(?![_$[:alnum:]])",
-      "beginCaptures": { "1": { "name": "keyword.control.as.metascript" } },
+      "comment": "Type assertion or check: expr as Type, expr satisfies Type",
+      "begin": "(?<![_$[:alnum:]])\\b(as|satisfies)\\b(?![_$[:alnum:]])",
+      "beginCaptures": { "1": { "name": "keyword.control.$1.metascript" } },
       "end": "(?=[,);\\}\\]=]|$|//)",
       "patterns": [
         { "include": "#type" }

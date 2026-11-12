@@ -552,6 +552,9 @@
 (type_assertion_expression
   "as" @keyword.operator)
 
+(satisfies_expression
+  "satisfies" @keyword.operator)
+
 ; ===========================================================================
 ; Keywords — Exception / Error Handling
 ; ===========================================================================

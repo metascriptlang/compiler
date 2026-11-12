@@ -4365,6 +4365,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "satisfies_expression"
+        },
+        {
+          "type": "SYMBOL",
           "name": "update_expression"
         },
         {
@@ -5680,6 +5684,27 @@
           {
             "type": "STRING",
             "value": "as"
+          },
+          {
+            "type": "SYMBOL",
+            "name": "type"
+          }
+        ]
+      }
+    },
+    "satisfies_expression": {
+      "type": "PREC_LEFT",
+      "value": 1,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "SYMBOL",
+            "name": "_expression"
+          },
+          {
+            "type": "STRING",
+            "value": "satisfies"
           },
           {
             "type": "SYMBOL",
@@ -7302,6 +7327,15 @@
           "type": "ALIAS",
           "content": {
             "type": "STRING",
+            "value": "satisfies"
+          },
+          "named": true,
+          "value": "identifier"
+        },
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "STRING",
             "value": "async"
           },
           "named": true,
@@ -7657,6 +7691,10 @@
     ],
     [
       "type_assertion_expression",
+      "_expression"
+    ],
+    [
+      "satisfies_expression",
       "_expression"
     ],
     [

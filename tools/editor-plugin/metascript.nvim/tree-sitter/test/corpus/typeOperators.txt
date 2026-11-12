@@ -1,0 +1,45 @@
+================================================================================
+Satisfies keeps the operand and its checked type
+================================================================================
+
+const s = { size: 2 } satisfies Shape;
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (satisfies_expression
+      (object
+        (pair key: (identifier) value: (number)))
+      (type (type_identifier)))))
+
+================================================================================
+Satisfies chains with as
+================================================================================
+
+const k = x satisfies Kind as string;
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (type_assertion_expression
+      (satisfies_expression
+        (identifier)
+        (type (type_identifier)))
+      (type (primitive_type)))))
+
+================================================================================
+Satisfies stays an identifier elsewhere
+================================================================================
+
+const satisfies = 1;
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (number)))
