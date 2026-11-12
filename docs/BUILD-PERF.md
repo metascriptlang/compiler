@@ -126,8 +126,25 @@ each binary, us/op, gates running on the host:
 | map toArray | 18.737 | 30.121 | 4.758 | 4.338 |
 | geometric mean of bundle over zig, 16 rows | | 1.03 (worst 1.61, best 0.94) | | 0.93 (1.06, 0.78) |
 
-The same three rows were 15.4 to 17.7, 38 to 74 and 5.2 us/op under the pinned config. `map toArray --release` is
-slower than zig's for the second time (28.860 against 19.251 on 2026-11-12) and is not explained.
+The same three rows were 15.4 to 17.7, 38 to 74 and 5.2 us/op under the pinned config.
+
+`map toArray --release` is slower than zig's on rtx every time it was taken (28.860 against 19.251 us on
+2026-11-12; 30.121 against 18.737, 28.426 against 18.365 and 29.289 against 22.167 on 2026-11-13), and only there:
+d87 gave 56.865 against zig's 185.082 and m1m 67.424 against 59.444 under load. What it is not, measured on rtx
+with msc `1b493b622aca` and bundle `3a7e411898f0` (load average 75):
+
+- Not a flag: with `-fno-omit-frame-pointer` 29.785, with `-O3` 37.988, with `-march=znver4` 50.643 (spreads 15 to
+  28 %); without LTO both are several times slower (zig 83.898, bundle 102.255); `--danger` is level (5.359
+  against 5.480).
+- Not the kernel: `strace -c` counts 14 `mmap` calls in the whole run under zig and 22 under the bundle, one
+  `munmap` each, and `/usr/bin/time` shows 0.00 s system time for both.
+- Not different code in the row's own function: the closure (`dollarfn_anon_35___benchOms_u0`, 450 and 449
+  disassembly lines) calls the same 12 routines, has the same vector loops, and its map-and-push loop is the same
+  instruction sequence with other registers, `%rsp` in place of `%rbp` offsets and different padding before it.
+  Both call `memcpy` and `memset` in libc through the PLT.
+
+That leaves how the same loop runs on this CPU (alignment of the loop or of the two arrays it reads and writes).
+Not measured: hardware counters, because `perf` is closed to users on rtx (`perf_event_paranoid` 4).
 
 The m1m and d87 tables of this run are not usable. m1m gave `--release` 1.18 and `--danger` 0.99 while two jobs of
 the measuring session shared its cores; with `--passC=-mcpu=native`, which compiles the same code, it was 0.99 the
