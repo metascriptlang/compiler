@@ -15,6 +15,7 @@ import {
 	parseDiscKey,
 	unwrapType,
 	implementationOf,
+	distinctBase,
 	literalCarrier,
 	literalMembers,
 } from "../discDetect";
@@ -93,6 +94,7 @@ export macro jsonValueOf(arg: Node): Node {
 		}
 	}
 	let tt = implementationOf(t);
+	const isDistinct = distinctBase(tt) != null;
 	while (tt.kind == NodeKind.TypeGeneric) tt = unwrapType(tt);
 
 	// Array field — emit a call to a per-element-type runtime helper.
@@ -432,13 +434,13 @@ export macro jsonValueOf(arg: Node): Node {
 			"number" | "float32" | "float64" => "jsonNumber",
 			_ => "jsonInt",
 		};
-		const argNode: Node = builderName == "jsonInt"
+		const argNode: Node = builderName == "jsonInt" || isDistinct
 			? {
 				kind: NodeKind.TypeAssertion,
 				line: t.line,
 				column: t.column,
 				asExpr: t,
-				asType: "int64",
+				asType: builderName == "jsonInt" ? "int64" : tn,
 			}
 			: t;
 		return {
