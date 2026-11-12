@@ -83,6 +83,18 @@ generated files and restored all 97 native objects. Table and commands:
   mode, flags and header resolution are in the key because a hit across them could produce a
   different program. Removing one of them from a key needs a measurement that output stays
   identical across it.
+- **A host build is keyed by this machine's CPU.** A build through the bundle that names no target
+  compiles with `-march=native` (`-mcpu=native` on arm64), a text that is the same on two machines, so
+  `selectNativeToolchain` adds `-DMSC_HOST_CPU_<digest>`, a digest of what clang reads to resolve
+  `native` (`runtime/core/hostCpu.h`, `msHostCpuSignature`), and every key the flags reach changes with
+  the CPU. Without it a cache restored on another CPU model (a CI cache, a home directory moved to
+  another machine) would link objects that CPU may not run. Measured 2026-11-13 from the `-D` in the
+  cc1 lines of `hello.ms` (`CC_PRINT_OPTIONS`): rtx `428fc0ec74eb7a7b` (`znver5`), d87
+  `1655ae3e0c377ad2` (`skylake`), m1m `2865d2307a45c0d3` (`apple-m1`), each the same in a debug, a
+  release and a `--passC` build; a build naming `--cpu` or `--abi=musl` carries none. Not covered:
+  `--cc=zig`, which detects the host CPU itself and gets no marker, and a `-march=native` an author
+  passes to another compiler through `--passC`. Not measured: a store actually restored across two
+  machines.
 - **A hit is only as correct as its recorded inputs.** A header that appears later is an input
   only through a literal `__has_include` name; see below.
 
