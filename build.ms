@@ -29,6 +29,19 @@ function checked(c: Command): Command {
 export const test = checked(runArtifact(msc, ["test"]));
 export const suite = checked(runArtifact(msc, ["test", "src/index.ms"]));
 
+const tier = (entry: string, args: string[]): Command => {
+	const c = checked(withSubject(msc, []));
+	c.addArtifactArg(msc);
+	c.addArgs(["test", entry, "--tests-in-dir"]);
+	c.addArgs(args);
+	c.describe(["tests", entry].concat(args).join(" "));
+	return c;
+};
+const tiers: BuildNode[] = ["js", "handoff", "checker3pass", "lang", "fmt", "crypto"].map((name: string): BuildNode => tier(`src/test/${name}/index.ms`, []));
+tiers.push(tier("src/test/helpers.ms", []));
+for (let i = 0; i < 3; i++) tiers.push(tier("src/test/c/index.ms", [`--tests-shard=${i}/3`]));
+export const tests = step({ description: "every tier index", inputs: tiers, make: (): void => {} });
+
 export const corpusRunner = executable({ entry: path("src/test/corpus/run.ms") });
 export const corpus = withSubject(msc, []);
 corpus.addArtifactArg(corpusRunner);
