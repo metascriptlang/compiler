@@ -14,6 +14,7 @@
 #define msHeapDeallocPages msHeapProbeDeallocPages
 #define msHeapResetPages msHeapProbeResetPages
 #define msHeapOutOfMemory msHeapProbeOutOfMemory
+#define msHeapFreedTwice msHeapProbeFreedTwice
 #include "../../../../runtime/allocator.c"
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,6 +36,25 @@ _Noreturn void msHeapOutOfMemory(void) {
 	if (expectingOOM) longjmp(oom, 1);
 	fprintf(stderr, "GUARD-FAIL allocator %s: unexpected OOM\n", phase);
 	abort();
+}
+
+static unsigned refusals;
+static int expectingRefusal;
+static jmp_buf refusal;
+
+_Noreturn void msHeapFreedTwice(void* p) {
+	++refusals;
+	if (expectingRefusal) longjmp(refusal, 1);
+	fprintf(stderr, "GUARD-FAIL allocator %s: the free of %p was refused\n", phase, p);
+	abort();
+}
+
+static void freeIsRefused(void* p) {
+	unsigned before = refusals;
+	expectingRefusal = 1;
+	if (!setjmp(refusal)) msHeapFree(p);
+	expectingRefusal = 0;
+	CHECK(refusals == before + 1);
 }
 
 void* msHeapTryAllocPages(size_t bytes) {
@@ -306,6 +326,45 @@ int32_t msAllocatorCoreChecks(void) {
 	msHeapFree(other);
 	msHeapFree(otherNext);
 	for (unsigned i = 1; i < PER_PAGE; ++i) msHeapFree(full[i]);
+
+	phase = "a second free of a small cell is refused and leaves its chunk as it was";
+	unsigned char* twice[PER_PAGE];
+	for (unsigned i = 0; i < PER_PAGE; ++i) twice[i] = msHeapAlloc(CELL);
+	msHeapSmall* cellsHome = (msHeapSmall*)msHeapPage(twice[0]);
+	for (unsigned i = 1; i < PER_PAGE; ++i) CHECK((msHeapSmall*)msHeapPage(twice[i]) == cellsHome);
+	size_t occupiedBefore = region->occupied;
+	msHeapFree(twice[0]);
+	freeIsRefused(twice[0]);
+	msHeapFree(twice[1]);
+	freeIsRefused(twice[0]);
+	CHECK(cellsHome->free == 2 * CELL && cellsHome->freeList == (msHeapCell*)twice[1] && region->occupied == occupiedBefore - 2 * CELL);
+	memset(twice[2], 0x4c, CELL);
+	unsigned char* again = msHeapAlloc(CELL);
+	CHECK(again == twice[1]);
+
+	phase = "a live cell whose bytes hold the home mark is freed once, then refused";
+	((msHeapCell*)again)->run = msHeapHomeMark(cellsHome);
+	msHeapFree(again);
+	CHECK(cellsHome->free == 2 * CELL);
+	freeIsRefused(again);
+	checkBytes(twice[2], CELL, 0x4c);
+	msHeapFree(twice[2]);
+	msHeapFree(twice[3]);
+
+	phase = "a second free of a big chunk is refused";
+	unsigned char* big = msHeapAlloc(3 * 4096);
+	unsigned char* beside = msHeapAlloc(3 * 4096);
+	memset(beside, 0x2b, 3 * 4096);
+	msHeapFree(big);
+	occupiedBefore = region->occupied;
+	freeIsRefused(big);
+	CHECK(region->occupied == occupiedBefore);
+	checkBytes(beside, 3 * 4096, 0x2b);
+
+	phase = "a free whose page holds no chunk header is refused";
+	memset(beside, 0, 3 * 4096);
+	freeIsRefused((unsigned char*)msHeapPage(beside) + 4096 + 64);
+	msHeapFree(beside);
 	msHeapReset();
 	return 0;
 }
