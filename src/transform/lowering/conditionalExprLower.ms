@@ -45,7 +45,7 @@ import { peelTransparentInstance, PEEL_MAX_DEPTH, isMaybeType, unwrapMaybeType, 
 import { readonlyDataConstBinding } from "../../checker/constFold";
 import { nodeHasPositionalNew } from "./newExprLower";
 import { moveDoWhileTestIntoBody } from "./jumpRetarget";
-import { isLowerableSpreadLiteral, expandSpreadLiteral } from "../desugar/arraySpreadLower";
+import { isLowerableSpreadLiteral, beginSpreadLiteral, expandSpreadElement, endSpreadLiteral } from "../desugar/arraySpreadLower";
 import { spreadStructOf, expandObjectSpread } from "../desugar/objectSpreadLower";
 import { needsIntegerCompoundRewrite, needsIntegerUpdateRewrite, cloneIfPure } from "../coercion/intArithJS";
 import { cloneTargetIfPure } from "../place";
@@ -194,13 +194,27 @@ function bindToStatement(expr: Node, prefix: string, hoisted: Node[], ctx: Trans
 
 function hoistLiteral(lit: Node, hoisted: Node[], ctx: TransformContext): Node {
 	callsToStatements += 1;
-	hoistChildrenInOrder(lit, hoisted, ctx);
-	callsToStatements -= 1;
 	if (isLowerableSpreadLiteral(lit)) {
-		expandSpreadLiteral(lit, ctx, hoisted);
+		hoistSpreadLiteralInOrder(lit, hoisted, ctx);
+		callsToStatements -= 1;
 		return lit;
 	}
+	hoistChildrenInOrder(lit, hoisted, ctx);
+	callsToStatements -= 1;
 	return lit.kind == NodeKind.ObjectLiteral ? expandObjectSpread(lit, ctx) : lit;
+}
+
+// Each element's hoists are followed by its own push or copy loop, so statement order is
+// evaluation order: a later element's call cannot run before an earlier spread is copied.
+function hoistSpreadLiteralInOrder(lit: Node, hoisted: Node[], ctx: TransformContext): void {
+	const d = lit.data as ArrayLiteralData;
+	const accSym = beginSpreadLiteral(lit, ctx, hoisted);
+	for (let at = 0; at < d.elements.length; at += 1) {
+		const e = d.elements[at];
+		if (e != null) d.elements[at] = hoistTernaries(e, hoisted, ctx);
+		expandSpreadElement(lit, at, accSym, ctx, hoisted);
+	}
+	endSpreadLiteral(lit, accSym);
 }
 
 function aggregateInitType(expr: Node): Type | null {

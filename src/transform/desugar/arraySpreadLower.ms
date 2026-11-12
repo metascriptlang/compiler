@@ -103,10 +103,9 @@ function accumulatorCall(name: string, accSym: Symbol, accT: Type | null, arg: N
 	return makeExprStmt(makeCall(runtimeRef(name, loc), [target, arg], loc), loc);
 }
 
-export function expandSpreadLiteral(lit: Node, ctx: TransformContext, out: Node[]): void {
+export function beginSpreadLiteral(lit: Node, ctx: TransformContext, out: Node[]): Symbol {
 	const litT = lit.nodeType;
 	const loc = lit.location;
-	const d = lit.data as ArrayLiteralData;
 	const accSym = freshTempSym(ctx, "spra", litT);
 	const emptyLit = createNode(NodeKind.ArrayLiteral, { elements: [] }, syntheticToken(loc));
 	emptyLit.nodeType = litT;
@@ -114,67 +113,83 @@ export function expandSpreadLiteral(lit: Node, ctx: TransformContext, out: Node[
 	accDecl.resolvedSym = accSym;
 	accDecl.nodeType = litT;
 	out.push(accDecl);
+	return accSym;
+}
+
+// Appends element `at` of the literal to the accumulator: a push, or the copy of a spread's source.
+export function expandSpreadElement(lit: Node, at: number, accSym: Symbol, ctx: TransformContext, out: Node[]): void {
+	const litT = lit.nodeType;
+	const loc = lit.location;
+	const d = lit.data as ArrayLiteralData;
 	const litBare = bareArrayType(litT);
 	const accElem = litBare != null ? litBare.typeReturn : null;
-	for (let at = 0; at < d.elements.length; at += 1) {
-		const e = d.elements[at];
-		if (e == null) continue;
-		if (e.kind != NodeKind.SpreadExpr) {
-			out.push(pushStmt(accSym, litT, e, loc));
-			continue;
-		}
-		const sd = e.data as SpreadExprData;
-		const srcT = sd.spreadArg.nodeType;
-		const tuple = tupleSource(srcT);
-		if (tuple == null && !isIndexedSource(srcT)) {
-			reportTransformError(ctx, `a spread of '${typeDisplayName(srcT)}' is unsupported on this backend: spread an array, a tuple or a string`, sd.spreadArg.location);
-			continue;
-		}
-		const srcSym = freshTempSym(ctx, "sprs", srcT);
-		const srcDecl = makeVarDecl(srcSym.name, sd.spreadArg, DeclKind.Const, loc);
-		srcDecl.resolvedSym = srcSym;
-		srcDecl.nodeType = srcT;
-		out.push(srcDecl);
-		if (tuple != null) {
-			for (let i = 0; i < tuple.typeChildren.length; i += 1) {
-				const item = makeArrayAccess(typedRef(srcSym, srcT, loc), makeNumber(i, loc), loc);
-				item.nodeType = tuple.typeChildren[i];
-				out.push(pushStmt(accSym, litT, item, loc));
-			}
-			continue;
-		}
-		const bareSrc = bareArrayType(srcT);
-		const srcElem = bareSrc != null ? bareSrc.typeReturn : null;
-		if (!ctx.raiserBackend && bareSrc != null && bareSrc.kind == TypeKind.Array) {
-			const length = makeMember(viewRef(srcSym, srcT, loc), "length", loc);
-			length.nodeType = int32Type();
-			const extra = plainRunAfter(d.elements, at);
-			const room = extra == 0 ? length : makeBinary(length, "+", makeNumber(extra, loc), loc);
-			room.nodeType = int32Type();
-			out.push(accumulatorCall("msGenericArrayReserveMore", accSym, litT, room, loc));
-			if (srcElem != null && accElem != null && isPrimitiveKind(srcElem.kind) && srcElem.kind == accElem.kind) {
-				out.push(accumulatorCall("msGenericArrayAppendBlock", accSym, litT, viewRef(srcSym, srcT, loc), loc));
-				continue;
-			}
-		}
-		const indexType = counterType(ctx);
-		const iSym = freshTempSym(ctx, "spri", indexType);
-		const iDecl = makeVarDecl(iSym.name, makeNumber(0, loc), DeclKind.Let, loc);
-		iDecl.resolvedSym = iSym;
-		iDecl.nodeType = indexType;
-		out.push(iDecl);
-		const elemAccess = makeArrayAccess(viewRef(srcSym, srcT, loc), typedRef(iSym, indexType, loc), loc);
-		elemAccess.nodeType = srcElem;
-		const bodyStmts = [pushStmt(accSym, litT, elemAccess, loc), makeCounterStep(iSym, indexType, loc)];
-		const lenMember = makeMember(viewRef(srcSym, srcT, loc), "length", loc);
-		lenMember.nodeType = int32Type();
-		const cond = makeBinary(typedRef(iSym, indexType, loc), "<", lenMember, loc);
-		out.push(makeWhile(cond, makeBlock(bodyStmts, loc), loc));
+	const e = d.elements[at];
+	if (e == null) return;
+	if (e.kind != NodeKind.SpreadExpr) {
+		out.push(pushStmt(accSym, litT, e, loc));
+		return;
 	}
+	const sd = e.data as SpreadExprData;
+	const srcT = sd.spreadArg.nodeType;
+	const tuple = tupleSource(srcT);
+	if (tuple == null && !isIndexedSource(srcT)) {
+		reportTransformError(ctx, `a spread of '${typeDisplayName(srcT)}' is unsupported on this backend: spread an array, a tuple or a string`, sd.spreadArg.location);
+		return;
+	}
+	const srcSym = freshTempSym(ctx, "sprs", srcT);
+	const srcDecl = makeVarDecl(srcSym.name, sd.spreadArg, DeclKind.Const, loc);
+	srcDecl.resolvedSym = srcSym;
+	srcDecl.nodeType = srcT;
+	out.push(srcDecl);
+	if (tuple != null) {
+		for (let i = 0; i < tuple.typeChildren.length; i += 1) {
+			const item = makeArrayAccess(typedRef(srcSym, srcT, loc), makeNumber(i, loc), loc);
+			item.nodeType = tuple.typeChildren[i];
+			out.push(pushStmt(accSym, litT, item, loc));
+		}
+		return;
+	}
+	const bareSrc = bareArrayType(srcT);
+	const srcElem = bareSrc != null ? bareSrc.typeReturn : null;
+	if (!ctx.raiserBackend && bareSrc != null && bareSrc.kind == TypeKind.Array) {
+		const length = makeMember(viewRef(srcSym, srcT, loc), "length", loc);
+		length.nodeType = int32Type();
+		const extra = plainRunAfter(d.elements, at);
+		const room = extra == 0 ? length : makeBinary(length, "+", makeNumber(extra, loc), loc);
+		room.nodeType = int32Type();
+		out.push(accumulatorCall("msGenericArrayReserveMore", accSym, litT, room, loc));
+		if (srcElem != null && accElem != null && isPrimitiveKind(srcElem.kind) && srcElem.kind == accElem.kind) {
+			out.push(accumulatorCall("msGenericArrayAppendBlock", accSym, litT, viewRef(srcSym, srcT, loc), loc));
+			return;
+		}
+	}
+	const indexType = counterType(ctx);
+	const iSym = freshTempSym(ctx, "spri", indexType);
+	const iDecl = makeVarDecl(iSym.name, makeNumber(0, loc), DeclKind.Let, loc);
+	iDecl.resolvedSym = iSym;
+	iDecl.nodeType = indexType;
+	out.push(iDecl);
+	const elemAccess = makeArrayAccess(viewRef(srcSym, srcT, loc), typedRef(iSym, indexType, loc), loc);
+	elemAccess.nodeType = srcElem;
+	const bodyStmts = [pushStmt(accSym, litT, elemAccess, loc), makeCounterStep(iSym, indexType, loc)];
+	const lenMember = makeMember(viewRef(srcSym, srcT, loc), "length", loc);
+	lenMember.nodeType = int32Type();
+	const cond = makeBinary(typedRef(iSym, indexType, loc), "<", lenMember, loc);
+	out.push(makeWhile(cond, makeBlock(bodyStmts, loc), loc));
+}
+
+export function endSpreadLiteral(lit: Node, accSym: Symbol): void {
 	const litData: IdentifierData = { name: accSym.name };
 	lit.kind = NodeKind.Identifier;
 	lit.data = litData;
 	lit.resolvedSym = accSym;
+}
+
+export function expandSpreadLiteral(lit: Node, ctx: TransformContext, out: Node[]): void {
+	const accSym = beginSpreadLiteral(lit, ctx, out);
+	const d = lit.data as ArrayLiteralData;
+	for (let at = 0; at < d.elements.length; at += 1) expandSpreadElement(lit, at, accSym, ctx, out);
+	endSpreadLiteral(lit, accSym);
 }
 
 function expandLeading(stmt: Node, ctx: TransformContext): Node[] {
