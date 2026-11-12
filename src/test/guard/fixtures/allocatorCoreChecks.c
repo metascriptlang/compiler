@@ -243,5 +243,69 @@ int32_t msAllocatorCoreChecks(void) {
 	msHeapReset();
 	CHECK(msHeapAlloc(16) == boot);
 	msHeapReset();
+
+	phase = "a cell taken and freed in turn keeps its chunk at the head of its class";
+	enum { CELL = 1008, PER_PAGE = 4, FILL_PAGES = 16, FILL = FILL_PAGES * PER_PAGE };
+	msHeapRegion* region = MS_HEAP_REGION(&msHeapOnly);
+	unsigned char* turn = msHeapAlloc(CELL);
+	msHeapSmall* turnHome = (msHeapSmall*)msHeapPage(turn);
+	msHeapFree(turn);
+	CHECK(region->small[CELL / MS_HEAP_ALIGN] == turnHome && region->empties == NULL);
+	CHECK(msHeapAlloc(CELL) == turn);
+	msHeapFree(turn);
+
+	phase = "small chunks emptied in any order feed a big request without an OS request";
+	unsigned char* fill[FILL];
+	for (unsigned i = 0; i < FILL; ++i) {
+		fill[i] = msHeapAlloc(CELL);
+		memset(fill[i], (int)i, CELL);
+	}
+	msHeapChunk* firstPage = msHeapPage(fill[0]);
+	for (unsigned i = 0; i < FILL; ++i) CHECK((unsigned char*)msHeapPage(fill[i]) == (unsigned char*)firstPage + i / PER_PAGE * 4096);
+	for (unsigned i = 0; i < FILL; ++i) {
+		unsigned at = (i * 37) % FILL;
+		checkBytes(fill[at], CELL, (unsigned char)at);
+		msHeapFree(fill[at]);
+	}
+	size_t emptied = requests;
+	unsigned char* joinedPages = msHeapAlloc(FILL_PAGES * 4096 - sizeof(msHeapBig));
+	CHECK(msHeapPage(joinedPages) == firstPage && firstPage->size == FILL_PAGES * 4096 && requests == emptied);
+	msHeapFree(joinedPages);
+
+	phase = "a small chunk with one live cell keeps its page";
+	for (unsigned i = 0; i < FILL; ++i) fill[i] = msHeapAlloc(CELL);
+	enum { KEPT = 5 * PER_PAGE + 1 };
+	memset(fill[KEPT], 0x6d, CELL);
+	msHeapChunk* keptPage = msHeapPage(fill[KEPT]);
+	CHECK((unsigned char*)keptPage == (unsigned char*)firstPage + 5 * 4096);
+	for (unsigned i = 0; i < FILL; ++i) if (i != KEPT) msHeapFree(fill[i]);
+	emptied = requests;
+	unsigned char* behind = msHeapAlloc(10 * 4096 - sizeof(msHeapBig));
+	CHECK((unsigned char*)msHeapPage(behind) == (unsigned char*)keptPage + 4096 && requests == emptied);
+	unsigned char* across = msHeapAlloc(6 * 4096 - sizeof(msHeapBig));
+	CHECK(requests == emptied + 1 && keptPage->size == CELL);
+	checkBytes(fill[KEPT], CELL, 0x6d);
+	msHeapFree(across);
+	msHeapFree(behind);
+	msHeapFree(fill[KEPT]);
+
+	phase = "an emptied chunk that left its class serves another class";
+	unsigned char* full[PER_PAGE];
+	for (unsigned i = 0; i < PER_PAGE; ++i) full[i] = msHeapAlloc(CELL);
+	unsigned char* lone = msHeapAlloc(CELL);
+	msHeapSmall* shelved = (msHeapSmall*)msHeapPage(lone);
+	CHECK(msHeapPage(full[0]) == keptPage && (msHeapChunk*)shelved != keptPage);
+	msHeapFree(lone);
+	msHeapFree(full[0]);
+	CHECK(region->empties == shelved && region->small[CELL / MS_HEAP_ALIGN] == (msHeapSmall*)keptPage);
+	emptied = requests;
+	unsigned char* other = msHeapAlloc(48);
+	unsigned char* otherNext = msHeapAlloc(48);
+	CHECK(other == shelved->data && otherNext == other + 48 && shelved->base.size == 48 && region->empties == NULL);
+	CHECK(requests == emptied);
+	msHeapFree(other);
+	msHeapFree(otherNext);
+	for (unsigned i = 1; i < PER_PAGE; ++i) msHeapFree(full[i]);
+	msHeapReset();
 	return 0;
 }

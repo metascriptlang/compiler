@@ -161,6 +161,7 @@ static void remoteRuns(void) {
 static void remoteBigReuse(void) {
     phase = "remote big reuse";
     msHeapRegion* a = MS_HEAP_REGION(msHeapCurrent);
+    msHeapReturnIdle();
     size_t before = a->occupied;
     for (int i = 0; i < 8; ++i) { bigs[i] = msHeapAlloc(BIG); memset(bigs[i], 0x5a, BIG); }
     probeJoin(probeSpawn(freeBigs, NULL));
@@ -227,6 +228,7 @@ static void stressWorker(void* arg) {
         }
         void* local = msHeapAlloc(32 + (seed % 200));
         msHeapFree(local);
+        if (r % 128 == 127) msHeapReturnIdle();
     }
     msHeapThreadRelease();
 }
@@ -294,11 +296,35 @@ static void foreignThreadExit(void) {
     msHeapFree(bigs[0]);
 }
 
+static msHeapChunk* chunkHolding(void* p) {
+    uintptr_t at = (uintptr_t)msHeapPage(p);
+    while (!msHeapContains(MS_HEAP_REGION(msHeapCurrent), at)) at -= MS_HEAP_PAGE_SIZE;
+    return (msHeapChunk*)at;
+}
+
+/* M10: a small chunk whose cells were all freed by another thread goes back to the big-chunk
+ * pool on the owner's next return, when every cell is on the chunk's own free list again. */
+static void remotelyEmptiedChunksReturn(void) {
+    phase = "small chunks emptied by another thread return to the big-chunk pool";
+    msHeapRegion* a = MS_HEAP_REGION(msHeapCurrent);
+    msHeapReturnIdle();
+    size_t before = a->occupied;
+    for (int i = 0; i < CELLS; ++i) { cells[i] = msHeapAlloc(112); memset(cells[i], 0x5a, 112); }
+    probeJoin(probeSpawn(freeCells, NULL));
+    for (int i = 0; i < CELLS; ++i) CHECK(msHeapPage(cells[i])->size == 112 && (msHeapPage(cells[i])->prevSize & 1));
+    msHeapReturnIdle();
+    CHECK(a->occupied == before);
+    for (int i = 0; i < CELLS; ++i) CHECK(!(chunkHolding(cells[i])->prevSize & 1));
+    for (int i = 0; i < CELLS; ++i) { cells[i] = msHeapAlloc(112); memset(cells[i], 0x5a, 112); }
+    for (int i = 0; i < CELLS; ++i) msHeapFree(cells[i]);
+}
+
 int32_t msAllocatorThreadChecks(void) {
     remoteSmallReuse();
     remoteRuns();
     remoteBigReuse();
     foreignRealloc();
+    remotelyEmptiedChunksReturn();
     stress();
     retireAndAdopt();
     foreignThreadExit();

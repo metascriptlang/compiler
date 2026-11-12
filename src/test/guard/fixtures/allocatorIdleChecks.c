@@ -468,6 +468,131 @@ static void smallChunkBesideDiscardedJoinsIt(void) {
     msHeapFree(left);
 }
 
+static msHeapBig* chunkHolding(void* p) {
+    uintptr_t at = (uintptr_t)msHeapPage(p);
+    while (!msHeapContains(region(), at)) at -= MS_HEAP_PAGE_SIZE;
+    return (msHeapBig*)at;
+}
+
+static int isSmallChunkOf(void* p, size_t cell) {
+    msHeapChunk* page = msHeapPage(p);
+    return msHeapContains(region(), (uintptr_t)page) && (page->prevSize & 1) && page->size == cell;
+}
+
+enum { SMALL_CELL = 1008, SMALL_PER_PAGE = 4, SMALL_CELLS = 4096, SMALL_RETAKEN = 1024 };
+static void* smallCells[SMALL_CELLS];
+static void* retaken[SMALL_RETAKEN];
+
+static void emptiedSmallChunksGoBack(void) {
+    phase = "small chunks emptied in any order go back once they stayed empty for the return age; one taken again stays";
+    for (int i = 0; i < SMALL_CELLS; ++i) {
+        smallCells[i] = msHeapAlloc(SMALL_CELL);
+        memset(smallCells[i], 0x5a, SMALL_CELL);
+    }
+    msHeapReturnIdle();
+    CHECK(region()->returnDue == 0);
+    enum { LATER = SMALL_CELLS - SMALL_RETAKEN };
+    for (int i = 0; i < LATER; ++i) msHeapFree(smallCells[SMALL_RETAKEN + (i * 37) % LATER]);
+    for (int i = 0; i < SMALL_RETAKEN; ++i) msHeapFree(smallCells[(i * 37) % SMALL_RETAKEN]);
+    CHECK(region()->empties != NULL && region()->agedEmpties == NULL);
+    int wait = msHeapIdleWaitMs(-1);
+    CHECK(wait > MS_HEAP_RETURN_AFTER_MS && wait <= AGE_MS);
+    CHECK(region()->empties == NULL && region()->agedEmpties != NULL);
+    for (int i = 0; i < SMALL_CELLS; ++i) CHECK(isSmallChunkOf(smallCells[i], SMALL_CELL));
+    size_t carvedBefore = carved;
+    for (int i = 0; i < SMALL_RETAKEN; ++i) {
+        retaken[i] = msHeapAlloc(SMALL_CELL);
+        memset(retaken[i], 0x5a, SMALL_CELL);
+    }
+    CHECK(carved == carvedBefore);
+    probeNowMs += wait - 1;
+    msHeapReturn(region(), probeNowMs);
+    for (int i = 0; i < SMALL_CELLS; ++i) CHECK(isSmallChunkOf(smallCells[i], SMALL_CELL));
+    CHECK(msHeapIdleWaitMs(-1) == 1);
+    size_t before = discardedBytes;
+    probeNowMs += 1;
+    msHeapReturnUnused();
+    int kept = 0;
+    for (int i = 0; i < SMALL_CELLS; ++i) {
+        if (isSmallChunkOf(smallCells[i], SMALL_CELL)) { ++kept; continue; }
+        msHeapBig* chunk = chunkHolding(smallCells[i]);
+        CHECK(!(chunk->base.prevSize & 1) && ((chunk->zeroed & MS_HEAP_DISCARDED) || !msHeapReturnable(region(), chunk)));
+    }
+    CHECK(kept >= SMALL_RETAKEN && kept <= SMALL_RETAKEN + SMALL_PER_PAGE);
+    for (int i = 0; i < SMALL_RETAKEN; ++i) CHECK(isSmallChunkOf(retaken[i], SMALL_CELL));
+    CHECK(discardedBytes - before >= 2 * MIB);
+    freeChunksReadable();
+    for (int i = 0; i < SMALL_CELLS; ++i) {
+        smallCells[i] = msHeapAlloc(SMALL_CELL);
+        memset(smallCells[i], 0x5a, SMALL_CELL);
+    }
+    for (int i = 0; i < SMALL_CELLS; ++i) msHeapFree(smallCells[i]);
+    for (int i = 0; i < SMALL_RETAKEN; ++i) msHeapFree(retaken[i]);
+}
+
+static void* awayCell;
+static int awayStep;
+static void awaitStep(int step) { while (__atomic_load_n(&awayStep, __ATOMIC_ACQUIRE) != step) {} }
+static void holdInRun(void* arg) {
+    (void)arg;
+    msHeapFree(msHeapAlloc(16));
+    msHeapFree(awayCell);
+    __atomic_store_n(&awayStep, 1, __ATOMIC_RELEASE);
+    awaitStep(2);
+    msHeapThreadFlush();
+    __atomic_store_n(&awayStep, 3, __ATOMIC_RELEASE);
+    awaitStep(4);
+    msHeapThreadRelease();
+}
+
+static void chunkWaitsForACellInAnotherThreadsRun(void) {
+    phase = "a small chunk whose last cell sits in another thread's run stays, and joins the big chunks once the cell is home";
+    enum { CELL = 2016 };
+    unsigned char* kept = msHeapAlloc(CELL);
+    unsigned char* mate = msHeapAlloc(CELL);
+    unsigned char* other = msHeapAlloc(CELL);
+    msHeapSmall* home = (msHeapSmall*)msHeapPage(kept);
+    CHECK((msHeapSmall*)msHeapPage(mate) == home && (msHeapSmall*)msHeapPage(other) != home);
+    awayCell = kept;
+    __atomic_store_n(&awayStep, 0, __ATOMIC_RELEASE);
+    probeThread t = probeSpawn(holdInRun, NULL);
+    awaitStep(1);
+    msHeapFree(mate);
+    msHeapReturnIdle();
+    CHECK(isSmallChunkOf(kept, CELL) && home->free == MS_HEAP_SMALL_ROOM - CELL);
+    __atomic_store_n(&awayStep, 2, __ATOMIC_RELEASE);
+    awaitStep(3);
+    CHECK(isSmallChunkOf(kept, CELL) && home->free == MS_HEAP_SMALL_ROOM - CELL);
+    msHeapReturnIdle();
+    CHECK(!(chunkHolding(kept)->base.prevSize & 1));
+    __atomic_store_n(&awayStep, 4, __ATOMIC_RELEASE);
+    probeJoin(t);
+    msHeapFree(other);
+}
+
+static void* awayPair[2];
+static void freeAwayPair(void* arg) {
+    (void)arg;
+    msHeapFree(awayPair[0]);
+    msHeapFree(awayPair[1]);
+}
+
+static void chunkWaitsForACellInItsOwnersCache(void) {
+    phase = "a small chunk with a cell in its owner's remote cache stays until a return routes the cell home";
+    enum { CELL = 2000, SLOT = CELL / MS_HEAP_ALIGN };
+    awayPair[0] = msHeapAlloc(CELL);
+    awayPair[1] = msHeapAlloc(CELL);
+    msHeapSmall* home = (msHeapSmall*)msHeapPage(awayPair[0]);
+    CHECK((msHeapSmall*)msHeapPage(awayPair[1]) == home && region()->small[SLOT] == NULL);
+    probeJoin(probeSpawn(freeAwayPair, NULL));
+    unsigned char* again = msHeapAlloc(CELL);
+    CHECK(again == awayPair[1] && region()->remoteCells[SLOT] == (msHeapCell*)awayPair[0] && home->free == MS_HEAP_SMALL_ROOM - 2 * CELL);
+    msHeapFree(again);
+    CHECK(home->free == MS_HEAP_SMALL_ROOM - CELL && region()->small[SLOT] == home);
+    msHeapReturnIdle();
+    CHECK(region()->remoteCells[SLOT] == NULL && !(chunkHolding(awayPair[0])->base.prevSize & 1));
+}
+
 int32_t msAllocatorIdleChecks(void) {
     reserve();
     dirtyChunkGoesBack();
@@ -498,6 +623,12 @@ int32_t msAllocatorIdleChecks(void) {
     smallChunkJoinsANeighbourDiscardedInTheSameReturn();
     freeChunksReadable();
     largeChunkKeepsItsAgeBesideAnOlderSmallOne();
+    freeChunksReadable();
+    emptiedSmallChunksGoBack();
+    freeChunksReadable();
+    chunkWaitsForACellInAnotherThreadsRun();
+    freeChunksReadable();
+    chunkWaitsForACellInItsOwnersCache();
     freeChunksReadable();
     return 0;
 }
