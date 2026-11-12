@@ -17,6 +17,7 @@ export enum HostCapability {
 	Pure,
 	FileRead,
 	ChildProcess,
+	Local,
 }
 
 export interface HostEntry {
@@ -26,6 +27,7 @@ export interface HostEntry {
 	capability: HostCapability;
 	leaf: boolean;  // in place and spawns no child: it cannot run the VM again, so a call saves no floor and resumes no run
 	live: boolean;  // false once _resetHostRegistryForTests dropped it, so a call site that cached it resolves again
+	viaSystem: boolean;
 }
 
 interface HostRegistry {
@@ -50,9 +52,10 @@ export function registerHostFn(
 		entry.inPlace = -1;
 		entry.capability = capability;
 		entry.leaf = false;
+		entry.viaSystem = false;
 		return;
 	}
-	const newEntry: HostEntry = { name, fn, inPlace: -1, capability, leaf: false, live: true };
+	const newEntry: HostEntry = { name, fn, inPlace: -1, capability, leaf: false, live: true, viaSystem: false };
 	_registry.entries.set(name, newEntry);
 }
 
@@ -69,6 +72,16 @@ export function lookupHost(name: string): HostEntry | null {
 
 export function hostEntryAllowedInRestrictedMode(entry: HostEntry): boolean {
 	return entry.capability == HostCapability.Pure || entry.capability == HostCapability.FileRead;
+}
+
+export function routeHostFnThroughSystem(name: string): void {
+	const entry = _registry.entries.get(name);
+	if (entry == null) throw new Error(`no host function '${name}' to route through the system`);
+	entry.viaSystem = true;
+}
+
+export function hostEntryAllowedInSandbox(entry: HostEntry): boolean {
+	return entry.viaSystem || entry.capability == HostCapability.Pure || entry.capability == HostCapability.Local;
 }
 
 export function hostEntrySpawnsChild(entry: HostEntry): boolean {

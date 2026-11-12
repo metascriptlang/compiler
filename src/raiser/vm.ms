@@ -27,7 +27,8 @@ import { orcRegisterCandidate, orcUnregister, orcCollect } from "./orc";
 import { ledgerAudit } from "./ledger";
 import { RaiserCopyKind, RaiserCopyPlan, copyTypedValue } from "./valueCopy";
 import { parseIntStr } from "../utils/string";
-import { HostCapability, HostEntry, setHostEntryInPlace, lookupHost, hostEntryAllowedInRestrictedMode, hostEntrySpawnsChild, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap, setActiveProgramArgv, activeProgramArgv, takeHostRaise, hostRaiseIsFatal, hostRaised, hostStateActive, raiseFromHost } from "./hostRegistry";
+import { activeSystem } from "../utils/system";
+import { HostCapability, HostEntry, setHostEntryInPlace, lookupHost, hostEntryAllowedInRestrictedMode, hostEntryAllowedInSandbox, hostEntrySpawnsChild, registerHostFn, _resetHostRegistryForTests, setActiveHostHeaps, activeHostObjectHeap, activeHostArrayHeap, setActiveProgramArgv, activeProgramArgv, takeHostRaise, hostRaiseIsFatal, hostRaised, hostStateActive, raiseFromHost } from "./hostRegistry";
 import { RaiserHostFn, RaiserPrintSink, boxString, unboxFloat } from "./marshal";
 import { int64Bits } from "../utils/stdBackport";
 
@@ -268,6 +269,7 @@ export interface RaiserVM {
 	diagEndColumn: number;
 	hostCallsRestricted: boolean;
 	hostPolicySource: string;
+	sandboxed: boolean;
 	programArgv: string[] | null;   // what the program's `argv` reads; null leaves the host's own argv visible
 	floor: number;
 	suspendedRuns: RaiserRun[];
@@ -369,7 +371,7 @@ export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM 
 	const thenRuns: RaiserThen[] = [];
 	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod), thenRuns, readyOrder: [] as number[], idleWait: false, ticked: [] as number[], freeStrands: [] as number[], spareRegs: [] as RaiserRegFile[] };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", programArgv: null, floor: 0, suspendedRuns: [], unsettled: false, hostArgsAt: 0, hostResult: 0, floorPending: false, inPlaceHost: -1 };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", sandboxed: activeSystem() != null, programArgv: null, floor: 0, suspendedRuns: [], unsettled: false, hostArgsAt: 0, hostResult: 0, floorPending: false, inPlaceHost: -1 };
 }
 
 // --- Register access ---
@@ -2740,7 +2742,7 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 			}
 			case RaiserOpcode.CallHost: {
 				const entry = func.hostCache[((word >> 24) & 65535) as int32];
-				if (entry == null || !entry.leaf || vm.hostCallsRestricted) {
+				if (entry == null || !entry.leaf || vm.hostCallsRestricted || vm.sandboxed) {
 					slow = true;
 					break;
 				}
@@ -5591,6 +5593,10 @@ function vmHandleCallHost(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	}
 	if (vm.hostCallsRestricted && !hostEntryAllowedInRestrictedMode(entry)) {
 		vmError(vm, `Restricted dependency compile-time code '${vm.hostPolicySource}' cannot call host function '${entry.name}'`);
+		return;
+	}
+	if (vm.sandboxed && !hostEntryAllowedInSandbox(entry)) {
+		vmError(vm, `a sandboxed interpreter cannot call host function '${entry.name}': it reaches the machine and the embedder's system does not provide it`);
 		return;
 	}
 	if (vm.comptime && hostEntrySpawnsChild(entry)) {

@@ -50,7 +50,7 @@ import {
 } from "../../raiser/vm";
 import { copyBytes } from "../../raiser/memory";
 import {
-	HostCapability, registerHostFn, markHostRegistryInitialized, isHostRegistryInitialized, setActiveHostHeaps,
+	HostCapability, registerHostFn, routeHostFnThroughSystem, markHostRegistryInitialized, isHostRegistryInitialized, setActiveHostHeaps,
 	activeHostObjectHeap, activeHostArrayHeap, activeProgramArgv, raiseFromHost,
 } from "../../raiser/hostRegistry";
 import {
@@ -67,11 +67,12 @@ import { distinctNumericBase, enumMemberValue } from "../../checker/types";
 
 import {
 	exists, isFile, isDir, isExecutable, fileSize, modifiedTime, realpath,
-	readFile, readFileBytes, writeFile, writeFileBytes, appendFile, chmod, changeStamp, changedTime,
-	mkdir, mkdirExclusive, rmdir, remove, rename, symlink, readDir,
-	ensureDir, removeAll, readLines, writeLines, copyFile,
-} from "std/fs";
-import { cwd, platform, arch, env, exec, argv, execPath, execFile, execFileResult } from "std/process";
+	readFile, readFileBytes, writeFile, appendFile, changeStamp, changedTime,
+	mkdir, rmdir, remove, rename, symlink, readDir,
+	ensureDir, removeAll, copyFile, cwd, env, execPath,
+} from "../../utils/system";
+import { writeFileBytes, chmod, mkdirExclusive, readLines, writeLines } from "std/fs";
+import { platform, arch, env as machineEnv, exec, argv, execFile, execFileResult } from "std/process";
 import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
 import { utf8String, findBytesFrom, byteEqAt, asciiWords } from "std/core/string/bytes";
 import { wellFormedPrefix } from "std/core/string/utf8Repair";
@@ -452,7 +453,7 @@ function _bridgeMsProcessArch(args: RaiserValue[]): RaiserValue {
 }
 
 function _bridgeMsProcessExecPath(args: RaiserValue[]): RaiserValue {
-	return boxString(execPath);
+	return boxString(execPath());
 }
 
 function _bridgeMsProcessGetEnv(args: RaiserValue[]): RaiserValue {
@@ -560,11 +561,11 @@ function _bridgeMsProcessArgv(args: RaiserValue[]): RaiserValue {
 }
 
 function _bridgeMsProcessSetEnv(args: RaiserValue[]): RaiserValue {
-	return boxInt(env.set(unboxString(args[0]), unboxString(args[1])) ? 1 : 0);
+	return boxInt(machineEnv.set(unboxString(args[0]), unboxString(args[1])) ? 1 : 0);
 }
 
 function _bridgeMsProcessUnsetEnv(args: RaiserValue[]): RaiserValue {
-	return boxInt(env.delete(unboxString(args[0])) ? 1 : 0);
+	return boxInt(machineEnv.delete(unboxString(args[0])) ? 1 : 0);
 }
 
 function _unboxStringArrayArg(v: RaiserValue): string[] {
@@ -1629,6 +1630,17 @@ function _bridgeMsUnionWrapMaybe(vm: RaiserVM): void {
 	hostReturn(vm, raiserObject(handle));
 }
 
+const SYSTEM_ROUTED: string[] = [
+	"msFsExists", "msFsRealPath", "msFsIsFile", "msFsIsDir", "msFsIsExecutable", "msFsFileSize",
+	"msFsModifiedTime", "msFsReadFile", "msFsLastErrno", "msFsWriteFileMode", "msFsChangedTime",
+	"msFsChangeStamp", "std/fs.readFile", "std/fs.readFileBytes", "std/fs.readDir", "std/fs.exists",
+	"std/fs.isFile", "std/fs.isDir", "std/fs.isExecutable", "std/fs.realpath", "std/fs.fileSize",
+	"std/fs.modifiedTime", "std/fs.changedTime", "std/fs.changeStamp", "std/fs.writeFile", "std/fs.appendFile",
+	"std/fs.copyFile", "std/fs.mkdir", "std/fs.ensureDir", "std/fs.rmdir", "std/fs.remove", "std/fs.removeAll",
+	"std/fs.rename", "std/fs.symlink", "msFsCopyFile", "msFsMkdir", "msFsRmdir", "msFsRemove", "msFsRename",
+	"msFsSymlink", "msFsReadDirEntries", "msProcessCwd", "msProcessGetEnv", "msProcessExecPath",
+];
+
 export function ensureHostTableLoaded(): void {
 	if (isHostRegistryInitialized()) return;
 
@@ -1692,8 +1704,8 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msFsReadDirEntries", _bridgeMsFsReadDirEntries, HostCapability.FileRead);
 	// process accessors
 	registerHostFn("msProcessCwd",       _bridgeMsProcessCwd);
-	registerHostFn("msProcessPlatform",  _bridgeMsProcessPlatform);
-	registerHostFn("msProcessArch",      _bridgeMsProcessArch);
+	registerHostFn("msProcessPlatform",  _bridgeMsProcessPlatform, HostCapability.Local);
+	registerHostFn("msProcessArch",      _bridgeMsProcessArch, HostCapability.Local);
 	registerHostFn("msProcessExecPath",  _bridgeMsProcessExecPath);
 	registerHostFn("msProcessGetEnv",    _bridgeMsProcessGetEnv);
 	// process spawn/exec
@@ -1721,9 +1733,9 @@ export function ensureHostTableLoaded(): void {
 	registerInPlaceHostFn("msStringParseInt",      _bridgeMsStringParseInt, HostCapability.Pure);
 	registerInPlaceHostFn("msStringParseFloat",    _bridgeMsStringParseFloat, HostCapability.Pure);
 	registerInPlaceHostFn("msStringFromCodePoint", _bridgeMsStringFromCodePoint, HostCapability.Pure);
-	registerInPlaceHostFn("msPerformanceNow",      _bridgeMsPerformanceNow);
-	registerInPlaceHostFn("msTimeNow",             _bridgeMsTimeNow);
-	registerHostFn("msProcessArgv",         _bridgeMsProcessArgv);
+	registerInPlaceHostFn("msPerformanceNow",      _bridgeMsPerformanceNow, HostCapability.Local);
+	registerInPlaceHostFn("msTimeNow",             _bridgeMsTimeNow, HostCapability.Local);
+	registerHostFn("msProcessArgv",         _bridgeMsProcessArgv, HostCapability.Local);
 	registerHostFn("msProcessSetEnv",       _bridgeMsProcessSetEnv);
 	registerHostFn("msProcessUnsetEnv",     _bridgeMsProcessUnsetEnv);
 	registerHostFn("msProcessExecFile",     _bridgeMsProcessExecFile);
@@ -1752,10 +1764,10 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msReadLine",            _bridgeMsReadLine);
 	registerInPlaceHostFn("msReadBytes",    _bridgeMsReadBytes);
 	registerHostFn("msStdinHasData",        _bridgeMsStdinHasData);
-	registerHostFn("msWriteStdout",        _bridgeMsWriteStdout);
-	registerHostFn("msWriteStderr",        _bridgeMsWriteStderr);
-	registerHostFn("msEprintln",           _bridgeMsEprintln);
-	registerHostFn("msWarnln",             _bridgeMsEprintln);
+	registerHostFn("msWriteStdout",        _bridgeMsWriteStdout, HostCapability.Local);
+	registerHostFn("msWriteStderr",        _bridgeMsWriteStderr, HostCapability.Local);
+	registerHostFn("msEprintln",           _bridgeMsEprintln, HostCapability.Local);
+	registerHostFn("msWarnln",             _bridgeMsEprintln, HostCapability.Local);
 	registerHostFn("msZipReaderOpen",       _bridgeMsZipReaderOpen);
 	registerHostFn("msZipReaderCount",      _bridgeMsZipReaderCount);
 	registerHostFn("msZipReaderEntryName",  _bridgeMsZipReaderEntryName);
@@ -1768,10 +1780,10 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msZipWriterAdd",        _bridgeMsZipWriterAdd);
 	registerHostFn("msZipWriterFinalize",   _bridgeMsZipWriterFinalize);
 	registerHostFn("msZipWriterClose",      _bridgeMsZipWriterClose);
-	registerHostFn("msCryptoInit",          _bridgeMsCryptoInit);
-	registerHostFn("msCryptoCleanup",       _bridgeMsCryptoCleanup);
-	registerHostFn("msCryptoHashString",    _bridgeMsCryptoHashString);
-	registerInPlaceHostFn("msCryptoDigest", _bridgeMsCryptoDigest);
+	registerHostFn("msCryptoInit",          _bridgeMsCryptoInit, HostCapability.Local);
+	registerHostFn("msCryptoCleanup",       _bridgeMsCryptoCleanup, HostCapability.Local);
+	registerHostFn("msCryptoHashString",    _bridgeMsCryptoHashString, HostCapability.Local);
+	registerInPlaceHostFn("msCryptoDigest", _bridgeMsCryptoDigest, HostCapability.Local);
 	registerInPlaceHostFn("msStringSplit",         _bridgeMsStringSplit, HostCapability.Pure);
 	registerInPlaceHostFn("msNodeIsFloatLiteral", _bridgeMsNodeIsFloatLiteral, HostCapability.Pure);
 	registerInPlaceHostFn("msNodeIntValue",        _bridgeMsNodeIntValue, HostCapability.Pure);
@@ -1831,6 +1843,7 @@ export function ensureHostTableLoaded(): void {
 	registerInPlaceHostFn("acosh", _bridgeAcosh, HostCapability.Pure);
 	registerInPlaceHostFn("atanh", _bridgeAtanh, HostCapability.Pure);
 	registerInPlaceHostFn("fmod",  _bridgeFmod, HostCapability.Pure);
+	for (const name of SYSTEM_ROUTED) routeHostFnThroughSystem(name);
 	markHostRegistryInitialized();
 }
 

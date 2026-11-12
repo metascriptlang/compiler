@@ -3,6 +3,7 @@ import { RaiserVM, vmCallFunction } from "../../raiser/vm";
 import { takeTouched, retouch } from "../../raiser/module";
 import { canonicalModulePath } from "../../module/loader";
 import { cacheRoot } from "../package/cache";
+import { activeSystem } from "../../utils/system";
 
 function isPathInsideRoot(path: string, root: string): boolean {
 	if (path.length <= root.length || !path.startsWith(root)) return false;
@@ -42,6 +43,8 @@ export function callWithComptimeHostPolicy(
 	_comptimeRuns += 1;
 	const previousRestricted = vm.hostCallsRestricted;
 	const previousSource = vm.hostPolicySource;
+	const previousSandboxed = vm.sandboxed;
+	vm.sandboxed = activeSystem() != null;
 	const restrictedSource = restrictedComptimeSource(modulePath);
 	vm.hostCallsRestricted = restrictedSource != "";
 	vm.hostPolicySource = restrictedSource;
@@ -52,6 +55,7 @@ export function callWithComptimeHostPolicy(
 	retouch(vm.mod, ran);
 	vm.hostCallsRestricted = previousRestricted;
 	vm.hostPolicySource = previousSource;
+	vm.sandboxed = previousSandboxed;
 	const observer = _runObserver;
 	if (observer != null) observer(vm, ran);
 	return result;
