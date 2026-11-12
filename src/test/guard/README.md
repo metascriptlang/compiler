@@ -187,3 +187,10 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   A second program writes one-char literals and indexes nothing: it links `msCharLit120` and
   `msCharLit32`, the objects its literals name, and no `msCharPayloads`. RED on the compiler of
   `e3f94f82fda4` (rtx: the literal-only program links `msCharPayloads`), GREEN on the fix.
+- **`windowsHelloLinksNoPthread.ms`** — a Windows hello holds none of the static `libwinpthread`:
+  no file every program links names a pthread function there, since one name extracts the archive
+  member and its code stays in the file. Cross-builds hello with `--os=windows --danger --strip` on
+  any host and looks for `SetThreadDescription`, a name winpthreads looks up when it starts, since a
+  stripped binary has no symbols. Proven RED on the compiler of `7b6e64e1f852` and GREEN on the fix
+  on d87, m1m and rtx (2026-11-12); sizes in `docs/BUILD-PERF.md` §a Windows hello links no
+  winpthreads.

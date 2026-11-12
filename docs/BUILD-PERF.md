@@ -738,6 +738,55 @@ the two-argument print's `__const` goes from 2,280 to 408 B and its `__text` fro
 
 Pinned by `src/test/guard/oneCharLiteralLinksNoStringTable.ms`.
 
+## Measured 2026-11-12 — a Windows hello links no winpthreads
+
+d87, native Windows x86-64, the prepared bundle. One candidate compiler of tree `02f0363999d9` builds
+`console.log("hello")` with `msc build --danger --strip` twice: with `runtime/drc.c` and
+`runtime/promise/drain.c` as they were before the change, then as they are after it, so the two files
+are all that differs between the rows. Sections from `llvm-objdump -h`, the map from
+`--passL=-Wl,-Map=<file>` on an unstripped build:
+
+| | file | `.text` | `.rdata` | `.pdata` | `winpthread` lines in the link map |
+|---|---|---|---|---|---|
+| before | 21,504 B | 12,662 | 5,092 | 624 | 24 |
+| after | 17,920 | 9,878 | 4,376 | 468 | 0 |
+
+Both print `hello`. The cause, measured on the compiler of `7b6e64e1f852`: no function of the linked
+hello calls `pthread_mutex_lock` or `pthread_mutex_unlock` (`llvm-objdump -d`), yet `mutex.o` and
+`misc.o` of the static `libwinpthread` are in the file. Of the 218 cached objects of that link, two
+name those symbols as undefined (`llvm-nm -u` over `out/release/.cache`): `runtime/drc.c` through
+`msOrphanRootsLock` and `runtime/promise/drain.c` through `msOrphanMu`. A name in any input extracts
+its archive member, and the member's code stays although the functions that named it are dropped;
+why the linker keeps it was not traced. Both locks are SRW locks under `_WIN32` now, as
+`msHeapRetiredLock` in `runtime/allocator.c` already was; every other platform compiles the text it
+compiled before.
+
+The primitives, on d87 with the bundle's clang at `-O2`: a lock, a counter increment and an unlock,
+20 M pairs on one thread and 2 M pairs on each of four threads, six rounds over two runs, host load
+not sampled:
+
+| ns per pair | SRW lock | winpthreads mutex |
+|---|---|---|
+| one thread | 13.5-13.7 | 11.4-11.5 |
+| four threads | 18.8-20.1 | 20.5-23.5 |
+
+The uncontended SRW pair is about 2 ns slower. Both locks are taken when a pool worker exits
+(`msRootsThreadTeardown`), at the pool join (`msRootsAdoptOrphans`) and when a failure goes unhandled
+(`msAdoptOrphanFailure`, `msNoteOrphanError`, the exit report), never per operation.
+
+The same candidate on d87 runs 12 corpus programs of those paths (`721-orphanRejectionExit`,
+`799-workerExitReturns`, `workerExitHandsItsCyclesToTheExitCollect`, `workerExitFreesCycleRoots`,
+`workerExitSiblingActive`, `spawnJoinsAtEveryExit`, `spawnHeldFailureUnawaited`,
+`spawnHeldFailureUnawaitedAsync`, `spawnHeldTwoFailuresNoLoop`, `spawnHeldSlowFailureNoLoop`,
+`spawnTimeoutReportsLateFailure`, `spawnedRejectionReleasedOnce`): 40 cells pass, 0 fail, and the
+guard `workerExitAdoptsCycleRoots` is ok.
+
+Pinned by `src/test/guard/windowsHelloLinksNoPthread.ms`, which cross-builds, so every host runs it;
+through zig from Linux and macOS the same hello is 80,896 B before and 80,384 after. Not measured: a
+Windows program larger than hello, the corpus and guard lanes as a whole on Windows, Windows arm64,
+and whether a Windows program that uses actors, the event loop or HCR links winpthreads
+(`runtime/actor/actor.h`, `runtime/promise/dispatchFull.c` and `runtime/hcr.c` include `<pthread.h>`).
+
 ## Measured 2026-11-08 — the prepared bundle becomes the default; Windows leaves zig's runtime
 
 With no `--cc`, msc builds with the prepared clang/lld bundle every target the bundle carries a runtime for, and
