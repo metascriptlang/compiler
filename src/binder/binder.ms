@@ -32,7 +32,7 @@ import {
 	MacroInvocationData, SpliceManyData,
 	HiddenDerefData, HiddenStdConvData,
 	IdentifierData, BooleanLiteralData,
-	JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData,
+	JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData, SatisfiesExprData,
 } from "../ast/node";
 
 // ===== FlowNode Constructors =====
@@ -822,6 +822,7 @@ function bindExpression(state: BinderState, node: Node): void {
 			const d = node.data as TypeAssertionData;
 			if (d.asExpr != null) bindExpression(state, d.asExpr);
 		},
+		NodeKind.SatisfiesExpr => bindExpression(state, (node.data as SatisfiesExprData).satisfiesExpr),
 		NodeKind.TryExpr => {
 			const d = node.data as TryExprData;
 			if (d.tryArg != null) bindExpression(state, d.tryArg);

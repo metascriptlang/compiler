@@ -548,6 +548,8 @@ export enum NodeKind {
 	JSXExpressionContainer, JSXAttribute, JSXSpreadAttribute,
 	// `{ [key]: value }` whose key is not a string literal: compile-time only, like JSX.
 	ComputedProperty,
+	// `expr satisfies T`: checked against T, typed as expr; replaced by its operand during check.
+	SatisfiesExpr,
 }
 
 // ===== Declaration Kind Enum =====
@@ -707,6 +709,7 @@ export type NodeData =
 	| { jsxAttrName: string, jsxAttrValue: Owned<Node> }                  // JSXAttribute
 	| { jsxSpreadArg: Owned<Node> }                                       // JSXSpreadAttribute
 	| { computedKey: Owned<Node>, computedValue: Owned<Node> }                  // ComputedProperty
+	| { satisfiesExpr: Owned<Node>, satisfiesType: string }                    // SatisfiesExpr
 
 // ===== Flow Graph =====
 //
@@ -952,6 +955,7 @@ export type JSXExpressionContainerData = { jsxExpr: Owned<Node> };
 export type JSXAttributeData = { jsxAttrName: string, jsxAttrValue: Owned<Node> };
 export type JSXSpreadAttributeData = { jsxSpreadArg: Owned<Node> };
 export type ComputedPropertyData = { computedKey: Owned<Node>, computedValue: Owned<Node> };
+export type SatisfiesExprData = { satisfiesExpr: Owned<Node>, satisfiesType: string };
 
 // ===== Constructors =====
 
@@ -1093,6 +1097,7 @@ export function createNodeAt(kind: NodeKind.JSXExpressionContainer, data: JSXExp
 export function createNodeAt(kind: NodeKind.JSXAttribute, data: JSXAttributeData, loc: SourceLocation): Node;
 export function createNodeAt(kind: NodeKind.JSXSpreadAttribute, data: JSXSpreadAttributeData, loc: SourceLocation): Node;
 export function createNodeAt(kind: NodeKind.ComputedProperty, data: ComputedPropertyData, loc: SourceLocation): Node;
+export function createNodeAt(kind: NodeKind.SatisfiesExpr, data: SatisfiesExprData, loc: SourceLocation): Node;
 
 // Implementation — widest signature, accepts any NodeKind and the NodeData union.
 // This is the body; all overload signatures above delegate here via the checker's

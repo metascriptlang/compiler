@@ -59,7 +59,7 @@ import {
 	// SERIALIZE A2 — macro multi-decl emission
 	SpliceManyData,
 	// JSX (compile-time only — needs round-trip through macro VM)
-	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData, BuiltinKind, backEdges, strongNodes } from "../../ast/node";
+	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData, SatisfiesExprData, BuiltinKind, backEdges, strongNodes } from "../../ast/node";
 import { Token, TokenKind, createToken } from "../../lexer/token";
 import { actorHandleIndex, instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase, skipModifier, peelToRepr, unwrapMaybeType, isFloatType, numberLiteralBase } from "../../checker/types";
 import { isUnsignedIntegerType } from "../../checker/compat";
@@ -1455,6 +1455,11 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setNode(objHeap, arrHeap, handle, "computedKey", d.computedKey);
 			setNode(objHeap, arrHeap, handle, "computedValue", d.computedValue);
 		},
+		NodeKind.SatisfiesExpr => {
+			const d = node.data as SatisfiesExprData;
+			setNode(objHeap, arrHeap, handle, "satisfiesExpr", d.satisfiesExpr);
+			setStr(objHeap, arrHeap, handle, "satisfiesType", d.satisfiesType);
+		},
 
 		// Any unrecognized kind: kind/line/column only
 		_ => {},
@@ -1555,7 +1560,7 @@ function isExpressionKind(kind: NodeKind): boolean {
 			| NodeKind.BigIntLiteral | NodeKind.RegexLiteral | NodeKind.Identifier
 			| NodeKind.BinaryExpr | NodeKind.UnaryExpr | NodeKind.UpdateExpr | NodeKind.CallExpr | NodeKind.MemberExpr
 			| NodeKind.ArrayAccess | NodeKind.ObjectLiteral | NodeKind.ArrayLiteral | NodeKind.ArrowFunction
-			| NodeKind.FunctionExpr | NodeKind.TypeAssertion | NodeKind.ConditionalExpr | NodeKind.NewExpr
+			| NodeKind.FunctionExpr | NodeKind.TypeAssertion | NodeKind.SatisfiesExpr | NodeKind.ConditionalExpr | NodeKind.NewExpr
 			| NodeKind.TryExpr | NodeKind.MatchExpr | NodeKind.AwaitExpr | NodeKind.YieldExpr | NodeKind.MoveExpr
 			| NodeKind.OutExpr | NodeKind.SizeofExpr | NodeKind.MacroInvocation => true,
 		_ => false,
@@ -1763,7 +1768,7 @@ function readTypeOperand(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap: R
 }
 
 function readQuotedTypeOperands(out: Node, handle: int64, objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, loc: SourceLocation): void {
-	const carriesTypeText = out.kind == NodeKind.VariableDecl || out.kind == NodeKind.TypeAssertion || out.kind == NodeKind.CallExpr || out.kind == NodeKind.NewExpr
+	const carriesTypeText = out.kind == NodeKind.VariableDecl || out.kind == NodeKind.TypeAssertion || out.kind == NodeKind.SatisfiesExpr || out.kind == NodeKind.CallExpr || out.kind == NodeKind.NewExpr
 		|| out.kind == NodeKind.FunctionDecl || out.kind == NodeKind.ArrowFunction || out.kind == NodeKind.FunctionExpr
 		|| out.kind == NodeKind.MethodDecl || out.kind == NodeKind.ConstructorDecl || out.kind == NodeKind.PropertyDecl || out.kind == NodeKind.SizeofExpr
 		|| out.kind == NodeKind.TypeAnnotation;
@@ -2562,6 +2567,11 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const computedKey = readNode(objHeap, arrHeap, h, "computedKey", loc);
 			const computedValue = readNode(objHeap, arrHeap, h, "computedValue", loc);
 			return createNodeAt(NodeKind.ComputedProperty, { computedKey, computedValue }, loc);
+		},
+		NodeKind.SatisfiesExpr => {
+			const satisfiesExpr = readNode(objHeap, arrHeap, h, "satisfiesExpr", loc);
+			const satisfiesType = readStr(objHeap, arrHeap, h, "satisfiesType");
+			return createNodeAt(NodeKind.SatisfiesExpr, { satisfiesExpr, satisfiesType }, loc);
 		},
 
 		// Unknown kind — return a NullLiteral as safe fallback

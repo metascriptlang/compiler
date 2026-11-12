@@ -44,7 +44,7 @@ import {
 	// JSX (compile-time only — addKindFields cases for quote {<...>})
 	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData,
 	// Full addKindFields parity with bridge.ms nodeToValue (macros read fields of any NodeKind)
-	BigIntLiteralData, RegexLiteralData, UpdateExprData, TypeAssertionData, SpreadExprData,
+	BigIntLiteralData, RegexLiteralData, UpdateExprData, TypeAssertionData, SatisfiesExprData, SpreadExprData,
 	NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData,
 	ComptimeBlockData, TypeAnnotationData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
 	DestructuringDeclData, BreakStmtData, ContinueStmtData, UnreachableStmtData, ImportDeclData,
@@ -487,6 +487,7 @@ function addQuotedTypeSlots(node: Node, keys: string[], values: Node[], loc: Sou
 		NodeKind.SizeofExpr => addQuotedTypeOperand(keys, values, (node.data as SizeofExprData).sizeofType, typeLocalsAt(node), loc),
 		NodeKind.VariableDecl => addQuotedTypeOperand(keys, values, (node.data as VariableDeclData).declType, typeLocalsAt(node), loc),
 		NodeKind.TypeAssertion => addQuotedTypeOperand(keys, values, (node.data as TypeAssertionData).asType, typeLocalsAt(node), loc),
+		NodeKind.SatisfiesExpr => addQuotedTypeOperand(keys, values, (node.data as SatisfiesExprData).satisfiesType, typeLocalsAt(node), loc),
 		NodeKind.CallExpr | NodeKind.NewExpr => addQuotedTypeOperands(keys, values, node.typeArg, typeLocalsAt(node), loc),
 		_ => {},
 	};
@@ -950,6 +951,12 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		const d = node.data as TypeAssertionData;
 		addNodeField(keys, values, "asExpr", d.asExpr, loc);
 		addStrField(keys, values, "asType", d.asType, loc);
+		return;
+	}
+	if (k == NodeKind.SatisfiesExpr) {
+		const d = node.data as SatisfiesExprData;
+		addNodeField(keys, values, "satisfiesExpr", d.satisfiesExpr, loc);
+		addStrField(keys, values, "satisfiesType", d.satisfiesType, loc);
 		return;
 	}
 	if (k == NodeKind.SpreadExpr) {

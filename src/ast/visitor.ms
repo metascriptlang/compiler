@@ -25,7 +25,7 @@ import {
 	ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
 	TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData,
 	SpliceManyData,
-	JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData,
+	JSXElementData, JSXFragmentData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData, SatisfiesExprData,
 } from "./node";
 
 type ChildVisitor = (child: Node) => void;
@@ -206,7 +206,7 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr | NodeKind.ClassDecl | NodeKind.MethodDecl | NodeKind.ConstructorDecl | NodeKind.ExportDecl | NodeKind.DecoratedDecl | NodeKind.EnumDecl | NodeKind.MacroDecl | NodeKind.ActorDecl | NodeKind.PropertyDecl => forEachDecl(node, cb),
 		NodeKind.VariableDecl | NodeKind.ReturnStmt | NodeKind.ThrowStmt | NodeKind.ExprStmt | NodeKind.DeferStmt | NodeKind.TryCatchStmt | NodeKind.DestructuringDecl | NodeKind.QuoteExpr | NodeKind.ComptimeBlock | NodeKind.MacroInvocation | NodeKind.TestDecl | NodeKind.AssertStmt => forEachSimple(node, cb),
 		NodeKind.BinaryExpr | NodeKind.UnaryExpr | NodeKind.UpdateExpr | NodeKind.CallExpr | NodeKind.MemberExpr | NodeKind.ArrayAccess | NodeKind.ObjectLiteral | NodeKind.ArrayLiteral | NodeKind.ConditionalExpr | NodeKind.SpreadExpr | NodeKind.NewExpr | NodeKind.TryExpr => forEachExpr(node, cb),
-		NodeKind.AwaitExpr | NodeKind.YieldExpr | NodeKind.MoveExpr | NodeKind.OutExpr | NodeKind.HiddenDeref | NodeKind.HiddenAddr | NodeKind.HiddenStdConv | NodeKind.HiddenSubConv | NodeKind.TypeAssertion => forEachWrapper(node, cb),
+		NodeKind.AwaitExpr | NodeKind.YieldExpr | NodeKind.MoveExpr | NodeKind.OutExpr | NodeKind.HiddenDeref | NodeKind.HiddenAddr | NodeKind.HiddenStdConv | NodeKind.HiddenSubConv | NodeKind.TypeAssertion | NodeKind.SatisfiesExpr => forEachWrapper(node, cb),
 		NodeKind.ArrayPattern | NodeKind.ObjectPattern | NodeKind.ObjectPatternProp => forEachPattern(node, cb),
 		NodeKind.TypeGeneric | NodeKind.TypeArray | NodeKind.TypeUnion | NodeKind.TypeIntersection | NodeKind.TypeFunction | NodeKind.TypeObject => forEachType(node, cb),
 		NodeKind.JSXElement | NodeKind.JSXFragment | NodeKind.JSXExpressionContainer | NodeKind.JSXAttribute | NodeKind.JSXSpreadAttribute | NodeKind.ComputedProperty => forEachJsx(node, cb),
@@ -513,6 +513,10 @@ function forEachWrapper(node: Node, cb: ChildVisitor): void {
 			const d: Cursor<TypeAssertionData> = node.data as TypeAssertionData;
 			visitChild(cb, d.asExpr);
 		},
+		NodeKind.SatisfiesExpr => {
+			const d: Cursor<SatisfiesExprData> = node.data as SatisfiesExprData;
+			visitChild(cb, d.satisfiesExpr);
+		},
 		_ => { throw new Error(`internal: forEachWrapper got NodeKind ${node.kind.toString()}`); },
 	};
 }
@@ -618,7 +622,7 @@ export function mapChildren(node: Node, f: Visitor): void {
 		NodeKind.DestructuringDecl | NodeKind.QuoteExpr | NodeKind.ComptimeBlock | NodeKind.MacroInvocation | NodeKind.TestDecl | NodeKind.AssertStmt => mapMeta(node, f),
 		NodeKind.BinaryExpr | NodeKind.UnaryExpr | NodeKind.UpdateExpr | NodeKind.CallExpr | NodeKind.MemberExpr | NodeKind.ArrayAccess => mapExpr(node, f),
 		NodeKind.ObjectLiteral | NodeKind.ArrayLiteral | NodeKind.ConditionalExpr | NodeKind.SpreadExpr | NodeKind.NewExpr | NodeKind.TryExpr => mapCollection(node, f),
-		NodeKind.AwaitExpr | NodeKind.YieldExpr | NodeKind.MoveExpr | NodeKind.OutExpr | NodeKind.HiddenDeref | NodeKind.HiddenAddr | NodeKind.HiddenStdConv | NodeKind.HiddenSubConv | NodeKind.TypeAssertion => mapWrapper(node, f),
+		NodeKind.AwaitExpr | NodeKind.YieldExpr | NodeKind.MoveExpr | NodeKind.OutExpr | NodeKind.HiddenDeref | NodeKind.HiddenAddr | NodeKind.HiddenStdConv | NodeKind.HiddenSubConv | NodeKind.TypeAssertion | NodeKind.SatisfiesExpr => mapWrapper(node, f),
 		NodeKind.ArrayPattern | NodeKind.ObjectPattern | NodeKind.ObjectPatternProp => mapPattern(node, f),
 		NodeKind.TypeGeneric | NodeKind.TypeArray | NodeKind.TypeUnion => mapType(node, f),
 		NodeKind.TypeIntersection | NodeKind.TypeFunction | NodeKind.TypeObject => mapTypeMore(node, f),
@@ -987,6 +991,10 @@ function mapWrapper(node: Node, f: Visitor): void {
 		NodeKind.TypeAssertion => {
 			const d: Cursor<TypeAssertionData> = node.data as TypeAssertionData;
 			d.asExpr = f(d.asExpr);
+		},
+		NodeKind.SatisfiesExpr => {
+			const d: Cursor<SatisfiesExprData> = node.data as SatisfiesExprData;
+			d.satisfiesExpr = f(d.satisfiesExpr);
 		},
 		_ => { throw new Error(`internal: mapWrapper got NodeKind ${node.kind.toString()}`); },
 	};

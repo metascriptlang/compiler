@@ -21,7 +21,7 @@ import {
 	QuoteExprData, ComptimeBlockData,
 	TypeGenericData, TypeArrayData, TypeUnionData, TypeIntersectionData, TypeFunctionData, TypeObjectData,
 	SpliceManyData,
-	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData,
+	JSXElementData, JSXFragmentData, JSXTextData, JSXExpressionContainerData, JSXAttributeData, JSXSpreadAttributeData, ComputedPropertyData, SatisfiesExprData,
 } from "../../ast/node";
 import { parseSource } from "../../parser/statements/validation";
 
@@ -551,6 +551,10 @@ function hashInto(h: TaText, node: Node | null, bodies: boolean): TaText {
 		NodeKind.ComputedProperty => {
 			const d = node.data as ComputedPropertyData;
 			h = hN(h, d.computedKey); h = hN(h, d.computedValue);
+		},
+		NodeKind.SatisfiesExpr => {
+			const d = node.data as SatisfiesExprData;
+			h = hN(h, d.satisfiesExpr); h = hS(h, d.satisfiesType);
 		},
 	};
 

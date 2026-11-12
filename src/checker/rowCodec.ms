@@ -794,6 +794,7 @@ function buildNodeData(kind: NodeKind, rd: PackReader, nodes: Node[], types: Typ
 	if (kind == NodeKind.JSXAttribute) return { jsxAttrName: rd.text(), jsxAttrValue: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.JSXSpreadAttribute) return { jsxSpreadArg: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.ComputedProperty) return { computedKey: rd.nodeRef(nodes) as Node, computedValue: rd.nodeRef(nodes) as Node } as NodeData;
+	if (kind == NodeKind.SatisfiesExpr) return { satisfiesExpr: rd.nodeRef(nodes) as Node, satisfiesType: rd.text() } as NodeData;
 	return { nullPlaceholder: true } as NodeData;
 }
 

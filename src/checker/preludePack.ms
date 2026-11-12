@@ -1035,7 +1035,7 @@ test "preludePack: exhaustive per-kind node roundtrip" {
 		const samples = pkSamples(sym, nt, ct);
 		// Completeness tripwire: one sample per NodeKind member, in enum
 		// order — extend pkSamples when NodeKind grows.
-		assert samples.length == 92;
+		assert samples.length == 93;
 		for (let i = 0; i < samples.length; i += 1) {
 			assert (samples[i].kind as int32) == i;
 		}
