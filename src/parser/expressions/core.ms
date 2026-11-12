@@ -1,8 +1,8 @@
 // Core Expression Parser - Pratt parsing with operator precedence
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData, AwaitExprData, CallExprData, IdentifierData, MemberExprData, NumberLiteralData, BinaryExprData, ConditionalExprData } from "../../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, finishNode, finishAfter, parenGroupThen, expectCloser, addError } from "../cursor";
+import { Node, NodeKind, NodeFlag, NodeData, Expression, createNode, QuoteExprData, BlockStmtData, UnaryExprData, UpdateExprData, TypeAssertionData, SatisfiesExprData, AwaitExprData, CallExprData, IdentifierData, MemberExprData, NumberLiteralData, BinaryExprData, ConditionalExprData } from "../../ast/node";
+import { ParserState, createState, current, advance, peek, isAtEnd, finishNode, finishAfter, parenGroupThen, expectCloser, addError, hasPrecedingLineBreak } from "../cursor";
 import { lex } from "../../lexer/lexer";
 import { captureGenericTypeArgs } from "../generics";
 import { captureType, captureTypeText, isGenericCallAhead } from "../typeAnnotation";
@@ -43,11 +43,28 @@ function parseAsType(state: ParserState, left: Node, token: Token): Node {
 	return finishNode(state, asNode);
 }
 
+function parseSatisfiesType(state: ParserState, left: Node, token: Token): Node {
+	advance(state);
+	const captured = captureType(state, true);
+	const satNode = createNode(NodeKind.SatisfiesExpr, { satisfiesExpr: left, satisfiesType: captured.text } as SatisfiesExprData, token);
+	satNode.typeExpr = captured.expr;
+	return finishNode(state, satNode);
+}
+
+function isSatisfiesToken(token: Token): boolean {
+	return token.kind == TokenKind.Ident && token.value == "satisfies";
+}
+
+// `satisfies` is a contextual keyword: after a line break it starts the next statement.
+function atSatisfies(state: ParserState): boolean {
+	return isSatisfiesToken(current(state)) && !hasPrecedingLineBreak(state);
+}
+
 // After `a op b as T`, an operator that binds tighter than `op` would have taken
 // `b` had the assertion been erased, so the expression stops there instead.
 function bindsBefore(next: Token, lastPrec: int32): boolean {
-	if (!isBinaryOperator(next) && next.kind != TokenKind.As) return false;
-	const p = getPrecedence(next.kind);
+	if (!isBinaryOperator(next) && next.kind != TokenKind.As && !isSatisfiesToken(next)) return false;
+	const p = isSatisfiesToken(next) ? getPrecedence(TokenKind.As) : getPrecedence(next.kind);
 	return p > lastPrec || (p == lastPrec && next.kind == TokenKind.StarStar);
 }
 
@@ -181,14 +198,15 @@ function parseExprWithPrec(state: ParserState, minPrec: int32): ExprResult {
 
 	// Binary operators with Pratt precedence climbing; `as` binds at relational precedence
 	let lastPrec = NO_BINARY_PREC;
-	while (!isAtEnd(state) && (isBinaryOperator(current(state)) || current(state).kind == TokenKind.As)) {
+	while (!isAtEnd(state) && (isBinaryOperator(current(state)) || current(state).kind == TokenKind.As || atSatisfies(state))) {
 		const op = current(state);
-		const prec = getPrecedence(op.kind);
+		const satisfies = atSatisfies(state);
+		const prec = satisfies ? getPrecedence(TokenKind.As) : getPrecedence(op.kind);
 		if (prec < minPrec) {
 			break;
 		}
-		if (op.kind == TokenKind.As) {
-			left = parseAsType(state, left, op);
+		if (op.kind == TokenKind.As || satisfies) {
+			left = satisfies ? parseSatisfiesType(state, left, op) : parseAsType(state, left, op);
 			if (bindsBefore(current(state), lastPrec)) break;
 			continue;
 		}
@@ -687,6 +705,17 @@ test "spread kind" { assert exprKind("...x") == NodeKind.SpreadExpr; }
 test "try kind" { assert exprKind("try x") == NodeKind.TryExpr; }
 
 test "as kind" { assert exprKind("x as number") == NodeKind.TypeAssertion; }
+
+test "satisfies kind" { assert exprKind("x satisfies Shape") == NodeKind.SatisfiesExpr; }
+
+test "satisfies takes the binary operand before it" {
+	const n = exprNode("a + b satisfies T");
+	assert n.kind == NodeKind.SatisfiesExpr && (n.data as SatisfiesExprData).satisfiesExpr.kind == NodeKind.BinaryExpr;
+}
+
+test "satisfies after a line break ends the expression" { assert exprKind("x\nsatisfies T") == NodeKind.Identifier; }
+
+test "satisfies stays an identifier elsewhere" { assert exprKind("satisfies(1)") == NodeKind.CallExpr; }
 
 test "true kind" { assert exprKind("true") == NodeKind.BooleanLiteral; }
 
