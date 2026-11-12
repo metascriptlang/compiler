@@ -474,7 +474,7 @@ function unitEvidence(r: ExecFileResult): string {
 	const lines: string[] = [`exit ${r.exitCode}`];
 	for (const line of both(r).split("\n")) {
 		const t = line.trim();
-		if (t.startsWith("stdUnit: ") || t.startsWith("verify: ") || t.contains("error") || t.contains("internal")) lines.push(t);
+		if (t.startsWith("stdUnit: ") || t.startsWith("verify: ") || t.startsWith("watch: ") || t.contains("error") || t.contains("internal")) lines.push(t);
 	}
 	return lines.join("\n");
 }
@@ -633,6 +633,33 @@ function runStdUnitSupportSteps(dir: string, reasons: string[]): void {
 	const system = `${home}/std/core/system/index.ms`;
 	put(system, `${read(system)}\n// an edit to a prelude module\n`);
 	checkUnitStep("step 8 (a prelude module edited)", build(`${dir}/localCache8`), "written", "[miss: no unit]x1", reasons);
+
+	const watchWork = `${dir}/watch`;
+	put(`${watchWork}/main.ms`, UNIT_PROGRAM_A);
+	env.set("MSC_CACHE_DIR", `${dir}/localCache9seed`);
+	env.delete("MSC_IC_VERIFY");
+	const seeded = execFileResult(homeExe, ["build", "main.ms", "--hcr", "--force", "--emit=c", "--time"], watchWork);
+	if (!succeeded(seeded) || !lineWith(both(seeded), "stdUnit: ").contains("state=written ")) {
+		reasons.push(`step 9 (a one-shot --hcr build): no unit written:\n${unitEvidence(seeded)}`);
+		return;
+	}
+	put(`${dir}/watchSteps/main.ms`, UNIT_PROGRAM_A.replace("counter.bump(2)", "counter.bump(3)"));
+	put(`${dir}/watchSteps/system.ms`, `${read(system)}\n// a second edit to a prelude module\n`);
+	put(`${dir}/watchReplay.txt`, `${dir}/watchSteps/main.ms main.ms\n${dir}/watchSteps/system.ms ${system}\n`);
+	env.set("MSC_CACHE_DIR", `${dir}/localCache9`);
+	env.set("MSC_IC_VERIFY", "1");
+	const watched = execFileResult(homeExe, ["build", "main.ms", "--hcr", `--watch-replay=${dir}/watchReplay.txt`, "--emit=c", "--time"], watchWork);
+	const session = both(watched);
+	const problems: string[] = [];
+	if (!succeeded(watched)) problems.push("the session failed");
+	if (!lineWith(session, "stdUnit: ").contains("state=hit ")) problems.push("step 9: the first build of the session did not load the unit");
+	for (let k = 0; k < 3; k += 1) {
+		if (!lineWith(session, `watch: verify build ${k}: `).endsWith(" diagnostics equal a cold build")) problems.push(`build ${k} has no 'diagnostics equal a cold build' verdict`);
+	}
+	if (!lineWith(session, "watch: build 1 ").startsWith("watch: build 1 built ")) problems.push("step 9: the build after a program edit did not stay warm");
+	if (!lineWith(session, "watch: rebuilding from scratch: ").endsWith(" of the prelude changed")) problems.push("step 10: a prelude module edited under the session did not rebuild it from scratch");
+	if (!lineWith(session, "watch: build 2 ").startsWith("watch: build 2 rebuilt ")) problems.push("step 10: the build after the prelude edit is not a rebuild");
+	if (problems.length > 0) reasons.push(`steps 9-10 (a watch session after a hit; a prelude module edited under it): ${problems.join("; ")}:\n${unitEvidence(watched)}`);
 }
 
 function runStdUnitCheck(): string[] {
