@@ -405,21 +405,6 @@ static inline int32_t msNetAcceptNonBlock(int32_t fd) {
 	return (int32_t)cfd;
 }
 
-/**
- * Non-blocking recv. Returns received data, or empty string on EAGAIN/close/error.
- * Uses thread-local buffer to avoid per-recv malloc+free.
- */
-static inline msString msNetRecvNonBlock(int32_t fd, int32_t maxBytes) {
-	if (maxBytes <= 0) return MS_EMPTY_STRING;
-	if (maxBytes > 8192) maxBytes = 8192;
-	ms_ssize_t r;
-	do {
-		r = recv(fd, _msRecvTlBuf, (size_t)maxBytes, 0);
-	} while (r < 0 && ms_errno() == MS_EINTR);
-	if (r <= 0) return MS_EMPTY_STRING;
-	return msStringNew(_msRecvTlBuf, (int64_t)r);
-}
-
 static inline msUint8Array msNetRecvNonBlockBytes(int32_t fd, int32_t maxBytes) {
 	if (maxBytes <= 0) return MS_EMPTY_UINT8_ARRAY;
 	if (maxBytes > (int32_t)sizeof(_msRecvTlBuf)) maxBytes = (int32_t)sizeof(_msRecvTlBuf);
@@ -444,10 +429,6 @@ static inline int32_t msNetSendNonBlockBytes(int32_t fd, const uint8_t* data, in
 	if (n < 0 && ms_errno() == MS_EWOULDBLOCK) return 0;
 	if (n < 0) return -1;
 	return (int32_t)n;
-}
-
-static inline int32_t msNetSendNonBlock(int32_t fd, msString data, int32_t offset) {
-	return msNetSendNonBlockBytes(fd, (const uint8_t*)msStringToCString(data), msStrLen(data), offset);
 }
 
 /**
@@ -513,24 +494,6 @@ static inline int32_t msFastParseMethod(msString data) {
 	case 'O': if (len > 7 && d[1]=='P' && d[2]=='T' && d[3]=='I' && d[4]=='O' && d[5]=='N' && d[6]=='S' && d[7]==' ') return 6; break;
 	}
 	return -1;
-}
-
-/* Fast path extract — returns path substring from raw request data.
- * Avoids indexOf + two slice() calls. */
-static inline msString msFastParsePath(msString data) {
-	if (msStrLen(data) < 14) return MS_EMPTY_STRING;
-	const char* d = msStrData(&data);
-	int32_t len = (int32_t)msStrLen(data);
-	/* Find first space (end of method) */
-	int32_t i = 0;
-	while (i < len && d[i] != ' ') i++;
-	if (i >= len) return MS_EMPTY_STRING;
-	int32_t pathStart = i + 1;
-	/* Find second space (end of path) */
-	int32_t pathEnd = pathStart;
-	while (pathEnd < len && d[pathEnd] != ' ') pathEnd++;
-	if (pathEnd >= len) return MS_EMPTY_STRING;
-	return msStringNew(d + pathStart, (int64_t)(pathEnd - pathStart));
 }
 
 /* Fast path extract into existing buffer — zero-alloc after warmup.
@@ -607,12 +570,6 @@ static inline void _msEnsureDate(void) {
 		_msDateLen = (int64_t)n;
 		_msDatePayload.cap = _msDateLen | MS_STRLIT_FLAG;
 	}
-}
-
-/* C-string accessor — kept for any legacy callers. */
-static inline const char* msGetDateHeader(void) {
-	_msEnsureDate();
-	return _msDatePayload.data + 6; /* skip "Date: " prefix for raw date value */
 }
 
 /* Zero-alloc msString accessor — bakes full "Date: ...\r\n" header line.
@@ -719,65 +676,6 @@ static inline void msStaticCachePut(int32_t slotId, int64_t currentSec, msString
 	}
 	_msStaticCache[slotId].epoch = currentSec;
 	_msStaticCache[slotId].valid = 1;
-}
-
-/* Build HTTP response in one allocation (httpbeast pattern).
- * snprintf header + memcpy body → single string.
- * Includes cached Date header (RFC 7231 requirement). */
-static inline msString msBuildResponse(int32_t status, msString statusTextStr,
-                                        msString contentType, msString body) {
-	char header[512];
-	int32_t bodyLen = (int32_t)msStrLen(body);
-	/* Extract C strings from msString for snprintf */
-	char stBuf[64], ctBuf[128];
-	int stLen = msStrLen(statusTextStr) < 63 ? (int)msStrLen(statusTextStr) : 63;
-	int ctLen = msStrLen(contentType) < 127 ? (int)msStrLen(contentType) : 127;
-	memcpy(stBuf, msStrData(&statusTextStr), stLen);
-	stBuf[stLen] = '\0';
-	memcpy(ctBuf, msStrData(&contentType), ctLen);
-	ctBuf[ctLen] = '\0';
-
-	int hlen = snprintf(header, 512,
-		"HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %d\r\nDate: %s\r\n\r\n",
-		(int)status, stBuf, ctBuf, (int)bodyLen, msGetDateHeader());
-	if (hlen < 0 || hlen >= 512) hlen = 511;
-	int32_t total = hlen + bodyLen;
-	msString result = msStringNewUninit(total);
-	char* w = msStrWritable(&result);
-	memcpy(w, header, hlen);
-	if (bodyLen > 0)
-		memcpy(w + hlen, msStrData(&body), bodyLen);
-	return result;
-}
-
-/* Build response into existing msString — reuses buffer (zero malloc after first request).
- * The dest string grows on first use, then subsequent calls reuse the allocation.
- * Call from C with pointer to msString (not through MetaScript extern). */
-static inline void msBuildResponseReuse(msString* dest, int32_t status, msString statusTextStr,
-                                         msString contentType, msString body) {
-	char header[512];
-	int32_t bodyLen = (int32_t)msStrLen(body);
-	char stBuf[64], ctBuf[128];
-	int stLen = msStrLen(statusTextStr) < 63 ? (int)msStrLen(statusTextStr) : 63;
-	int ctLen = msStrLen(contentType) < 127 ? (int)msStrLen(contentType) : 127;
-	memcpy(stBuf, msStrData(&statusTextStr), stLen);
-	stBuf[stLen] = '\0';
-	memcpy(ctBuf, msStrData(&contentType), ctLen);
-	ctBuf[ctLen] = '\0';
-
-	int hlen = snprintf(header, 512,
-		"HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %d\r\nDate: %s\r\n\r\n",
-		(int)status, stBuf, ctBuf, (int)bodyLen, msGetDateHeader());
-	if (MS_UNLIKELY(hlen < 0 || hlen >= 512)) hlen = 511;
-	int32_t total = hlen + bodyLen;
-
-	/* Reuse buffer: reset length, grow if needed (realloc only on first call or size increase) */
-	msStrSetLen(dest, 0);
-	char* w = msStrReserve(dest, (int64_t)total);
-	memcpy(w, header, hlen);
-	if (bodyLen > 0)
-		memcpy(w + hlen, msStrData(&body), bodyLen);
-	msStrCommit(dest, total);
 }
 
 #ifdef __cplusplus

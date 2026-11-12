@@ -170,10 +170,6 @@ static void __uringSubmitSqe(void) {
 #define URING_RECV_BUF 4096
 static _Thread_local char** _uringRecvBufs = NULL;
 
-/* Per-fd response buffers — reused across requests (zero malloc after warmup).
- * msBuildResponseReuse writes header+body into these msStrings. */
-static _Thread_local msString* _uringRespBufs = NULL;
-
 typedef struct { const char* p; int32_t len; int32_t off; } msUringSendState;
 static _Thread_local msUringSendState* _uringSends = NULL;
 
@@ -194,12 +190,9 @@ static void __uringThreadRelease(void) {
 	}
 	for (int i = 0; i < _uringFdCap; i++) {
 		msMemFree(_uringRecvBufs[i]);
-		msStringDecref(_uringRespBufs[i]);
 	}
 	msMemFree(_uringRecvBufs);
 	_uringRecvBufs = NULL;
-	msMemFree(_uringRespBufs);
-	_uringRespBufs = NULL;
 	msMemFree(_uringSends);
 	_uringSends = NULL;
 	_uringFdCap = 0;
@@ -212,15 +205,11 @@ static void __uringGrowFds(int fd) {
 	char** recv = (char**)msRealloc(_uringRecvBufs, (size_t)_uringFdCap * sizeof(char*), (size_t)cap * sizeof(char*));
 	if (recv == NULL) msRaiseOutOfMemory();
 	_uringRecvBufs = recv;
-	msString* resp = (msString*)msRealloc(_uringRespBufs, (size_t)_uringFdCap * sizeof(msString), (size_t)cap * sizeof(msString));
-	if (resp == NULL) msRaiseOutOfMemory();
-	_uringRespBufs = resp;
 	msUringSendState* sends = (msUringSendState*)msRealloc(_uringSends, (size_t)_uringFdCap * sizeof(msUringSendState), (size_t)cap * sizeof(msUringSendState));
 	if (sends == NULL) msRaiseOutOfMemory();
 	_uringSends = sends;
 	size_t added = (size_t)(cap - _uringFdCap);
 	memset(_uringRecvBufs + _uringFdCap, 0, added * sizeof(char*));
-	memset(_uringRespBufs + _uringFdCap, 0, added * sizeof(msString));
 	memset(_uringSends + _uringFdCap, 0, added * sizeof(msUringSendState));
 	_uringFdCap = cap;
 	__uringRegisterRelease();
@@ -412,29 +401,6 @@ static inline msString msUringRecvData(int32_t fd, int32_t bytesRecv) {
 	return msStringNew(_uringRecvBufs[fd], (int64_t)bytesRecv);
 }
 
-/* Build response into per-fd reusable buffer — zero malloc after warmup.
- * Returns the msString (owned by per-fd pool, DO NOT free — stays alive until next request on this fd). */
-static inline msString msUringBuildResponse(int32_t fd, int32_t status, msString statusText,
-                                             msString contentType, msString body) {
-	__ensureFd(fd);
-	msBuildResponseReuse(&_uringRespBufs[fd], status, statusText, contentType, body);
-	return _uringRespBufs[fd];
-}
-
-/* Find CRLFCRLF header terminator anywhere in recv buffer. Returns position
- * immediately AFTER the terminator (i.e. body start offset) or -1 if not yet
- * complete. Scanning the whole buffer is required: POST/PUT with body in the
- * first recv ends with body bytes, not \r\n\r\n. */
-static inline int32_t msUringFastHeaderCheck(int32_t fd, int32_t bytesRecv) {
-	if (bytesRecv < 4 || fd >= _uringFdCap || _uringRecvBufs[fd] == NULL) return -1;
-	const char* d = _uringRecvBufs[fd];
-	for (int32_t i = 0; i <= bytesRecv - 4; i++) {
-		if (d[i]=='\r' && d[i+1]=='\n' && d[i+2]=='\r' && d[i+3]=='\n')
-			return i + 4;
-	}
-	return -1;
-}
-
 #else /* !__linux__ or MS_USE_EPOLL — stubs for macOS/fallback */
 
 static inline int32_t msUringEvtInit(void) { return -1; }
@@ -442,10 +408,6 @@ static inline void msUringSubmitAccept(int32_t fd) { (void)fd; }
 static inline void msUringSubmitRecv(int32_t fd, msString s, int32_t len) { (void)fd; (void)s; (void)len; }
 static inline void msUringSubmitSend(int32_t fd, msString s, int32_t len) { (void)fd; (void)s; (void)len; }
 static inline msString msUringRecvData(int32_t fd, int32_t n) { (void)fd; (void)n; return MS_EMPTY_STRING; }
-static inline msString msUringBuildResponse(int32_t fd, int32_t st, msString stT, msString ct, msString b) {
-	(void)fd; (void)st; (void)stT; (void)ct; (void)b; return MS_EMPTY_STRING;
-}
-static inline int32_t msUringFastHeaderCheck(int32_t fd, int32_t n) { (void)fd; (void)n; return -1; }
 static inline int32_t msUringWait(int32_t t) { (void)t; return 0; }
 static inline void msUringSubmitCancel(int32_t fd, int32_t op) { (void)fd; (void)op; }
 static inline int32_t msUringEventFd(int32_t i) { (void)i; return -1; }

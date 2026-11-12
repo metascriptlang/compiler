@@ -27,8 +27,6 @@ extern function msNetClose(fd: int32): void;
 extern function msNetSetTimeout(fd: int32, ms: int32): int32;
 extern function msNetSetNonBlocking(fd: int32): int32;
 extern function msNetAcceptNonBlock(fd: int32): int32;
-extern function msNetRecvNonBlock(fd: int32, maxBytes: int32): string;
-extern function msNetSendNonBlock(fd: int32, data: string, offset: int32): int32;
 extern function msSelectorOpen(): int64;
 extern function msSelectorAdd(sel: int64, fd: int32, events: int32): int32;
 extern function msSelectorModify(sel: int64, fd: int32, events: int32): int32;
@@ -50,10 +48,7 @@ extern function msUringEventFd(idx: int32): int32;
 extern function msUringEventOp(idx: int32): int32;
 extern function msUringEventRes(idx: int32): int32;
 extern function msUringRecvData(fd: int32, bytesRecv: int32): string;
-extern function msUringFastHeaderCheck(fd: int32, bytesRecv: int32): int32;
-extern function msUringBuildResponse(fd: int32, status: int32, statusText: string, contentType: string, body: string): string;
 extern function msFastParseMethod(data: string): int32;
-extern function msFastParsePath(data: string): string;
 extern function msNetSetTcpNoDelay(fd: int32): void;
 extern function msNetSetNoSigpipe(fd: int32): void;
 
@@ -68,7 +63,6 @@ extern function msStaticCacheGet(slotId: int32): string;
 extern function msStaticCachePut(slotId: int32, sec: int64, source: string): void;
 
 // Zero-alloc hot path externs (Phase 1-4)
-extern function buildResponseReuse(this dest: string, status: int32, st: string, ct: string, body: string): void from "&msBuildResponseReuse";
 extern function parsePathInto(this dest: string, data: string): void from "&msFastParsePathInto";
 extern function shiftLeft(this s: string, offset: int32): void from "&msStringShiftLeft";
 extern function emptyKeepingBuffer(this s: string): void from "&msStringClear";
@@ -212,7 +206,6 @@ function closeStopped(server: HttpServer): void {
 
 // Build HTTP response in one C-level allocation (httpbeast pattern).
 // Used as fast path when res.headers is empty — zero template literal overhead.
-extern function msBuildResponse(status: int32, statusText: string, contentType: string, body: string): string;
 
 // Slow path: build response in MS code, honoring user-set res.headers
 // (CORS, custom auth, cookies, etc.). Fast path skipped when res.headers
@@ -1096,7 +1089,6 @@ function handleBlocking(server: HttpServer, fd: int32): boolean {
 // ===== io_uring Native Event Loop (Linux) =====
 // Same logic as eventLoop but uses native RECV/SEND/ACCEPT via io_uring.
 // Zero epoll, zero separate recv/send syscalls — all through the ring buffer.
-// Per-fd response buffers: zero malloc after warmup (msBuildResponseReuse).
 
 // io_uring RECV dispatch: accumulate bytes into client.data, find header end,
 // frame body, dispatch handler. Submits the next uring op (recv / send / close)
