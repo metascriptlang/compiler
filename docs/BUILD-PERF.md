@@ -57,6 +57,76 @@ median difference +0.6% at noise 0.3% (no mark); wall time noise 17% and max rss
 time and rss under that load show nothing. Not measured: Linux (`perf stat` and the `/usr/bin/time -f`
 fallback are written, not run), and `rt:` programs.
 
+## Measured 2026-11-13 — a host build compiles for this machine's CPU
+
+A build through the bundle that names no OS, CPU or musl now passes `-march=native` (`-mcpu=native` on arm64)
+ahead of `--passC` (`hostCpuFlags`, `namesTarget`), which is what zig did for the same build: it got no `-target`
+and resolved the detected host. A build that names its target keeps the driver's baseline. All numbers are a
+candidate of tree `78c032900602` built by msc `1b493b622aca`, through bundles whose configs name no CPU: rtx
+`3a7e411898f0`, m1m `8d7d908f2630`, d87 `44950a26db3f`.
+
+The CPU cc1 receives, from `CC_PRINT_OPTIONS` on `tools/managedToolchain/matrix/hello.ms`:
+
+| build | rtx | m1m | d87 |
+|---|---|---|---|
+| no target, debug and `--release` | `znver5` | `apple-m1` | `skylake` |
+| `--release --passC=-march=x86-64-v3` (`-mcpu=apple-m1` on m1m) | `x86-64-v3` | `apple-a14` | `x86-64-v3` |
+| `--release --cpu=x86_64` (`arm64` on m1m) | `x86-64` | `apple-m1` | `x86-64` |
+| `--release --os=linux --cpu=x86_64 --abi=musl` | `x86-64` | `x86-64` | `x86-64` |
+
+Speed of the built program on rtx, the default build against `--cc=zig`, `src/bench/iter/bench.ms`, second run of
+each binary, us/op, gates running on the host:
+
+| row | zig `--release` | default `--release` | zig `--danger` | default `--danger` |
+|---|---|---|---|---|
+| indexed for int32[] | 2.268 | 2.228 | 1.049 | 1.036 |
+| for-of keys() | 1.775 | 1.856 | 13.787 | 13.205 |
+| generator | 0.877 | 0.835 | 0.817 | 0.648 |
+| map toArray | 18.737 | 30.121 | 4.758 | 4.338 |
+| geometric mean of bundle over zig, 16 rows | | 1.03 (worst 1.61, best 0.94) | | 0.93 (1.06, 0.78) |
+
+The same three rows were 15.4 to 17.7, 38 to 74 and 5.2 us/op under the pinned config. `map toArray --release` is
+slower than zig's for the second time (28.860 against 19.251 on 2026-11-12) and is not explained.
+
+The m1m and d87 tables of this run are not usable. m1m gave `--release` 1.18 and `--danger` 0.99 while two jobs of
+the measuring session shared its cores; with `--passC=-mcpu=native`, which compiles the same code, it was 0.99 the
+day before. On d87 zig's own rows moved between the two days by 2 to 10 times (`indexed --release` 8.965 then
+4.932 us, `map toArray --release` 2,026.643 then 185.082), and the ratio went from 0.42 to 1.26.
+
+The marker `-DMSC_HOST_CPU_<digest>` that keys the caches is in [BUILD-CACHE.md](BUILD-CACHE.md) §Rules. The digest
+is taken in the compiler's own process (`runtime/core/hostCpu.h`) from what LLVM 23.1.4 reads to resolve `native`
+(`llvm/lib/TargetParser/Host.cpp`): on x86-64 cpuid leaves 0, 1, 7.0, 7.1, 0xd.1, 0x14.0, 0x19, 0x1e.1, 0x24.0,
+0x80000001, 0x80000008, 0x80000021 and XCR0; on Apple arm64 `hw.cpufamily` alone (it has no feature detection
+there). Linux aarch64 reads `/proc/cpuinfo` and Windows arm64 `IsProcessorFeaturePresent`; neither is read yet, no
+bundle exists for those hosts, and a host build there is refused naming `--cpu`.
+
+Rejected: asking the bundle's clang (`clang -### -march=native`) on every build. It took under 5 ms on rtx and 38
+to 172 ms on the Mac under load (a `sysctl` process took 45 to 99 ms in the same minute), against 0.19 s for a
+warm `msc build` of a hello world on that Mac. Keeping its answer in a memo does not help: whatever tells that
+the memo is still about this CPU is already the key.
+
+A default `--danger` self-build through the bundle links thin LTO on macOS and Windows, where `zig cc` cannot
+(`ltoBroken`). msc `1b493b622aca`, `msc build src/index.ms --danger` against the same with `--lto=off`, then
+`check src/index.ms` by each result, three runs, the first cold:
+
+| | build, LTO | build, `--lto=off` | cc1 lines with `-flto=thin` | check by the LTO binary | check by the other |
+|---|---|---|---|---|---|
+| m1m, bundle `be33328d1c99`, load 8 | 88 s | 72 s | 590 of 591 | 9.1, 6.39, 6.23 s | 9.32, 6.84, 6.69 s |
+| d87, bundle `44950a26db3f` | 197 s | 125 s | 584 of 585 | 15.15, 12.22, 11.96 s | 16.12, 13.19, 12.7 s |
+
+On the Mac (M3 Max, installed bundle `8d7d908f2630`, msc `1b493b622aca`) `hello.ms` and `cppCompanion.ms` build and
+run in debug and `--release`, and `hello.ms` builds and runs with `--sanitize=address`, `thread` and `undefined`,
+linking `libclang_rt.asan_osx_dynamic.dylib`, `tsan_osx_dynamic` and `ubsan_osx_dynamic`; `--cc=zig
+--sanitize=address` fails at link there (`undefined symbol: ___asan_handle_no_return`).
+
+Tests of `src/compiler/toolchain.ms` and `cc.ms` by the candidate: exit 0 on rtx and m1m. On d87 `msc test` exits
+127 for every file under the installed msc as well (inbox card `2026-11-12-msc-test-exits-127-on-windows.md`); the
+test binaries it left, `_test_toolchain_*.exe` and `_test_options_*.exe`, exit 0 run by hand.
+
+Not verified: a quiet host for any speed row; `-mcpu=native` on the M3 Max in a benchmark (it reads `apple-m3`
+there); a cache restored on another machine; a host build on Linux aarch64 or Windows arm64; `--cc=zig`, which
+detects the CPU itself and carries no marker.
+
 ## Measured 2026-11-12 — the source-built engine against the installed engines
 
 `tools/managedToolchain/llvmEngine.cmake` builds the engine the way LLVM's own releases are built:
