@@ -761,6 +761,7 @@ static void msHeapReleaseBig(msHeapRegion* a, msHeapBig* chunk) {
 }
 
 static void msHeapDeallocBig(msHeapRegion* a, msHeapBig* chunk) {
+    if (!(chunk->base.prevSize & 1)) msHeapFreedTwice(chunk->data);
     a->occupied -= chunk->base.size;
     msHeapReleaseBig(a, chunk);
 }
@@ -797,7 +798,20 @@ static void msHeapRelistSmall(msHeapRegion* a, msHeapSmall* chunk) {
     if (head && head->free == MS_HEAP_SMALL_ROOM) msHeapShelveSmall(a, head);
 }
 
+static uintptr_t msHeapHomeMark(msHeapSmall* chunk) {
+    return (uintptr_t)chunk ^ (uintptr_t)0x9e3779b97f4a7c15u;
+}
+
+static int msHeapIsHome(msHeapSmall* chunk, msHeapCell* cell) {
+    for (msHeapCell* home = chunk->freeList; home; home = home->next)
+        if (home == cell) return 1;
+    return 0;
+}
+
 static inline void msHeapPutHome(msHeapRegion* a, msHeapSmall* chunk, msHeapCell* cell, size_t size) {
+    uintptr_t mark = msHeapHomeMark(chunk);
+    if (__builtin_expect(cell->run == mark, 0) && msHeapIsHome(chunk, cell)) msHeapFreedTwice(cell);
+    cell->run = mark;
     cell->next = chunk->freeList;
     chunk->freeList = cell;
     uint32_t before = chunk->free;
@@ -953,6 +967,7 @@ static inline __attribute__((always_inline)) void* msHeapTake(size_t size, int* 
             *zeroed = chunk->bumpZeroed;
             chunk->acc += (uint32_t)cellSize;
         }
+        if (!*zeroed) ((msHeapCell*)result)->run = 0;
         chunk->free -= (uint32_t)cellSize;
         if (chunk->free < cellSize) msHeapRemoveSmall(a, chunk);
         a->occupied += cellSize;
@@ -1007,6 +1022,7 @@ void msHeapFree(void* p) {
 #endif
     if (base->size <= MS_HEAP_SMALL_ROOM) {
         size_t size = base->size;
+        if (!size || size % MS_HEAP_ALIGN) msHeapFreedTwice(p);
 #if MS_HEAP_THREADS
         if (owner != here) {
             if (here) msHeapAddToRun(here, owner, size / MS_HEAP_ALIGN, size, p);
@@ -1015,8 +1031,8 @@ void msHeapFree(void* p) {
         }
 #endif
         msHeapRegion* a = MS_HEAP_REGION(here);
-        a->occupied -= size;
         msHeapPutHome(a, (msHeapSmall*)base, p, size);
+        a->occupied -= size;
     } else {
 #if MS_HEAP_THREADS
         if (owner != here) {

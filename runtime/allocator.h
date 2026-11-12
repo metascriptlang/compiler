@@ -79,6 +79,7 @@ MS_HEAP_API int msHeapReusePages(void* p, size_t bytes);
 #endif
 MS_HEAP_API void msHeapResetPages(void);
 MS_HEAP_API _Noreturn void msHeapOutOfMemory(void);
+MS_HEAP_API _Noreturn void msHeapFreedTwice(void* p);
 
 #endif
 #endif
