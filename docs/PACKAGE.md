@@ -271,6 +271,23 @@ merging by shape gives that result without intercepting calls (`keepOne`,
   Measured 2026-11-12, candidate of tree `55d4b0200539`, in
   `src/test/projectConfigCommands.ms` (the `expectStd…` cases, red before the executor read
   the checks).
+- `test({ entry })` is Zig's `addTest` as one check: a command running `msc test <entry>
+  --depfile=…` (`test`, `std/build/graph.ms`), keyed by the files the test build read
+  (`writeBuildDepFile`, `src/compiler/cache.ms`: the modules, link inputs, `build.ms`, the C
+  sources and headers, the C compiler). It runs again when one of them changed, is reused when
+  an unrelated file did, and a failure is never kept. It knows what the test **build** read, not
+  what a test reads while it **runs**: name fixtures with `addFileInput(path("fixtures"))` on
+  the command `test()` returns. Recompiler's own tiers read `std/` and `runtime/` while they
+  run, so `build.ms` gives them the whole trees as inputs. Measured 2026-11-12, candidate of
+  tree `f34bdc617978`: the case "a test node runs again only when a module its entry imports
+  changed" gives `ran|reused|failed|failed|reused|ran|reused`; recompiler's `msc build tests`
+  (the gate's tests lane as ten nodes) ran 5645 tests in 402.3 s at host load 55–60 and a
+  second run reused all ten in 4.0 s. Not verified: `--target=js`, Windows.
+- A depfile input that changed after its job started keeps the output out of the store, because
+  its hash would vouch for content the job may not have read (`readSetUnchangedSinceStart`,
+  `execute.ms`); before, a command that appended to its own input was reused on the next run.
+  A command that declares a depfile and does not write one fails with `did not write its
+  depfile copy.d`, as Zig's `Run` does (`try man.addDepFilePost`, `Run.zig` at 738d2be9d).
 - `runArtifact(app, args)` is a command whose program is `app`; `addArtifactArg(app)` and
   `addPrefixedArtifactArg("--msc=", app)` pass an artifact's path and key the command by its
   content; `getEmittedBin()` names the binary as a file argument.
