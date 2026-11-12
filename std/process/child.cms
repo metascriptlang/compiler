@@ -8,8 +8,6 @@
 // returns the bytes as they came.
 // The async names readAsync, writeAsync and waitAsync are reserved for the same handle.
 
-@include("runtime/process.h");
-
 import {
 	ProcessError,
 	ProcessErrorKind,
@@ -24,41 +22,9 @@ import { incompleteTail } from "./utf8Tail";
 import { utf8Text, wellFormedString } from "../core/string/bytes";
 import { rawBuffer } from "../core/buffer/bytes";
 import { childEnvironmentPairs } from "./environment";
-
-extern function msProcChildSpawn(
-	path: string,
-	args: string[],
-	cwd: string,
-	flags: int32,
-): int64;
-extern function msProcChildSpawnEnv(
-	path: string,
-	args: string[],
-	cwd: string,
-	flags: int32,
-	environment: string[],
-): int64;
-extern function msProcChildIsUnsupported(spawnResult: int64): int32;
-extern function msProcChildPid(h: int64): int32;
-extern function msProcChildErrno(h: int64): int32;
-extern function msProcChildWritten(h: int64): int64;
-extern function msProcChildWrite(h: int64, data: string, timeoutMs: int64): int32;
-extern function msProcChildCloseStdin(h: int64): void;
-extern function msProcChildRead(h: int64, stream: int32, timeoutMs: int64): int32;
-extern function msProcChildTake(h: int64, stream: int32): string;
-extern function msProcChildWait(h: int64, timeoutMs: int64): int32;
-extern function msProcChildKill(h: int64): int32;
-extern function msProcChildExitCode(h: int64): int32;
-extern function msProcChildSignal(h: int64): int32;
-extern function msProcChildPeakRss(h: int64): int64;
-extern function msProcChildClose(h: int64): void;
-extern function msProcChildFree(h: int64): void;
-
-const CHILD_OK = 0;
-const CHILD_ENDED = 1;
-const CHILD_TIMEOUT = 2;
-const CHILD_PIPE_CLOSED = 3;
-const CHILD_OVERFLOW = 4;
+import { CHILD_OK, CHILD_ENDED, CHILD_TIMEOUT, CHILD_PIPE_CLOSED, CHILD_OVERFLOW, SPAWN_MERGE_STDERR, SPAWN_OWN_GROUP } from "./outcome";
+import { ChildCore, spawnChild, spawnUnsupported } from "./native";
+import { platformName } from "./host";
 
 const NO_SPAWN = "ENOSYS: process spawning is not supported on this target";
 
@@ -90,23 +56,23 @@ export interface SpawnOptions {
 }
 
 export class ChildProcess {
-	private handle: int64;
+	private core: ChildCore;
 	pid: int32;
 	command: string;
 	private held: string[];
 
-	constructor(handle: int64, command: string) {
-		this.handle = handle;
-		this.pid = msProcChildPid(handle);
+	constructor(core: ChildCore, command: string) {
+		this.core = core;
+		this.pid = core.pid;
 		this.command = command;
 		this.held = ["", ""];
 	}
 
 	// All bytes of `data`, or Timeout / PipeClosed naming how many were sent.
 	write(data: string, timeoutMs: int32): Result<void, ProcessError> {
-		const code = msProcChildWrite(this.handle, data, timeoutMs as int64);
+		const code = this.core.write(data, timeoutMs as int64);
 		if (code == CHILD_OK) return Result.ok(null);
-		const sent = `${msProcChildWritten(this.handle)} of ${data.byteLength} bytes`;
+		const sent = `${this.core.written} of ${data.byteLength} bytes`;
 		return Result.err(match (code) {
 			CHILD_TIMEOUT => timedOut(this.command, `write after ${timeoutMs} ms, sent ${sent}`),
 			CHILD_PIPE_CLOSED => pipeClosed(this.command, `stdin, sent ${sent}`),
@@ -115,13 +81,13 @@ export class ChildProcess {
 	}
 
 	closeStdin(): void {
-		msProcChildCloseStdin(this.handle);
+		this.core.closeStdin();
 	}
 
 	// At least one byte, or `ended` at EOF. Timeout keeps whatever arrives later for the next read.
 	read(stream: ChildStream, timeoutMs: int32): Result<ReadChunk, ProcessError> {
 		const which = stream as int32;
-		const code = msProcChildRead(this.handle, which, timeoutMs as int64);
+		const code = this.core.read(which, timeoutMs as int64);
 		if (code == CHILD_OK) return Result.ok({ data: this.takeText(which), ended: false });
 		if (code == CHILD_ENDED) return Result.ok(this.endText(which));
 		return Result.err(this.readFailure(stream, code, timeoutMs));
@@ -130,9 +96,9 @@ export class ChildProcess {
 	// The same read as `read`, with the bytes untouched.
 	readBytes(stream: ChildStream, timeoutMs: int32): Result<ByteChunk, ProcessError> {
 		const which = stream as int32;
-		const code = msProcChildRead(this.handle, which, timeoutMs as int64);
+		const code = this.core.read(which, timeoutMs as int64);
 		if (code == CHILD_OK) {
-			return Result.ok({ data: rawBuffer(msProcChildTake(this.handle, which)), ended: false });
+			return Result.ok({ data: rawBuffer(this.core.take(which)), ended: false });
 		}
 		if (code == CHILD_ENDED) return Result.ok({ data: Buffer.alloc(0), ended: true });
 		return Result.err(this.readFailure(stream, code, timeoutMs));
@@ -140,13 +106,13 @@ export class ChildProcess {
 
 	// Whatever stderr the pump has drained so far, decoded in full; does not wait.
 	takeStderr(): string {
-		const raw = this.held[1] + msProcChildTake(this.handle, ChildStream.Stderr as int32);
+		const raw = this.held[1] + this.core.take(ChildStream.Stderr as int32);
 		this.held[1] = "";
 		return utf8Text(raw, false);
 	}
 
 	private takeText(which: int32): string {
-		const raw = this.held[which] + msProcChildTake(this.handle, which);
+		const raw = this.held[which] + this.core.take(which);
 		const kept = incompleteTail(raw.asBytes());
 		const length = raw.byteLength;
 		this.held[which] = wellFormedString(raw.asBytes()[(length - kept)..length]);
@@ -172,7 +138,7 @@ export class ChildProcess {
 
 	// The exit status, or Timeout with the child still running.
 	wait(timeoutMs: int32): Result<ExitStatus, ProcessError> {
-		const code = msProcChildWait(this.handle, timeoutMs as int64);
+		const code = this.core.wait(timeoutMs as int64);
 		if (code == CHILD_OK) return Result.ok(this.status());
 		if (code == CHILD_TIMEOUT) {
 			return Result.err(timedOut(this.command, `wait after ${timeoutMs} ms`));
@@ -182,34 +148,27 @@ export class ChildProcess {
 
 	// SIGKILL and reap; a child already reaped keeps its first status.
 	kill(): Result<ExitStatus, ProcessError> {
-		if (msProcChildKill(this.handle) == CHILD_OK) return Result.ok(this.status());
+		if (this.core.kill() == CHILD_OK) return Result.ok(this.status());
 		return Result.err(this.osError("kill"));
 	}
 
 	// The most memory the reaped child and the children it waited for held at once, in bytes; null before it is reaped, where the OS does not say, and on Linux when it is no higher than this process's own peak, which a child's count starts from.
 	peakRss(): number | null {
-		const peak = msProcChildPeakRss(this.handle);
+		const peak = this.core.peakRss();
 		return peak > 0 ? peak as number : null;
 	}
 
 	// Kills and reaps a child still running and closes every pipe. Idempotent.
 	close(): void {
-		msProcChildClose(this.handle);
+		this.core.close();
 	}
 
 	private osError(what: string): ProcessError {
-		return pipeError(this.command, `${what}: ${errnoName(msProcChildErrno(this.handle))}`);
+		return pipeError(this.command, `${what}: ${errnoName(this.core.lastErrno)}`);
 	}
 
 	private status(): ExitStatus {
-		return { code: msProcChildExitCode(this.handle), signal: msProcChildSignal(this.handle) };
-	}
-
-	onDestroy(): void {
-		if (this.handle != 0) {
-			msProcChildFree(this.handle);
-			this.handle = 0;
-		}
+		return { code: this.core.exitCode(), signal: this.core.signal() };
 	}
 }
 
@@ -219,24 +178,19 @@ export function spawn(
 	args: string[] = [],
 	opts: SpawnOptions = {},
 ): Result<ChildProcess, ProcessError> {
-	const flags: int32 = ((opts.mergeStderr ?? false) ? 1 : 0) + ((opts.ownProcessGroup ?? false) ? 2 : 0);
-	if (flags >= 2 && msProcessPlatform() == "windows") return Result.err(startFailed(path, "ENOTSUP: ownProcessGroup is not supported on Windows yet"));
+	const flags: int32 = ((opts.mergeStderr ?? false) ? SPAWN_MERGE_STDERR : 0) | ((opts.ownProcessGroup ?? false) ? SPAWN_OWN_GROUP : 0);
+	if ((flags & SPAWN_OWN_GROUP) != 0 && platformName() == "windows") return Result.err(startFailed(path, "ENOTSUP: ownProcessGroup is not supported on Windows yet"));
 	const variables = opts.env;
-	let handle: int64 = 0;
+	let environment: string[] | null = null;
 	if (variables != null) {
-		const prepared = childEnvironmentPairs(
-			variables, msProcessPlatform() == "windows",
-		);
+		const prepared = childEnvironmentPairs(variables, platformName() == "windows");
 		if (!prepared.ok) { return Result.err(startFailed(path, "EINVAL")); }
-		handle = msProcChildSpawnEnv(
-			path, args, opts.cwd ?? "", flags, prepared.value,
-		);
-	} else {
-		handle = msProcChildSpawn(path, args, opts.cwd ?? "", flags);
+		environment = prepared.value;
 	}
-	if (handle > 0) return Result.ok(new ChildProcess(handle, path));
-	if (msProcChildIsUnsupported(handle) != 0) return Result.err(startFailed(path, NO_SPAWN));
-	return Result.err(startFailed(path, errnoName(-handle as int32)));
+	const started = spawnChild(path, args, opts.cwd ?? "", flags, environment);
+	if (started.ok) return Result.ok(new ChildProcess(started.value, path));
+	if (spawnUnsupported(started.error)) return Result.err(startFailed(path, NO_SPAWN));
+	return Result.err(startFailed(path, errnoName(started.error)));
 }
 
 // ===== Tests =====
@@ -260,9 +214,7 @@ test "spawn of a missing program is NotFound naming ENOENT" {
 	}
 }
 
-extern function msProcessPlatform(): string;
-
-const onWindows = msProcessPlatform() == "windows";
+const onWindows = platformName() == "windows";
 const shell = onWindows ? "sh" : "/bin/sh";
 
 test "spawn of a batch file on Windows is refused naming EINVAL" {

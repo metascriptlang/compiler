@@ -1,0 +1,59 @@
+@include("errno.h");
+
+extern const ENOSYS: int32;
+
+export function spawnUnsupported(errno: int32): boolean {
+	return errno == ENOSYS;
+}
+
+when (windows) {
+	export { captureShell, captureArgv, runInherited, spawnChild, ChildCore, environmentEntries } from "./windows";
+} else when (posix) {
+	export { captureShell, captureArgv, runInherited, spawnChild, ChildCore, environmentEntries } from "./posix";
+} else {
+	import { ExecFileResult, CHILD_ERROR } from "./outcome";
+
+	function unsupported(): ExecFileResult {
+		return { started: false, pipeOk: true, exitCode: 0, signal: 0, output: "", errorOutput: "", startErrno: ENOSYS };
+	}
+
+	export function captureShell(command: string): ExecFileResult {
+		return unsupported();
+	}
+
+	export function captureArgv(path: string, args: Readonly<string[]>, cwd: string): ExecFileResult {
+		return unsupported();
+	}
+
+	export function runInherited(path: string, args: Readonly<string[]>): number {
+		return -1;
+	}
+
+	export function environmentEntries(): string[] {
+		return [];
+	}
+
+	// No spawn on this target: spawnChild refuses with ENOSYS, so no ChildCore is ever made.
+	export class ChildCore {
+		pid: int32 = 0;
+		lastErrno: int32 = ENOSYS;
+		written: int64 = 0;
+
+		write(data: string, timeoutMs: int64): int32 { return CHILD_ERROR; }
+		closeStdin(): void {}
+		read(s: int32, timeoutMs: int64): int32 { return CHILD_ERROR; }
+		take(s: int32): string { return ""; }
+		wait(timeoutMs: int64): int32 { return CHILD_ERROR; }
+		kill(): int32 { return CHILD_ERROR; }
+		exitCode(): int32 { return -1; }
+		signal(): int32 { return 0; }
+		peakRss(): int64 { return -1; }
+		close(): void {}
+	}
+
+	export function spawnChild(
+		path: string, args: Readonly<string[]>, cwd: string, flags: int32, environment: Readonly<string[]> | null,
+	): Result<ChildCore, int32> {
+		return Result.err(ENOSYS);
+	}
+}

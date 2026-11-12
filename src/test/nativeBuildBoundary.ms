@@ -1959,7 +1959,7 @@ function runIosProcess(): void {
 	}
 	need(command(dir, "ios-process-native", compiler, ["build", "main.ms", "--cc=clang", "--output=native"]).code == 0, "ios-process native build");
 	record("the same program on macOS through posix_spawn", IOS_PROCESS_EXPECTED, command(dir, "ios-process-native-run", `${dir}/native`, [dir]).stdout.trim());
-	need(command(dir, "ios-process-fork", compiler, ["build", "main.ms", "--cc=clang", "--passC=-DMS_TEST_SPAWN_FORK", "--output=fork"]).code == 0, "ios-process fork-shim build");
+	need(command(dir, "ios-process-fork", compiler, ["build", "main.ms", "--cc=clang", "-d:testSpawnFork", "--output=fork"]).code == 0, "ios-process fork-shim build");
 	record("the same program on macOS through the fork shim iOS uses for a cwd", IOS_PROCESS_EXPECTED, command(dir, "ios-process-fork-run", `${dir}/fork`, [dir]).stdout.trim());
 }
 

@@ -1,0 +1,986 @@
+when (posix) {
+	@include("errno.h");
+	@include("fcntl.h");
+	@include("limits.h");
+	@include("paths.h");
+	@include("poll.h");
+	@include("signal.h");
+	@include("spawn.h");
+	@include("stdlib.h");
+	@include("string.h");
+	@include("sys/resource.h");
+	@include("sys/wait.h");
+	@include("time.h");
+	@include("unistd.h");
+	@include("runtime/spawnLock.h");
+
+	import {
+		ExecFileResult, CHILD_OK, CHILD_ENDED, CHILD_TIMEOUT, CHILD_PIPE_CLOSED, CHILD_OVERFLOW, CHILD_ERROR,
+		CHILD_BUFFER_CAP, SPAWN_MERGE_STDERR, SPAWN_OWN_GROUP,
+	} from "./outcome";
+
+	extern struct Mutex from "pthread_mutex_t" {}
+	extern struct SigSet from "sigset_t" {}
+	extern struct SigAction from "struct sigaction" { sa_handler: Ptr<void>; }
+	extern struct FileActions from "posix_spawn_file_actions_t" {}
+	extern struct SpawnAttr from "posix_spawnattr_t" {}
+	extern struct PollFd from "struct pollfd" { fd: int32; events: int16; revents: int16; }
+	extern struct Timespec from "struct timespec" { tv_sec: int64; tv_nsec: int64; }
+	extern struct Rusage from "struct rusage" { ru_maxrss: int64; }
+
+	extern let _msSpawnCreateLock: Mutex;
+	extern let errno: int32;
+	extern const EACCES: int32;
+	extern const EAGAIN: int32;
+	extern const EINTR: int32;
+	extern const EINVAL: int32;
+	extern const ENAMETOOLONG: int32;
+	extern const ENOENT: int32;
+	extern const ENOMEM: int32;
+	extern const ENOTDIR: int32;
+	extern const ENOTSUP: int32;
+	extern const EPIPE: int32;
+	extern const EWOULDBLOCK: int32;
+	extern const PATH_MAX: int32;
+	extern const NAME_MAX: int32;
+	extern const _PATH_DEFPATH: cstring;
+	extern const POLLIN: int16;
+	extern const POLLOUT: int16;
+	extern const F_SETFD: int32;
+	extern const F_GETFL: int32;
+	extern const F_SETFL: int32;
+	extern const FD_CLOEXEC: int32;
+	extern const O_NONBLOCK: int32;
+	extern const WNOHANG: int32;
+	extern const SIGKILL: int32;
+	extern const SIGPIPE: int32;
+	extern const NSIG: int32;
+	extern const SIG_BLOCK: int32;
+	extern const SIG_SETMASK: int32;
+	extern const SIG_DFL: Ptr<void>;
+	extern const POSIX_SPAWN_SETSIGMASK: int16;
+	extern const POSIX_SPAWN_SETSIGDEF: int16;
+	extern const POSIX_SPAWN_SETPGROUP: int16;
+	extern const CLOCK_MONOTONIC: int32;
+	extern const RUSAGE_SELF: int32;
+
+	extern function pthread_mutex_lock(ref m: Mutex): int32;
+	extern function pthread_mutex_unlock(ref m: Mutex): int32;
+	extern function cPipe(fds: Ptr<int32>): int32 from "pipe";
+	extern function fcntl(fd: int32, command: int32, arg: int32): int32;
+	extern function cClose(fd: int32): int32 from "close";
+	extern function cRead(fd: int32, at: Ptr<uint8>, size: uint64): int64 from "read";
+	extern function cReadInt(fd: int32, ref value: int32, size: uint64): int64 from "read";
+	extern function cWrite(fd: int32, at: Readonly<Ptr<uint8>>, size: uint64): int64 from "write";
+	extern function cWriteInt(fd: int32, ref value: int32, size: uint64): int64 from "write";
+	extern function poll(fds: Ptr<PollFd>, count: uint32, timeoutMs: int32): int32;
+	extern function waitpid(pid: int32, ref status: int32, options: int32): int32;
+	extern function wait4(pid: int32, ref status: int32, options: int32, ref usage: Rusage): int32;
+	extern function getrusage(who: int32, ref usage: Rusage): int32;
+	extern function kill(pid: int32, sig: int32): int32;
+	extern function setpgid(pid: int32, group: int32): int32;
+	extern function WIFEXITED(status: int32): boolean;
+	extern function WEXITSTATUS(status: int32): int32;
+	extern function WIFSIGNALED(status: int32): boolean;
+	extern function WTERMSIG(status: int32): int32;
+	extern function clock_gettime(clock: int32, ref ts: Timespec): int32;
+	extern function nanosleep(ref pause: Timespec, rest: Ptr<Timespec> | null): int32;
+	extern function sigemptyset(ref set: SigSet): int32;
+	extern function sigaddset(ref set: SigSet, sig: int32): int32;
+	extern function sigismember(ref set: SigSet, sig: int32): int32;
+	extern function sigaction(sig: int32, ref action: SigAction, old: Ptr<SigAction> | null): int32;
+	extern function sigprocmask(how: int32, ref set: SigSet, old: Ptr<SigSet> | null): int32;
+	extern function cMemchr(at: Readonly<Ptr<uint8>>, value: int32, size: uint64): Ptr<uint8> | null from "memchr";
+	extern function cMalloc(size: uint64): Ptr<uint8> | null from "malloc";
+	extern function cRealloc(at: Ptr<uint8>, size: uint64): Ptr<uint8> | null from "realloc";
+	extern function cFree(at: Ptr<uint8>): void from "free";
+	extern function cCallocArgv(count: uint64, size: uint64): Ptr<cstring> | null from "calloc";
+	extern function cFreeArgv(at: Ptr<cstring>): void from "free";
+	extern function msStringNew(data: cstring, length: int64): string;
+	extern function fork(): int32;
+	extern function cExit(code: int32): never from "_exit";
+	extern function dup2(fd: int32, target: int32): int32;
+	extern function chdir(path: cstring): int32;
+	extern function execve(file: cstring, argv: Ptr<cstring>, envp: Ptr<cstring>): int32;
+	extern function posix_spawn_file_actions_init(ref fa: FileActions): int32;
+	extern function posix_spawn_file_actions_destroy(ref fa: FileActions): int32;
+	extern function posix_spawn_file_actions_addclose(ref fa: FileActions, fd: int32): int32;
+	extern function posix_spawn_file_actions_adddup2(ref fa: FileActions, fd: int32, target: int32): int32;
+	extern function posix_spawnattr_init(ref attr: SpawnAttr): int32;
+	extern function posix_spawnattr_destroy(ref attr: SpawnAttr): int32;
+	extern function posix_spawnattr_setsigmask(ref attr: SpawnAttr, ref set: SigSet): int32;
+	extern function posix_spawnattr_setsigdefault(ref attr: SpawnAttr, ref set: SigSet): int32;
+	extern function posix_spawnattr_setflags(ref attr: SpawnAttr, flags: int16): int32;
+	extern function posix_spawn(
+		ref pid: int32, file: cstring, ref fa: FileActions, ref attr: SpawnAttr, argv: Ptr<cstring>, envp: Ptr<cstring>,
+	): int32;
+	extern function posix_spawnp(
+		ref pid: int32, file: cstring, ref fa: FileActions, ref attr: SpawnAttr, argv: Ptr<cstring>, envp: Ptr<cstring>,
+	): int32;
+
+	when (macos || ios) {
+		@include("crt_externs.h");
+		extern function _NSGetEnviron(): Ptr<Ptr<cstring>>;
+		extern function execvp(file: cstring, argv: Ptr<cstring>): int32;
+		extern const F_SETNOSIGPIPE: int32;
+
+		function parentEnvironment(): Ptr<cstring> {
+			return _NSGetEnviron()[0];
+		}
+
+		function execSearching(file: cstring, argv: Ptr<cstring>, envp: Ptr<cstring>): void {
+			_NSGetEnviron()[0] = envp;
+			execvp(file, argv);
+		}
+	} else {
+		extern let environ: Ptr<cstring>;
+		extern function execvpe(file: cstring, argv: Ptr<cstring>, envp: Ptr<cstring>): int32;
+		extern function sigpending(ref set: SigSet): int32;
+		extern function pthread_sigmask(how: int32, ref set: SigSet, ref old: SigSet): int32;
+		extern function pthread_sigmaskRestore(how: int32, ref set: SigSet, old: Ptr<SigSet> | null): int32 from "pthread_sigmask";
+		extern function sigtimedwait(ref set: SigSet, info: Ptr<void> | null, ref timeout: Timespec): int32;
+
+		function parentEnvironment(): Ptr<cstring> {
+			return environ;
+		}
+
+		function execSearching(file: cstring, argv: Ptr<cstring>, envp: Ptr<cstring>): void {
+			execvpe(file, argv, envp);
+		}
+	}
+
+	// Every NAME=value entry of this process's environment, in environ's order.
+	export function environmentEntries(): string[] {
+		const result: string[] = [];
+		const entries = parentEnvironment() as Ptr<void> as Ptr<cstring | null> | null;
+		if (entries == null) return result;
+		for (let i = 0; entries[i] != null; i++) result.push(entries[i] as string);
+		return result;
+	}
+
+	// ===== The spawn plan: one record of a spawn's steps, run by posix_spawn or after a fork =====
+
+	const STEP_CLOSE: int32 = 0;
+	const STEP_DUP2: int32 = 1;
+	const STEP_CHDIR: int32 = 2;
+
+	struct Step {
+		kind: int32;
+		fd: int32;
+		target: int32;
+		path: cstring;
+	}
+
+	struct Plan {
+		steps: Step[16];
+		count: int32;
+		chdirs: int32;
+		flags: int16;
+		mask: SigSet;
+		defaults: SigSet;
+	}
+
+	function newPlan(): Plan {
+		let plan: Plan = { steps: [], count: 0, chdirs: 0, flags: 0, mask: {}, defaults: {} };
+		sigemptyset(plan.mask);
+		sigemptyset(plan.defaults);
+		return plan;
+	}
+
+	function addStep(ref plan: Plan, kind: int32, fd: int32, target: int32, path: cstring): void {
+		plan.steps[plan.count] = { kind: kind, fd: fd, target: target, path: path };
+		plan.count += 1;
+		if (kind == STEP_CHDIR) plan.chdirs += 1;
+	}
+
+	function addClose(ref plan: Plan, fd: int32): void {
+		addStep(plan, STEP_CLOSE, fd, 0, "");
+	}
+
+	function addDup2(ref plan: Plan, fd: int32, target: int32): void {
+		addStep(plan, STEP_DUP2, fd, target, "");
+	}
+
+	// SIGPIPE back to its default and nothing blocked, so a child the parent ignored SIGPIPE for still dies of it.
+	function resetSignals(ref plan: Plan): void {
+		sigaddset(plan.defaults, SIGPIPE);
+		plan.flags = POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF;
+	}
+
+	function addChdirNative(ref fa: FileActions, path: cstring): int32 {
+		when (ios) {
+			return ENOTSUP;
+		} else {
+			return posix_spawn_file_actions_addchdir_np(fa, path);
+		}
+	}
+
+	when (!ios) {
+		extern function posix_spawn_file_actions_addchdir_np(ref fa: FileActions, path: cstring): int32;
+	}
+
+	function launchNative(
+		ref plan: Plan, file: cstring, search: boolean, argv: Ptr<cstring>, envp: Ptr<cstring>, ref pid: int32,
+	): int32 {
+		let fa: FileActions = {};
+		let err = posix_spawn_file_actions_init(fa);
+		if (err != 0) return err;
+		let attr: SpawnAttr = {};
+		err = posix_spawnattr_init(attr);
+		if (err != 0) {
+			posix_spawn_file_actions_destroy(fa);
+			return err;
+		}
+		for (let i = 0; err == 0 && i < plan.count; i++) {
+			const step = plan.steps[i];
+			if (step.kind == STEP_CLOSE) err = posix_spawn_file_actions_addclose(fa, step.fd);
+			else if (step.kind == STEP_DUP2) err = posix_spawn_file_actions_adddup2(fa, step.fd, step.target);
+			else err = addChdirNative(fa, step.path);
+		}
+		if (err == 0) {
+			posix_spawnattr_setsigmask(attr, plan.mask);
+			posix_spawnattr_setsigdefault(attr, plan.defaults);
+			err = posix_spawnattr_setflags(attr, plan.flags);
+		}
+		if (err == 0) {
+			err = search
+				? posix_spawnp(pid, file, fa, attr, argv, envp)
+				: posix_spawn(pid, file, fa, attr, argv, envp);
+		}
+		posix_spawnattr_destroy(attr);
+		posix_spawn_file_actions_destroy(fa);
+		return err;
+	}
+
+	// Runs in the forked child: async-signal-safe calls only, no allocation, as POSIX requires after fork.
+	function childFail(reportFd: int32): never {
+		let err = errno;
+		cWriteInt(reportFd, err, 4);
+		cExit(127);
+	}
+
+	function runForked(
+		ref plan: Plan, reportFd: int32, file: cstring, search: boolean, argv: Ptr<cstring>, envp: Ptr<cstring>,
+	): never {
+		if ((plan.flags & POSIX_SPAWN_SETSIGDEF) != 0) {
+			let dfl: SigAction = {};
+			dfl.sa_handler = SIG_DFL;
+			for (let sig = 1; sig < NSIG; sig++) {
+				if (sigismember(plan.defaults, sig) == 1 && sigaction(sig, dfl, null) != 0) childFail(reportFd);
+			}
+		}
+		if ((plan.flags & POSIX_SPAWN_SETSIGMASK) != 0 && sigprocmask(SIG_SETMASK, plan.mask, null) != 0) {
+			childFail(reportFd);
+		}
+		if ((plan.flags & POSIX_SPAWN_SETPGROUP) != 0 && setpgid(0, 0) != 0) childFail(reportFd);
+		for (let i = 0; i < plan.count; i++) {
+			const step = plan.steps[i];
+			let failed = false;
+			if (step.kind == STEP_CLOSE) failed = cClose(step.fd) != 0;
+			else if (step.kind == STEP_DUP2) failed = dup2(step.fd, step.target) < 0;
+			else failed = chdir(step.path) != 0;
+			if (failed) childFail(reportFd);
+		}
+		if (search) execSearching(file, argv, envp);
+		else execve(file, argv, envp);
+		childFail(reportFd);
+	}
+
+	// fork + exec reporting a failed step's errno over a close-on-exec pipe, as posix_spawn reports it.
+	function launchForked(
+		ref plan: Plan, file: cstring, search: boolean, argv: Ptr<cstring>, envp: Ptr<cstring>, ref pid: int32,
+	): int32 {
+		let report: int32[2] = [];
+		if (cPipe((report as Span<int32>) as Ptr<int32>) != 0) return errno;
+		fcntl(report[0], F_SETFD, FD_CLOEXEC);
+		fcntl(report[1], F_SETFD, FD_CLOEXEC);
+		const child = fork();
+		if (child < 0) {
+			const err = errno;
+			cClose(report[0]);
+			cClose(report[1]);
+			return err;
+		}
+		if (child == 0) {
+			cClose(report[0]);
+			runForked(plan, report[1], file, search, argv, envp);
+		}
+		cClose(report[1]);
+		let err: int32 = 0;
+		let got = cReadInt(report[0], err, 4);
+		while (got < 0 && errno == EINTR) got = cReadInt(report[0], err, 4);
+		cClose(report[0]);
+		if (got == 4) {
+			let status: int32 = 0;
+			while (waitpid(child, status, 0) < 0 && errno == EINTR) {}
+			return err;
+		}
+		pid = child;
+		return 0;
+	}
+
+	// bionic below API 34 has no posix_spawn_file_actions_addchdir_np and the iOS SDK none at all.
+	function launch(
+		ref plan: Plan, file: cstring, search: boolean, argv: Ptr<cstring>, envp: Ptr<cstring>, ref pid: int32,
+	): int32 {
+		when (android) {
+			return launchForked(plan, file, search, argv, envp, pid);
+		} else when (ios || testSpawnFork) {
+			if (plan.chdirs > 0) return launchForked(plan, file, search, argv, envp, pid);
+			return launchNative(plan, file, search, argv, envp, pid);
+		} else {
+			return launchNative(plan, file, search, argv, envp, pid);
+		}
+	}
+
+	// ===== Pipes and argv =====
+
+	struct Pipe {
+		error: int32;
+		read: int32;
+		write: int32;
+	}
+
+	// posix_spawn hands the child every descriptor without FD_CLOEXEC and macOS has no pipe2,
+	// so pipe creation and every spawn share one lock: no spawn lands between pipe() and FD_CLOEXEC.
+	function spawnPipe(): Pipe {
+		let fds: int32[2] = [];
+		pthread_mutex_lock(_msSpawnCreateLock);
+		const made = cPipe((fds as Span<int32>) as Ptr<int32>) == 0;
+		const error = made ? 0 : errno;
+		if (made) {
+			fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+			fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+		}
+		pthread_mutex_unlock(_msSpawnCreateLock);
+		return { error: error, read: made ? fds[0] : -1, write: made ? fds[1] : -1 };
+	}
+
+	function closePipe(p: Pipe): void {
+		if (p.read >= 0) cClose(p.read);
+		if (p.write >= 0) cClose(p.write);
+	}
+
+	// The strings stay owned by `path` and `args`; the array is freed with cFreeArgv.
+	function argvOf(path: string, args: Readonly<string[]>): Ptr<cstring> | null {
+		const argv = cCallocArgv((args.length + 2) as uint64, sizeof cstring);
+		if (argv == null) return null;
+		const at: Ptr<cstring> = argv;
+		at[0] = path as cstring;
+		for (let i = 0; i < args.length; i++) at[i + 1] = args[i] as cstring;
+		return at;
+	}
+
+	function spawnLocked(
+		ref plan: Plan, file: cstring, search: boolean, argv: Ptr<cstring>, envp: Ptr<cstring>, ref pid: int32,
+	): int32 {
+		pthread_mutex_lock(_msSpawnCreateLock);
+		const err = launch(plan, file, search, argv, envp, pid);
+		pthread_mutex_unlock(_msSpawnCreateLock);
+		return err;
+	}
+
+	// ===== Growable pipe buffers =====
+
+	struct PipeBuffer {
+		fd: int32;
+		data: Ptr<uint8> | null;
+		len: int64;
+		cap: int64;
+		overflow: boolean;
+	}
+
+	function pipeBuffer(fd: int32): PipeBuffer {
+		return { fd: fd, data: null, len: 0, cap: 0, overflow: false };
+	}
+
+	// Room for `want` more bytes, doubling from `first`; false when the allocation failed.
+	function reserve(ref b: PipeBuffer, want: int64, first: int64): boolean {
+		if (b.len + want <= b.cap) return true;
+		let cap = b.cap == 0 ? first : b.cap;
+		while (cap < b.len + want) cap *= 2;
+		const old = b.data;
+		const grown = old == null ? cMalloc(cap as uint64) : cRealloc(old, cap as uint64);
+		if (grown == null) return false;
+		b.data = grown;
+		b.cap = cap;
+		return true;
+	}
+
+	function textOf(ref b: PipeBuffer): string {
+		const data = b.data;
+		if (data == null || b.len == 0) return "";
+		return msStringNew(data as cstring, b.len);
+	}
+
+	function release(ref b: PipeBuffer): void {
+		const data = b.data;
+		if (data != null) cFree(data);
+		b.data = null;
+		b.len = 0;
+		b.cap = 0;
+	}
+
+	function closeFd(ref b: PipeBuffer): void {
+		if (b.fd >= 0) {
+			cClose(b.fd);
+			b.fd = -1;
+		}
+	}
+
+	// ===== Synchronous capture =====
+
+	const CAPTURE_FIRST: int64 = 4096;
+	const PUMP_MORE = 1;
+	const PUMP_END = 0;
+	const PUMP_FAILED = -1;
+
+	// One read of a descriptor poll() reported ready, so it cannot block.
+	function pumpCapture(ref b: PipeBuffer): int32 {
+		if (!reserve(b, CAPTURE_FIRST, CAPTURE_FIRST)) return PUMP_FAILED;
+		const data = b.data;
+		if (data == null) return PUMP_FAILED;
+		const n = cRead(b.fd, data + b.len, (b.cap - b.len) as uint64);
+		if (n == 0) return PUMP_END;
+		if (n < 0) return errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK ? PUMP_MORE : PUMP_FAILED;
+		b.len += n;
+		return PUMP_MORE;
+	}
+
+	// Both pipes drain from one thread and neither may fill: a child blocked writing one stream
+	// while the parent waits on the other deadlocks both, and compiler diagnostics pass 64 KB.
+	function finishCapture(outFd: int32, errFd: int32, pid: int32): ExecFileResult {
+		let streams: PipeBuffer[2] = [pipeBuffer(outFd), pipeBuffer(errFd)];
+		let open: boolean[2] = [true, true];
+		let pipeOk = true;
+		while (open[0] || open[1]) {
+			let fds: PollFd[2] = [];
+			let slot: int32[2] = [-1, -1];
+			let count: uint32 = 0;
+			for (let s = 0; s < 2; s++) {
+				if (!open[s]) continue;
+				slot[s] = count as int32;
+				fds[count] = { fd: streams[s].fd, events: POLLIN, revents: 0 };
+				count += 1;
+			}
+			if (poll((fds as Span<PollFd>) as Ptr<PollFd>, count, -1) < 0) {
+				if (errno == EINTR) continue;
+				pipeOk = false;
+				break;
+			}
+			for (let s = 0; s < 2; s++) {
+				if (slot[s] < 0 || fds[slot[s]].revents == 0) continue;
+				const got = pumpCapture(streams[s]);
+				if (got == PUMP_MORE) continue;
+				open[s] = false;
+				if (got == PUMP_FAILED) pipeOk = false;
+			}
+		}
+		closeFd(streams[0]);
+		closeFd(streams[1]);
+		let status: int32 = 0;
+		if (waitpid(pid, status, 0) < 0) {
+			release(streams[0]);
+			release(streams[1]);
+			return notStarted(0);
+		}
+		const output = textOf(streams[0]);
+		const errorOutput = textOf(streams[1]);
+		release(streams[0]);
+		release(streams[1]);
+		let exitCode: int32 = -1;
+		let signal: int32 = 0;
+		if (WIFEXITED(status)) exitCode = WEXITSTATUS(status);
+		else if (WIFSIGNALED(status)) {
+			exitCode = 0;
+			signal = WTERMSIG(status);
+		}
+		return {
+			started: true, pipeOk: pipeOk, exitCode: exitCode, signal: signal,
+			output: output, errorOutput: errorOutput, startErrno: 0,
+		};
+	}
+
+	function notStarted(startErrno: int32): ExecFileResult {
+		return {
+			started: false, pipeOk: true, exitCode: 0, signal: 0, output: "", errorOutput: "", startErrno: startErrno,
+		};
+	}
+
+	function captureSpawn(file: cstring, search: boolean, argv: Ptr<cstring>, cwd: string): ExecFileResult {
+		const out = spawnPipe();
+		if (out.error != 0) return notStarted(0);
+		const err = spawnPipe();
+		if (err.error != 0) {
+			closePipe(out);
+			return notStarted(0);
+		}
+		let plan = newPlan();
+		addClose(plan, out.read);
+		addClose(plan, err.read);
+		addDup2(plan, out.write, 1);
+		addDup2(plan, err.write, 2);
+		addClose(plan, out.write);
+		addClose(plan, err.write);
+		if (cwd != "") addStep(plan, STEP_CHDIR, 0, 0, cwd as cstring);
+		let pid: int32 = 0;
+		const spawnErr = spawnLocked(plan, file, search, argv, parentEnvironment(), pid);
+		if (spawnErr != 0) {
+			closePipe(out);
+			closePipe(err);
+			return notStarted(spawnErr);
+		}
+		cClose(out.write);
+		cClose(err.write);
+		return finishCapture(out.read, err.read, pid);
+	}
+
+	// `command` through /bin/sh -c, so pipes, redirects and globs in it work.
+	export function captureShell(command: string): ExecFileResult {
+		const argv = cCallocArgv(4, sizeof cstring);
+		if (argv == null) return notStarted(0);
+		const at: Ptr<cstring> = argv;
+		at[0] = "sh";
+		at[1] = "-c";
+		at[2] = command as cstring;
+		const result = captureSpawn("/bin/sh", false, at, "");
+		cFreeArgv(at);
+		return result;
+	}
+
+	// `path` searched on PATH when it has no slash, with no shell; a non-empty `cwd` is the child's directory.
+	export function captureArgv(path: string, args: Readonly<string[]>, cwd: string): ExecFileResult {
+		const argv = argvOf(path, args);
+		if (argv == null) return notStarted(0);
+		const result = captureSpawn(path as cstring, true, argv, cwd);
+		cFreeArgv(argv);
+		return result;
+	}
+
+	// Inherits stdio; the exit code, 128 + the signal that ended it, or -1 when it never ran.
+	export function runInherited(path: string, args: Readonly<string[]>): number {
+		const argv = argvOf(path, args);
+		if (argv == null) return -1;
+		let plan = newPlan();
+		let pid: int32 = 0;
+		const spawnErr = spawnLocked(plan, path as cstring, true, argv, parentEnvironment(), pid);
+		cFreeArgv(argv);
+		if (spawnErr != 0) return -1;
+		let status: int32 = 0;
+		if (waitpid(pid, status, 0) < 0) return -1;
+		if (WIFEXITED(status)) return WEXITSTATUS(status);
+		if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+		return -1;
+	}
+
+	// ===== Supplied environment (derived from libuv, see libuv.LICENSE) =====
+
+	// NUL-terminated views of `pairs`, refused with EINVAL when one holds a NUL.
+	function environmentOf(pairs: Readonly<string[]>, ref error: int32): Ptr<cstring> | null {
+		for (const pair of pairs) {
+			if (cMemchr(pair as cstring as Ptr<uint8>, 0, pair.byteLength as uint64) != null) {
+				error = EINVAL;
+				return null;
+			}
+		}
+		const envp = cCallocArgv((pairs.length + 1) as uint64, sizeof cstring);
+		if (envp == null) {
+			error = ENOMEM;
+			return null;
+		}
+		const at: Ptr<cstring> = envp;
+		for (let i = 0; i < pairs.length; i++) at[i] = pairs[i] as cstring;
+		return at;
+	}
+
+	function spawnRetrying(ref plan: Plan, file: cstring, argv: Ptr<cstring>, envp: Ptr<cstring>, ref pid: int32): int32 {
+		let result = launch(plan, file, false, argv, envp, pid);
+		while (result == EINTR) result = launch(plan, file, false, argv, envp, pid);
+		return result;
+	}
+
+	// The program is looked up on the PATH the child gets, not the parent's, as Node does.
+	function spawnInEnvironment(
+		ref plan: Plan, file: string, argv: Ptr<cstring>, envp: Ptr<cstring>, pairs: Readonly<string[]>, ref pid: int32,
+	): int32 {
+		if (file == "") return ENOENT;
+		if (file.includes("/")) return spawnRetrying(plan, file as cstring, argv, envp, pid);
+		let path = _PATH_DEFPATH as string;
+		for (const pair of pairs) {
+			if (pair.startsWith("PATH=")) {
+				path = pair.slice(5);
+				break;
+			}
+		}
+		if (file.byteLength > NAME_MAX) return ENAMETOOLONG;
+		let denied = false;
+		for (const dir of path.split(":")) {
+			if (dir.byteLength >= PATH_MAX) continue;
+			const candidate = dir == "" ? file : `${dir}/${file}`;
+			const result = spawnRetrying(plan, candidate as cstring, argv, envp, pid);
+			if (result == EACCES) denied = true;
+			else if (result != ENOENT && result != ENOTDIR) return result;
+		}
+		return denied ? EACCES : ENOENT;
+	}
+
+	// ===== Long-lived child =====
+
+	const CHILD_FIRST: int64 = 65536;
+
+	function nowMs(): number {
+		let ts: Timespec = { tv_sec: 0, tv_nsec: 0 };
+		clock_gettime(CLOCK_MONOTONIC, ts);
+		return (ts.tv_sec as number) * 1000 + (ts.tv_nsec as number) / 1000000;
+	}
+
+	function remainingMs(deadline: number): int32 {
+		const left = deadline - nowMs();
+		if (left <= 0) return 0;
+		if (left >= 2147483647) return 2147483647;
+		return (left + 0.999) as int32;
+	}
+
+	function setNonBlocking(fd: int32): void {
+		fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+	}
+
+	// A write to a child that closed its stdin returns EPIPE instead of raising SIGPIPE: macOS marks
+	// the fd F_SETNOSIGPIPE at spawn; elsewhere SIGPIPE is blocked around the write and one it raised is consumed.
+	function writeNoSigpipe(fd: int32, at: Readonly<Ptr<uint8>>, size: uint64): int64 {
+		when (macos || ios) {
+			return cWrite(fd, at, size);
+		} else {
+			let pipeSet: SigSet = {};
+			let pending: SigSet = {};
+			let old: SigSet = {};
+			sigemptyset(pipeSet);
+			sigaddset(pipeSet, SIGPIPE);
+			sigpending(pending);
+			const alreadyPending = sigismember(pending, SIGPIPE) == 1;
+			pthread_sigmask(SIG_BLOCK, pipeSet, old);
+			const n = cWrite(fd, at, size);
+			const saved = errno;
+			if (n < 0 && saved == EPIPE && !alreadyPending) {
+				let zero: Timespec = { tv_sec: 0, tv_nsec: 0 };
+				while (sigtimedwait(pipeSet, null, zero) < 0 && errno == EINTR) {}
+			}
+			pthread_sigmaskRestore(SIG_SETMASK, old, null);
+			errno = saved;
+			return n;
+		}
+	}
+
+	export class ChildCore {
+		pid: int32;
+		lastErrno: int32;
+		written: int64;
+		private ownGroup: boolean;
+		private inFd: int32;
+		private streams: PipeBuffer[2];
+		private reaped: boolean;
+		private rawStatus: int32;
+		private peak: int64;
+		private inheritedPeak: int64;
+		private closed: boolean;
+
+		constructor(pid: int32, ownGroup: boolean, inFd: int32, outFd: int32, errFd: int32) {
+			this.pid = pid;
+			this.lastErrno = 0;
+			this.written = 0;
+			this.ownGroup = ownGroup;
+			this.inFd = inFd;
+			this.streams = [pipeBuffer(outFd), pipeBuffer(errFd)];
+			this.reaped = false;
+			this.rawStatus = 0;
+			this.peak = 0;
+			this.inheritedPeak = 0;
+			this.closed = false;
+			when (linux || android) {
+				let self: Rusage = { ru_maxrss: 0 };
+				if (getrusage(RUSAGE_SELF, self) == 0) this.inheritedPeak = self.ru_maxrss * 1024;
+			}
+		}
+
+		// ru_maxrss counts kilobytes on Linux and the BSDs, bytes on Darwin; a Linux child's count starts from this process's peak.
+		private record(status: int32, usage: Readonly<Rusage>): void {
+			this.reaped = true;
+			this.rawStatus = status;
+			when (macos || ios) {
+				this.peak = usage.ru_maxrss;
+			} else {
+				this.peak = usage.ru_maxrss * 1024;
+			}
+			if (this.peak <= this.inheritedPeak) this.peak = 0;
+		}
+
+		// One read into the stream's buffer; the fd was reported ready, so it cannot block.
+		private fill(s: int32): void {
+			const room = CHILD_BUFFER_CAP - this.streams[s].len;
+			if (room == 0) {
+				this.streams[s].overflow = true;
+				return;
+			}
+			const want = room < CHILD_FIRST ? room : CHILD_FIRST;
+			const data = reserve(this.streams[s], want, CHILD_FIRST) ? this.streams[s].data : null;
+			if (data == null) {
+				this.lastErrno = ENOMEM;
+				return;
+			}
+			const n = cRead(this.streams[s].fd, data + this.streams[s].len, want as uint64);
+			if (n > 0) {
+				this.streams[s].len += n;
+				return;
+			}
+			if (n == 0) {
+				closeFd(this.streams[s]);
+				return;
+			}
+			if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) return;
+			this.lastErrno = errno;
+			closeFd(this.streams[s]);
+		}
+
+		// One poll round over every open pipe, bounded by timeoutMs; with `pending` it advances that write.
+		private pump(pending: string, done: int64, timeoutMs: int32): int64 {
+			let fds: PollFd[3] = [];
+			let slot: int32[3] = [-1, -1, -1];
+			let count: uint32 = 0;
+			const size = pending.byteLength as int64;
+			if (this.inFd >= 0 && done < size) {
+				slot[2] = count as int32;
+				fds[count] = { fd: this.inFd, events: POLLOUT, revents: 0 };
+				count += 1;
+			}
+			for (let s = 0; s < 2; s++) {
+				if (this.streams[s].fd < 0) continue;
+				if (this.streams[s].len >= CHILD_BUFFER_CAP) {
+					this.streams[s].overflow = true;
+					continue;
+				}
+				slot[s] = count as int32;
+				fds[count] = { fd: this.streams[s].fd, events: POLLIN, revents: 0 };
+				count += 1;
+			}
+			if (poll((fds as Span<PollFd>) as Ptr<PollFd>, count, timeoutMs) <= 0) return done;
+			for (let s = 0; s < 2; s++) {
+				if (slot[s] >= 0 && fds[slot[s]].revents != 0) this.fill(s);
+			}
+			if (slot[2] >= 0 && fds[slot[2]].revents != 0) {
+				const at = (pending as cstring) as Ptr<uint8>;
+				const n = writeNoSigpipe(this.inFd, at + done, (size - done) as uint64);
+				if (n > 0) return done + n;
+				if (n < 0 && errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) this.lastErrno = errno;
+			}
+			return done;
+		}
+
+		// Every byte of `data`, or how far it got before the deadline or a closed pipe.
+		write(data: string, timeoutMs: int64): int32 {
+			this.written = 0;
+			if (this.closed || this.inFd < 0) return CHILD_PIPE_CLOSED;
+			const size = data.byteLength as int64;
+			let done: int64 = 0;
+			const deadline = nowMs() + (timeoutMs as number);
+			this.lastErrno = 0;
+			while (true) {
+				done = this.pump(data, done, remainingMs(deadline));
+				this.written = done;
+				if (this.lastErrno == EPIPE) return CHILD_PIPE_CLOSED;
+				if (this.lastErrno != 0) return CHILD_ERROR;
+				if (done == size) return CHILD_OK;
+				if (nowMs() >= deadline) return CHILD_TIMEOUT;
+			}
+		}
+
+		closeStdin(): void {
+			if (this.inFd >= 0) {
+				cClose(this.inFd);
+				this.inFd = -1;
+			}
+		}
+
+		// OK when the stream holds a byte (take it), ENDED at EOF with nothing held, OVERFLOW once after it filled.
+		read(s: int32, timeoutMs: int64): int32 {
+			if (this.closed) return CHILD_PIPE_CLOSED;
+			const deadline = nowMs() + (timeoutMs as number);
+			this.lastErrno = 0;
+			let polled = false;
+			while (true) {
+				if (this.streams[s].overflow) {
+					this.streams[s].overflow = false;
+					return CHILD_OVERFLOW;
+				}
+				if (this.streams[s].len > 0) return CHILD_OK;
+				if (this.lastErrno != 0) return CHILD_ERROR;
+				if (this.streams[s].fd < 0) return CHILD_ENDED;
+				if (polled && nowMs() >= deadline) return CHILD_TIMEOUT;
+				this.pump("", 0, remainingMs(deadline));
+				polled = true;
+			}
+		}
+
+		take(s: int32): string {
+			const taken = textOf(this.streams[s]);
+			this.streams[s].len = 0;
+			return taken;
+		}
+
+		private drainExited(): void {
+			while (true) {
+				const before = this.streams[0].len + this.streams[1].len;
+				const outOpen = this.streams[0].fd >= 0;
+				const errOpen = this.streams[1].fd >= 0;
+				if (!outOpen && !errOpen) return;
+				this.pump("", 0, 0);
+				if (this.streams[0].len + this.streams[1].len == before
+					&& (this.streams[0].fd >= 0) == outOpen && (this.streams[1].fd >= 0) == errOpen) return;
+			}
+		}
+
+		// WNOHANG between pump rounds, backing off from 50 us to 50 ms; the deadline leaves the child running.
+		wait(timeoutMs: int64): int32 {
+			const deadline = nowMs() + (timeoutMs as number);
+			let delayUs: int64 = 50;
+			while (!this.reaped) {
+				let status: int32 = 0;
+				let usage: Rusage = { ru_maxrss: 0 };
+				const got = wait4(this.pid, status, WNOHANG, usage);
+				if (got == this.pid) {
+					this.record(status, usage);
+					this.drainExited();
+					break;
+				}
+				if (got < 0 && errno != EINTR) {
+					this.lastErrno = errno;
+					return CHILD_ERROR;
+				}
+				const left = remainingMs(deadline);
+				if (left == 0) return CHILD_TIMEOUT;
+				const leftUs = (left as int64) * 1000;
+				const sliceUs = delayUs < leftUs ? delayUs : leftUs;
+				if (sliceUs >= 1000) {
+					this.pump("", 0, (sliceUs / 1000) as int32);
+				} else {
+					this.pump("", 0, 0);
+					let pause: Timespec = { tv_sec: 0, tv_nsec: sliceUs * 1000 };
+					nanosleep(pause, null);
+				}
+				delayUs = delayUs * 2 < 50000 ? delayUs * 2 : 50000;
+			}
+			return CHILD_OK;
+		}
+
+		// SIGKILL to the child, or to its whole group when it leads one, then a blocking reap; a reaped pid is never signalled, so a recycled pid is safe.
+		kill(): int32 {
+			if (this.reaped) return CHILD_OK;
+			kill(this.ownGroup ? -this.pid : this.pid, SIGKILL);
+			let status: int32 = 0;
+			let usage: Rusage = { ru_maxrss: 0 };
+			let got = wait4(this.pid, status, 0, usage);
+			while (got < 0 && errno == EINTR) got = wait4(this.pid, status, 0, usage);
+			if (got != this.pid) {
+				this.lastErrno = errno;
+				return CHILD_ERROR;
+			}
+			this.record(status, usage);
+			return CHILD_OK;
+		}
+
+		exitCode(): int32 {
+			let st = this.rawStatus;
+			if (WIFEXITED(st)) return WEXITSTATUS(st);
+			return WIFSIGNALED(st) ? 0 : -1;
+		}
+
+		signal(): int32 {
+			let st = this.rawStatus;
+			return WIFSIGNALED(st) ? WTERMSIG(st) : 0;
+		}
+
+		peakRss(): int64 {
+			return this.reaped && this.peak > 0 ? this.peak : -1;
+		}
+
+		// Idempotent: kills and reaps a child still running, closes every pipe, drops the buffers.
+		close(): void {
+			if (this.closed) return;
+			this.kill();
+			this.closeStdin();
+			for (let s = 0; s < 2; s++) {
+				closeFd(this.streams[s]);
+				release(this.streams[s]);
+			}
+			this.closed = true;
+		}
+
+		onDestroy(): void {
+			this.close();
+		}
+	}
+
+	// The child, or the errno that kept it from starting.
+	export function spawnChild(
+		path: string, args: Readonly<string[]>, cwd: string, flags: int32, environment: Readonly<string[]> | null,
+	): Result<ChildCore, int32> {
+		const mergeStderr = (flags & SPAWN_MERGE_STDERR) != 0;
+		const ownGroup = (flags & SPAWN_OWN_GROUP) != 0;
+		const input = spawnPipe();
+		if (input.error != 0) return Result.err(input.error);
+		const out = spawnPipe();
+		if (out.error != 0) {
+			closePipe(input);
+			return Result.err(out.error);
+		}
+		const err: Pipe = mergeStderr ? { error: 0, read: -1, write: -1 } : spawnPipe();
+		if (err.error != 0) {
+			closePipe(input);
+			closePipe(out);
+			return Result.err(err.error);
+		}
+		let failed: int32 = 0;
+		let pid: int32 = 0;
+		const argv = argvOf(path, args);
+		const envp = argv != null && environment != null ? environmentOf(environment, failed) : null;
+		if (argv == null) {
+			failed = ENOMEM;
+		} else if (environment == null || envp != null) {
+			let plan = newPlan();
+			resetSignals(plan);
+			if (ownGroup) plan.flags |= POSIX_SPAWN_SETPGROUP;
+			addClose(plan, input.write);
+			addClose(plan, out.read);
+			if (!mergeStderr) addClose(plan, err.read);
+			addDup2(plan, input.read, 0);
+			addDup2(plan, out.write, 1);
+			addDup2(plan, mergeStderr ? out.write : err.write, 2);
+			addClose(plan, input.read);
+			addClose(plan, out.write);
+			if (!mergeStderr) addClose(plan, err.write);
+			if (cwd != "") addStep(plan, STEP_CHDIR, 0, 0, cwd as cstring);
+			pthread_mutex_lock(_msSpawnCreateLock);
+			failed = environment != null && envp != null
+				? spawnInEnvironment(plan, path, argv, envp, environment, pid)
+				: launch(plan, path as cstring, true, argv, parentEnvironment(), pid);
+			pthread_mutex_unlock(_msSpawnCreateLock);
+		}
+		if (argv != null) cFreeArgv(argv);
+		if (envp != null) cFreeArgv(envp);
+		cClose(input.read);
+		cClose(out.write);
+		if (err.write >= 0) cClose(err.write);
+		if (failed != 0) {
+			cClose(input.write);
+			cClose(out.read);
+			if (err.read >= 0) cClose(err.read);
+			return Result.err(failed);
+		}
+		setNonBlocking(input.write);
+		setNonBlocking(out.read);
+		if (err.read >= 0) setNonBlocking(err.read);
+		when (macos || ios) {
+			fcntl(input.write, F_SETNOSIGPIPE, 1);
+		}
+		return Result.ok(new ChildCore(pid, ownGroup, input.write, out.read, err.read));
+	}
+}

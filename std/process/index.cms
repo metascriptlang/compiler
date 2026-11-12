@@ -8,40 +8,23 @@
  * Wall-clock / monotonic time live in the `Date` / `performance` preludes.
  */
 
-@include("runtime/process.h");
-
 import { isExecutable, isFile } from "../fs";
 import { utf8Text } from "../core/string/bytes";
 import {
 	ProcessError, ProcessErrorKind,
 	spawnFailed, startFailed, errnoName, nonZeroExit, signalTerminated, pipeError,
 } from "./errors";
+import { ExecFileResult } from "./outcome";
+import {
+	archName, platformName, exitProcess, getEnv, setEnv, unsetEnv, currentDirectory, argvList, executablePath,
+} from "./host";
+import { captureShell, captureArgv, runInherited, spawnUnsupported, environmentEntries } from "./native";
 
 // Re-export error types so callers do `import { exec, ProcessError } from "std/process"`.
 export { ProcessError, ProcessErrorKind } from "./errors";
 export { processError, spawnFailed, startFailed, notFound, nonZeroExit, signalTerminated, pipeError, isNotFound, isNonZeroExit, isRetryable } from "./errors";
 export { spawn, ChildProcess, ChildStream, ExitStatus, ReadChunk, ByteChunk, SpawnOptions } from "./child";
-
-extern function msProcessArgc(): number;
-extern function msProcessArgvAt(idx: number): string;
-extern function msProcessExit(code: number): never;
-extern function msProcessCwd(): string;
-extern function msProcessExecFile(path: string, args: string[]): number;
-extern function msProcessSpawnSync(command: string): string;
-extern function msProcSpawnGetExitCode(): int32;
-extern function msProcSpawnGetSignal(): int32;
-extern function msProcSpawnGetStderr(): string;
-extern function msProcSpawnGetOk(): int32;
-extern function msProcSpawnGetPipeOk(): int32;
-extern function msProcSpawnGetErrno(): int32;
-extern function msProcSpawnGetUnsupported(): int32;
-extern function msProcessGetEnv(name: string): string;
-extern function msProcessSetEnv(name: string, value: string): number;
-extern function msProcessUnsetEnv(name: string): number;
-extern function msProcessEnvAt(index: number): string;
-extern function msProcessPlatform(): string;
-extern function msProcessArch(): string;
-extern function msProcessExecPath(): string;
+export { ExecFileResult } from "./outcome";
 
 const NO_SPAWN = "ENOSYS: process spawning is not supported on this target";
 
@@ -54,28 +37,17 @@ function textOf(raw: string): string {
 // Command-line arguments
 // =============================================================================
 
-function buildArgv(): string[] {
-	const result: string[] = [];
-	const count = msProcessArgc();
-	let i = 0;
-	while (i < count) {
-		result.push(msProcessArgvAt(i));
-		i += 1;
-	}
-	return result;
-}
-
-export const argv: string[] = buildArgv();
+export const argv: string[] = argvList();
 
 // The running executable as the OS reports it, however argv[0] was spelled; "" where the OS has no answer.
-export const execPath: string = msProcessExecPath();
+export const execPath: string = executablePath();
 
 // =============================================================================
 // Process control
 // =============================================================================
 
 export function exit(code: number): never {
-	msProcessExit(code);
+	exitProcess(code);
 }
 
 // =============================================================================
@@ -83,7 +55,7 @@ export function exit(code: number): never {
 // =============================================================================
 
 export function cwd(): string {
-	return msProcessCwd();
+	return currentDirectory();
 }
 
 // =============================================================================
@@ -116,25 +88,25 @@ export function execBytes(command: string): Result<Buffer, ProcessError> {
 
 // stdout as the string the runtime read, which may hold ill-formed UTF-8; never leaves this module.
 function execRaw(command: string): Result<string, ProcessError> {
-	const stdoutText = msProcessSpawnSync(command);
-	const ok = msProcSpawnGetOk();
-	if (ok == 0) {
-		return Result.err(spawnFailed(command, msProcSpawnGetUnsupported() != 0 ? NO_SPAWN : "fork/exec failed"));
+	const r = captureShell(command);
+	if (!r.started) {
+		return Result.err(spawnFailed(command, spawnUnsupported(r.startErrno) ? NO_SPAWN : "fork/exec failed"));
 	}
-	const pipeOk = msProcSpawnGetPipeOk();
-	if (pipeOk == 0) {
+	return finished(command, r);
+}
+
+// A run that started: its stdout as the runtime read it, or the error its pipes or status name.
+function finished(command: string, r: ExecFileResult): Result<string, ProcessError> {
+	if (!r.pipeOk) {
 		return Result.err(pipeError(command, "failed to drain stdout/stderr from child"));
 	}
-	const signal = msProcSpawnGetSignal();
-	const exitCode = msProcSpawnGetExitCode();
-	const stderrText = msProcSpawnGetStderr();
-	if (signal != 0) {
-		return Result.err(signalTerminated(command, signal, textOf(stdoutText), textOf(stderrText)));
+	if (r.signal != 0) {
+		return Result.err(signalTerminated(command, r.signal, textOf(r.output), textOf(r.errorOutput)));
 	}
-	if (exitCode != 0) {
-		return Result.err(nonZeroExit(command, exitCode, textOf(stdoutText), textOf(stderrText)));
+	if (r.exitCode != 0) {
+		return Result.err(nonZeroExit(command, r.exitCode, textOf(r.output), textOf(r.errorOutput)));
 	}
-	return Result.ok(stdoutText);
+	return Result.ok(r.output);
 }
 
 // Run a binary directly (no shell). Mirrors Node.js `child_process.execFile`:
@@ -143,10 +115,8 @@ function execRaw(command: string): Result<string, ProcessError> {
 // On Windows this bypasses cmd.exe entirely, so forward-slash paths like
 // "out/debug/hello.exe" work without normalization. Stdio inherits the parent.
 export function execFile(path: string, args: string[] = []): number {
-	return msProcessExecFile(path, args);
+	return runInherited(path, args);
 }
-
-extern function msProcessSpawnSyncArgv(path: string, args: string[], cwd: string): string;
 
 // Direct-argv counterpart of exec(): spawn `path` with `args` — no /bin/sh, no
 // cmd.exe — capturing stdout/stderr/exit/signal exactly like exec(). Same
@@ -169,50 +139,18 @@ export function execFileCaptureBytes(path: string, args: string[] = [], cwd: str
 }
 
 function execFileCaptureRaw(path: string, args: string[], cwd: string): Result<string, ProcessError> {
-	const stdoutText = msProcessSpawnSyncArgv(path, args, cwd);
-	const ok = msProcSpawnGetOk();
-	if (ok == 0) {
-		return Result.err(startFailed(path, msProcSpawnGetUnsupported() != 0 ? NO_SPAWN : errnoName(msProcSpawnGetErrno())));
+	const r = captureArgv(path, args, cwd);
+	if (!r.started) {
+		return Result.err(startFailed(path, spawnUnsupported(r.startErrno) ? NO_SPAWN : errnoName(r.startErrno)));
 	}
-	const pipeOk = msProcSpawnGetPipeOk();
-	if (pipeOk == 0) {
-		return Result.err(pipeError(path, "failed to drain stdout/stderr from child"));
-	}
-	const signal = msProcSpawnGetSignal();
-	const exitCode = msProcSpawnGetExitCode();
-	const stderrText = msProcSpawnGetStderr();
-	if (signal != 0) {
-		return Result.err(signalTerminated(path, signal, textOf(stdoutText), textOf(stderrText)));
-	}
-	if (exitCode != 0) {
-		return Result.err(nonZeroExit(path, exitCode, textOf(stdoutText), textOf(stderrText)));
-	}
-	return Result.ok(stdoutText);
-}
-
-export interface ExecFileResult {
-	started: boolean;
-	pipeOk: boolean;
-	exitCode: int32;
-	signal: int32;
-	output: string;
-	errorOutput: string;
-	startErrno: int32;
+	return finished(path, r);
 }
 
 // Like execFileCapture, but a child that ran reports every stream and status
 // whatever its exit code � `started` is false only when it never ran.
 export function execFileResult(path: string, args: string[] = [], cwd: string = ""): ExecFileResult {
-	const stdoutText = msProcessSpawnSyncArgv(path, args, cwd);
-	return {
-		started: msProcSpawnGetOk() != 0,
-		pipeOk: msProcSpawnGetPipeOk() != 0,
-		exitCode: msProcSpawnGetExitCode(),
-		signal: msProcSpawnGetSignal(),
-		output: textOf(stdoutText),
-		errorOutput: textOf(msProcSpawnGetStderr()),
-		startErrno: msProcSpawnGetErrno(),
-	};
+	const r = captureArgv(path, args, cwd);
+	return { ...r, output: textOf(r.output), errorOutput: textOf(r.errorOutput) };
 }
 
 // =============================================================================
@@ -222,23 +160,21 @@ export function execFileResult(path: string, args: string[] = [], cwd: string = 
 // Namespaced env API — Deno-style.
 export class env {
 	static get(name: string): string {
-		return msProcessGetEnv(name);
+		return getEnv(name);
 	}
 
 	static set(name: string, value: string): boolean {
-		return msProcessSetEnv(name, value) != 0.0;
+		return setEnv(name, value);
 	}
 
 	static delete(name: string): boolean {
-		return msProcessUnsetEnv(name) != 0.0;
+		return unsetEnv(name);
 	}
 }
 
 export function envPairs(): Map<string, string> {
 	const variables = new Map<string, string>();
-	for (let i = 0; true; i++) {
-		const entry = msProcessEnvAt(i);
-		if (entry == "") break;
+	for (const entry of environmentEntries()) {
 		const equals = entry.indexOf("=", 1);
 		if (equals > 0 && !entry.startsWith("=")) variables.set(entry.slice(0, equals), entry.slice(equals + 1));
 	}
@@ -256,11 +192,11 @@ export function envPairs(): Map<string, string> {
 // Matches Node/Bun/Deno: single string identifier, resolved once at module load.
 // Values: "windows" | "darwin" | "linux" | "other". Compare with `platform === "..."`.
 
-export const platform: string = msProcessPlatform();
+export const platform: string = platformName();
 
 // The CPU this program was compiled for, in `--cpu` spelling: "amd64" | "arm64" | "i386" |
 // "arm" | "wasm32" | "riscv64" | "other".
-export const arch: string = msProcessArch();
+export const arch: string = archName();
 
 // =============================================================================
 // Executable lookup (PATH search)

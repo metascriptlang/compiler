@@ -138,9 +138,8 @@ MS_TLS_PUBLISH(msErrPayload)
  * Held only for list-pointer swaps, never while callbacks execute. */
 _Atomic(int) gMsFutCbLock = 0;
 
-/* One spawn lock for the whole program (see _msSpawnCreateLock in runtime/process.h).
- * std/process and std/process/child each include that header into their own C file, so a
- * lock defined there would be one per file and would serialize nothing between them. */
+/* One spawn lock for the whole program, declared in runtime/spawnLock.h and taken by std/process
+ * around pipe creation and spawn: a lock defined in a module would be one per C file. */
 #ifdef _WIN32
 #include <windows.h>
 SRWLOCK _msSpawnCreateLock = SRWLOCK_INIT;

@@ -6,8 +6,6 @@
 // RED when onDestroy skips the kill/reap (pid still listed) or a pipe leaks (descriptor count on POSIX, handle count on Windows, grows).
 // RED on a compiler without `spawn` in std/process.
 
-@include("runtime/process.h");
-
 import { spawn, exit } from "std/process";
 import { host, listed, onWindows } from "./fixtures/childHost";
 import { readDir } from "std/fs";
@@ -19,10 +17,20 @@ function report(msg: string): void {
 	failed = failed + 1;
 }
 
-extern function msProcessHandleCount(): int32;
+when (windows) {
+	@include("windows.h");
+	extern type Dword: uint32 from "DWORD";
+	extern function GetCurrentProcess(): Ptr<void>;
+	extern function GetProcessHandleCount(process: Ptr<void>, ref count: Dword): int32;
 
-function openFds(): int32 {
-	return onWindows ? msProcessHandleCount() : readDir("/dev/fd").length as int32;
+	function openFds(): int32 {
+		let n: Dword = 0;
+		return GetProcessHandleCount(GetCurrentProcess(), n) != 0 ? n as int32 : -1;
+	}
+} else {
+	function openFds(): int32 {
+		return readDir("/dev/fd").length as int32;
+	}
 }
 
 function startAndDrop(program: string, args: string[]): int32 {

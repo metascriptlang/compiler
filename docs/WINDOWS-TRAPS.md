@@ -13,7 +13,7 @@ Only relevant when the dev box is Windows. On macOS/Linux hosts, skip.
 - **A Windows C test driver forwarding to another compiler must re-quote argv.**
   `_spawnv` joins the supplied strings into a command line; first-hop quoting
   does not survive that second hop. The native-boundary drivers use the same
-  MS CRT escaping algorithm as `runtime/process.h` `_msAppendWinArg`. Measured
+  MS CRT escaping algorithm as `std/process/winCommandLine.ms` `windowsArg`. Measured
   2026-10-05 on the `812f6661` integration candidate: the unquoted driver split
   `project outputs/local` and Zig rejected trailing `.d.tmp` tokens as inputs;
   the corrected driver passed 8/8 real project-cache cases in both spaced

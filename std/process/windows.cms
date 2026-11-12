@@ -1,0 +1,1064 @@
+when (windows) {
+	@include("errno.h");
+	@include("stdlib.h");
+	@include("string.h");
+	@include("wchar.h");
+	@include("windows.h");
+	@include("psapi.h");
+	@include("runtime/spawnLock.h");
+	@include("runtime/windowsEnvSort.h");
+
+	import {
+		ExecFileResult, CHILD_OK, CHILD_ENDED, CHILD_TIMEOUT, CHILD_PIPE_CLOSED, CHILD_OVERFLOW, CHILD_ERROR,
+		CHILD_BUFFER_CAP, SPAWN_MERGE_STDERR, SPAWN_OWN_GROUP,
+	} from "./outcome";
+	import { windowsCommandLine, quotedCommandLine, runsThroughCmd } from "./winCommandLine";
+
+	extern struct SrwLock from "SRWLOCK" {}
+	extern type Dword: uint32 from "DWORD";
+	extern struct SecurityAttributes from "SECURITY_ATTRIBUTES" {
+		nLength: uint32;
+		bInheritHandle: int32;
+		lpSecurityDescriptor: Ptr<void> | null;
+	}
+	extern struct ProcessMemoryCounters from "PROCESS_MEMORY_COUNTERS" { PeakWorkingSetSize: uint64; }
+	extern struct StartupInfoA from "STARTUPINFOA" {
+		cb: uint32;
+		dwFlags: uint32;
+		hStdInput: Ptr<void> | null;
+		hStdOutput: Ptr<void> | null;
+		hStdError: Ptr<void> | null;
+	}
+	extern struct StartupInfoW from "STARTUPINFOW" {
+		cb: uint32;
+		dwFlags: uint32;
+		hStdInput: Ptr<void> | null;
+		hStdOutput: Ptr<void> | null;
+		hStdError: Ptr<void> | null;
+	}
+	extern struct ProcessInformation from "PROCESS_INFORMATION" {
+		hProcess: Ptr<void> | null;
+		hThread: Ptr<void> | null;
+		dwProcessId: uint32;
+	}
+	extern struct LargeInteger from "LARGE_INTEGER" { QuadPart: int64; }
+
+	extern let _msSpawnCreateLock: SrwLock;
+	extern const EACCES: int32;
+	extern const EAGAIN: int32;
+	extern const EINVAL: int32;
+	extern const EIO: int32;
+	extern const EMFILE: int32;
+	extern const ENOENT: int32;
+	extern const ENOMEM: int32;
+	extern const ENOTSUP: int32;
+	extern const EPIPE: int32;
+	extern const STARTF_USESTDHANDLES: uint32;
+	extern const STD_INPUT_HANDLE: uint32;
+	extern const STD_OUTPUT_HANDLE: uint32;
+	extern const STD_ERROR_HANDLE: uint32;
+	extern const HANDLE_FLAG_INHERIT: uint32;
+	extern const PIPE_NOWAIT: uint32;
+	extern const INFINITE: uint32;
+	extern const WAIT_OBJECT_0: uint32;
+	extern const WAIT_TIMEOUT: uint32;
+	extern const CREATE_UNICODE_ENVIRONMENT: uint32;
+	extern const ERROR_FILE_NOT_FOUND: uint32;
+	extern const ERROR_PATH_NOT_FOUND: uint32;
+	extern const ERROR_ACCESS_DENIED: uint32;
+	extern const ERROR_BAD_EXE_FORMAT: uint32;
+	extern const ERROR_BROKEN_PIPE: uint32;
+	extern const ERROR_NO_DATA: uint32;
+	extern const ERROR_PIPE_NOT_CONNECTED: uint32;
+	extern const INVALID_FILE_ATTRIBUTES: uint32;
+	extern const FILE_ATTRIBUTE_DIRECTORY: uint32;
+	extern const CP_UTF8: uint32;
+	extern const CSTR_EQUAL: int32;
+
+	extern function AcquireSRWLockExclusive(ref lock: SrwLock): void;
+	extern function ReleaseSRWLockExclusive(ref lock: SrwLock): void;
+	extern function GetStdHandle(which: uint32): Ptr<void> | null;
+	extern function CloseHandle(h: Ptr<void>): int32;
+	extern function GetLastError(): uint32;
+	extern function CreatePipe(
+		ref read: Ptr<void> | null, ref write: Ptr<void> | null, ref attrs: SecurityAttributes, size: uint32,
+	): int32;
+	extern function SetHandleInformation(h: Ptr<void>, mask: uint32, flags: uint32): int32;
+	extern function SetNamedPipeHandleState(
+		h: Ptr<void>, ref mode: Dword, maxCount: Ptr<Dword> | null, timeout: Ptr<Dword> | null,
+	): int32;
+	extern function PeekNamedPipe(
+		h: Ptr<void>, buffer: Ptr<void> | null, size: uint32, read: Ptr<Dword> | null, ref avail: Dword,
+		left: Ptr<Dword> | null,
+	): int32;
+	extern function ReadFile(h: Ptr<void>, at: Ptr<uint8>, size: uint32, ref got: Dword, overlapped: Ptr<void> | null): int32;
+	extern function WriteFile(
+		h: Ptr<void>, at: Readonly<Ptr<uint8>>, size: uint32, ref put: Dword, overlapped: Ptr<void> | null,
+	): int32;
+	extern function CreateProcessA(
+		application: cstring | null, commandLine: Ptr<uint8>, processAttrs: Ptr<void> | null, threadAttrs: Ptr<void> | null,
+		inherit: int32, flags: uint32, environment: Ptr<void> | null, cwd: cstring | null, ref startup: StartupInfoA,
+		ref info: ProcessInformation,
+	): int32;
+	extern function CreateProcessW(
+		application: Ptr<uint16> | null, commandLine: Ptr<uint16>, processAttrs: Ptr<void> | null,
+		threadAttrs: Ptr<void> | null, inherit: int32, flags: uint32, environment: Ptr<uint16> | null,
+		cwd: Ptr<uint16> | null, ref startup: StartupInfoW, ref info: ProcessInformation,
+	): int32;
+	extern function WaitForSingleObject(h: Ptr<void>, ms: uint32): uint32;
+	extern function GetExitCodeProcess(h: Ptr<void>, ref code: Dword): int32;
+	extern function K32GetProcessMemoryInfo(h: Ptr<void>, ref counters: ProcessMemoryCounters, size: Dword): int32;
+	extern function TerminateProcess(h: Ptr<void>, code: uint32): int32;
+	extern function Sleep(ms: uint32): void;
+	extern function QueryPerformanceFrequency(ref value: LargeInteger): int32;
+	extern function QueryPerformanceCounter(ref value: LargeInteger): int32;
+	extern function GetFileAttributesW(path: Ptr<uint16>): uint32;
+	extern function GetCurrentDirectoryW(size: uint32, at: Ptr<uint16> | null): uint32;
+	extern function GetEnvironmentVariableW(name: Ptr<uint16>, at: Ptr<uint16> | null, size: uint32): uint32;
+	extern function NeedCurrentDirectoryForExePathW(name: Ptr<uint16>): int32;
+	extern function CompareStringOrdinal(a: Ptr<uint16>, aLength: int32, b: Ptr<uint16>, bLength: int32, ignoreCase: int32): int32;
+	extern function MultiByteToWideChar(
+		codePage: uint32, flags: uint32, text: Readonly<Ptr<uint8>>, length: int32, wide: Ptr<uint16> | null, room: int32,
+	): int32;
+	extern function WideCharToMultiByte(
+		codePage: uint32, flags: uint32, wide: Ptr<uint16>, length: int32, text: Ptr<uint8> | null, room: int32,
+		fallback: Ptr<void> | null, usedFallback: Ptr<void> | null,
+	): int32;
+	extern function wcslen(at: Ptr<uint16>): uint64;
+	extern function GetEnvironmentStringsW(): Ptr<uint16> | null;
+	extern function FreeEnvironmentStringsW(block: Ptr<uint16>): int32;
+	extern function cMemchr(at: Readonly<Ptr<uint8>>, value: int32, size: uint64): Ptr<uint8> | null from "memchr";
+	extern function cMemcpy(to: Ptr<uint16>, from: Ptr<uint16>, size: uint64): Ptr<uint16> from "memcpy";
+	extern function cMalloc(size: uint64): Ptr<uint8> | null from "malloc";
+	extern function cMallocWide(size: uint64): Ptr<uint16> | null from "malloc";
+	extern function cCallocWide(count: uint64, size: uint64): Ptr<uint16> | null from "calloc";
+	extern function cRealloc(at: Ptr<uint8>, size: uint64): Ptr<uint8> | null from "realloc";
+	extern function cFree(at: Ptr<uint8>): void from "free";
+	extern function cFreeWide(at: Ptr<uint16>): void from "free";
+	extern function msStringNew(data: cstring, length: int64): string;
+	extern function msWindowsEnvSort(items: Ptr<Ptr<uint16>>, count: uint64): void;
+
+	// Matches the errno Windows' CRT gives EFTYPE.
+	const EFTYPE: int32 = 4028;
+	const PIPE_SIZE: uint32 = 64 * 1024;
+	const WRITE_CHUNK: int64 = 1024;
+	const WRITE_ROUND: int64 = 65536;
+
+	// ===== UTF-16 =====
+
+	// `text` as a NUL-terminated wide string; ill-formed UTF-8 converts with replacement, as CreateProcessW's callers did.
+	function wideOf(text: string, backslashes: boolean): Ptr<uint16> | null {
+		const bytes = (text as cstring) as Ptr<uint8>;
+		const units = MultiByteToWideChar(CP_UTF8, 0, bytes, -1, null, 0);
+		if (units <= 0) return null;
+		const wide = cMallocWide((units as uint64) * 2);
+		if (wide == null) return null;
+		if (MultiByteToWideChar(CP_UTF8, 0, bytes, -1, wide, units) == 0) {
+			cFreeWide(wide);
+			return null;
+		}
+		if (backslashes) {
+			for (let i = 0; i < units; i++) {
+				if (wide[i] == 47) wide[i] = 92;
+			}
+		}
+		return wide;
+	}
+
+	export function utf8OfWide(wide: Ptr<uint16>): string {
+		const room = WideCharToMultiByte(CP_UTF8, 0, wide, -1, null, 0, null, null);
+		if (room <= 0) return "";
+		const bytes = cMalloc(room as uint64);
+		if (bytes == null) return "";
+		WideCharToMultiByte(CP_UTF8, 0, wide, -1, bytes, room, null, null);
+		const text = msStringNew(bytes as cstring, (room - 1) as int64);
+		cFree(bytes);
+		return text;
+	}
+
+	function freeWide(wide: Ptr<uint16> | null): void {
+		if (wide != null) cFreeWide(wide);
+	}
+
+	function closeHandle(h: Ptr<void> | null): void {
+		if (h != null) CloseHandle(h);
+	}
+
+	// ===== Growable pipe buffers =====
+
+	struct PipeBuffer {
+		h: Ptr<void> | null;
+		data: Ptr<uint8> | null;
+		len: int64;
+		cap: int64;
+		overflow: boolean;
+	}
+
+	function pipeBuffer(h: Ptr<void> | null): PipeBuffer {
+		return { h: h, data: null, len: 0, cap: 0, overflow: false };
+	}
+
+	function reserve(ref b: PipeBuffer, want: int64, first: int64): boolean {
+		if (b.len + want <= b.cap) return true;
+		let cap = b.cap == 0 ? first : b.cap;
+		while (cap < b.len + want) cap *= 2;
+		const old = b.data;
+		const grown = old == null ? cMalloc(cap as uint64) : cRealloc(old, cap as uint64);
+		if (grown == null) return false;
+		b.data = grown;
+		b.cap = cap;
+		return true;
+	}
+
+	function textOf(ref b: PipeBuffer): string {
+		const data = b.data;
+		if (data == null || b.len == 0) return "";
+		return msStringNew(data as cstring, b.len);
+	}
+
+	function release(ref b: PipeBuffer): void {
+		const data = b.data;
+		if (data != null) cFree(data);
+		b.data = null;
+		b.len = 0;
+		b.cap = 0;
+	}
+
+	function closeStream(ref b: PipeBuffer): void {
+		const h = b.h;
+		if (h != null) CloseHandle(h);
+		b.h = null;
+	}
+
+	// ===== Synchronous capture =====
+
+	struct CapturePipes {
+		ok: boolean;
+		outRead: Ptr<void> | null;
+		outWrite: Ptr<void> | null;
+		errRead: Ptr<void> | null;
+		errWrite: Ptr<void> | null;
+	}
+
+	function inheritable(): SecurityAttributes {
+		let sa: SecurityAttributes = { nLength: 0, bInheritHandle: 1, lpSecurityDescriptor: null };
+		sa.nLength = sizeof SecurityAttributes as uint32;
+		return sa;
+	}
+
+	// Pipe write ends the child inherits, read ends it does not; on failure every handle is closed.
+	function capturePipes(): CapturePipes {
+		let sa = inheritable();
+		let p: CapturePipes = { ok: false, outRead: null, outWrite: null, errRead: null, errWrite: null };
+		if (CreatePipe(p.outRead, p.outWrite, sa, PIPE_SIZE) == 0) return p;
+		p.ok = notInherited(p.outRead) && CreatePipe(p.errRead, p.errWrite, sa, PIPE_SIZE) != 0 && notInherited(p.errRead);
+		if (!p.ok) closeCapturePipes(p);
+		return p;
+	}
+
+	function notInherited(h: Ptr<void> | null): boolean {
+		return h != null && SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0) != 0;
+	}
+
+	function closeCapturePipes(ref p: CapturePipes): void {
+		closeHandle(p.outRead);
+		closeHandle(p.outWrite);
+		closeHandle(p.errRead);
+		closeHandle(p.errWrite);
+		p.outRead = null;
+		p.outWrite = null;
+		p.errRead = null;
+		p.errWrite = null;
+	}
+
+	const PUMP_MORE = 1;
+	const PUMP_END = 0;
+
+	// Whatever the pipe holds now, without blocking; PUMP_END at EOF (a broken pipe) or a failed allocation.
+	function pumpCapture(ref b: PipeBuffer, ref didRead: boolean): int32 {
+		const h = b.h;
+		if (h == null) return PUMP_END;
+		let avail: Dword = 0;
+		if (PeekNamedPipe(h, null, 0, null, avail, null) == 0) return PUMP_END;
+		if (avail == 0) return PUMP_MORE;
+		const want: int64 = avail > 4096 ? 4096 : avail as int64;
+		const data = reserve(b, want, 4096) ? b.data : null;
+		if (data == null) {
+			release(b);
+			b.overflow = true;
+			return PUMP_END;
+		}
+		let got: Dword = 0;
+		if (ReadFile(h, data + b.len, want as uint32, got, null) == 0 || got == 0) return PUMP_END;
+		didRead = true;
+		b.len += got as int64;
+		return PUMP_MORE;
+	}
+
+	function notStarted(startErrno: int32): ExecFileResult {
+		return {
+			started: false, pipeOk: true, exitCode: 0, signal: 0, output: "", errorOutput: "", startErrno: startErrno,
+		};
+	}
+
+	// Both pipes drain from one thread: reading stdout to EOF before stderr deadlocks a child that
+	// fills the stderr pipe first. The 1 ms backoff runs only while both are open and empty.
+	function finishCapture(outRead: Ptr<void> | null, errRead: Ptr<void> | null, info: ProcessInformation): ExecFileResult {
+		let streams: PipeBuffer[2] = [pipeBuffer(outRead), pipeBuffer(errRead)];
+		let open: boolean[2] = [true, true];
+		while (open[0] || open[1]) {
+			let didRead = false;
+			for (let s = 0; s < 2; s++) {
+				if (open[s] && pumpCapture(streams[s], didRead) == PUMP_END) open[s] = false;
+			}
+			if (!didRead && (open[0] || open[1])) Sleep(1);
+		}
+		closeStream(streams[0]);
+		closeStream(streams[1]);
+		const pipeOk = !streams[0].overflow && !streams[1].overflow;
+		const code = reap(info);
+		const output = textOf(streams[0]);
+		const errorOutput = textOf(streams[1]);
+		release(streams[0]);
+		release(streams[1]);
+		return {
+			started: true, pipeOk: pipeOk, exitCode: code as int32, signal: 0,
+			output: output, errorOutput: errorOutput, startErrno: 0,
+		};
+	}
+
+	function startErrno(lastError: uint32, exe: string): int32 {
+		if (lastError == ERROR_FILE_NOT_FOUND || lastError == ERROR_PATH_NOT_FOUND) return ENOENT;
+		if (lastError == ERROR_ACCESS_DENIED) {
+			const wide = wideOf(exe, false);
+			if (wide != null) {
+				const attrs = GetFileAttributesW(wide);
+				cFreeWide(wide);
+				if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0) return ENOENT;
+			}
+			return EACCES;
+		}
+		if (lastError == ERROR_BAD_EXE_FORMAT) return EFTYPE;
+		return 0;
+	}
+
+	function startupA(input: Ptr<void> | null, output: Ptr<void> | null, error: Ptr<void> | null): StartupInfoA {
+		let si: StartupInfoA = { cb: 0, dwFlags: STARTF_USESTDHANDLES, hStdInput: input, hStdOutput: output, hStdError: error };
+		si.cb = sizeof StartupInfoA as uint32;
+		return si;
+	}
+
+	function startupW(input: Ptr<void> | null, output: Ptr<void> | null, error: Ptr<void> | null): StartupInfoW {
+		let si: StartupInfoW = { cb: 0, dwFlags: STARTF_USESTDHANDLES, hStdInput: input, hStdOutput: output, hStdError: error };
+		si.cb = sizeof StartupInfoW as uint32;
+		return si;
+	}
+
+	function noProcess(): ProcessInformation {
+		return { hProcess: null, hThread: null, dwProcessId: 0 };
+	}
+
+	// CreateProcess with inheritance hands the child every inheritable handle in the process, so a
+	// concurrent spawn would leak this one's pipe write ends; the lock runs until both are closed here.
+	// /d skips cmd's AutoRun; /s with the whole command quoted keeps cmd from stripping its first and last quote.
+	export function captureShell(command: string): ExecFileResult {
+		AcquireSRWLockExclusive(_msSpawnCreateLock);
+		let pipes = capturePipes();
+		if (!pipes.ok) {
+			ReleaseSRWLockExclusive(_msSpawnCreateLock);
+			return notStarted(0);
+		}
+		const line = `cmd.exe /d /s /c "${command}"`;
+		let si = startupA(GetStdHandle(STD_INPUT_HANDLE), pipes.outWrite, pipes.errWrite);
+		let info = noProcess();
+		const ok = CreateProcessA(null, (line as cstring) as Ptr<uint8>, null, null, 1, 0, null, null, si, info) != 0;
+		closeHandle(pipes.outWrite);
+		closeHandle(pipes.errWrite);
+		ReleaseSRWLockExclusive(_msSpawnCreateLock);
+		if (!ok) {
+			closeHandle(pipes.outRead);
+			closeHandle(pipes.errRead);
+			return notStarted(0);
+		}
+		return finishCapture(pipes.outRead, pipes.errRead, info);
+	}
+
+	// `path` with no shell, through the search order CreateProcessW applies to the first token;
+	// a non-empty `cwd` is the child's directory.
+	export function captureArgv(path: string, args: Readonly<string[]>, cwd: string): ExecFileResult {
+		if (runsThroughCmd(path)) return notStarted(EINVAL);
+		AcquireSRWLockExclusive(_msSpawnCreateLock);
+		let pipes = capturePipes();
+		if (!pipes.ok) {
+			ReleaseSRWLockExclusive(_msSpawnCreateLock);
+			return notStarted(0);
+		}
+		const wideLine = wideOf(windowsCommandLine(path, args), false);
+		const wideCwd = cwd != "" ? wideOf(cwd, true) : null;
+		if (wideLine == null || (cwd != "" && wideCwd == null)) {
+			freeWide(wideLine);
+			freeWide(wideCwd);
+			closeCapturePipes(pipes);
+			ReleaseSRWLockExclusive(_msSpawnCreateLock);
+			return notStarted(0);
+		}
+		let si = startupW(GetStdHandle(STD_INPUT_HANDLE), pipes.outWrite, pipes.errWrite);
+		let info = noProcess();
+		const ok = CreateProcessW(null, wideLine, null, null, 1, 0, null, wideCwd, si, info) != 0;
+		const lastError = ok ? 0 : GetLastError();
+		freeWide(wideLine);
+		freeWide(wideCwd);
+		closeHandle(pipes.outWrite);
+		closeHandle(pipes.errWrite);
+		ReleaseSRWLockExclusive(_msSpawnCreateLock);
+		if (!ok) {
+			closeHandle(pipes.outRead);
+			closeHandle(pipes.errRead);
+			return notStarted(startErrno(lastError, path));
+		}
+		return finishCapture(pipes.outRead, pipes.errRead, info);
+	}
+
+	// Waits for the process, closes both its handles and gives its exit code.
+	function reap(info: ProcessInformation): uint32 {
+		let code: Dword = 0;
+		const process = info.hProcess;
+		if (process != null) {
+			WaitForSingleObject(process, INFINITE);
+			GetExitCodeProcess(process, code);
+			CloseHandle(process);
+		}
+		closeHandle(info.hThread);
+		return code;
+	}
+
+	// Inherits stdio and the environment; the exit code, or -1 when it never ran.
+	// lpApplicationName takes `path` with forward slashes as written.
+	export function runInherited(path: string, args: Readonly<string[]>): number {
+		if (runsThroughCmd(path)) return -1;
+		const full = quotedCommandLine(path, args);
+		let si = startupA(GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_OUTPUT_HANDLE), GetStdHandle(STD_ERROR_HANDLE));
+		let info = noProcess();
+		AcquireSRWLockExclusive(_msSpawnCreateLock);
+		const ok = CreateProcessA(path as cstring, (full as cstring) as Ptr<uint8>, null, null, 1, 0, null, null, si, info) != 0;
+		ReleaseSRWLockExclusive(_msSpawnCreateLock);
+		if (!ok) return -1;
+		return reap(info) as number;
+	}
+
+	// ===== Long-lived child =====
+
+	const CHILD_FIRST: int64 = 65536;
+
+	function nowMs(): number {
+		let freq: LargeInteger = { QuadPart: 0 };
+		let now: LargeInteger = { QuadPart: 0 };
+		QueryPerformanceFrequency(freq);
+		QueryPerformanceCounter(now);
+		return (now.QuadPart as number) * 1000 / (freq.QuadPart as number);
+	}
+
+	function remainingMs(deadline: number): int32 {
+		const left = deadline - nowMs();
+		if (left <= 0) return 0;
+		if (left >= 2147483647) return 2147483647;
+		return (left + 0.999) as int32;
+	}
+
+	export class ChildCore {
+		pid: int32;
+		lastErrno: int32;
+		written: int64;
+		private process: Ptr<void> | null;
+		private input: Ptr<void> | null;
+		private streams: PipeBuffer[2];
+		private reaped: boolean;
+		private code: int32;
+		private killedBy: int32;
+		private peak: int64;
+		private closed: boolean;
+
+		constructor(pid: int32, process: Ptr<void> | null, input: Ptr<void> | null, output: Ptr<void> | null, error: Ptr<void> | null) {
+			this.pid = pid;
+			this.lastErrno = 0;
+			this.written = 0;
+			this.process = process;
+			this.input = input;
+			this.streams = [pipeBuffer(output), pipeBuffer(error)];
+			this.reaped = false;
+			this.code = 0;
+			this.killedBy = 0;
+			this.peak = 0;
+			this.closed = false;
+		}
+
+		// One non-blocking read; true when bytes arrived or the stream ended. A pipe whose
+		// every write end closed reports ERROR_BROKEN_PIPE, which is EOF, not an error.
+		private fill(s: int32): boolean {
+			const h = this.streams[s].h;
+			if (h == null) return false;
+			let avail: Dword = 0;
+			if (PeekNamedPipe(h, null, 0, null, avail, null) == 0) {
+				if (GetLastError() != ERROR_BROKEN_PIPE) this.lastErrno = EIO;
+				closeStream(this.streams[s]);
+				return true;
+			}
+			if (avail == 0) return false;
+			const room = CHILD_BUFFER_CAP - this.streams[s].len;
+			let want = room < CHILD_FIRST ? room : CHILD_FIRST;
+			if ((avail as int64) < want) want = avail as int64;
+			const data = reserve(this.streams[s], want, CHILD_FIRST) ? this.streams[s].data : null;
+			if (data == null) {
+				this.lastErrno = ENOMEM;
+				return true;
+			}
+			let got: Dword = 0;
+			if (ReadFile(h, data + this.streams[s].len, want as uint32, got, null) == 0) {
+				if (GetLastError() != ERROR_BROKEN_PIPE) this.lastErrno = EIO;
+				closeStream(this.streams[s]);
+				return true;
+			}
+			this.streams[s].len += got as int64;
+			return true;
+		}
+
+		// One pump over the open pipes, bounded by timeoutMs; `progress` when it moved a byte or a
+		// stream ended. stdin is PIPE_NOWAIT: a byte-mode write that does not fit the free space
+		// returns 0 bytes, so the write goes in small chunks after the reads.
+		private pump(pending: string, done: int64, timeoutMs: int32, ref progress: boolean): int64 {
+			const deadline = nowMs() + (timeoutMs as number);
+			const size = pending.byteLength as int64;
+			let at = done;
+			while (true) {
+				progress = false;
+				for (let s = 0; s < 2; s++) {
+					if (this.streams[s].h == null) continue;
+					if (this.streams[s].len < CHILD_BUFFER_CAP) {
+						if (this.fill(s)) progress = true;
+					} else if (!this.streams[s].overflow) {
+						this.streams[s].overflow = true;
+						progress = true;
+					}
+				}
+				const input = this.input;
+				if (input != null && at < size) {
+					const bytes = (pending as cstring) as Ptr<uint8>;
+					let round: int64 = 0;
+					while (at < size && round < 65536) {
+						const left = size - at;
+						const want = left < 1024 ? left : 1024;
+						let put: Dword = 0;
+						if (WriteFile(input, bytes + at, want as uint32, put, null) == 0) {
+							const e = GetLastError();
+							this.lastErrno = e == ERROR_NO_DATA || e == ERROR_BROKEN_PIPE || e == ERROR_PIPE_NOT_CONNECTED ? EPIPE : EIO;
+							progress = true;
+							break;
+						}
+						if (put == 0) break;
+						at += put as int64;
+						round += put as int64;
+						progress = true;
+					}
+				}
+				if (progress) return at;
+				if (remainingMs(deadline) == 0) return at;
+				Sleep(1);
+			}
+		}
+
+		private pumpOnce(timeoutMs: int32): boolean {
+			let progress = false;
+			this.pump("", 0, timeoutMs, progress);
+			return progress;
+		}
+
+		write(data: string, timeoutMs: int64): int32 {
+			this.written = 0;
+			if (this.closed || this.input == null) return CHILD_PIPE_CLOSED;
+			const size = data.byteLength as int64;
+			let done: int64 = 0;
+			const deadline = nowMs() + (timeoutMs as number);
+			this.lastErrno = 0;
+			while (true) {
+				let progress = false;
+				done = this.pump(data, done, remainingMs(deadline), progress);
+				this.written = done;
+				if (this.lastErrno == EPIPE) return CHILD_PIPE_CLOSED;
+				if (this.lastErrno != 0) return CHILD_ERROR;
+				if (done == size) return CHILD_OK;
+				if (nowMs() >= deadline) return CHILD_TIMEOUT;
+			}
+		}
+
+		closeStdin(): void {
+			closeHandle(this.input);
+			this.input = null;
+		}
+
+		read(s: int32, timeoutMs: int64): int32 {
+			if (this.closed) return CHILD_PIPE_CLOSED;
+			const deadline = nowMs() + (timeoutMs as number);
+			this.lastErrno = 0;
+			let polled = false;
+			while (true) {
+				if (this.streams[s].overflow) {
+					this.streams[s].overflow = false;
+					return CHILD_OVERFLOW;
+				}
+				if (this.streams[s].len > 0) return CHILD_OK;
+				if (this.lastErrno != 0) return CHILD_ERROR;
+				if (this.streams[s].h == null) return CHILD_ENDED;
+				if (polled && nowMs() >= deadline) return CHILD_TIMEOUT;
+				this.pumpOnce(remainingMs(deadline));
+				polled = true;
+			}
+		}
+
+		take(s: int32): string {
+			const taken = textOf(this.streams[s]);
+			this.streams[s].len = 0;
+			return taken;
+		}
+
+		// A kill this handle sent reads as POSIX SIGKILL: exit 0, signal 9.
+		private record(process: Ptr<void>, killed: boolean): void {
+			let code: Dword = 0;
+			GetExitCodeProcess(process, code);
+			let memory: ProcessMemoryCounters = { PeakWorkingSetSize: 0 };
+			if (K32GetProcessMemoryInfo(process, memory, sizeof ProcessMemoryCounters as uint32) != 0) {
+				this.peak = memory.PeakWorkingSetSize as int64;
+			}
+			this.reaped = true;
+			this.code = killed ? 0 : code as int32;
+			this.killedBy = killed ? 9 : 0;
+		}
+
+		// The deadline leaves the child running; the pump runs between process polls.
+		wait(timeoutMs: int64): int32 {
+			const deadline = nowMs() + (timeoutMs as number);
+			let delayMs: int32 = 1;
+			while (!this.reaped) {
+				const process = this.process;
+				if (process == null) return CHILD_ERROR;
+				const got = WaitForSingleObject(process, 0);
+				if (got == WAIT_OBJECT_0) {
+					this.record(process, false);
+					while (this.pumpOnce(0)) {}
+					break;
+				}
+				if (got != WAIT_TIMEOUT) {
+					this.lastErrno = EIO;
+					return CHILD_ERROR;
+				}
+				if (this.pumpOnce(0)) continue;
+				const left = remainingMs(deadline);
+				if (left == 0) return CHILD_TIMEOUT;
+				WaitForSingleObject(process, (delayMs < left ? delayMs : left) as uint32);
+				delayMs = delayMs * 2 < 8 ? delayMs * 2 : 8;
+			}
+			return CHILD_OK;
+		}
+
+		// TerminateProcess, then a blocking wait; a child that exited first keeps its own status.
+		kill(): int32 {
+			if (this.reaped) return CHILD_OK;
+			const process = this.process;
+			if (process == null) return CHILD_ERROR;
+			const alreadyGone = WaitForSingleObject(process, 0) == WAIT_OBJECT_0;
+			if (!alreadyGone) TerminateProcess(process, 1);
+			if (WaitForSingleObject(process, INFINITE) != WAIT_OBJECT_0) {
+				this.lastErrno = EIO;
+				return CHILD_ERROR;
+			}
+			this.record(process, !alreadyGone);
+			return CHILD_OK;
+		}
+
+		exitCode(): int32 {
+			return this.code;
+		}
+
+		signal(): int32 {
+			return this.killedBy;
+		}
+
+		peakRss(): int64 {
+			return this.reaped && this.peak > 0 ? this.peak : -1;
+		}
+
+		close(): void {
+			if (this.closed) return;
+			this.kill();
+			this.closeStdin();
+			for (let s = 0; s < 2; s++) {
+				closeStream(this.streams[s]);
+				release(this.streams[s]);
+			}
+			closeHandle(this.process);
+			this.process = null;
+			this.closed = true;
+		}
+
+		onDestroy(): void {
+			this.close();
+		}
+	}
+
+	// ===== Supplied environment (derived from libuv, see libuv.LICENSE) =====
+
+	function keyUnits(pair: Ptr<uint16>): int32 {
+		let n = 0;
+		while (pair[n] != 0 && pair[n] != 61) n += 1;
+		return n;
+	}
+
+	function compareKeys(a: Ptr<uint16>, b: Ptr<uint16>): int32 {
+		return CompareStringOrdinal(a, keyUnits(a), b, keyUnits(b), 1) - CSTR_EQUAL;
+	}
+
+	function freeAll(items: Ptr<uint16>[]): void {
+		for (const item of items) cFreeWide(item);
+	}
+
+	// The parent's value of `name` as a wide `NAME=value`, or null when it has none.
+	function inheritedPair(name: string, ref error: int32): Ptr<uint16> | null {
+		const wideName = wideOf(name, false);
+		if (wideName == null) {
+			error = ENOMEM;
+			return null;
+		}
+		const size = GetEnvironmentVariableW(wideName, null, 0);
+		const key = wcslen(wideName);
+		const item = size == 0 ? null : cMallocWide((key + 1 + (size as uint64)) * 2);
+		if (item == null) {
+			cFreeWide(wideName);
+			if (size != 0) error = ENOMEM;
+			return null;
+		}
+		cMemcpy(item, wideName, key * 2);
+		item[key] = 61;
+		const got = GetEnvironmentVariableW(wideName, item + key + 1, size);
+		cFreeWide(wideName);
+		if (got == 0 || got >= size) {
+			cFreeWide(item);
+			if (got >= size) error = EAGAIN;
+			return null;
+		}
+		return item;
+	}
+
+	// CREATE_UNICODE_ENVIRONMENT's block: the supplied pairs plus the variables Windows needs that
+	// they lack, from the parent, sorted by key without case as Windows sorts them.
+	function environmentBlock(pairs: Readonly<string[]>, ref error: int32): Ptr<uint16> | null {
+		let supplied: Ptr<uint16>[] = [];
+		for (const pair of pairs) {
+			const holdsNul = cMemchr((pair as cstring) as Ptr<uint8>, 0, pair.byteLength as uint64) != null;
+			const wide = holdsNul ? null : wideOf(pair, false);
+			if (wide == null) {
+				error = holdsNul ? EINVAL : ENOMEM;
+				freeAll(supplied);
+				return null;
+			}
+			supplied.push(wide);
+		}
+		if (supplied.length > 1) msWindowsEnvSort((supplied as Span<Ptr<uint16>>) as Ptr<Ptr<uint16>>, supplied.length as uint64);
+		const required = [
+			"HOMEDRIVE", "HOMEPATH", "LOGONSERVER", "PATH", "SYSTEMDRIVE",
+			"SYSTEMROOT", "TEMP", "USERDOMAIN", "USERNAME", "USERPROFILE", "WINDIR",
+		];
+		let inherited: Ptr<uint16>[] = [];
+		for (const name of required) {
+			const wideName = wideOf(name, false);
+			if (wideName == null) {
+				error = ENOMEM;
+				break;
+			}
+			let present = false;
+			for (const item of supplied) {
+				if (CompareStringOrdinal(item, keyUnits(item), wideName, -1, 1) == CSTR_EQUAL) {
+					present = true;
+					break;
+				}
+			}
+			cFreeWide(wideName);
+			if (present) continue;
+			const pair = inheritedPair(name, error);
+			if (error != 0) break;
+			if (pair != null) inherited.push(pair);
+		}
+		if (error != 0) {
+			freeAll(supplied);
+			freeAll(inherited);
+			return null;
+		}
+		let units: uint64 = 1;
+		for (const item of supplied) units += wcslen(item) + 1;
+		for (const item of inherited) units += wcslen(item) + 1;
+		if (units < 2) units = 2;
+		const block = cCallocWide(units, 2);
+		if (block == null) {
+			error = ENOMEM;
+			freeAll(supplied);
+			freeAll(inherited);
+			return null;
+		}
+		let at: uint64 = 0;
+		let s = 0;
+		let i = 0;
+		while (s < supplied.length || i < inherited.length) {
+			const next = i == inherited.length || (s < supplied.length && compareKeys(supplied[s], inherited[i]) < 0)
+				? supplied[s++]
+				: inherited[i++];
+			const size = wcslen(next) + 1;
+			cMemcpy(block + at, next, size * 2);
+			at += size;
+		}
+		freeAll(supplied);
+		freeAll(inherited);
+		return block;
+	}
+
+	// Every NAME=value entry of this process's environment block, the hidden "=C:" ones included.
+	export function environmentEntries(): string[] {
+		const result: string[] = [];
+		const block = GetEnvironmentStringsW();
+		if (block == null) return result;
+		let at: int64 = 0;
+		while (block[at] != 0) {
+			const item = block + at;
+			result.push(utf8OfWide(item));
+			at += (wcslen(item) as int64) + 1;
+		}
+		FreeEnvironmentStringsW(block);
+		return result;
+	}
+
+	function blockPath(block: Ptr<uint16>): string {
+		let at: int64 = 0;
+		while (block[at] != 0) {
+			const item = block + at;
+			if (keyUnits(item) == 4 && utf8OfWide(item).toUpperCase().startsWith("PATH=")) return utf8OfWide(item + 5);
+			at += (wcslen(item) as int64) + 1;
+		}
+		return "";
+	}
+
+	// ===== The program a supplied environment's PATH finds (derived from libuv, see libuv.LICENSE) =====
+
+	const SEMICOLON: uint8 = 59;
+	const COLON: uint8 = 58;
+	const DQUOTE: uint8 = 34;
+	const SQUOTE: uint8 = 39;
+
+	function isSeparator(b: uint8): boolean {
+		return b == 92 || b == 47 || b == COLON;
+	}
+
+	function isSlash(b: uint8): boolean {
+		return b == 92 || b == 47;
+	}
+
+	function endsInSeparator(s: string): boolean {
+		const b = s.asBytes();
+		return b.length > 0 && isSeparator(b[b.length - 1]);
+	}
+
+	// `dir` resolved against `cwd` as Windows resolves a rooted, drive-relative or relative directory,
+	// then `name` with `ext`; the path when a file (not a directory) is there, else "".
+	function joinTest(dir: string, name: string, ext: string, cwd: string, ref error: int32): string {
+		const d = dir.asBytes();
+		const dn = d.length;
+		let base = cwd;
+		let rest = dir;
+		if (dn > 2 && isSlash(d[0]) && isSlash(d[1])) {
+			base = "";
+		} else if (dn > 0 && isSlash(d[0])) {
+			base = cwd.byteSlice(0, 2);
+		} else if (dn >= 2 && d[1] == COLON && (dn < 3 || !isSlash(d[2]))) {
+			if (cwd.byteLength < 2 || cwd.byteSlice(0, 2).toUpperCase() != dir.byteSlice(0, 2).toUpperCase()) base = "";
+			else rest = dir.byteSlice(2, dn);
+		} else if (dn > 2 && d[1] == COLON) {
+			base = "";
+		}
+		let candidate = base;
+		if (base != "" && !endsInSeparator(base)) candidate += "\\";
+		candidate += rest;
+		if (rest != "" && !endsInSeparator(candidate)) candidate += "\\";
+		candidate += name;
+		if (ext != "") {
+			if (name != "" && !candidate.endsWith(".")) candidate += ".";
+			candidate += ext;
+		}
+		const wide = wideOf(candidate, false);
+		if (wide == null) {
+			error = ENOMEM;
+			return "";
+		}
+		const attrs = GetFileAttributesW(wide);
+		cFreeWide(wide);
+		return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0 ? candidate : "";
+	}
+
+	function tryExtensions(dir: string, name: string, cwd: string, exact: boolean, ref error: int32): string {
+		let found = exact ? joinTest(dir, name, "", cwd, error) : "";
+		if (found == "" && error == 0) found = joinTest(dir, name, "com", cwd, error);
+		if (found == "" && error == 0) found = joinTest(dir, name, "exe", cwd, error);
+		return found;
+	}
+
+	function searchPath(file: string, cwd: string, path: string, ref error: int32): string {
+		const f = file.asBytes();
+		const fn = f.length;
+		if (fn == 0 || file == ".") return "";
+		let nameAt = fn;
+		while (nameAt > 0 && !isSeparator(f[nameAt - 1])) nameAt -= 1;
+		const name = file.byteSlice(nameAt, fn);
+		const dot = name.byteIndexOf(".");
+		const exact = dot >= 0 && dot + 1 < name.byteLength;
+		if (nameAt != 0) return tryExtensions(file.byteSlice(0, nameAt), name, cwd, exact, error);
+		let found = "";
+		const empty = wideOf("", false);
+		if (empty != null) {
+			const needCwd = NeedCurrentDirectoryForExePathW(empty) != 0;
+			cFreeWide(empty);
+			if (needCwd) found = tryExtensions("", file, cwd, exact, error);
+		}
+		const p = path.asBytes();
+		const pn = p.length;
+		let at = 0;
+		while (found == "" && error == 0 && at < pn) {
+			if (p[at] == SEMICOLON) {
+				at += 1;
+				continue;
+			}
+			let end = at;
+			if (p[at] == DQUOTE || p[at] == SQUOTE) {
+				end = at + 1;
+				while (end < pn && p[end] != p[at]) end += 1;
+			}
+			while (end < pn && p[end] != SEMICOLON) end += 1;
+			let from = at;
+			let size = end - at;
+			if (size > 0 && (p[from] == DQUOTE || p[from] == SQUOTE)) {
+				from += 1;
+				size -= 1;
+			}
+			if (size > 0 && (p[from + size - 1] == DQUOTE || p[from + size - 1] == SQUOTE)) size -= 1;
+			if (size > 0) found = tryExtensions(path.byteSlice(from, from + size), file, cwd, exact, error);
+			at = end < pn ? end + 1 : end;
+		}
+		return found;
+	}
+
+	function currentDirectory(): string {
+		const size = GetCurrentDirectoryW(0, null);
+		const wide = size == 0 ? null : cCallocWide(size as uint64, 2);
+		if (wide == null) return "";
+		const got = GetCurrentDirectoryW(size, wide);
+		const text = got == 0 || got >= size ? "" : utf8OfWide(wide);
+		cFreeWide(wide);
+		return text;
+	}
+
+	// The program CreateProcessW gets as lpApplicationName when the child has its own environment.
+	function executableIn(file: string, childCwd: string, block: Ptr<uint16>, ref error: int32): string {
+		const cwd = childCwd != "" ? childCwd : currentDirectory();
+		if (cwd == "") {
+			error = EINVAL;
+			return "";
+		}
+		const wideCwd = wideOf(cwd, false);
+		if (wideCwd == null) {
+			error = ENOMEM;
+			return "";
+		}
+		const attrs = GetFileAttributesW(wideCwd);
+		const lastError = GetLastError();
+		cFreeWide(wideCwd);
+		if (attrs == INVALID_FILE_ATTRIBUTES) {
+			error = lastError == ERROR_ACCESS_DENIED ? EACCES : ENOENT;
+			return "";
+		}
+		if ((attrs & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+			error = ENOENT;
+			return "";
+		}
+		const found = searchPath(file.replaceAll("/", "\\"), cwd, blockPath(block), error);
+		if (found == "" && error == 0) error = ENOENT;
+		return found;
+	}
+
+	// The child, or the errno that kept it from starting. Pipes and the spawn share the lock (see captureShell).
+	export function spawnChild(
+		path: string, args: Readonly<string[]>, cwd: string, flags: int32, environment: Readonly<string[]> | null,
+	): Result<ChildCore, int32> {
+		if ((flags & SPAWN_OWN_GROUP) != 0) return Result.err(ENOTSUP);
+		const mergeStderr = (flags & SPAWN_MERGE_STDERR) != 0;
+		if (runsThroughCmd(path)) return Result.err(EINVAL);
+		const wideLine = wideOf(windowsCommandLine(path, args), false);
+		const wideCwd = cwd != "" ? wideOf(cwd, true) : null;
+		if (wideLine == null || (cwd != "" && wideCwd == null)) {
+			freeWide(wideLine);
+			freeWide(wideCwd);
+			return Result.err(ENOMEM);
+		}
+		let failed: int32 = 0;
+		const block = environment != null ? environmentBlock(environment, failed) : null;
+		let executable: Ptr<uint16> | null = null;
+		if (block != null && failed == 0) {
+			const found = executableIn(path, cwd.replaceAll("/", "\\"), block, failed);
+			if (failed == 0) {
+				executable = wideOf(found, false);
+				if (executable == null) failed = ENOMEM;
+			}
+		}
+		if (failed != 0) {
+			freeWide(wideLine);
+			freeWide(wideCwd);
+			freeWide(block);
+			freeWide(executable);
+			return Result.err(failed);
+		}
+		let sa = inheritable();
+		let inRead: Ptr<void> | null = null;
+		let inWrite: Ptr<void> | null = null;
+		let outRead: Ptr<void> | null = null;
+		let outWrite: Ptr<void> | null = null;
+		let errRead: Ptr<void> | null = null;
+		let errWrite: Ptr<void> | null = null;
+		let nowait: Dword = PIPE_NOWAIT;
+		let info = noProcess();
+		AcquireSRWLockExclusive(_msSpawnCreateLock);
+		if (CreatePipe(inRead, inWrite, sa, PIPE_SIZE) == 0 || !notInherited(inWrite)) failed = EMFILE;
+		if (failed == 0 && (CreatePipe(outRead, outWrite, sa, PIPE_SIZE) == 0 || !notInherited(outRead))) failed = EMFILE;
+		if (failed == 0 && !mergeStderr && (CreatePipe(errRead, errWrite, sa, PIPE_SIZE) == 0 || !notInherited(errRead))) {
+			failed = EMFILE;
+		}
+		const input = inWrite;
+		if (failed == 0 && (input == null || SetNamedPipeHandleState(input, nowait, null, null) == 0)) failed = EIO;
+		if (failed == 0) {
+			let si = startupW(inRead, outWrite, mergeStderr ? outWrite : errWrite);
+			const flags = environment != null ? CREATE_UNICODE_ENVIRONMENT : 0;
+			if (CreateProcessW(executable, wideLine, null, null, 1, flags, block, wideCwd, si, info) == 0) {
+				failed = startErrno(GetLastError(), path);
+				if (failed == 0) failed = EINVAL;
+			}
+		}
+		closeHandle(inRead);
+		closeHandle(outWrite);
+		closeHandle(errWrite);
+		ReleaseSRWLockExclusive(_msSpawnCreateLock);
+		freeWide(wideLine);
+		freeWide(wideCwd);
+		freeWide(block);
+		freeWide(executable);
+		if (failed != 0) {
+			closeHandle(inWrite);
+			closeHandle(outRead);
+			closeHandle(errRead);
+			return Result.err(failed);
+		}
+		closeHandle(info.hThread);
+		return Result.ok(new ChildCore(info.dwProcessId as int32, info.hProcess, inWrite, outRead, errRead));
+	}
+}

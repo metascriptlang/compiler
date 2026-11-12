@@ -1297,8 +1297,8 @@ function planJobs(specs: Spec[]): BuildJob[] {
 // ---- scheduler ----
 
 // One build, as it runs on a pool worker. Everything here must be safe off
-// the main thread: exec() keeps its result in thread-local state (see the
-// _Thread_local block in runtime/process.h) and the only files touched are
+// the main thread: exec() returns its whole result rather than leaving it in
+// shared state, and the only files touched are
 // this cell's own dir, so no two workers share a path.
 //
 // The verdict comes back as a plain int rather than an interface, matching

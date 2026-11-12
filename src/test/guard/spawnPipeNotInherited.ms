@@ -1,7 +1,7 @@
 // nim-guard: a capture spawn never waits on a process it did not start. Nim keeps the
 // handles its stdlib creates non-inheritable (changelog 1.4, syncio `setInheritable`);
 // the capture pipes follow it, and pipe creation never interleaves with another
-// thread's spawn (runtime/process.h `_msSpawnCreateLock`, as on Windows).
+// thread's spawn (`_msSpawnCreateLock` in std/process/posix.cms, as on Windows).
 //
 // RED PRE-FIX: some captures wait ~2 s for a grandchild that inherited their write end.
 // GREEN POST-FIX: no capture waits on the grandchildren.

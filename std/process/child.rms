@@ -1,5 +1,5 @@
 // A long-lived child process — Raiser tier. Same surface as child.cms: the msProcChild kernels are
-// host bridges (hostTable.ms) over the same runtime/process.h the C tier links, and a handle is an
+// host bridges (hostTable.ms) over the same std/process/native ChildCore the C tier runs, and a handle is an
 // index into the host's child table, whose live entries are killed and reaped when the VM run ends.
 //
 // Every blocking call takes a deadline in milliseconds; 0 polls once. A read, write or wait

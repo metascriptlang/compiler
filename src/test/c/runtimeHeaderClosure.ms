@@ -50,5 +50,5 @@ test "the header every generated module includes reaches no Windows SDK header" 
 
 test "the closure scan follows quoted includes to a Windows SDK header" {
 	const root = resolveRuntimeDir();
-	assert windowsSdkIncludesReachedFrom(root, join(root, "runtime/process.h")).length > 0;
+	assert windowsSdkIncludesReachedFrom(root, join(root, "runtime/spawnLock.h")).length > 0;
 }

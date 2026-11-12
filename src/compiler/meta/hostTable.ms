@@ -84,6 +84,8 @@ import { join, resolve } from "std/fs/path";
 import { registerCompileTimeRead, registerCompileTimeEnv, registerCompileTimeProcess } from "../cache";
 import { IoError, IoErrorKind } from "std/io/errors";
 import { ProcessErrorKind } from "std/process/errors";
+import { ChildCore, spawnChild, spawnUnsupported, captureShell, captureArgv, runInherited } from "std/process/native";
+import { ExecFileResult } from "std/process/outcome";
 import "std/compress/zip";
 import { HashAlgorithm, init as cryptoInit, cleanup as cryptoCleanup, encodedHash, digestSync, isHashSupported } from "std/crypto/pure/coreNative";
 
@@ -292,9 +294,7 @@ function _stdFsChangeStamp(args: RaiserValue[]): RaiserValue {
 	return boxString(changeStamp(unboxString(args[0])));
 }
 
-function _stdProcessExecFileResult(args: RaiserValue[]): RaiserValue {
-	registerCompileTimeProcess();
-	const r = execFileResult(unboxString(args[0]), args.length > 1 ? _unboxStringArrayArg(args[1]) : [], args.length > 2 ? unboxString(args[2]) : "");
+function _vmExecFileResult(r: ExecFileResult): RaiserValue {
 	return _toVm(hostObject(
 		["started", "pipeOk", "exitCode", "signal", "output", "errorOutput", "startErrno"],
 		[
@@ -302,6 +302,38 @@ function _stdProcessExecFileResult(args: RaiserValue[]): RaiserValue {
 			hostString(r.output), hostString(r.errorOutput), hostValue(boxInt(r.startErrno)),
 		],
 	));
+}
+
+function _stdProcessCaptureShell(args: RaiserValue[]): RaiserValue {
+	registerCompileTimeProcess();
+	return _vmExecFileResult(captureShell(unboxString(args[0])));
+}
+
+function _stdProcessCaptureArgv(args: RaiserValue[]): RaiserValue {
+	registerCompileTimeProcess();
+	return _vmExecFileResult(captureArgv(unboxString(args[0]), _unboxStringArrayArg(args[1]), unboxString(args[2])));
+}
+
+function _stdProcessRunInherited(args: RaiserValue[]): RaiserValue {
+	registerCompileTimeProcess();
+	return boxFloat(runInherited(unboxString(args[0]), _unboxStringArrayArg(args[1])));
+}
+
+function _stdProcessSpawnUnsupported(args: RaiserValue[]): RaiserValue {
+	return boxBool(spawnUnsupported(unboxInt(args[0]) as int32));
+}
+
+function _stdProcessSetEnv(args: RaiserValue[]): RaiserValue {
+	return boxBool(machineEnv.set(unboxString(args[0]), unboxString(args[1])));
+}
+
+function _stdProcessUnsetEnv(args: RaiserValue[]): RaiserValue {
+	return boxBool(machineEnv.delete(unboxString(args[0])));
+}
+
+function _stdProcessExecFileResult(args: RaiserValue[]): RaiserValue {
+	registerCompileTimeProcess();
+	return _vmExecFileResult(execFileResult(unboxString(args[0]), args.length > 1 ? _unboxStringArrayArg(args[1]) : [], args.length > 2 ? unboxString(args[2]) : ""));
 }
 
 // --- File system bridges ---
@@ -511,10 +543,8 @@ function _bridgeMsProcSpawnGetErrno(args: RaiserValue[]): RaiserValue {
 	return boxInt(_spawnErrno);
 }
 
-extern function msProcSpawnGetUnsupported(): int32;
-
 function _bridgeMsProcSpawnGetUnsupported(args: RaiserValue[]): RaiserValue {
-	return boxInt(msProcSpawnGetUnsupported());
+	return boxInt(spawnUnsupported(_spawnErrno as int32) ? 1 : 0);
 }
 
 function _bridgeMsProcSpawnGetExitCode(args: RaiserValue[]): RaiserValue {
@@ -603,68 +633,43 @@ function _bridgeMsProcessSpawnSyncArgv(args: RaiserValue[]): RaiserValue {
 
 
 // --- std/process/child bridges ---
-// The VM sees an index into _children, never the native pointer, so a forged or
+// The VM sees an index into _children, never the ChildCore, so a forged or
 // stale handle is refused instead of dereferenced. closeHostChildren kills and
 // reaps whatever the program left open when its run ends.
 
-@include("runtime/process.h");
+const _children: (ChildCore | null)[] = [];
 
-extern function msProcChildSpawn(path: string, args: string[], cwd: string, mergeStderr: int32): int64;
-extern function msProcChildSpawnEnv(
-	path: string, args: string[], cwd: string, mergeStderr: int32,
-	environment: string[],
-): int64;
-extern function msProcChildIsUnsupported(spawnResult: int64): int32;
-extern function msProcChildPid(h: int64): int32;
-extern function msProcChildErrno(h: int64): int32;
-extern function msProcChildWritten(h: int64): int64;
-extern function msProcChildWrite(h: int64, data: string, timeoutMs: int64): int32;
-extern function msProcChildCloseStdin(h: int64): void;
-extern function msProcChildRead(h: int64, stream: int32, timeoutMs: int64): int32;
-extern function msProcChildTake(h: int64, stream: int32): string;
-extern function msProcChildWait(h: int64, timeoutMs: int64): int32;
-extern function msProcChildKill(h: int64): int32;
-extern function msProcChildExitCode(h: int64): int32;
-extern function msProcChildSignal(h: int64): int32;
-extern function msProcChildPeakRss(h: int64): int64;
-extern function msProcChildClose(h: int64): void;
-extern function msProcChildFree(h: int64): void;
-
-const _children: int64[] = [];
-
-function _childOf(v: RaiserValue): int64 {
+function _childOf(v: RaiserValue): ChildCore | null {
 	const id = unboxInt(v) as int64;
-	if (id < 1 || id > _children.length || _children[id - 1] == 0) {
-		raiseFromHost(`ChildProcess handle ${id} is not a live child of this run`, true);
-		return 0;
-	}
-	return _children[id - 1];
+	const child = id >= 1 && id <= _children.length ? _children[id - 1] : null;
+	if (child == null) raiseFromHost(`ChildProcess handle ${id} is not a live child of this run`, true);
+	return child;
 }
 
 export function closeHostChildren(): void {
-	for (const h of _children) {
-		if (h != 0) msProcChildFree(h);
+	for (const child of _children) {
+		if (child != null) child.close();
 	}
 	_children.length = 0;
 }
 
-function _trackHostChild(handle: int64): RaiserValue {
-	if (handle <= 0) { return raiserInt(handle); }
-	_children.push(handle);
+function _trackHostChild(started: Result<ChildCore, int32>): RaiserValue {
+	if (!started.ok) return raiserInt(-(started.error as int64));
+	_children.push(started.value);
 	return raiserInt(_children.length as int64);
 }
 
 function _bridgeMsProcChildSpawn(args: RaiserValue[]): RaiserValue {
 	registerCompileTimeProcess();
-	return _trackHostChild(msProcChildSpawn(
+	return _trackHostChild(spawnChild(
 		unboxString(args[0]), _unboxStringArrayArg(args[1]),
-		unboxString(args[2]), unboxInt(args[3]) as int32,
+		unboxString(args[2]), unboxInt(args[3]) as int32, null,
 	));
 }
 
 function _bridgeMsProcChildSpawnEnv(args: RaiserValue[]): RaiserValue {
 	registerCompileTimeProcess();
-	return _trackHostChild(msProcChildSpawnEnv(
+	return _trackHostChild(spawnChild(
 		unboxString(args[0]), _unboxStringArrayArg(args[1]),
 		unboxString(args[2]), unboxInt(args[3]) as int32,
 		_unboxStringArrayArg(args[4]),
@@ -672,81 +677,81 @@ function _bridgeMsProcChildSpawnEnv(args: RaiserValue[]): RaiserValue {
 }
 
 function _bridgeMsProcChildIsUnsupported(args: RaiserValue[]): RaiserValue {
-	return boxInt(msProcChildIsUnsupported(unboxInt(args[0]) as int64));
+	return boxInt(spawnUnsupported(-(unboxInt(args[0]) as int32)) ? 1 : 0);
 }
 
 function _bridgeMsProcChildPid(args: RaiserValue[]): RaiserValue {
-	const h = _childOf(args[0]);
-	return h == 0 ? raiserNil() : boxInt(msProcChildPid(h));
+	const c = _childOf(args[0]);
+	return c == null ? raiserNil() : boxInt(c.pid);
 }
 
 function _bridgeMsProcChildErrno(args: RaiserValue[]): RaiserValue {
-	const h = _childOf(args[0]);
-	return h == 0 ? raiserNil() : boxInt(msProcChildErrno(h));
+	const c = _childOf(args[0]);
+	return c == null ? raiserNil() : boxInt(c.lastErrno);
 }
 
 function _bridgeMsProcChildWritten(args: RaiserValue[]): RaiserValue {
-	const h = _childOf(args[0]);
-	return h == 0 ? raiserNil() : raiserInt(msProcChildWritten(h));
+	const c = _childOf(args[0]);
+	return c == null ? raiserNil() : raiserInt(c.written);
 }
 
 function _bridgeMsProcChildWrite(args: RaiserValue[]): RaiserValue {
-	const h = _childOf(args[0]);
-	return h == 0 ? raiserNil() : boxInt(msProcChildWrite(h, unboxString(args[1]), unboxInt(args[2]) as int64));
+	const c = _childOf(args[0]);
+	return c == null ? raiserNil() : boxInt(c.write(unboxString(args[1]), unboxInt(args[2]) as int64));
 }
 
 function _bridgeMsProcChildCloseStdin(args: RaiserValue[]): RaiserValue {
-	const h = _childOf(args[0]);
-	if (h != 0) msProcChildCloseStdin(h);
+	const c = _childOf(args[0]);
+	if (c != null) c.closeStdin();
 	return raiserNil();
 }
 
 function _bridgeMsProcChildRead(args: RaiserValue[]): RaiserValue {
-	const h = _childOf(args[0]);
-	return h == 0 ? raiserNil() : boxInt(msProcChildRead(h, unboxInt(args[1]) as int32, unboxInt(args[2]) as int64));
+	const c = _childOf(args[0]);
+	return c == null ? raiserNil() : boxInt(c.read(unboxInt(args[1]) as int32, unboxInt(args[2]) as int64));
 }
 
 function _bridgeMsProcChildTake(args: RaiserValue[]): RaiserValue {
-	const h = _childOf(args[0]);
-	return h == 0 ? raiserNil() : boxString(msProcChildTake(h, unboxInt(args[1]) as int32));
+	const c = _childOf(args[0]);
+	return c == null ? raiserNil() : boxString(c.take(unboxInt(args[1]) as int32));
 }
 
 function _bridgeMsProcChildWait(args: RaiserValue[]): RaiserValue {
-	const h = _childOf(args[0]);
-	return h == 0 ? raiserNil() : boxInt(msProcChildWait(h, unboxInt(args[1]) as int64));
+	const c = _childOf(args[0]);
+	return c == null ? raiserNil() : boxInt(c.wait(unboxInt(args[1]) as int64));
 }
 
 function _bridgeMsProcChildKill(args: RaiserValue[]): RaiserValue {
-	const h = _childOf(args[0]);
-	return h == 0 ? raiserNil() : boxInt(msProcChildKill(h));
+	const c = _childOf(args[0]);
+	return c == null ? raiserNil() : boxInt(c.kill());
 }
 
 function _bridgeMsProcChildExitCode(args: RaiserValue[]): RaiserValue {
-	const h = _childOf(args[0]);
-	return h == 0 ? raiserNil() : boxInt(msProcChildExitCode(h));
+	const c = _childOf(args[0]);
+	return c == null ? raiserNil() : boxInt(c.exitCode());
 }
 
 function _bridgeMsProcChildSignal(args: RaiserValue[]): RaiserValue {
-	const h = _childOf(args[0]);
-	return h == 0 ? raiserNil() : boxInt(msProcChildSignal(h));
+	const c = _childOf(args[0]);
+	return c == null ? raiserNil() : boxInt(c.signal());
 }
 
 function _bridgeMsProcChildPeakRss(args: RaiserValue[]): RaiserValue {
-	const h = _childOf(args[0]);
-	return h == 0 ? raiserNil() : boxInt(msProcChildPeakRss(h) as number);
+	const c = _childOf(args[0]);
+	return c == null ? raiserNil() : boxInt(c.peakRss() as number);
 }
 
 function _bridgeMsProcChildClose(args: RaiserValue[]): RaiserValue {
-	const h = _childOf(args[0]);
-	if (h != 0) msProcChildClose(h);
+	const c = _childOf(args[0]);
+	if (c != null) c.close();
 	return raiserNil();
 }
 
 function _bridgeMsProcChildFree(args: RaiserValue[]): RaiserValue {
-	const h = _childOf(args[0]);
-	if (h != 0) {
-		msProcChildFree(h);
-		_children[(unboxInt(args[0]) as int64) - 1] = 0;
+	const c = _childOf(args[0]);
+	if (c != null) {
+		c.close();
+		_children[(unboxInt(args[0]) as int64) - 1] = null;
 	}
 	return raiserNil();
 }
@@ -1647,6 +1652,7 @@ const SYSTEM_ROUTED: string[] = [
 	"std/fs.copyFile", "std/fs.mkdir", "std/fs.ensureDir", "std/fs.rmdir", "std/fs.remove", "std/fs.removeAll",
 	"std/fs.rename", "std/fs.symlink", "msFsCopyFile", "msFsMkdir", "msFsRmdir", "msFsRemove", "msFsRename",
 	"msFsSymlink", "msFsReadDirEntries", "msProcessCwd", "msProcessGetEnv", "msProcessExecPath",
+	"std/process/host.currentDirectory", "std/process/host.getEnv", "std/process/host.executablePath",
 ];
 
 export function ensureHostTableLoaded(): void {
@@ -1749,6 +1755,21 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msProcessExecFile",     _bridgeMsProcessExecFile);
 	registerHostFn("msProcessSpawnSyncArgv", _bridgeMsProcessSpawnSyncArgv);
 	registerHostFn("std/process.execFileResult", _stdProcessExecFileResult);
+	// The C tier's OS leaves, keyed by routine: a @comptime in a C build runs std/process's .cms bodies.
+	registerHostFn("std/process/host.currentDirectory", _bridgeMsProcessCwd);
+	registerHostFn("std/process/host.platformName", _bridgeMsProcessPlatform, HostCapability.Local);
+	registerHostFn("std/process/host.archName", _bridgeMsProcessArch, HostCapability.Local);
+	registerHostFn("std/process/host.executablePath", _bridgeMsProcessExecPath);
+	registerHostFn("std/process/host.getEnv", _bridgeMsProcessGetEnv);
+	registerHostFn("std/process/host.setEnv", _stdProcessSetEnv);
+	registerHostFn("std/process/host.unsetEnv", _stdProcessUnsetEnv);
+	registerHostFn("std/process/host.argvList", _bridgeMsProcessArgv, HostCapability.Local);
+	registerHostFn("std/process/native.spawnUnsupported", _stdProcessSpawnUnsupported, HostCapability.Pure);
+	for (const side of ["posix", "windows"]) {
+		registerHostFn(`std/process/${side}.captureShell`, _stdProcessCaptureShell);
+		registerHostFn(`std/process/${side}.captureArgv`, _stdProcessCaptureArgv);
+		registerHostFn(`std/process/${side}.runInherited`, _stdProcessRunInherited);
+	}
 	registerHostFn("msProcChildSpawn", _bridgeMsProcChildSpawn, HostCapability.ChildProcess);
 	registerHostFn(
 		"msProcChildSpawnEnv", _bridgeMsProcChildSpawnEnv,

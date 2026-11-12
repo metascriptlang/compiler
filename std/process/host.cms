@@ -1,0 +1,203 @@
+@include("stdlib.h");
+@include("runtime/processHost.h");
+
+extern const MS_PROCESS_ARCH: cstring;
+extern function msTestErrorFlag(): void;
+extern function cExit(code: int32): never from "exit";
+extern function getenv(name: cstring): cstring | null;
+extern function msStringNew(data: cstring, length: int64): string;
+
+// The CPU this program was compiled for, in `--cpu` spelling.
+export function archName(): string {
+	return MS_PROCESS_ARCH as string;
+}
+
+export function platformName(): string {
+	when (windows) {
+		return "windows";
+	} else when (macos || ios) {
+		return "darwin";
+	} else when (linux || android) {
+		return "linux";
+	} else {
+		return "other";
+	}
+}
+
+export function exitProcess(code: number): never {
+	msTestErrorFlag();
+	cExit(code as int32);
+}
+
+export function getEnv(name: string): string {
+	const value = getenv(name as cstring);
+	return value == null ? "" : value as string;
+}
+
+when (windows) {
+	@include("windows.h");
+	@include("direct.h");
+	@include("shellapi.h");
+
+	import { utf8OfWide } from "./windows";
+
+	extern const CP_UTF8: uint32;
+	extern const STD_OUTPUT_HANDLE: uint32;
+	extern const STD_ERROR_HANDLE: uint32;
+	extern const ENABLE_VIRTUAL_TERMINAL_PROCESSING: uint32;
+	extern type Dword: uint32 from "DWORD";
+	extern function _putenv_s(name: cstring, value: cstring): int32;
+	extern function _getcwd(at: Ptr<uint8>, size: int32): Ptr<uint8> | null;
+	extern function GetCommandLineW(): Ptr<uint16>;
+	extern function CommandLineToArgvW(line: Ptr<uint16>, ref count: int32): Ptr<Ptr<uint16>> | null;
+	extern function LocalFree(at: Ptr<Ptr<uint16>>): Ptr<void> | null;
+	extern function GetModuleFileNameW(module: Ptr<void> | null, at: Ptr<uint16>, size: uint32): uint32;
+	extern function SetConsoleOutputCP(page: uint32): int32;
+	extern function SetConsoleCP(page: uint32): int32;
+	extern function GetStdHandle(which: uint32): Ptr<void> | null;
+	extern function GetConsoleMode(h: Ptr<void>, ref mode: Dword): int32;
+	extern function SetConsoleMode(h: Ptr<void>, mode: uint32): int32;
+
+	export function setEnv(name: string, value: string): boolean {
+		return _putenv_s(name as cstring, value as cstring) == 0;
+	}
+
+	export function unsetEnv(name: string): boolean {
+		return _putenv_s(name as cstring, "") == 0;
+	}
+
+	export function currentDirectory(): string {
+		let buf: uint8[4096] = [];
+		const at = (buf as Span<uint8>) as Ptr<uint8>;
+		if (_getcwd(at, 4096) == null) return "";
+		return (at as cstring) as string;
+	}
+
+	export function argvList(): string[] {
+		const result: string[] = [];
+		let count: int32 = 0;
+		const wide = CommandLineToArgvW(GetCommandLineW(), count);
+		if (wide == null) return result;
+		for (let i = 0; i < count; i++) result.push(utf8OfWide(wide[i]));
+		LocalFree(wide);
+		return result;
+	}
+
+	export function executablePath(): string {
+		let buf: uint16[32768] = [];
+		const at = (buf as Span<uint16>) as Ptr<uint16>;
+		const n = GetModuleFileNameW(null, at, 32768);
+		if (n == 0 || n >= 32768) return "";
+		return utf8OfWide(at);
+	}
+
+	function enableTerminalSequences(h: Ptr<void> | null): void {
+		let mode: Dword = 0;
+		if (h != null && GetConsoleMode(h, mode) != 0) SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+	}
+
+	// UTF-8 code pages so non-ASCII output is not CP437 mojibake, and VT processing so a child's
+	// ANSI sequences (zig cc's progress lines, colours) are interpreted rather than printed.
+	SetConsoleOutputCP(CP_UTF8);
+	SetConsoleCP(CP_UTF8);
+	enableTerminalSequences(GetStdHandle(STD_OUTPUT_HANDLE));
+	enableTerminalSequences(GetStdHandle(STD_ERROR_HANDLE));
+} else {
+	@include("unistd.h");
+
+	extern function setenv(name: cstring, value: cstring, overwrite: int32): int32;
+	extern function unsetenv(name: cstring): int32;
+	extern function getcwd(at: Ptr<uint8>, size: uint64): Ptr<uint8> | null;
+	extern let cmdCount: int32;
+	extern let cmdLine: Ptr<cstring> | null;
+
+	export function setEnv(name: string, value: string): boolean {
+		return setenv(name as cstring, value as cstring, 1) == 0;
+	}
+
+	export function unsetEnv(name: string): boolean {
+		return unsetenv(name as cstring) == 0;
+	}
+
+	export function currentDirectory(): string {
+		let buf: uint8[4096] = [];
+		const at = (buf as Span<uint8>) as Ptr<uint8>;
+		if (getcwd(at, 4096) == null) return "";
+		return (at as cstring) as string;
+	}
+
+	when (macos || ios) {
+		@include("crt_externs.h");
+		@include("mach-o/dyld.h");
+
+		extern function _NSGetArgc(): Ptr<int32>;
+		extern function _NSGetArgv(): Ptr<Ptr<cstring>>;
+		extern function _NSGetExecutablePath(at: Ptr<uint8> | null, ref size: uint32): int32;
+		extern function cMalloc(size: uint64): Ptr<uint8> | null from "malloc";
+		extern function cFree(at: Ptr<uint8>): void from "free";
+
+		export function argvList(): string[] {
+			const result: string[] = [];
+			const count = _NSGetArgc()[0];
+			const argv = _NSGetArgv()[0];
+			for (let i = 0; i < count; i++) result.push(argv[i] as string);
+			return result;
+		}
+
+		export function executablePath(): string {
+			let size: uint32 = 0;
+			_NSGetExecutablePath(null, size);
+			const buf = cMalloc((size + 1) as uint64);
+			if (buf == null) return "";
+			const text = _NSGetExecutablePath(buf, size) == 0 ? (buf as cstring) as string : "";
+			cFree(buf);
+			return text;
+		}
+	} else when (linux || android) {
+		@include("fcntl.h");
+
+		extern const O_RDONLY: int32;
+		extern function open(path: cstring, flags: int32): int32;
+		extern function cRead(fd: int32, at: Ptr<uint8>, size: uint64): int64 from "read";
+		extern function cClose(fd: int32): int32 from "close";
+		extern function readlink(path: cstring, at: Ptr<uint8>, size: uint64): int64;
+
+		// /proc/self/cmdline holds each argument followed by a NUL.
+		export function argvList(): string[] {
+			const fd = open("/proc/self/cmdline", O_RDONLY);
+			if (fd < 0) return [];
+			let whole = "";
+			let chunk: uint8[4096] = [];
+			const at = (chunk as Span<uint8>) as Ptr<uint8>;
+			let n = cRead(fd, at, 4096);
+			while (n > 0) {
+				whole += msStringNew(at as cstring, n);
+				n = cRead(fd, at, 4096);
+			}
+			cClose(fd);
+			const parts = whole.split("\u0000");
+			parts.pop();
+			return parts;
+		}
+
+		export function executablePath(): string {
+			let buf: uint8[4096] = [];
+			const at = (buf as Span<uint8>) as Ptr<uint8>;
+			const n = readlink("/proc/self/exe", at, 4095);
+			if (n <= 0) return "";
+			return msStringNew(at as cstring, n);
+		}
+	} else {
+		export function argvList(): string[] {
+			const result: string[] = [];
+			const argv = cmdLine;
+			if (argv == null) return result;
+			for (let i = 0; i < cmdCount; i++) result.push(argv[i] as string);
+			return result;
+		}
+
+		export function executablePath(): string {
+			return "";
+		}
+	}
+}
