@@ -1384,12 +1384,30 @@ static inline void msActorRetireState(msActor* a) {
     msRootsAdopt(&a->roots);
 }
 
+/* Do NOT free a popped message: pop made it the new tail stub, freed by the next pop or by
+ * msMpscDestroy. I20: each pending CALL's reply fails (BEAM {noproc}) so its caller unblocks. */
+static inline void msActorDropMailbox(msActor* a) {
+    msMessage* dm;
+    while ((dm = msMpscPop(&a->mailbox)) != NULL) {
+        if (dm->replyFuture != NULL) msMsgReplyFail(dm->replyFuture);
+        msMsgDrop(dm, a->dropMsg);
+    }
+}
+
+/* A sender pins the shell before it reads alive, so with no pin left none is between that read
+ * and its push: only now can the mailbox go, with what such senders pushed after the destroy. */
+static inline void msActorFreeUnpinned(msActor* a) {
+    msActorDropMailbox(a);
+    msMpscDestroy(&a->mailbox);
+    msActorJobsFree(a);
+    msMemFree(a);
+}
+
 static inline void msActorFreeShell(msActor* a) {
     if (msHazardScan(a)) {
         msActorDeferRetire(a);
     } else {
-        msActorJobsFree(a);
-        msMemFree(a);
+        msActorFreeUnpinned(a);
     }
 }
 
@@ -1443,20 +1461,8 @@ static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
         msMsgSetDouble(downMsg, 2, (double)reason);  /* exit reason */
         msActorSend(watcher, downMsg);  /* send clears the pin */
     }
-    /* Step 4: drain remaining messages. Do NOT free the popped message — pop
-     * already made it the new tail stub (freed by the next pop, or by
-     * msMpscDestroy below). Freeing it here frees the live tail, and the
-     * next pop reads freed memory.
-     * I20: fail each pending CALL's reply future (BEAM {noproc}) so callers
-     * awaiting a now-reaped actor unblock instead of hanging. */
-    {
-        msMessage* dm;
-        while ((dm = msMpscPop(&a->mailbox)) != NULL) {
-            if (dm->replyFuture != NULL) msMsgReplyFail(dm->replyFuture);
-            msMsgDrop(dm, a->dropMsg);
-        }
-    }
-    msMpscDestroy(&a->mailbox);
+    /* Step 4: drain remaining messages; the mailbox itself lives until the shell is freed. */
+    msActorDropMailbox(a);
     if (a->jobs != NULL) {
         msActor* prevActor = msCurrentActor;
         msCurrentActor = a;
@@ -2057,8 +2063,7 @@ static inline bool msActorPollLocal(void) {
                 atomic_store_explicit(&d->runNext, sched->deferredFree, memory_order_relaxed);
                 sched->deferredFree = d;
             } else {
-                msActorJobsFree(d);
-                msMemFree(d);
+                msActorFreeUnpinned(d);
                 didWork = true;
             }
             d = nx;
