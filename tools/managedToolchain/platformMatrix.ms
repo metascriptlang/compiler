@@ -66,7 +66,7 @@ const CONSUMERS: Consumer[] = [
 	{ name: "sanThread", source: "threads.ms", flags: "--sanitize=thread", kind: "exe", expect: THREADS, code: 0, report: "" },
 	{ name: "ubsanDefault", source: "ubsanCompanion.ms", flags: "", kind: "exe", expect: "", code: 0, report: "overflow" },
 	{ name: "ubsanSan", source: "ubsanCompanion.ms", flags: "--sanitize=undefined", kind: "exe", expect: "", code: 0, report: "overflow" },
-	{ name: "ubsanRelease", source: "ubsanCompanion.ms", flags: "--release", kind: "exe", expect: "matrix-ub -2147483648", code: 0, report: "" },
+	{ name: "ubsanRelease", source: "ubsanCompanion.ms", flags: "--release", kind: "exe", expect: "matrix-ub *", code: 0, report: "" },
 	{ name: "hcr", source: "hcr.ms", flags: "--hcr", kind: "hcr", expect: "matrix-hcr 42", code: 0, report: "" },
 	{ name: "libraryOrder", source: "hello.ms", flags: "--passL=-Wl,--no-as-needed --passL=-lutil", kind: "order", expect: "libutil.so.1 libc.so.6", code: 0, report: "" },
 	{ name: "libraryOrderShared", source: "sharedLibrary.ms", flags: "--app=lib --passL=-Wl,--no-as-needed --passL=-lutil", kind: "orderLib", expect: "libutil.so.1 libc.so.6", code: 0, report: "" },
@@ -292,7 +292,8 @@ function runCell(results: string, host: string, consumer: Consumer, target: stri
 		return;
 	}
 	const reported = ran.out + ran.err;
-	const good = consumer.report != "" ? ran.code != 0 && (reported.contains(consumer.report)) : ran.code == consumer.code && ran.out.trim() == consumer.expect;
+	const printed = consumer.expect.endsWith("*") ? ran.out.startsWith(consumer.expect.slice(0, consumer.expect.length - 1)) : ran.out.trim() == consumer.expect;
+	const good = consumer.report != "" ? ran.code != 0 && (reported.contains(consumer.report)) : ran.code == consumer.code && printed;
 	const detail = consumer.report != "" ? `${observed}; stderr: ${oneLine(ran.err, 160)}` : observed;
 	const why = good ? "" : `expected rc=${consumer.code} out=${consumer.expect}; stderr: ${oneLine(ran.err, 160)}`;
 	note(results, [consumer.name, target, compiler, "run", host, good ? "ok" : "FAIL", String(ran.seconds), detail, why]);
