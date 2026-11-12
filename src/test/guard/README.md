@@ -81,6 +81,15 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   function signature (`hashType` tyProc / `sameInstantiation`; NIM-REF CK-52). Two nullable-fn fields of different arity: a
   collapse re-erases the 2nd's arity → checker "expected at most 0" → build RED.
   Proven RED on the pre-fix compiler, GREEN post-fix (drc+orc).
+- **`jsBundleKeepsOnlyWhatRuns.ms`** — a `--target=js` bundle holds a top-level function, class, enum
+  or effect-free binding only when something that runs names it: a statement that runs on load, a
+  bundle export, or a declaration already kept, as the reference's JS backend emits a proc and a
+  const on use and every top-level statement always. Builds a hello and a `JSON.parse` program as
+  bundles (default and `--danger`), runs each under node and reads the text: hello holds no JSON
+  parser and no `Error` class, the JSON program holds the parser and its used class and neither its
+  unused class nor the function only that class calls. A host without `node` prints GUARD-SKIP.
+  Proven RED on the compiler of `e21c6e7c3666` (rtx: every bundle holds the whole prelude), GREEN
+  on the fix (rtx, 2026-11-12).
 - **`solanaConstFoldLinks.ms`**, **`solanaWritableBinding.ms`** (`GUARD-OS solana`) —
   scalar module consts fold before the SBF link, which keeps only `.text` and
   `.rodata` (`getConstExpr`); a binding that still needs writable storage is
