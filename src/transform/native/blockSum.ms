@@ -13,7 +13,7 @@
 // multiply, negate and range checks, so the sticky block changes nothing but its own locals and the checked
 // BODY re-runs a block it refuses and stops at the exact element.
 
-import { Node, NodeKind, Symbol, Type, TypeKind, DeclKind, SourceLocation, BinaryExprData, UnaryExprData, CallExprData, BlockStmtData, ExprStmtData, VariableDeclData, MemberExprData, ArrayAccessData, WhileStmtData, HiddenStdConvData, HiddenDerefData, NumberLiteralData, TypeAssertionData, ConditionalExprData, NodeFlag } from "../../ast/node";
+import { Node, NodeKind, Symbol, SymbolFlag, Type, TypeKind, DeclKind, SourceLocation, BinaryExprData, UnaryExprData, CallExprData, BlockStmtData, ExprStmtData, VariableDeclData, MemberExprData, ArrayAccessData, WhileStmtData, HiddenStdConvData, HiddenDerefData, NumberLiteralData, TypeAssertionData, ConditionalExprData, NodeFlag } from "../../ast/node";
 import { peelToRepr, peelTransparentInstance, getSysType, booleanType } from "../../checker/types";
 import { TransformContext, freshTempSym } from "../context";
 import { makeCall, runtimeRef, generatedRef, makeIdentResolved, cloneIdent, makeVarDecl, makeBlock, makeWhile, makeIf, makeBinary, makeUnary, makeAssign, makeExprStmt, makeHiddenDeref, makeHiddenStdConv, makeConditional, isRuntimeProcCall } from "../util";
@@ -22,9 +22,12 @@ import { clonePlace } from "../place";
 import { isSignedKind, bitsOfKind } from "../numKinds";
 import { forEachChild } from "../../ast/visitor";
 import { cloneFresh } from "../lowering/iterInline";
+import { hasFlag } from "../../checker/symbol";
+import { cloneNodeKeepSem } from "../../monomorphize/clone";
 
 type SumLoop = { acc: Node, sub: boolean, index: Node, bounds: Node[], decls: Node[], term: Node };
 type Fast = { bad: Symbol, counters: HashSet<Symbol>, guarded: Node[], ranges: HashMap<Symbol, Range>, counterChecks: Range[], loc: SourceLocation };
+type StoreLoop = { index: Node, bounds: Node[], body: Node[], states: Symbol[], views: Symbol[] };
 type Range = { lo: int64, hi: int64 };
 type Wrapped = { op: string, a: Symbol, b: Symbol | null, overflow: Symbol };
 
@@ -501,6 +504,194 @@ function sumLoop(s: SumLoop, loop: Node, ctx: TransformContext): Node {
 	const checked = makeBlock([makeWhile(inBlock, w.whileBody, loc)], loc);
 	head.push(makeIf(fits, take, checked, loc));
 	return makeWhile(w.whileCondition, makeBlock(head, loc), loc);
+}
+
+export function versionStoreLoop(loop: Node, ctx: TransformContext): Node | null {
+	const s = matchStoreLoop(loop);
+	return s == null ? null : storeLoop(s, loop, ctx);
+}
+
+function matchStoreLoop(loop: Node): StoreLoop | null {
+	const w = loop.data as WhileStmtData;
+	if (w.whileLabel != "" || w.whileBody.kind != NodeKind.BlockStmt) return null;
+	const bounds: Node[] = [];
+	const index = boundedIndex(w.whileCondition, bounds);
+	if (index == null) return null;
+	const stmts = flatStatements(w.whileBody);
+	if (stmts.length < 2 || !isStep(stmts[stmts.length - 1], index)) return null;
+	const body = stmts.slice(0, stmts.length - 1);
+	const states: Symbol[] = [];
+	let stores = 0;
+	for (const st of body) {
+		if (st.kind == NodeKind.VariableDecl) {
+			const init = (st.data as VariableDeclData).initializer;
+			if (st.resolvedSym == null || !isScalar(st.resolvedSym.symbolType) || init == null || !isPure(init, null)) return null;
+		} else if (storedView(st, index) != null) {
+			stores += 1;
+		} else {
+			const state = steppedState(st, index);
+			if (state == null) return null;
+			states.push(state);
+		}
+	}
+	if (stores == 0) return null;
+	for (const v of states) {
+		let readsIt = 0;
+		for (const st of body) {
+			if (reads(st, v)) readsIt += 1;
+		}
+		for (const b of bounds) {
+			if (reads(b, v)) return null;
+		}
+		if (readsIt != 1) return null;
+	}
+	const views: Symbol[] = [];
+	for (const st of body) {
+		if (!collectViews(st, views)) return null;
+	}
+	for (const st of body) {
+		for (const target of views) {
+			const own = storedView(st, index) == target;
+			const read = own ? reads(((st.data as ExprStmtData).expr.data as BinaryExprData).right, target) : reads(st, target);
+			if (read && storesInto(body, target, index)) return null;
+		}
+	}
+	for (const b of bounds) {
+		if (reads(b, index.resolvedSym!) && !sameLocal(b, index)) return null;
+	}
+	return { index, bounds, body, states, views };
+}
+
+function storedView(stmt: Node, index: Node): Symbol | null {
+	if (stmt.kind != NodeKind.ExprStmt) return null;
+	const e = (stmt.data as ExprStmtData).expr;
+	if (e.kind != NodeKind.BinaryExpr || (e.data as BinaryExprData).operator != "=") return null;
+	const d = e.data as BinaryExprData;
+	if (d.left.kind != NodeKind.ArrayAccess) return null;
+	const slot = d.left.data as ArrayAccessData;
+	if (slot.array.kind != NodeKind.Identifier || !isWholeArrayView(slot.array) || !sameLocal(slot.index, index)) return null;
+	if (!isIntegral(elementType(slot.array)) || !isIntegral(d.right.nodeType) || !isPure(d.right, null)) return null;
+	return slot.array.resolvedSym;
+}
+
+function storesInto(body: Node[], view: Symbol, index: Node): boolean {
+	for (const st of body) {
+		if (storedView(st, index) == view) return true;
+	}
+	return false;
+}
+
+function steppedState(stmt: Node, index: Node): Symbol | null {
+	if (stmt.kind != NodeKind.ExprStmt) return null;
+	const e = (stmt.data as ExprStmtData).expr;
+	if (e.kind != NodeKind.BinaryExpr) return null;
+	const d = e.data as BinaryExprData;
+	if ((d.operator != "+=" && d.operator != "-=") || d.left.kind != NodeKind.Identifier || d.left.resolvedSym == null || sameLocal(d.left, index)) return null;
+	const r = peelToRepr(d.left.nodeType);
+	const float = r != null && (r.kind == TypeKind.Number || r.kind == TypeKind.Float64);
+	return float && d.right.kind == NodeKind.NumberLiteral ? d.left.resolvedSym : null;
+}
+
+function collectViews(n: Node, views: Symbol[]): boolean {
+	if (n.kind == NodeKind.ArrayAccess || n.kind == NodeKind.MemberExpr) {
+		const a = n.kind == NodeKind.ArrayAccess ? (n.data as ArrayAccessData).array : (n.data as MemberExprData).object;
+		if (elementType(a) != null) {
+			if (a.kind != NodeKind.Identifier || !isWholeArrayView(a)) return false;
+			if (!views.includes(a.resolvedSym!)) views.push(a.resolvedSym!);
+		}
+	}
+	let ok = true;
+	forEachChild(n, (c: Node): void => {
+		if (ok && !collectViews(c, views)) ok = false;
+	});
+	return ok;
+}
+
+function isWholeArrayView(a: Node): boolean {
+	return a.resolvedSym != null && isSpan(a.nodeType) && hasFlag(a.resolvedSym!, SymbolFlag.WholeArrayView);
+}
+
+function storeLoop(s: StoreLoop, loop: Node, ctx: TransformContext): Node {
+	const w = loop.data as WhileStmtData;
+	const loc = loop.location;
+	const i64 = getSysType(TypeKind.Int64);
+	const indexType = s.index.nodeType!;
+	const head: Node[] = [];
+	const end = declareLocal(head, ctx, "end", i64, blockEnd(s.index, s.bounds, loc), DeclKind.Const, loc);
+	const bad = declareLocal(head, ctx, "bad", booleanType(), makeBool(false, loc), DeclKind.Let, loc);
+	const j = declareLocal(head, ctx, "j", indexType, cloneIdent(s.index, loc), DeclKind.Let, loc);
+	const renames = new HashMap<Symbol, Symbol>();
+	renames.set(s.index.resolvedSym!, j);
+	const copies: Symbol[] = [];
+	for (const v of s.states) {
+		const copy = declareLocal(head, ctx, "state", v.symbolType!, makeIdentResolved(v, loc), DeclKind.Let, loc);
+		renames.set(v, copy);
+		copies.push(copy);
+	}
+	const f: Fast = { bad, counters: new HashSet<Symbol>(), guarded: [], ranges: new HashMap<Symbol, Range>(), counterChecks: [], loc };
+	f.counters.add(j);
+	const fast: Node[] = [];
+	const stored: Symbol[] = [];
+	for (const st of s.body) {
+		const view = storedView(st, s.index);
+		if (view != null) {
+			const d = (st.data as ExprStmtData).expr.data as BinaryExprData;
+			const value = sticky(cloneFresh(d.right, renames, ctx, true), f);
+			const slot = makeCall(generatedRef("msSpanAccessUnchecked", loc), [makeIdentResolved(view, loc), makeIdentResolved(j, loc)], loc);
+			slot.nodeType = d.left.nodeType;
+			fast.push(makeExprStmt(makeAssign(slot, value, loc), loc));
+			f.guarded.push(makeIdentResolved(view, loc));
+			if (!stored.includes(view)) stored.push(view);
+			continue;
+		}
+		const copy = cloneFresh(st, renames, ctx, true);
+		if (st.kind == NodeKind.VariableDecl) {
+			const init = (copy.data as VariableDeclData).initializer;
+			if (copy.resolvedSym != null && init != null && isIntegral(copy.resolvedSym!.symbolType) && counterOf(init, f.counters) != null) f.counters.add(copy.resolvedSym!);
+			const r = copy.resolvedSym != null && init != null ? wrap(rangeOf(init, f), copy.resolvedSym!.symbolType) : null;
+			fast.push(sticky(copy, f));
+			if (r != null) f.ranges.set(copy.resolvedSym!, r);
+		} else fast.push(copy);
+	}
+	const one = makeIntNumber(1, loc);
+	one.nodeType = indexType;
+	fast.push(makeExprStmt(makeAssign(makeIdentResolved(j, loc), typed(makeBinary(makeIdentResolved(j, loc), "+", one, loc), indexType), loc), loc));
+	for (const a of f.guarded) {
+		const within = typed(makeCall(runtimeRef(isSpan(a.nodeType) ? "msBlockWithinSpan" : "msBlockWithin", loc), [a, wide(cloneIdent(s.index, loc), loc), makeIdentResolved(end, loc)], loc), booleanType());
+		head.push(markBad(bad, typed(makeUnaryNot(within, loc), booleanType()), loc));
+	}
+	for (const r of f.counterChecks) {
+		const below = typed(makeBinary(wide(cloneIdent(s.index, loc), loc), "<", int64(r.lo, loc), loc), booleanType());
+		const above = typed(makeBinary(makeIdentResolved(end, loc), ">", int64(r.hi + 1, loc), loc), booleanType());
+		head.push(markBad(bad, typed(makeBinary(below, "||", above, loc), booleanType()), loc));
+	}
+	for (const target of stored) {
+		for (const v of s.views) {
+			if (v == target) continue;
+			const same = typed(makeCall(runtimeRef("msBlockSameData", loc), [makeIdentResolved(target, loc), makeIdentResolved(v, loc)], loc), booleanType());
+			head.push(markBad(bad, same, loc));
+		}
+	}
+	const fastLoop = makeWhile(typed(makeBinary(wide(makeIdentResolved(j, loc), loc), "<", makeIdentResolved(end, loc), loc), booleanType()), makeBlock(fast, loc), loc);
+	head.push(makeIf(typed(makeUnaryNot(makeIdentResolved(bad, loc), loc), booleanType()), makeBlock([fastLoop], loc), null, loc));
+	const take: Node[] = [];
+	for (let k = 0; k < s.states.length; k++) take.push(assignTo(s.states[k], makeIdentResolved(copies[k], loc), loc));
+	take.push(makeExprStmt(makeAssign(cloneIdent(s.index, loc), narrow(makeIdentResolved(end, loc), indexType, loc), loc), loc));
+	const inBlock = typed(makeBinary(wide(cloneIdent(s.index, loc), loc), "<", makeIdentResolved(end, loc), loc), booleanType());
+	const checked = makeBlock([makeWhile(inBlock, w.whileBody, loc)], loc);
+	head.push(makeIf(typed(makeUnaryNot(makeIdentResolved(bad, loc), loc), booleanType()), makeBlock(take, loc), checked, loc));
+	return makeWhile(w.whileCondition, makeBlock(head, loc), loc);
+}
+
+function blockEnd(index: Node, bounds: Node[], loc: SourceLocation): Node {
+	const i64 = getSysType(TypeKind.Int64);
+	let bound = wide(cloneNodeKeepSem(bounds[0]), loc);
+	for (let k = 1; k < bounds.length; k++) {
+		const next = wide(cloneNodeKeepSem(bounds[k]), loc);
+		const less = typed(makeBinary(bound, "<", next, loc), booleanType());
+		bound = typed(makeConditional(less, cloneNodeKeepSem(bound), cloneNodeKeepSem(next), loc), i64);
+	}
+	return typed(makeCall(runtimeRef("msBlockEndOf", loc), [wide(cloneIdent(index, loc), loc), bound, int64(REDUCE_BLOCK, loc)], loc), i64);
 }
 
 // The block's magnitude bound always holds -1 and 0, so only a check that lets both through can be tested on it.

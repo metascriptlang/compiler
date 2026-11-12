@@ -19,7 +19,7 @@ import { makeCall, runtimeRef, makeIdentResolved, cloneIdent, makeVarDecl, makeB
 import { makeIntNumber } from "../../checker/literalNodes";
 import { clonePlace } from "../place";
 import { isSignedKind, bitsOfKind } from "../numKinds";
-import { versionSumLoop, REDUCE_BLOCK } from "./blockSum";
+import { versionSumLoop, versionStoreLoop, REDUCE_BLOCK } from "./blockSum";
 
 type Reduce = { acc: Node, op: string, term: Node };
 type Reduction = { acc: Node, op: string, arrays: Node[], index: Node, len: Node, widthTag: string };
@@ -33,7 +33,9 @@ function versionLoop(loop: Node, ctx: TransformContext): Node {
 	const r = matchReduction(loop);
 	if (r == null) {
 		const sum = versionSumLoop(loop, ctx);
-		return sum != null ? sum : loop;
+		if (sum != null) return sum;
+		const stored = versionStoreLoop(loop, ctx);
+		return stored != null ? stored : loop;
 	}
 	const w = loop.data as WhileStmtData;
 	const loc = loop.location;

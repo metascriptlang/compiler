@@ -132,6 +132,7 @@ import "./loopSpanCacheEmit";
 import "./exactIntegerNumberEmit";
 import "./blockSumEmit";
 import "./lambdaLeafEmit";
+import "./blockStoreEmit";
 import "./presizedPushEmit";
 import "./literalTagDispatch";
 import "./templateIntPartEmit";
