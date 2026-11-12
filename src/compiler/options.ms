@@ -58,6 +58,7 @@ export interface CliOptions {
 	abi: string;               // --abi=<gnu|musl>: libc of a linux target; "" = gnu
 	targetInfo: TargetInfo;
 	genDeps: boolean;
+	depFile: string;           // --depfile=<path>: write the files this build read, as a make rule
 	forceRebuild: boolean;
 	cacheDir: string;
 	globalCacheDir: string;
@@ -189,6 +190,7 @@ export function newCliOptions(): CliOptions {
 		abi: "",
 		targetInfo: hostTargetInfo(),
 		genDeps: false,
+		depFile: "",
 		forceRebuild: false,
 		cacheDir: "",
 		globalCacheDir: "",
@@ -469,6 +471,8 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 			}
 		} else if (arg == "--gendeps") {
 			opts.genDeps = true;
+		} else if (arg.startsWith("--depfile=")) {
+			opts.depFile = arg.slice(10, arg.length);
 		} else if (arg == "--force" || arg == "-f") {
 			opts.forceRebuild = true;
 		} else if (arg == "--cache-dir" || arg.startsWith("--cache-dir=") ||

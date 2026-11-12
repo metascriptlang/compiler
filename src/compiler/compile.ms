@@ -99,7 +99,7 @@ import { compileC, compileCFile, trimRootList, withoutPreprocessorArgs, objectCo
 import { defineIdentity, createDefineTable, initDefines, applyDefineSwitch, isDefined } from "./defines";
 import { resolveCC, requirePreparedToolchain } from "./toolchain";
 import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects } from "../utils/linkState";
-import { initCache, buildStartMark, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, projectRecordCurrent, writeProjectCache, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, headerSearch, invalidateCompileCache, isLinkCached, writeLinkCache, linkStoreKey, restoreLinked, publishLinked, cacheDir, headerModuleKey, lookupHeaderModule, storeHeaderModule, toolchainStamp, compilerStamp, objectStamp, stdTreeStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
+import { initCache, buildStartMark, stableOFileFp, fullCompileCmd, isCompileCached, objectStoreKey, nativeStoreSource, moduleStoreSource, restoreNativeObject, restoreModuleObject, publishToStore, computeFingerprint, publishNativeObject, nativeDepFile, registerNativeDependencies, projectCacheChanged, projectRecordCurrent, writeProjectCache, writeProjectDepFile, stableCFileFp, isCCodeCached, writeCSource, writeCompileFingerprintFp, moduleCompileFp, moduleObjectFp, moduleDepFile, publishModuleObject, headerSearch, invalidateCompileCache, isLinkCached, writeLinkCache, linkStoreKey, restoreLinked, publishLinked, cacheDir, headerModuleKey, lookupHeaderModule, storeHeaderModule, toolchainStamp, compilerStamp, objectStamp, stdTreeStamp, writePchManifest, pchManifestCurrent, setToolchainHeaderRoot } from "./cache";
 import { stampMemoRoot } from "../utils/cachePaths";
 import { hashContent } from "../utils/contentHash";
 import { lineText } from "../utils/sourceLines";
@@ -3897,6 +3897,7 @@ function buildCPhases(entryPath: string, opts: CliOptions, session: BuildSession
 	const recordDecides = !session.keep && !opts.emitC && !opts.isHcr && !opts.hcrHost && !opts.genDeps;
 	if (recordDecides && projectRecordCurrent(outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags)) {
 		printDiag(success("Up to date") + " " + bold(outBinary));
+		if (opts.depFile != "") writeProjectDepFile(opts.depFile, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 		session.lastBuilt = true;
 		return BuildStatus.UpToDate;
 	}
@@ -3962,6 +3963,7 @@ resetLiftedOps();
 	const upToDate = !opts.emitC && (session.keep ? lastBuilt && session.check.rechecked.size == 0 && hcrBundleCurrent : !projectChanged && hcrBundleCurrent);
 	if (upToDate) {
 		printDiag(success("Up to date") + " " + bold(outBinary));
+		if (opts.depFile != "") writeProjectDepFile(opts.depFile, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 		if (opts.genDeps) {
 			const depsDir = outDirForMode(opts.mode);
 			ensureDir(depsDir);
@@ -4690,6 +4692,7 @@ resetLiftedOps();
 		const relinkedPaths = linkHcrImages(oSlots, moduleSlots, jobPaths, hcrCoreSlot, hcrImageSlots, hcrModulePaths, hcrModules, entryPath, outBinary, allFlags, coreBaseFlags, opts);
 		if (hcrBuildAbi != null) publishHcrBuildAbi(hcrBuildAbi, relinkedPaths);
 		writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
+		if (opts.depFile != "") writeProjectDepFile(opts.depFile, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 		if (session.keep && cJobs.length <= PLANNED_COMPILE_JOBS) ensurePchs(cJobs, opts.mode, opts.ccCompiler, opts.ccBinary);
 		if (opts.showTime) printTiming("phase D (link images)", tLink);
 		printDiag(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(` (+${hcrModulePaths.length} HCR images)`));
@@ -4718,6 +4721,7 @@ resetLiftedOps();
 		}
 		if (hcrBuildAbi != null) publishHcrBuildAbi(hcrBuildAbi, recompiledModulePaths);
 		writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
+		if (opts.depFile != "") writeProjectDepFile(opts.depFile, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 		printDiag(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(" (link cached)"));
 		if (opts.showTime) printTiming("built", t0);
 		session.lastBuilt = true;
@@ -4798,6 +4802,7 @@ resetLiftedOps();
 
 	// Reference-aligned: writeJsonBuildInstructions — persist project cache after successful build
 	writeProjectCache(projectDeps, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
+	if (opts.depFile != "") writeProjectDepFile(opts.depFile, outBinary, opts.ccCompiler, opts.ccBinary, opts.mode, buildIdentityFlags);
 
 	if (opts.showTime) printTiming("phase D (link)", tD);
 	flowStop("phase.link", fD);
