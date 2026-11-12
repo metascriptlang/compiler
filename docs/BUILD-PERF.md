@@ -57,6 +57,47 @@ median difference +0.6% at noise 0.3% (no mark); wall time noise 17% and max rss
 time and rss under that load show nothing. Not measured: Linux (`perf stat` and the `/usr/bin/time -f`
 fallback are written, not run), and `rt:` programs.
 
+## Measured 2026-11-13 — a debug build guards its stack frames, as under `zig cc`
+
+zig gives every module of a debug build that links libc `-fstack-protector-strong --param ssp-buffer-size=4` and
+every other build `-fno-stack-protector` (`src/Module.zig`, `stack_protector`; `src/Compilation.zig`, the C
+arguments; zig `16d31ceed5`). A debug build through the bundle now passes the same pair on Linux and macOS
+(`debugStackProtector`, `src/compiler/cc.ms`). A wasm build is forced to release and has none.
+
+The matrix cells `stackSmash` and `stackSmashOff` (`tools/managedToolchain/matrix/stackSmash.c`) write 24 bytes
+past a 16-byte buffer: the first must die, the second, built with `--passC=-fno-stack-protector`, must print both
+lines. A candidate of tree `9a6f8501e62b`, exit status of the run (negative is a signal):
+
+| target, run on | bundle, protected | bundle, off | zig, protected | zig, off |
+|---|---|---|---|---|
+| linux-glibc-x86_64, rtx (`3a7e411898f0`) | -4 | survives | -4 | survives |
+| linux-musl-x86_64, rtx | -11 | survives | -11 | survives |
+| macos-arm64, m1m (`8d7d908f2630`) | -6 | survives | -5 | survives |
+| macos-x64 under Rosetta, m1m | not a result: no x86_64 runtime dylib loads | the same | -4 | survives |
+| windows-x64, d87 (`44950a26db3f`) | not passed, see below | survives | -1073741819 | survives |
+
+The first form of the fixture wrote 8 bytes past the buffer and survived under zig and the bundle alike on glibc,
+musl, Windows and macOS x64: the guard is not adjacent to the buffer there. A slack that was an array (`long[8]`)
+survived on macOS arm64 too, because a strong protector treats every array as one to keep beside the guard.
+
+Windows is not protected yet. clang's MinGW driver adds `-lssp_nonshared -lssp` to the link of a protected
+build, and no installed bundle has them: every debug cell of windows-x64 failed with `lld: error: unable to find
+library -lssp_nonshared` (rtx, m1m and d87 alike) until the flag was withheld there. mingw-w64 13.0.0 keeps
+`__stack_chk_fail` and `__stack_chk_guard` in `libmingwex.a`, so the two libraries are empty archives, which is
+what a clang-based mingw-w64 toolchain installs. The Windows runtime producer now writes them and links a
+`-fstack-protector-strong` executable and DLL as part of its check: rtx, engine `5f03abdf2cf1`, `producer rc=0
+after 63 s`, and the overlay differs from the one in the installed bundles only by the four archives (8 bytes each,
+for the executable and the DLL directory) and the receipt.
+
+The other debug consumers (`hello`, `threads`, `cCompanion`, `cppCompanion`, `sharedLibrary`, `ubsanDefault`)
+pass as before with the protector on. Run rows ok, the two cells above included: glibc 16, musl x86_64 14, macOS
+arm64 16; musl arm64 builds all eight.
+
+Not verified: a protected Windows program (no bundle carries the new overlay; msc passes the flag there once one
+does); musl arm64 and Linux arm64 run; the cost of the guard in a debug build. Left as it is: a `--release` build
+on macOS keeps clang's own default protector (frames with a character array of 8 bytes or more), which zig turns
+off; the default bundle build measured 0.99 to 1.03 of zig's time there with it.
+
 ## Measured 2026-11-13 — a host build compiles for this machine's CPU
 
 A build through the bundle that names no OS, CPU or musl now passes `-march=native` (`-mcpu=native` on arm64)
