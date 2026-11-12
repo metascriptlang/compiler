@@ -39,26 +39,26 @@ test "a plain back edge is cyclic" {
 }
 
 test "the compiler's own Node is acyclic: its owning edges are Owned and its edges back from symbols and flow nodes Unowned" {
-	const c = builtModuleC("unownedEdge", "compilerNode", "import { NodeKind, createNodeAt, makeLoc } from \"std/meta/node\";\nconst n = createNodeAt(NodeKind.Identifier, { name: \"x\" }, makeLoc(1, 1));\nconsole.log(n.kind);\n", ["--danger"], "node");
+	const c = builtModuleC("unownedEdge", "compilerNode", "import { NodeKind, createNodeAt, makeLoc } from \"std/meta/node\";\nconst n = createNodeAt(NodeKind.Identifier, { name: \"x\" }, makeLoc(1, 1));\nconsole.log(n.kind);\n", ["--danger"], "metaZnode");
 	assert typeInfoOf(c, "Node").contains(".isCyclic = MS_FALSE"), typeInfoOf(c, "Node") != "" ? typeInfoOf(c, "Node") : c.slice(0, 400);
 }
 
 test "the compiler's inline frame and ident chains are acyclic: each link owns the one before it" {
-	const frames = builtModuleC("unownedEdge", "compilerFrame", "import { InlineFrame } from \"std/meta/node\";\nconst f = new InlineFrame(\"g\", new InlineFrame(\"f\", null, 1), 2);\nconsole.log(f.callLine);\n", ["--danger"], "node");
+	const frames = builtModuleC("unownedEdge", "compilerFrame", "import { InlineFrame } from \"std/meta/node\";\nconst f = new InlineFrame(\"g\", new InlineFrame(\"f\", null, 1), 2);\nconsole.log(f.callLine);\n", ["--danger"], "metaZnode");
 	assert typeInfoOf(frames, "InlineFrame").contains(".isCyclic = MS_FALSE"), typeInfoOf(frames, "InlineFrame") != "" ? typeInfoOf(frames, "InlineFrame") : frames.slice(0, 400);
 	const idents = builtModuleC("unownedEdge", "compilerIdent", "import { createIdentCache, getIdentId } from \"../../../src/checker/idents\";\nconsole.log(getIdentId(createIdentCache(), \"x\"));\n", ["--danger"], "idents");
 	assert typeInfoOf(idents, "IdentEntry").contains(".isCyclic = MS_FALSE"), typeInfoOf(idents, "IdentEntry") != "" ? typeInfoOf(idents, "IdentEntry") : idents.slice(0, 400);
 }
 
 test "the compiler's flow graph is acyclic: a label's antecedent list and a reduce label's target name their flow node Unowned" {
-	const c = builtModuleC("unownedEdge", "compilerFlow", "import { FlowNode, FlowList, FlowReduceLabelData } from \"std/meta/node\";\nconst f = new FlowNode();\nconst l: FlowList = { flow: f, next: null };\nconst r: FlowReduceLabelData = { target: f, antecedents: l };\nf.reduceLabelData = r;\nconsole.log(r.antecedents.next == null);\n", ["--danger"], "node");
+	const c = builtModuleC("unownedEdge", "compilerFlow", "import { FlowNode, FlowList, FlowReduceLabelData } from \"std/meta/node\";\nconst f = new FlowNode();\nconst l: FlowList = { flow: f, next: null };\nconst r: FlowReduceLabelData = { target: f, antecedents: l };\nf.reduceLabelData = r;\nconsole.log(r.antecedents.next == null);\n", ["--danger"], "metaZnode");
 	for (const name of ["FlowNode", "FlowList", "FlowReduceLabelData"]) {
 		assert typeInfoOf(c, name).contains(".isCyclic = MS_FALSE"), typeInfoOf(c, name) != "" ? typeInfoOf(c, name) : c.slice(0, 400);
 	}
 }
 
 test "the compiler's Symbol is acyclic: a type names its symbol and a symbol its owner Unowned, a symbol owns its overloads" {
-	const c = builtModuleC("unownedEdge", "compilerSymbol", "import { makeSymbol } from \"../../../src/checker/symbol\";\nimport { SymbolKind } from \"std/meta/node\";\nconst s = makeSymbol(\"x\", SymbolKind.Variable, null, false);\nconsole.log(s.name);\n", ["--danger"], "node");
+	const c = builtModuleC("unownedEdge", "compilerSymbol", "import { makeSymbol } from \"../../../src/checker/symbol\";\nimport { SymbolKind } from \"std/meta/node\";\nconst s = makeSymbol(\"x\", SymbolKind.Variable, null, false);\nconsole.log(s.name);\n", ["--danger"], "metaZnode");
 	assert typeInfoOf(c, "Symbol").contains(".isCyclic = MS_FALSE"), typeInfoOf(c, "Symbol") != "" ? typeInfoOf(c, "Symbol") : c.slice(0, 400);
 }
 
