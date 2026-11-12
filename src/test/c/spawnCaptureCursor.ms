@@ -80,11 +80,14 @@ async function roundAfterAwait(items: Item[]): Promise<int32> {
 	});
 	return first + await a;
 }
-const items: Item[] = [];
-const leaves: Leaf[] = [];
-for (let i = 0; i < 8; i++) { const it = new Item(); it.v = i as int32; items.push(it); const l = new Leaf(); l.v = i as int32; leaves.push(l); }
-items[0].next = items[3];
-console.log(\`\${await round(items, leaves)} \${await roundAfterAwait(items)} \${returned(items)()} \${pushed(items)} \${returnedNullable(items)()} \${pushedNullable(items)}\`);
+async function main(): Promise<void> {
+	const items: Item[] = [];
+	const leaves: Leaf[] = [];
+	for (let i = 0; i < 8; i++) { const it = new Item(); it.v = i as int32; items.push(it); const l = new Leaf(); l.v = i as int32; leaves.push(l); }
+	items[0].next = items[3];
+	console.log(\`\${await round(items, leaves)} \${await roundAfterAwait(items)} \${returned(items)()} \${pushed(items)} \${returnedNullable(items)()} \${pushedNullable(items)}\`);
+}
+await main();
 `;
 
 function envInfos(prefix: string): string[] {
