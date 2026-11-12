@@ -1,10 +1,11 @@
 import { argv, exit } from "std/process";
 import { assembleBundle } from "./bundleAssembly";
 
-const USAGE = "assembleBundle --engine ENGINE_DIR --runtime-bundle BUNDLE_DIR " +
+const USAGE = "assembleBundle --engine ENGINE_DIR [--runtime-bundle BUNDLE_DIR] " +
 	"[--overlay OVERLAY_DIR ...] --output NEW_DIR\n" +
 	"ENGINE_DIR is a packageSourceEngine output; BUNDLE_DIR a bundle whose runtime/ " +
-	"is copied beside it; each OVERLAY_DIR is a prepareTargetRuntime output added over both";
+	"is copied beside it; each OVERLAY_DIR is a target runtime producer's output added over " +
+	"both; at least one of the two names a runtime";
 
 function main(): int32 {
 	const options = new Map<string, string>();
@@ -25,7 +26,7 @@ function main(): int32 {
 		if (key == "--overlay") { overlays.push(argv[i]); }
 		else { options.set(key, argv[i]); }
 	}
-	for (const key of ["--engine", "--runtime-bundle", "--output"]) {
+	for (const key of ["--engine", "--output"]) {
 		if ((options.get(key) ?? "") == "") {
 			console.error(USAGE);
 			console.error("assembleBundle: error: " + key + " is required");

@@ -5,7 +5,7 @@ import {
 } from "std/fs";
 import { parseJson, JsonValue, JsonKind } from "std/serialize/json";
 import { getDynamicField, setDynamicField } from "std/serialize/json/accessors";
-import { jsonArrayOfStrings, jsonString } from "std/serialize/json/builder";
+import { jsonArrayOfStrings, jsonBool, jsonObject, jsonString } from "std/serialize/json/builder";
 import { stringifyPretty } from "std/serialize/json/stringify";
 import { sha256File } from "./fileDigest";
 import { readUtf8File } from "./textFile";
@@ -15,9 +15,10 @@ import { renameNoReplace } from "./nativePublication";
 import { asciiEngineJson, claimPartial } from "./windowsEngine";
 import { engineHostKey } from "./sourceEnginePackage";
 import { runtimeLibrariesLast } from "./runtimeConfig";
+import { foldFileName } from "./fileCaseFold";
 import {
-	EngineContract, absoluteEnginePath, copyEngineFile, copyOnceByContent, engineIo,
-	verifyEngineContract, writeEngineContract, writeEngineText,
+	EngineContract, FileLinks, absoluteEnginePath, copyEngineFile, copyOnceByContent, engineIo,
+	inventoryTree, verifyEngineContract, writeEngineContract, writeEngineText,
 } from "./engineFiles";
 
 const RECEIPT = "notices/bundle-provenance.json";
@@ -134,16 +135,38 @@ function firstDiffering(source: string, target: string, rel: string): Result<str
 	return Result.ok("");
 }
 
-function addOverlays(partial: string, overlays: string[]): Result<void, string> {
+export function caseTwins(paths: string[]): Result<string, string> {
+	const folded = new Map<string, string>();
+	for (const path of paths) {
+		const key = try foldFileName(path);
+		const twin = folded.get(key);
+		if (twin != null) { return Result.ok(twin + " and " + path); }
+		folded.set(key, path);
+	}
+	return Result.ok("");
+}
+
+function addOverlays(partial: string, overlays: string[]): Result<string[], string> {
+	const runtimeEntries: string[] = [];
 	for (const overlay of overlays) {
-		if (!isDir(join(overlay, "runtime"))) { return Result.err(overlay + " has no runtime/"); }
+		const names = readDirNames(join(overlay, "runtime"));
+		if (!names.ok) { return Result.err(overlay + " has no runtime/"); }
+		const twins = try caseTwins(try inventoryTree(overlay, FileLinks.ContainedFiles));
+		if (twins != "") {
+			return Result.err("overlay " + overlay + " holds " + twins + ", which differ only " +
+				"by case: a host whose file system folds case would keep one of them");
+		}
 		const taken = try firstDiffering(overlay, partial, "");
 		if (taken != "") {
 			return Result.err("overlay " + overlay + " would replace " + taken);
 		}
 		try copyBundleTree(overlay, partial, "", []);
+		for (const name of names.value) {
+			if (!runtimeEntries.includes(name)) { runtimeEntries.push(name); }
+		}
 	}
-	return Result.ok(null);
+	runtimeEntries.sort();
+	return Result.ok(runtimeEntries);
 }
 
 function orderRuntimeLibraries(partial: string): Result<void, string> {
@@ -163,22 +186,32 @@ function orderRuntimeLibraries(partial: string): Result<void, string> {
 function writeReceipt(
 	partial: string, runtimeBundle: string, engineIdentity: string,
 	runtimeIdentity: string, host: string, version: string, directories: string[],
+	overlayEntries: string[],
 ): Result<void, string> {
-	const receipt = try readJson(join(runtimeBundle, RECEIPT));
+	const receipt = runtimeBundle == "" ?
+		jsonObject(["kind", "redistributionCertified"],
+			[jsonString("local-bundle-assembly"), jsonBool(false)]) :
+		try readJson(join(runtimeBundle, RECEIPT));
 	if (getDynamicField(receipt, "overlays").kind != JsonKind.Null) {
 		return Result.err(RECEIPT + " of " + runtimeBundle +
 			" lists bundle overlays, which an engine swap does not carry");
 	}
 	setDynamicField(receipt, "statement", jsonString("Engine copied unchanged, " +
-		"runtime/ copied from the runtime bundle, with the libraries its top-level configs " +
-		"name moved behind the inputs of the build; the contract files were rewritten " +
+		(runtimeBundle == "" ? "" : "runtime/ copied from the runtime bundle, with the " +
+		"libraries its top-level configs name moved behind the inputs of the build, ") +
+		"each overlay's target runtime added whole; the contract files were rewritten " +
 		"over the whole bundle. Not an upstream-controlled build."));
 	setDynamicField(receipt, "host", jsonString(host));
 	setDynamicField(receipt, "engineVersion", jsonString(version));
 	setDynamicField(receipt, "sourceEngineIdentity", jsonString(engineIdentity));
 	setDynamicField(receipt, "engineProvenanceSha256",
 		jsonString(try sha256File(join(partial, "notices/provenance.json"))));
-	setDynamicField(receipt, "runtimeBundleIdentity", jsonString(runtimeIdentity));
+	if (runtimeBundle != "") {
+		setDynamicField(receipt, "runtimeBundleIdentity", jsonString(runtimeIdentity));
+	}
+	if (overlayEntries.length > 0) {
+		setDynamicField(receipt, "overlays", jsonArrayOfStrings(overlayEntries));
+	}
 	setDynamicField(receipt, "targetRuntimeDirectories", jsonArrayOfStrings(directories));
 	return writeEngineText(join(partial, RECEIPT),
 		asciiEngineJson(stringifyPretty(receipt, 2)) + "\n");
@@ -186,22 +219,24 @@ function writeReceipt(
 
 function stage(
 	engine: string, runtimeBundle: string, partial: string,
-	engineContract: EngineContract, runtimeContract: EngineContract, overlays: string[],
+	engineContract: EngineContract, runtimeIdentity: string, overlays: string[],
 ): Result<AssembledBundle, string> {
 	try copyBundleTree(engine, partial, "", CONTRACT);
-	if (!isDir(join(runtimeBundle, "runtime"))) {
-		return Result.err(runtimeBundle + " has no runtime/");
-	}
 	try engineIo(ensureDir(join(partial, "runtime")));
-	try copyBundleTree(join(runtimeBundle, "runtime"), join(partial, "runtime"), "", []);
-	try orderRuntimeLibraries(partial);
+	if (runtimeBundle != "") {
+		if (!isDir(join(runtimeBundle, "runtime"))) {
+			return Result.err(runtimeBundle + " has no runtime/");
+		}
+		try copyBundleTree(join(runtimeBundle, "runtime"), join(partial, "runtime"), "", []);
+		try orderRuntimeLibraries(partial);
+	}
 	const host = engineContract.host;
 	const version = engineContract.version;
 	const directories = try addTargetRuntimeDirectories(partial, host,
 		version.split(".")[0]);
-	try addOverlays(partial, overlays);
+	const overlayEntries = try addOverlays(partial, overlays);
 	try writeReceipt(partial, runtimeBundle, engineContract.identity,
-		runtimeContract.identity, host, version, directories);
+		runtimeIdentity, host, version, directories, overlayEntries);
 	try writeEngineContract(partial, host, version);
 	return Result.ok({
 		output: "", contract: try verifyEngineContract(partial),
@@ -213,13 +248,17 @@ export function assembleBundle(
 	enginePath: string, runtimeBundlePath: string, outputPath: string, overlayPaths: string[] = [],
 ): Result<AssembledBundle, string> {
 	const host = try engineHostKey(platform, arch);
+	if (runtimeBundlePath == "" && overlayPaths.length == 0) {
+		return Result.err("a bundle needs a target runtime: name --runtime-bundle or an --overlay");
+	}
 	const engine = try absoluteEnginePath(enginePath);
-	const runtimeBundle = try absoluteEnginePath(runtimeBundlePath);
+	const runtimeBundle = runtimeBundlePath == "" ? "" : try absoluteEnginePath(runtimeBundlePath);
 	const output = try absoluteEnginePath(outputPath);
 	if (isLinkLike(output).ok) {
 		return Result.err(output + " exists; --output names a new directory");
 	}
 	for (const root of [engine, runtimeBundle]) {
+		if (root == "") { continue; }
 		const inside = containsExistingRoot(root, dirname(output));
 		if (!inside.ok) { return Result.err(inside.error.message); }
 		if (inside.value) { return Result.err("output must not be inside " + root); }
@@ -228,19 +267,25 @@ export function assembleBundle(
 		return Result.err(engine + " already has runtime/; --engine takes the engine alone");
 	}
 	const engineContract = try verifyEngineContract(engine);
-	const runtimeContract = try verifyEngineContract(runtimeBundle);
-	if (engineContract.host != host || runtimeContract.host != host) {
-		return Result.err("engine is " + engineContract.host + ", runtime bundle " +
-			runtimeContract.host + ", this host " + host);
+	if (engineContract.host != host) {
+		return Result.err("engine is " + engineContract.host + ", this host " + host);
 	}
-	if (engineContract.version != runtimeContract.version) {
-		return Result.err("engine is LLVM " + engineContract.version +
-			", the runtime was prepared for " + runtimeContract.version);
+	let runtimeIdentity = "";
+	if (runtimeBundle != "") {
+		const runtimeContract = try verifyEngineContract(runtimeBundle);
+		if (runtimeContract.host != host) {
+			return Result.err("runtime bundle is " + runtimeContract.host + ", this host " + host);
+		}
+		if (engineContract.version != runtimeContract.version) {
+			return Result.err("engine is LLVM " + engineContract.version +
+				", the runtime was prepared for " + runtimeContract.version);
+		}
+		runtimeIdentity = runtimeContract.identity;
 	}
 	const overlays: string[] = [];
 	for (const path of overlayPaths) { overlays.push(try absoluteEnginePath(path)); }
 	const partial = try claimPartial(output);
-	const staged = stage(engine, runtimeBundle, partial, engineContract, runtimeContract, overlays);
+	const staged = stage(engine, runtimeBundle, partial, engineContract, runtimeIdentity, overlays);
 	if (!staged.ok) {
 		const cleaned = removeAll(partial);
 		return Result.err(staged.error + (cleaned.ok ? "" :

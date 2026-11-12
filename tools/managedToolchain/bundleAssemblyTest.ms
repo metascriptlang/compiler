@@ -6,7 +6,7 @@ import { readStoredSiblingName } from "./nativeAlias";
 import { samePhysicalFile } from "./nativePath";
 import { writeEngineContract } from "./engineFiles";
 import { engineHostKey } from "./sourceEnginePackage";
-import { assembleBundle, linuxConfigTriples } from "./bundleAssembly";
+import { assembleBundle, caseTwins, linuxConfigTriples } from "./bundleAssembly";
 
 let cases: int32 = 0;
 
@@ -155,6 +155,37 @@ function storedOnceCases(dir: string, host: string): void {
 	const text = readUtf8File(join(output, "bin/clang.exe"));
 	expect(text.ok && text.value == "multicall" && assembled.value.contract.files == 9,
 		"every name is in the contract with the tool's bytes");
+	const overlay = join(dir, "overlay");
+	written(join(overlay, "runtime/windows/x86_64-windows-gnu.cfg"), "-target x86_64-w64-windows-gnu\n");
+	written(join(overlay, "runtime/wasm32-wasi.cfg"), "-target wasm32-wasip1\n");
+	written(join(overlay, "lib/clang/1/lib/x86_64-w64-windows-gnu/libclang_rt.builtins.a"), "rt");
+	const whole = assembleBundle(fresh, "", join(dir, "whole"), [overlay]);
+	if (!whole.ok) { throw new Error("assembly from overlays refused: " + whole.error); }
+	const receipt = readUtf8File(join(dir, "whole/notices/bundle-provenance.json"));
+	expect(isFile(join(dir, "whole/runtime/windows/x86_64-windows-gnu.cfg")) &&
+		isFile(join(dir, "whole/lib/clang/1/lib/x86_64-w64-windows-gnu/libclang_rt.builtins.a")) &&
+		receipt.ok && receipt.value.contains("\"local-bundle-assembly\"") &&
+		receipt.value.contains("\"wasm32-wasi.cfg\"") && receipt.value.contains("\"windows\"") &&
+		!receipt.value.contains("runtimeBundleIdentity"),
+		"an engine and overlays make a bundle whose receipt names each overlay's runtime entries");
+	const twins = caseTwins(["runtime/t/include/xt_mark.h", "runtime/t/lib/libc.a", "runtime/t/include/xt_MARK.h"]);
+	expect(twins.ok && twins.value == "runtime/t/include/xt_mark.h and runtime/t/include/xt_MARK.h",
+		"two paths that differ only by case are named");
+	const distinct = caseTwins(["runtime/t/a.h", "runtime/t/b.h", "runtime/T2/a.h"]);
+	expect(distinct.ok && distinct.value == "", "paths that differ by more than case are not");
+	const folding = join(dir, "folding");
+	written(join(folding, "runtime/t/include/xt_mark.h"), "match");
+	written(join(folding, "runtime/t/include/xt_MARK.h"), "target");
+	const kept = readUtf8File(join(folding, "runtime/t/include/xt_mark.h"));
+	if (kept.ok && kept.value == "match") {
+		expectRefusal(assembleBundle(fresh, "", join(dir, "folded"), [folding]), "differ only by case",
+			"an overlay whose payload a case-folding host cannot hold");
+	}
+	expectRefusal(assembleBundle(fresh, "", join(dir, "bare"), []), "needs a target runtime",
+		"an engine with no runtime at all");
+	expectRefusal(assembleBundle(fresh, join(dir, "whole"), join(dir, "swapped"), []),
+		"lists bundle overlays", "an engine swap from a bundle whose overlays reach outside runtime/");
+	expect(!exists(join(dir, "bare")) && !exists(join(dir, "swapped")), "a refused assembly publishes nothing");
 }
 
 function run(): void {
