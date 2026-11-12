@@ -1,6 +1,7 @@
 import {
 	configLine,
 	renderRuntimeConfig,
+	runtimeLibrariesLast,
 	RuntimeConfigInput,
 } from "./runtimeConfig";
 import { ElfLinkItemKind } from "./elfLinkPlan";
@@ -48,7 +49,47 @@ function refused(input: RuntimeConfigInput): void {
 	cases += 1;
 }
 
+function libraryOrderCases(): void {
+	const glibc = "-target x86_64-unknown-linux5.10.0-gnu2.31.0\n" +
+		"--sysroot=<CFGDIR>/x86_64-linux-gnu.2.31.so\n" +
+		"-Xlinker -L -Xlinker <CFGDIR>/x86_64-linux-gnu.2.31.so\n" +
+		"-Xlinker --gc-sections\n" +
+		"-Xlinker <CFGDIR>/x86_64-linux-gnu.2.31.so/crt1.o\n" +
+		"-Xlinker --dynamic-linker\n" +
+		"-Xlinker /lib64/ld-linux-x86-64.so.2\n" +
+		"-Xlinker --as-needed\n" +
+		"-Xlinker <CFGDIR>/x86_64-linux-gnu.2.31.so/libm.so.6\n" +
+		"-Xlinker <CFGDIR>/x86_64-linux-gnu.2.31.so/libc.so\n" +
+		"-Xlinker <CFGDIR>/x86_64-linux-gnu.2.31.so/libc_nonshared.a\n";
+	const ordered = "-target x86_64-unknown-linux5.10.0-gnu2.31.0\n" +
+		"--sysroot=<CFGDIR>/x86_64-linux-gnu.2.31.so\n" +
+		"-Xlinker -L -Xlinker <CFGDIR>/x86_64-linux-gnu.2.31.so\n" +
+		"-Xlinker --gc-sections\n" +
+		"-Xlinker <CFGDIR>/x86_64-linux-gnu.2.31.so/crt1.o\n" +
+		"-Xlinker --dynamic-linker\n" +
+		"-Xlinker /lib64/ld-linux-x86-64.so.2\n" +
+		"$-Xlinker $--as-needed\n" +
+		"$-Xlinker $<CFGDIR>/x86_64-linux-gnu.2.31.so/libm.so.6\n" +
+		"$-Xlinker $<CFGDIR>/x86_64-linux-gnu.2.31.so/libc.so\n" +
+		"$-Xlinker $<CFGDIR>/x86_64-linux-gnu.2.31.so/libc_nonshared.a\n";
+	if (runtimeLibrariesLast(glibc) != ordered) {
+		throw new Error("a config's libraries do not follow the build's own inputs");
+	}
+	cases += 1;
+	if (runtimeLibrariesLast(ordered) != ordered) {
+		throw new Error("an ordered config changed");
+	}
+	cases += 1;
+	const windows = "-target x86_64-w64-windows-gnu\n--rtlib=compiler-rt\n" +
+		"-Xlinker -L -Xlinker <CFGDIR>/x86_64-windows-gnu\n-Xlinker --stack=16777216\n";
+	if (runtimeLibrariesLast(windows) != windows) {
+		throw new Error("a config that names no library changed");
+	}
+	cases += 1;
+}
+
 function run(): void {
+	libraryOrderCases();
 	expectLine([], "");
 	expectLine(["-Xlinker", "<CFGDIR>/t/libc.a"],
 		"-Xlinker <CFGDIR>/t/libc.a");

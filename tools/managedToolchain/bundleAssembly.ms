@@ -14,6 +14,7 @@ import { isSymbolicLink, readStoredSiblingName } from "./nativeAlias";
 import { renameNoReplace } from "./nativePublication";
 import { asciiEngineJson, claimPartial } from "./windowsEngine";
 import { engineHostKey } from "./sourceEnginePackage";
+import { runtimeLibrariesLast } from "./runtimeConfig";
 import {
 	EngineContract, absoluteEnginePath, copyEngineFile, engineIo,
 	verifyEngineContract, writeEngineContract, writeEngineText,
@@ -113,6 +114,20 @@ function addTargetRuntimeDirectories(
 	return Result.ok(made);
 }
 
+function orderRuntimeLibraries(partial: string): Result<void, string> {
+	const runtime = join(partial, "runtime");
+	const names = readDirNames(runtime);
+	if (!names.ok) { return Result.err(names.error.message); }
+	for (const name of names.value) {
+		const path = join(runtime, name);
+		if (!name.endsWith(".cfg") || !isFile(path)) { continue; }
+		const text = try readUtf8File(path);
+		const ordered = runtimeLibrariesLast(text);
+		if (ordered != text) { try writeEngineText(path, ordered); }
+	}
+	return Result.ok(null);
+}
+
 function writeReceipt(
 	partial: string, runtimeBundle: string, engineIdentity: string,
 	runtimeIdentity: string, host: string, version: string, directories: string[],
@@ -123,7 +138,8 @@ function writeReceipt(
 			" lists bundle overlays, which an engine swap does not carry");
 	}
 	setDynamicField(receipt, "statement", jsonString("Engine copied unchanged, " +
-		"runtime/ copied from the runtime bundle; the contract files were rewritten " +
+		"runtime/ copied from the runtime bundle, with the libraries its top-level configs " +
+		"name moved behind the inputs of the build; the contract files were rewritten " +
 		"over the whole bundle. Not an upstream-controlled build."));
 	setDynamicField(receipt, "host", jsonString(host));
 	setDynamicField(receipt, "engineVersion", jsonString(version));
@@ -146,6 +162,7 @@ function stage(
 	}
 	try engineIo(ensureDir(join(partial, "runtime")));
 	try copyBundleTree(join(runtimeBundle, "runtime"), join(partial, "runtime"), "", []);
+	try orderRuntimeLibraries(partial);
 	const host = engineContract.host;
 	const version = engineContract.version;
 	const directories = try addTargetRuntimeDirectories(partial, host,

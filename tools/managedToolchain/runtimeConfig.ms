@@ -120,3 +120,34 @@ export function renderRuntimeConfig(
 	}
 	return Result.ok(lines.join("\n") + "\n");
 }
+
+function linksLibrary(value: string): boolean {
+	if (value.indexOf(" ") >= 0) { return false; }
+	if (value == "--as-needed") { return true; }
+	if (!value.startsWith("<CFGDIR>/")) { return false; }
+	const name = basename(value);
+	if (name.endsWith(".a")) { return true; }
+	const shared = name.indexOf(".so");
+	if (shared < 0) { return false; }
+	for (const part of name.slice(shared + 3).split(".")) {
+		if (part == "") { continue; }
+		for (const byte of part.asBytes()) {
+			if (byte < 48 || byte > 57) { return false; }
+		}
+	}
+	return true;
+}
+
+export function runtimeLibrariesLast(configText: string): string {
+	const leading: string[] = [];
+	const trailing: string[] = [];
+	for (const line of configText.split("\n")) {
+		if (line == "") { continue; }
+		if (line.startsWith("-Xlinker ") && linksLibrary(line.slice(9))) {
+			trailing.push("$-Xlinker $" + line.slice(9));
+		} else {
+			leading.push(line);
+		}
+	}
+	return leading.concat(trailing).join("\n") + "\n";
+}
