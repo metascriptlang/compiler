@@ -777,6 +777,31 @@ static inline void msActorScheduleEdge(msActor* a) {
     }
 }
 
+/* The send's steps after it saw the actor alive; the caller's pin on a is cleared here. */
+static inline void msActorPush(msActor* a, msMessage* msg) {
+    /* Amendment G (I16) for actor CALLs — acquire-before-visible. The reply
+     * future's in-flight ref is taken HERE, on the sender's thread, before
+     * the message becomes visible in the mailbox. The actor-processing
+     * thread (a pool worker for scheduler N) then publishes value+finished
+     * and routes the callback volley through msCompletionQueuePushOwned —
+     * no worker-side incref ever touches the non-atomic rc. The drain
+     * releases this ref after msFutureFireCallbacks; every fail site that
+     * pops the message pairs with msMsgReplyFail's deferred release.
+     * MUST run only after msActorSendOrDrop's guards: they fail the reply before any
+     * ref exists, and msMsgReplyFail would over-release it. */
+#if MS_FUTURE_SUBMIT_REF
+    if (msg->replyFuture != NULL) {
+        msIncRef(msg->replyFuture);
+        msFuturePublishCrossThread(msg->replyFuture);
+    }
+#endif
+    bool wasEmpty = msMpscPush(&a->mailbox, msg);
+    atomic_store_explicit(&a->hasWork, true, memory_order_release);
+
+    if (wasEmpty && !msActorHasFlag(a, MS_ACTOR_SUSPENDED)) msActorScheduleEdge(a);
+    msHazardClear(a);
+}
+
 /*
  * Send a message to an actor (any thread, wait-free).
  */
@@ -798,27 +823,7 @@ static inline void msActorSendOrDrop(msActor* a, msMessage* msg, msActorDropFn d
         msHazardClear(a);
         return;
     }
-    /* Amendment G (I16) for actor CALLs — acquire-before-visible. The reply
-     * future's in-flight ref is taken HERE, on the sender's thread, before
-     * the message becomes visible in the mailbox. The actor-processing
-     * thread (a pool worker for scheduler N) then publishes value+finished
-     * and routes the callback volley through msCompletionQueuePushOwned —
-     * no worker-side incref ever touches the non-atomic rc. The drain
-     * releases this ref after msFutureFireCallbacks; every fail site that
-     * pops the message pairs with msMsgReplyFail's deferred release.
-     * MUST stay after the two guards above: they fail the reply before any
-     * ref exists, and msMsgReplyFail would over-release it. */
-#if MS_FUTURE_SUBMIT_REF
-    if (msg->replyFuture != NULL) {
-        msIncRef(msg->replyFuture);
-        msFuturePublishCrossThread(msg->replyFuture);
-    }
-#endif
-    bool wasEmpty = msMpscPush(&a->mailbox, msg);
-    atomic_store_explicit(&a->hasWork, true, memory_order_release);
-
-    if (wasEmpty && !msActorHasFlag(a, MS_ACTOR_SUSPENDED)) msActorScheduleEdge(a);
-    msHazardClear(a);
+    msActorPush(a, msg);
 }
 
 static inline void msActorSend(msActor* a, msMessage* msg) {
