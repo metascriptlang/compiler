@@ -3,11 +3,13 @@ import { prepareSourceEngine } from "./sourceEngine";
 
 const USAGE = "prepareSourceEngine --source-tarball T --source-sha256 H " +
 	"--cache llvmEngine.cmake --cmake CMAKE --ninja NINJA --work DIR " +
-	"--output NEW_DIR [--jobs N] [--cc CC] [--cxx CXX] [--linker LD]\n" +
-	"--linker defaults to lld, and to the system linker on macOS";
+	"--output NEW_DIR [--jobs N] [--cc CC] [--cxx CXX] [--linker LD] [--bundle DIR]\n" +
+	"--linker defaults to lld, and to the system linker on macOS\n" +
+	"on Windows --bundle names the prepared bundle whose clang and mingw runtime build the " +
+	"first stage, and --cc, --cxx and --linker are refused";
 const KEYS = [
 	"--source-tarball", "--source-sha256", "--cache", "--cmake", "--ninja",
-	"--work", "--output", "--jobs", "--cc", "--cxx", "--linker",
+	"--work", "--output", "--jobs", "--cc", "--cxx", "--linker", "--bundle",
 ];
 const REQUIRED = [
 	"--source-tarball", "--source-sha256", "--cache", "--cmake", "--ninja",
@@ -58,6 +60,13 @@ function defaultLinker(): string {
 
 function run(options: Map<string, string>): Result<void, string> {
 	const value = (key: string): string => options.get(key) ?? "";
+	if (platform == "windows") {
+		for (const key of ["--cc", "--cxx", "--linker"]) {
+			if (options.has(key)) {
+				return Result.err(key + " does not apply on Windows: --bundle builds the first stage");
+			}
+		}
+	}
 	const record = try prepareSourceEngine({
 		tarball: value("--source-tarball"),
 		sha256: value("--source-sha256"),
@@ -72,6 +81,7 @@ function run(options: Map<string, string>): Result<void, string> {
 			cxx: options.get("--cxx") ?? "clang++",
 			linker: options.get("--linker") ?? defaultLinker(),
 		},
+		bundle: value("--bundle"),
 	});
 	console.log("built llvm " + record.llvmVersion + " from " +
 		record.sourceTarball + " into " + value("--output"));

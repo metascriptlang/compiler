@@ -1,38 +1,60 @@
 # Stages as clang/cmake/caches/Release.cmake with LLVM_RELEASE_ENABLE_PGO: BOOTSTRAP_ reaches
 # stage2-instrumented, BOOTSTRAP_BOOTSTRAP_ the engine; build stage2-install-distribution-stripped.
+# On a Windows host CLANG_ENABLE_BOOTSTRAP hands the next stage to clang-cl, so this file configures
+# the engine stage alone there, after llvm/utils/release/build_llvm_release.bat; build
+# install-distribution-stripped.
 
-function(set_final_stage_var name value type)
-  set(BOOTSTRAP_BOOTSTRAP_${name} ${value} CACHE ${type} "")
-endfunction()
+if(CMAKE_HOST_WIN32)
+  function(set_final_stage_var name value type)
+    set(${name} ${value} CACHE ${type} "")
+  endfunction()
 
-function(set_instrument_and_final_stage_var name value type)
-  set(BOOTSTRAP_${name} ${value} CACHE ${type} "")
-  set(BOOTSTRAP_BOOTSTRAP_${name} ${value} CACHE ${type} "")
-endfunction()
+  function(set_instrument_and_final_stage_var name value type)
+    set(${name} ${value} CACHE ${type} "")
+  endfunction()
 
-set(CMAKE_BUILD_TYPE Release CACHE STRING "")
-set(LLVM_TARGETS_TO_BUILD Native CACHE STRING "")
-set(LLVM_ENABLE_PROJECTS "clang;lld" CACHE STRING "")
-set(LLVM_ENABLE_RUNTIMES "compiler-rt" CACHE STRING "")
-set(COMPILER_RT_BUILD_SANITIZERS OFF CACHE BOOL "")
-set(LLVM_INCLUDE_TESTS OFF CACHE BOOL "")
-set(LLVM_ENABLE_ZLIB OFF CACHE BOOL "")
-set(LLVM_ENABLE_ZSTD OFF CACHE BOOL "")
-set(LLVM_ENABLE_LIBXML2 OFF CACHE BOOL "")
-set(CLANG_ENABLE_BOOTSTRAP ON CACHE BOOL "")
-set(CLANG_BOOTSTRAP_TARGETS "generate-profdata;stage2;stage2-install-distribution-stripped" CACHE STRING "")
+  set_final_stage_var(LLVM_DISTRIBUTION_COMPONENTS
+    "llvm-driver;clang;lld;llvm-ar;llvm-nm;llvm-objcopy;llvm-rc;llvm-symbolizer;llvm-readobj;clang-resource-headers"
+    STRING)
+else()
+  function(set_final_stage_var name value type)
+    set(BOOTSTRAP_BOOTSTRAP_${name} ${value} CACHE ${type} "")
+  endfunction()
 
-set(BOOTSTRAP_LLVM_BUILD_INSTRUMENTED IR CACHE STRING "")
-set(BOOTSTRAP_LLVM_ENABLE_PROJECTS "clang;lld" CACHE STRING "")
-set(BOOTSTRAP_LLVM_ENABLE_RUNTIMES "compiler-rt" CACHE STRING "")
-set(BOOTSTRAP_COMPILER_RT_BUILD_SANITIZERS OFF CACHE BOOL "")
-set(BOOTSTRAP_CLANG_ENABLE_BOOTSTRAP ON CACHE BOOL "")
-set(BOOTSTRAP_CLANG_BOOTSTRAP_TARGETS "install-distribution-stripped" CACHE STRING "")
+  function(set_instrument_and_final_stage_var name value type)
+    set(BOOTSTRAP_${name} ${value} CACHE ${type} "")
+    set(BOOTSTRAP_BOOTSTRAP_${name} ${value} CACHE ${type} "")
+  endfunction()
+
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "")
+  set(LLVM_TARGETS_TO_BUILD Native CACHE STRING "")
+  set(LLVM_ENABLE_PROJECTS "clang;lld" CACHE STRING "")
+  set(LLVM_ENABLE_RUNTIMES "compiler-rt" CACHE STRING "")
+  set(COMPILER_RT_BUILD_SANITIZERS OFF CACHE BOOL "")
+  set(LLVM_INCLUDE_TESTS OFF CACHE BOOL "")
+  set(LLVM_ENABLE_ZLIB OFF CACHE BOOL "")
+  set(LLVM_ENABLE_ZSTD OFF CACHE BOOL "")
+  set(LLVM_ENABLE_LIBXML2 OFF CACHE BOOL "")
+  set(CLANG_ENABLE_BOOTSTRAP ON CACHE BOOL "")
+  set(CLANG_BOOTSTRAP_TARGETS "generate-profdata;stage2;stage2-install-distribution-stripped" CACHE STRING "")
+
+  set(BOOTSTRAP_LLVM_BUILD_INSTRUMENTED IR CACHE STRING "")
+  set(BOOTSTRAP_LLVM_ENABLE_PROJECTS "clang;lld" CACHE STRING "")
+  set(BOOTSTRAP_LLVM_ENABLE_RUNTIMES "compiler-rt" CACHE STRING "")
+  set(BOOTSTRAP_COMPILER_RT_BUILD_SANITIZERS OFF CACHE BOOL "")
+  set(BOOTSTRAP_CLANG_ENABLE_BOOTSTRAP ON CACHE BOOL "")
+  set(BOOTSTRAP_CLANG_BOOTSTRAP_TARGETS "install-distribution-stripped" CACHE STRING "")
+
+  set_instrument_and_final_stage_var(LLVM_ENABLE_LTO THIN STRING)
+  set_final_stage_var(LLVM_ENABLE_RUNTIMES "compiler-rt" STRING)
+  set_final_stage_var(LLVM_DISTRIBUTION_COMPONENTS
+    "llvm-driver;clang;lld;llvm-ar;llvm-nm;llvm-objcopy;llvm-rc;dsymutil;llvm-symbolizer;llvm-readobj;clang-resource-headers;builtins;runtimes"
+    STRING)
+endif()
 
 set_instrument_and_final_stage_var(CMAKE_BUILD_TYPE Release STRING)
 set_instrument_and_final_stage_var(LLVM_TARGETS_TO_BUILD "X86;AArch64;WebAssembly" STRING)
 set_instrument_and_final_stage_var(CMAKE_POSITION_INDEPENDENT_CODE ON STRING)
-set_instrument_and_final_stage_var(LLVM_ENABLE_LTO THIN STRING)
 set_instrument_and_final_stage_var(LLVM_ENABLE_LLD ON BOOL)
 set_instrument_and_final_stage_var(LLVM_ENABLE_ASSERTIONS OFF BOOL)
 set_instrument_and_final_stage_var(LLVM_TOOL_LLVM_DRIVER_BUILD ON BOOL)
@@ -56,7 +78,6 @@ set_instrument_and_final_stage_var(LLVM_ENABLE_BINDINGS OFF BOOL)
 set_instrument_and_final_stage_var(LLVM_PARALLEL_LINK_JOBS 4 STRING)
 
 set_final_stage_var(LLVM_ENABLE_PROJECTS "clang;lld" STRING)
-set_final_stage_var(LLVM_ENABLE_RUNTIMES "compiler-rt" STRING)
 set_final_stage_var(LLVM_BUILD_STATIC ON BOOL)
 set_final_stage_var(COMPILER_RT_SANITIZERS_TO_BUILD "ubsan_minimal" STRING)
 set_final_stage_var(COMPILER_RT_BUILD_CRT OFF BOOL)
@@ -70,6 +91,3 @@ set_final_stage_var(COMPILER_RT_BUILD_GWP_ASAN OFF BOOL)
 set_final_stage_var(COMPILER_RT_ENABLE_IOS OFF BOOL)
 set_final_stage_var(COMPILER_RT_ENABLE_MACCATALYST OFF BOOL)
 set_final_stage_var(COMPILER_RT_INCLUDE_TESTS OFF BOOL)
-set_final_stage_var(LLVM_DISTRIBUTION_COMPONENTS
-  "llvm-driver;clang;lld;llvm-ar;llvm-nm;llvm-objcopy;llvm-rc;dsymutil;llvm-symbolizer;llvm-readobj;clang-resource-headers;builtins;runtimes"
-  STRING)

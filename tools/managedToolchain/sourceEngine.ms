@@ -1,13 +1,18 @@
 import { arch, env, execFile, findOnPath, platform } from "std/process";
-import { basename, dirname, ensureDir, isDir, isFile, isLinkLike, join } from "std/fs";
+import {
+	basename, dirname, ensureDir, isDir, isFile, isLinkLike, join, normalize, readDirNames, remove,
+} from "std/fs";
 import { IoErrorKind } from "std/io/errors";
 import { jsonValueOf } from "std/serialize/json";
 import { stringifyPretty } from "std/serialize/json/stringify";
 import { sha256File } from "./fileDigest";
-import { absoluteEnginePath, engineIo, writeEngineText } from "./engineFiles";
+import { absoluteEnginePath, engineIo, readEngineHeader, writeEngineText } from "./engineFiles";
 import { MINIMUM_MACOS_VERSION } from "./darwinConfig";
 import { captureToolUtf8 } from "./processCapture";
 import { readUtf8File } from "./textFile";
+import {
+	WindowsTarget, WindowsVariant, windowsClangTriple, windowsConfigPath,
+} from "./windowsConfig";
 
 const SOURCE_PREFIX = "llvm-project-";
 const SOURCE_SUFFIX = ".src.tar.xz";
@@ -15,6 +20,21 @@ const DARWIN_SANITIZERS = "asan;tsan;ubsan_minimal";
 const INSTRUMENTED_STAGE = "BOOTSTRAP_";
 const ENGINE_STAGE = "BOOTSTRAP_BOOTSTRAP_";
 const ENGINE_TARGET = "stage2-install-distribution-stripped";
+const WINDOWS_ENGINE_TARGET = "install-distribution-stripped";
+const WINDOWS_STAGE_FLAGS: string[] = [
+	"-DCMAKE_BUILD_TYPE=Release", "-DLLVM_TARGETS_TO_BUILD=Native", "-DLLVM_INCLUDE_TESTS=OFF",
+	"-DLLVM_INCLUDE_BENCHMARKS=OFF", "-DLLVM_INCLUDE_EXAMPLES=OFF", "-DLLVM_ENABLE_ZLIB=OFF",
+	"-DLLVM_ENABLE_ZSTD=OFF", "-DLLVM_ENABLE_LIBXML2=OFF", "-DLLVM_ENABLE_ASSERTIONS=OFF",
+];
+const STAGE0_RUNTIME_OFF: string[] = [
+	"BUILD_SANITIZERS", "BUILD_XRAY", "BUILD_LIBFUZZER", "BUILD_MEMPROF", "BUILD_ORC",
+	"BUILD_CTX_PROFILE", "BUILD_GWP_ASAN", "INCLUDE_TESTS",
+];
+const STAGE0_TOOLS: string[] = ["clang", "lld", "llvm-profdata", "llvm-ar", "llvm-ranlib", "llvm-rc"];
+const BUNDLE_TOOLS: string[] = ["clang.exe", "clang++.exe", "llvm-rc.exe", "llvm-ar.exe", "llvm-ranlib.exe"];
+const TRAINING_OBJECT = "tools/clang/lib/Sema/CMakeFiles/obj.clangSema.dir/Sema.cpp.obj";
+const UNTRAINED_FUNCTIONS_QUIET = "-Wno-backend-plugin";
+const PROFILE_SUFFIX = ".profraw";
 
 export struct SourceTools {
 	cc: string;
@@ -37,6 +57,32 @@ export struct SourceEngineRequest {
 	output: string;
 	jobs: int32;
 	tools: SourceTools;
+	bundle: string;
+}
+
+export struct WindowsStages {
+	cmake: string;
+	ninja: string;
+	source: string;
+	work: string;
+	bundle: string;
+	bundleMajor: string;
+	target: WindowsTarget;
+	jobs: int32;
+}
+
+export struct WindowsStagePlan {
+	stage0: EngineCommand[];
+	stage0Runtimes: EngineCommand;
+	instrument: EngineCommand[];
+	trainConfigure: EngineCommand;
+	train: EngineCommand;
+	engine: EngineCommand[];
+}
+
+export struct StageConfig {
+	name: string;
+	text: string;
 }
 
 export struct SourceEdit {
@@ -286,6 +332,192 @@ export function extractLlvmSource(
 	return Result.ok(source);
 }
 
+function windowsConfigure(stages: WindowsStages, stage: string, settings: string[]): EngineCommand {
+	return { file: stages.cmake, args: [
+		"-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=" + stages.ninja,
+		"-S", join(stages.source, "llvm"), "-B", join(stages.work, stage), ...settings,
+	] };
+}
+
+function windowsNinja(stages: WindowsStages, stage: string, targets: string[]): EngineCommand {
+	return { file: stages.ninja, args: [
+		"-C", join(stages.work, stage), "-j" + String(stages.jobs), ...targets,
+	] };
+}
+
+function builtWith(compilers: string, tools: string): string[] {
+	return [
+		"-DCMAKE_C_COMPILER=" + join(compilers, "clang.exe"),
+		"-DCMAKE_CXX_COMPILER=" + join(compilers, "clang++.exe"),
+		"-DCMAKE_RC_COMPILER=" + join(tools, "llvm-rc.exe"),
+		"-DCMAKE_AR=" + join(tools, "llvm-ar.exe"),
+		"-DCMAKE_RANLIB=" + join(tools, "llvm-ranlib.exe"),
+	];
+}
+
+function bundleConfig(stages: WindowsStages, cpp: boolean): string {
+	return join(join(stages.bundle, "runtime"),
+		windowsConfigPath(stages.target, WindowsVariant.Exe, cpp));
+}
+
+export function windowsProfile(stages: WindowsStages): string {
+	return join(stages.work, "profile.profdata");
+}
+
+export function windowsStagePlan(
+	stages: WindowsStages, cache: string, output: string,
+): WindowsStagePlan {
+	const triple = windowsClangTriple(stages.target);
+	const bundleBin = join(stages.bundle, "bin");
+	const stage0Bin = join(stages.work, "stage0/bin");
+	const c = "--no-default-config --config=" + bundleConfig(stages, false);
+	const cxx = "--no-default-config --config=" + bundleConfig(stages, true) +
+		" --config=" + bundleConfig(stages, false);
+	return {
+		stage0: [
+			windowsConfigure(stages, "stage0", [
+				...WINDOWS_STAGE_FLAGS, "-DLLVM_ENABLE_PROJECTS=clang;lld",
+				"-DLLVM_ENABLE_RUNTIMES=compiler-rt",
+				"-DLLVM_BUILTIN_TARGETS=" + triple, "-DLLVM_RUNTIME_TARGETS=" + triple,
+				...STAGE0_RUNTIME_OFF.map((part: string): string =>
+					"-DRUNTIMES_" + triple + "_COMPILER_RT_" + part + "=OFF"),
+				...builtWith(bundleBin, bundleBin), "-DCMAKE_C_FLAGS=" + c,
+				"-DCMAKE_CXX_FLAGS=" + cxx, "-DCMAKE_ASM_FLAGS=" + c, "-DLLVM_USE_LINKER=lld",
+			]),
+			windowsNinja(stages, "stage0", STAGE0_TOOLS),
+		],
+		stage0Runtimes: windowsNinja(stages, "stage0", ["runtimes"]),
+		instrument: [
+			windowsConfigure(stages, "instrument", [
+				...WINDOWS_STAGE_FLAGS, ...builtWith(stage0Bin, stage0Bin), "-DLLVM_ENABLE_LLD=ON",
+				"-DLLVM_ENABLE_PROJECTS=clang", "-DLLVM_BUILD_INSTRUMENTED=IR",
+			]),
+			windowsNinja(stages, "instrument", ["clang"]),
+		],
+		trainConfigure: windowsConfigure(stages, "train", [
+			...WINDOWS_STAGE_FLAGS, ...builtWith(join(stages.work, "instrument/bin"), stage0Bin),
+			"-DLLVM_ENABLE_PROJECTS=clang",
+		]),
+		train: { file: stages.ninja, args: ["-C", join(stages.work, "train"), TRAINING_OBJECT] },
+		engine: [
+			windowsConfigure(stages, "final", [
+				"-C", cache, ...builtWith(stage0Bin, stage0Bin),
+				"-DCMAKE_INSTALL_PREFIX=" + output,
+				"-DCMAKE_C_FLAGS=" + UNTRAINED_FUNCTIONS_QUIET,
+				"-DCMAKE_CXX_FLAGS=" + UNTRAINED_FUNCTIONS_QUIET,
+				"-DLLVM_PROFDATA_FILE=" + windowsProfile(stages),
+			]),
+			windowsNinja(stages, "final", [WINDOWS_ENGINE_TARGET]),
+		],
+	};
+}
+
+export function mergeProfilesCommand(stages: WindowsStages, profiles: string[]): EngineCommand {
+	return { file: join(stages.work, "stage0/bin/llvm-profdata.exe"), args: [
+		"merge", "-output=" + windowsProfile(stages), ...profiles,
+	] };
+}
+
+export function windowsStageConfig(
+	bundleText: string, bundleMajor: string, runtime: string, stage0: string, major: string,
+): Result<string, string> {
+	const bundleResource = "<CFGDIR>/../../lib/clang/" + bundleMajor;
+	const bundleLinker = "<CFGDIR>/../../bin/ld.lld";
+	for (const named of [bundleResource, bundleLinker]) {
+		if (!bundleText.contains(named)) {
+			return Result.err("the bundle's Windows config names no " + named);
+		}
+	}
+	return Result.ok(bundleText
+		.replaceAll(bundleResource, join(stage0, "lib/clang/" + major))
+		.replaceAll(bundleLinker, join(stage0, "bin/ld.lld"))
+		.replaceAll("<CFGDIR>", runtime));
+}
+
+export function windowsStageConfigs(
+	stages: WindowsStages, bundleText: string, major: string,
+): Result<StageConfig[], string> {
+	const triple = windowsClangTriple(stages.target);
+	const text = try windowsStageConfig(bundleText, stages.bundleMajor,
+		dirname(bundleConfig(stages, false)), join(stages.work, "stage0"), major);
+	return Result.ok([
+		{ name: triple + ".cfg", text },
+		{ name: triple + "-clang++.cfg",
+			text: "@" + bundleConfig(stages, true) + "\n@" + triple + ".cfg\n" },
+	]);
+}
+
+export function windowsStagesOf(
+	hostArch: string, cmake: string, ninja: string, work: string, bundlePath: string, jobs: int32,
+): Result<WindowsStages, string> {
+	if (hostArch != "amd64" && hostArch != "x86_64") {
+		return Result.err("the Windows engine stages are written for an x64 host, not " + hostArch);
+	}
+	if (bundlePath == "") {
+		return Result.err("--bundle is required on Windows: its clang and mingw runtime " +
+			"build the first stage");
+	}
+	const bundle = normalize(try absoluteEnginePath(bundlePath));
+	if (bundle.contains(" ")) {
+		return Result.err("--bundle " + bundle + " has a space, which CMAKE_C_FLAGS cannot carry");
+	}
+	const stages: WindowsStages = {
+		cmake: normalize(cmake), ninja: normalize(ninja), source: "", work: normalize(work),
+		bundle, bundleMajor: (try readEngineHeader(bundle)).version.split(".")[0],
+		target: WindowsTarget.X64, jobs,
+	};
+	for (const tool of BUNDLE_TOOLS) {
+		try existingFile("--bundle tool", join(bundle, "bin/" + tool));
+	}
+	try existingFile("--bundle config", bundleConfig(stages, false));
+	try existingFile("--bundle config", bundleConfig(stages, true));
+	return Result.ok(stages);
+}
+
+function profileFiles(directory: string): Result<string[], string> {
+	const names = readDirNames(directory);
+	if (!names.ok) { return Result.err(names.error.message); }
+	const profiles: string[] = [];
+	for (const name of names.value) {
+		if (name.endsWith(PROFILE_SUFFIX)) { profiles.push(join(directory, name)); }
+	}
+	profiles.sort();
+	return Result.ok(profiles);
+}
+
+function writeStageConfigs(bin: string, configs: StageConfig[]): Result<void, string> {
+	for (const config of configs) {
+		try writeEngineText(join(bin, config.name), config.text);
+	}
+	return Result.ok(null);
+}
+
+// Stages after llvm/utils/release/build_llvm_release.bat. The profiles cmake's own compiler
+// checks write are dropped before the training compile, as there: they are not representative.
+function runWindowsStages(
+	stages: WindowsStages, cache: string, output: string, version: string,
+): Result<void, string> {
+	const plan = windowsStagePlan(stages, normalize(cache), normalize(output));
+	const configs = try windowsStageConfigs(stages,
+		try readUtf8File(bundleConfig(stages, false)), version.split(".")[0]);
+	for (const command of plan.stage0) { try runCommand(command); }
+	try writeStageConfigs(join(stages.work, "stage0/bin"), configs);
+	try runCommand(plan.stage0Runtimes);
+	for (const command of plan.instrument) { try runCommand(command); }
+	try writeStageConfigs(join(stages.work, "instrument/bin"), configs);
+	try runCommand(plan.trainConfigure);
+	const profileDirectory = join(stages.work, "instrument/profiles");
+	for (const stale of try profileFiles(profileDirectory)) { try engineIo(remove(stale)); }
+	try runCommand(plan.train);
+	const profiles = try profileFiles(profileDirectory);
+	if (profiles.length == 0) {
+		return Result.err("the training compile wrote no profile into " + profileDirectory);
+	}
+	try runCommand(mergeProfilesCommand(stages, profiles));
+	for (const command of plan.engine) { try runCommand(command); }
+	return Result.ok(null);
+}
+
 export function prepareSourceEngine(
 	request: SourceEngineRequest,
 ): Result<SourceProvenance, string> {
@@ -305,14 +537,24 @@ export function prepareSourceEngine(
 			", expected " + request.sha256);
 	}
 	try refuseExisting(output);
-	const nice = platform == "windows" ? null : try hostTool("nice");
+	const windows = platform == "windows";
+	if (!windows && request.bundle != "") {
+		return Result.err("--bundle builds the first stage on Windows only; here --cc and --cxx do");
+	}
+	const nice = windows ? null : try hostTool("nice");
 	const build = join(work, "build");
 	const install = try buildCommand(ninja, build, request.jobs, nice);
+	const stages = windows ?
+		try windowsStagesOf(arch, cmake, ninja, work, request.bundle, request.jobs) : null;
 	const source = try extractLlvmSource(tarball, version, work);
 	env.set("PATH", pathWithToolDir(ninja, env.get("PATH") ?? "", platform));
-	try runCommand(configureCommand(platform, arch, cmake, ninja, source, build,
-		output, cache, request.tools));
-	try runCommand(install);
+	if (stages != null) {
+		try runWindowsStages({ ...stages, source: normalize(source) }, cache, output, version);
+	} else {
+		try runCommand(configureCommand(platform, arch, cmake, ninja, source, build,
+			output, cache, request.tools));
+		try runCommand(install);
+	}
 	const record: SourceProvenance = {
 		cacheFile: basename(cache),
 		cacheSha256: try sha256File(cache),

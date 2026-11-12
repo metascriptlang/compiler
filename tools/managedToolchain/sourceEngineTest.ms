@@ -1,13 +1,15 @@
-import { cwd } from "std/process";
+import { cwd, platform } from "std/process";
 import { ensureDir, exists, join, removeAll, writeFile } from "std/fs";
 import { randomUUIDSync } from "std/crypto";
 import { sha256File } from "./fileDigest";
 import {
-	LLVM_SOURCE_EDITS, SourceEdit, SourceEngineRequest, SourceTools,
+	LLVM_SOURCE_EDITS, SourceEdit, SourceEngineRequest, SourceTools, WindowsStages,
 	applySourceEdits, buildCommand, configureCommand, isSha256Hex, llvmSourceVersion, onlySymlinkFailures,
-	pathWithToolDir, tarExtractArgs, prepareSourceEngine, sourceEditRecords,
+	mergeProfilesCommand, pathWithToolDir, tarExtractArgs, prepareSourceEngine, sourceEditRecords,
+	windowsStageConfig, windowsStageConfigs, windowsStagePlan, windowsStagesOf,
 } from "./sourceEngine";
 import { readUtf8File } from "./textFile";
+import { WindowsTarget, WindowsVariant, renderWindowsSourceConfig } from "./windowsConfig";
 
 const TOOLS: SourceTools = { cc: "clang", cxx: "clang++", linker: "lld" };
 let cases: int32 = 0;
@@ -137,7 +139,7 @@ function refusalCases(dir: string): void {
 	const output = join(dir, "engine");
 	const request: SourceEngineRequest = {
 		tarball, sha256: "0".repeat(64), cache, cmake: cache, ninja: cache,
-		work, output, jobs: 4, tools: TOOLS,
+		work, output, jobs: 4, tools: TOOLS, bundle: "",
 	};
 	const mismatch = prepareSourceEngine(request);
 	expectRefusal(mismatch,
@@ -159,6 +161,120 @@ function refusalCases(dir: string): void {
 	});
 	expectRefusal(missing,
 		"--cmake", "a missing cmake");
+}
+
+const STAGES: WindowsStages = {
+	cmake: "C:/t/cmake.exe", ninja: "C:/t/ninja.exe", source: "C:/w/src/llvm-project-23.1.4.src",
+	work: "C:/w", bundle: "C:/b", bundleMajor: "22", target: WindowsTarget.X64, jobs: 8,
+};
+
+function windowsPlanCases(): void {
+	const plan = windowsStagePlan(STAGES, "C:/t/llvmEngine.cmake", "C:/o");
+	const stage0 = plan.stage0[0].args.join(" ");
+	expect(plan.stage0[0].file == "C:/t/cmake.exe" &&
+		stage0.contains("-S C:/w/src/llvm-project-23.1.4.src/llvm -B C:/w/stage0") &&
+		stage0.contains("-DCMAKE_MAKE_PROGRAM=C:/t/ninja.exe"),
+		"the first Windows stage is its own build of the extracted source");
+	expect(stage0.contains("-DCMAKE_C_COMPILER=C:/b/bin/clang.exe") &&
+		stage0.contains("-DCMAKE_CXX_COMPILER=C:/b/bin/clang++.exe") &&
+		stage0.contains("-DCMAKE_RC_COMPILER=C:/b/bin/llvm-rc.exe") &&
+		stage0.contains("-DCMAKE_AR=C:/b/bin/llvm-ar.exe"),
+		"the bundle's tools build the first stage");
+	expect(plan.stage0[0].args.includes("-DCMAKE_C_FLAGS=--no-default-config " +
+		"--config=C:/b/runtime/windows/x86_64-windows-gnu.cfg") &&
+		plan.stage0[0].args.includes("-DCMAKE_CXX_FLAGS=--no-default-config " +
+		"--config=C:/b/runtime/windows/x86_64-windows-gnu.cxx.cfg " +
+		"--config=C:/b/runtime/windows/x86_64-windows-gnu.cfg"),
+		"the bundle's clang compiles against the bundle's mingw and C++ runtime configs");
+	expect(stage0.contains("-DLLVM_BUILTIN_TARGETS=x86_64-w64-windows-gnu") &&
+		stage0.contains("-DLLVM_RUNTIME_TARGETS=x86_64-w64-windows-gnu") &&
+		stage0.contains("-DRUNTIMES_x86_64-w64-windows-gnu_COMPILER_RT_BUILD_SANITIZERS=OFF"),
+		"the first stage builds its builtins and profile runtime for the mingw triple, no sanitizer");
+	expect(plan.stage0[1].args.join(" ") ==
+		"-C C:/w/stage0 -j8 clang lld llvm-profdata llvm-ar llvm-ranlib llvm-rc" &&
+		plan.stage0Runtimes.args.join(" ") == "-C C:/w/stage0 -j8 runtimes",
+		"the first stage's tools are built before its runtimes, which its own clang compiles");
+	const instrument = plan.instrument[0].args.join(" ");
+	expect(instrument.contains("-B C:/w/instrument") &&
+		instrument.contains("-DCMAKE_C_COMPILER=C:/w/stage0/bin/clang.exe") &&
+		instrument.contains("-DLLVM_BUILD_INSTRUMENTED=IR") &&
+		instrument.contains("-DLLVM_ENABLE_PROJECTS=clang") &&
+		plan.instrument[1].args.join(" ") == "-C C:/w/instrument -j8 clang",
+		"the first stage builds an instrumented clang");
+	const train = plan.trainConfigure.args.join(" ");
+	expect(train.contains("-DCMAKE_CXX_COMPILER=C:/w/instrument/bin/clang++.exe") &&
+		train.contains("-DCMAKE_AR=C:/w/stage0/bin/llvm-ar.exe") &&
+		plan.train.args.join(" ") ==
+		"-C C:/w/train tools/clang/lib/Sema/CMakeFiles/obj.clangSema.dir/Sema.cpp.obj",
+		"the instrumented clang compiles Sema.cpp as its training");
+	const engine = plan.engine[0].args.join(" ");
+	expect(engine.contains("-B C:/w/final -C C:/t/llvmEngine.cmake") &&
+		engine.contains("-DCMAKE_C_COMPILER=C:/w/stage0/bin/clang.exe") &&
+		engine.contains("-DCMAKE_INSTALL_PREFIX=C:/o") &&
+		engine.contains("-DLLVM_PROFDATA_FILE=C:/w/profile.profdata") &&
+		!engine.contains("BOOTSTRAP") &&
+		plan.engine[1].args.join(" ") == "-C C:/w/final -j8 install-distribution-stripped",
+		"the first stage builds the engine from the cache file with the merged profile");
+	const merge = mergeProfilesCommand(STAGES, ["C:/w/instrument/profiles/a.profraw"]);
+	expect(merge.file == "C:/w/stage0/bin/llvm-profdata.exe" && merge.args.join(" ") ==
+		"merge -output=C:/w/profile.profdata C:/w/instrument/profiles/a.profraw",
+		"the first stage's llvm-profdata merges the training profiles");
+}
+
+function windowsConfigCases(dir: string): void {
+	const rendered = renderWindowsSourceConfig(WindowsTarget.X64, WindowsVariant.Exe, 22);
+	if (!rendered.ok) { throw new Error(rendered.error); }
+	const config = windowsStageConfig(rendered.value, "22", "C:/b/runtime/windows", "C:/w/stage0", "23");
+	expect(config.ok && config.value.contains("-resource-dir C:/w/stage0/lib/clang/23\n") &&
+		config.value.contains("-isystem C:/w/stage0/lib/clang/23/include\n") &&
+		config.value.contains("--ld-path=C:/w/stage0/bin/ld.lld\n") &&
+		config.value.contains("--sysroot=C:/b/runtime/windows/x86_64-windows-gnu\n") &&
+		!config.value.contains("<CFGDIR>") && !config.value.contains("clang/22"),
+		"a stage's clang keeps the bundle's mingw runtime and takes its own headers, runtime and linker");
+	expectRefusal(windowsStageConfig(rendered.value, "21", "C:/r", "C:/s", "23"),
+		"names no <CFGDIR>/../../lib/clang/21", "a config of another LLVM major than the bundle's");
+	expectRefusal(windowsStageConfig("-target x\n-resource-dir <CFGDIR>/../../lib/clang/22\n",
+		"22", "C:/r", "C:/s", "23"),
+		"names no <CFGDIR>/../../bin/ld.lld", "a config that names no bundle linker");
+	const configs = windowsStageConfigs(STAGES, rendered.value, "23");
+	expect(configs.ok && configs.value.length == 2 &&
+		configs.value[0].name == "x86_64-w64-windows-gnu.cfg" &&
+		configs.value[1].name == "x86_64-w64-windows-gnu-clang++.cfg" &&
+		configs.value[1].text == "@C:/b/runtime/windows/x86_64-windows-gnu.cxx.cfg\n" +
+		"@x86_64-w64-windows-gnu.cfg\n",
+		"a stage's bin holds the default configs clang and clang++ look up by triple");
+	expectRefusal(windowsStagesOf("arm64", "c", "n", dir, dir, 4), "x64 host", "an arm64 Windows host");
+	expectRefusal(windowsStagesOf("amd64", "c", "n", dir, "", 4), "--bundle is required",
+		"a Windows build without a bundle");
+	const bundle = join(dir, "bundle");
+	for (const sub of ["bin", "runtime/windows"]) {
+		const made = ensureDir(join(bundle, sub));
+		if (!made.ok) { throw new Error(made.error.message); }
+	}
+	written(join(bundle, "HOST"), "x86_64-windows\n");
+	written(join(bundle, "VERSION"), "22.1.0\n");
+	written(join(bundle, "runtime/windows/x86_64-windows-gnu.cfg"), rendered.value);
+	written(join(bundle, "runtime/windows/x86_64-windows-gnu.cxx.cfg"), "-stdlib=libc++\n");
+	for (const tool of ["clang.exe", "clang++.exe", "llvm-rc.exe", "llvm-ar.exe"]) {
+		written(join(bundle, "bin/" + tool), "tool");
+	}
+	expectRefusal(windowsStagesOf("amd64", "c", "n", dir, bundle, 4), "llvm-ranlib.exe is not a file",
+		"a bundle without a tool the first stage needs");
+	written(join(bundle, "bin/llvm-ranlib.exe"), "tool");
+	const stages = windowsStagesOf("amd64", "c", "n", dir, bundle, 4);
+	expect(stages.ok && stages.value.bundleMajor == "22" && stages.value.jobs == 4 &&
+		stages.value.bundle.endsWith("/bundle"),
+		"a bundle with its tools and Windows configs carries its LLVM major");
+	if (platform != "windows") {
+		const tarball = written(join(dir, "llvm-project-1.2.3.src.tar.xz"), "not a tarball");
+		const digest = sha256File(tarball);
+		if (!digest.ok) { throw new Error(digest.error); }
+		expectRefusal(prepareSourceEngine({
+			tarball, sha256: digest.value, cache: tarball, cmake: tarball, ninja: tarball,
+			work: join(dir, "bundleWork"), output: join(dir, "bundleEngine"), jobs: 4, tools: TOOLS,
+			bundle,
+		}), "--bundle builds the first stage on Windows only", "a bundle on a host that bootstraps");
+	}
 }
 
 function editCases(dir: string): void {
@@ -186,8 +302,10 @@ function editCases(dir: string): void {
 function run(): void {
 	versionCases();
 	commandCases();
+	windowsPlanCases();
 	const dir = scratch();
 	refusalCases(dir);
+	windowsConfigCases(dir);
 	editCases(dir);
 	const cleaned = removeAll(dir);
 	if (!cleaned.ok) { throw new Error(cleaned.error.message); }
