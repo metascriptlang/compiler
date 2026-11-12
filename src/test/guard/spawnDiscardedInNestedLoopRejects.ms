@@ -25,7 +25,11 @@ async function fire(box: Box): Promise<void> {
 	}
 }
 
-const shared = new Box();
-shared.items.push(1);
-await fire(shared);
-shared.items = [];
+async function main(): Promise<void> {
+	const shared = new Box();
+	shared.items.push(1);
+	await fire(shared);
+	shared.items = [];
+}
+
+await main();
