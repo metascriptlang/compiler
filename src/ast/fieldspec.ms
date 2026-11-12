@@ -177,7 +177,7 @@ function rebuildDeferStmt(n: Node, X: FieldXform): NodeData { const d = n.data a
 function rebuildTestDecl(n: Node, X: FieldXform): NodeData { const d = n.data as TestDeclData; return { testName: X.str(d.testName), testBody: X.node(d.testBody) as Node } as NodeData; }
 function rebuildAssertStmt(n: Node, X: FieldXform): NodeData { const d = n.data as AssertStmtData; return { assertExpr: X.node(d.assertExpr) as Node, assertSource: X.str(d.assertSource), assertMessage: X.str(d.assertMessage), assertMessageExpr: X.node(d.assertMessageExpr) } as NodeData; }
 function rebuildExternDecl(n: Node, X: FieldXform): NodeData { const d = n.data as ExternDeclData; return { externKind: X.integer(d.externKind as int32 as int64) as int32 as ExternKind, externName: X.str(d.externName), nativeName: X.str(d.nativeName), externType: X.str(d.externType) } as NodeData; }
-function rebuildMacroDecl(n: Node, X: FieldXform): NodeData { const d = n.data as MacroDeclData; return { macroDeclName: X.str(d.macroDeclName), macroDeclParams: X.strArr(d.macroDeclParams), macroDeclParamTypes: X.strArr(d.macroDeclParamTypes), macroDeclReturnType: X.str(d.macroDeclReturnType), macroDeclBody: X.node(d.macroDeclBody) as Node } as NodeData; }
+function rebuildMacroDecl(n: Node, X: FieldXform): NodeData { const d = n.data as MacroDeclData; return { macroDeclName: X.str(d.macroDeclName), macroDeclParams: X.strArr(d.macroDeclParams), macroDeclParamTypes: X.strArr(d.macroDeclParamTypes), macroDeclTypeParams: X.str(d.macroDeclTypeParams), macroDeclReturnType: X.str(d.macroDeclReturnType), macroDeclBody: X.node(d.macroDeclBody) as Node } as NodeData; }
 function rebuildQuoteExpr(n: Node, X: FieldXform): NodeData { const d = n.data as QuoteExprData; return { quoteBody: X.node(d.quoteBody) as Node } as NodeData; }
 function rebuildComptimeBlock(n: Node, X: FieldXform): NodeData { const d = n.data as ComptimeBlockData; return { comptimeBody: X.node(d.comptimeBody) as Node } as NodeData; }
 function rebuildTypeGeneric(n: Node, X: FieldXform): NodeData { const d = n.data as TypeGenericData; return { typExprBase: X.node(d.typExprBase) as Node, typExprArgs: X.nodes(d.typExprArgs) as Node[] } as NodeData; }
@@ -365,7 +365,7 @@ export function nodeFields(n: Node, V: FieldSink): void {
 	if (kind == NodeKind.TestDecl) { const d = n.data as TestDeclData; V.str("testName", d.testName); V.node("testBody", d.testBody); return; }
 	if (kind == NodeKind.AssertStmt) { const d = n.data as AssertStmtData; V.node("assertExpr", d.assertExpr); V.str("assertSource", d.assertSource); V.str("assertMessage", d.assertMessage); V.node("assertMessageExpr", d.assertMessageExpr); return; }
 	if (kind == NodeKind.ExternDecl) { const d = n.data as ExternDeclData; V.integer("externKind", d.externKind as int32 as int64); V.str("externName", d.externName); V.str("nativeName", d.nativeName); V.str("externType", d.externType); return; }
-	if (kind == NodeKind.MacroDecl) { const d = n.data as MacroDeclData; V.str("macroDeclName", d.macroDeclName); V.strArr("macroDeclParams", d.macroDeclParams); V.strArr("macroDeclParamTypes", d.macroDeclParamTypes); V.str("macroDeclReturnType", d.macroDeclReturnType); V.node("macroDeclBody", d.macroDeclBody); return; }
+	if (kind == NodeKind.MacroDecl) { const d = n.data as MacroDeclData; V.str("macroDeclName", d.macroDeclName); V.strArr("macroDeclParams", d.macroDeclParams); V.strArr("macroDeclParamTypes", d.macroDeclParamTypes); V.str("macroDeclTypeParams", d.macroDeclTypeParams); V.str("macroDeclReturnType", d.macroDeclReturnType); V.node("macroDeclBody", d.macroDeclBody); return; }
 	if (kind == NodeKind.QuoteExpr) { const d = n.data as QuoteExprData; V.node("quoteBody", d.quoteBody); return; }
 	if (kind == NodeKind.ComptimeBlock) { const d = n.data as ComptimeBlockData; V.node("comptimeBody", d.comptimeBody); return; }
 	if (kind == NodeKind.TypeGeneric) { const d = n.data as TypeGenericData; V.node("typExprBase", d.typExprBase); V.nodes("typExprArgs", d.typExprArgs); return; }
@@ -515,7 +515,7 @@ export function pkSamples(rootSym: Symbol, nodeTypeSample: Type, convTypeSample:
 	out.push(createNodeAt(NodeKind.TestDecl, { testName: "t", testBody: block } as NodeData, makeLoc(17, 70)));
 	out.push(createNodeAt(NodeKind.AssertStmt, { assertExpr: a, assertSource: "src.ms", assertMessage: "msg", assertMessageExpr: pkIdent("am") } as NodeData, makeLoc(17, 71)));
 	out.push(createNodeAt(NodeKind.ExternDecl, { externKind: 2 as int32 as ExternKind, externName: "ext", nativeName: "nat", externType: "void" } as NodeData, makeLoc(17, 72)));
-	out.push(createNodeAt(NodeKind.MacroDecl, { macroDeclName: "md", macroDeclParams: ["p"], macroDeclParamTypes: ["string"], macroDeclReturnType: "void", macroDeclBody: block } as NodeData, makeLoc(17, 73)));
+	out.push(createNodeAt(NodeKind.MacroDecl, { macroDeclName: "md", macroDeclParams: ["p"], macroDeclParamTypes: ["string"], macroDeclTypeParams: "T", macroDeclReturnType: "void", macroDeclBody: block } as NodeData, makeLoc(17, 73)));
 	out.push(createNodeAt(NodeKind.QuoteExpr, { quoteBody: block } as NodeData, makeLoc(17, 74)));
 	out.push(createNodeAt(NodeKind.ComptimeBlock, { comptimeBody: block } as NodeData, makeLoc(17, 75)));
 	out.push(createNodeAt(NodeKind.SizeofExpr, { sizeofType: "int32" } as NodeData, makeLoc(17, 76)));
@@ -645,7 +645,7 @@ export function pkDumpNode(n: Node | null, withMeta: boolean = true): string {
 	if (kind == NodeKind.TestDecl) { const d = n.data as TestDeclData; return s + `test=${d.testName}:${pkDumpNode(d.testBody, withMeta)}`; }
 	if (kind == NodeKind.AssertStmt) { const d = n.data as AssertStmtData; return s + `assert=${pkDumpNode(d.assertExpr, withMeta)}:${d.assertSource}:${d.assertMessage}:${pkDumpNode(d.assertMessageExpr, withMeta)}`; }
 	if (kind == NodeKind.ExternDecl) { const d = n.data as ExternDeclData; return s + `ext=${d.externKind as int32}:${d.externName}:${d.nativeName}:${d.externType}`; }
-	if (kind == NodeKind.MacroDecl) { const d = n.data as MacroDeclData; return s + `mdecl=${d.macroDeclName}:${d.macroDeclParams.join("|")}:${d.macroDeclParamTypes.join("|")}:${d.macroDeclReturnType}:${pkDumpNode(d.macroDeclBody, withMeta)}`; }
+	if (kind == NodeKind.MacroDecl) { const d = n.data as MacroDeclData; return s + `mdecl=${d.macroDeclName}:${d.macroDeclParams.join("|")}:${d.macroDeclParamTypes.join("|")}:${d.macroDeclTypeParams}:${d.macroDeclReturnType}:${pkDumpNode(d.macroDeclBody, withMeta)}`; }
 	if (kind == NodeKind.QuoteExpr) { const d = n.data as QuoteExprData; return s + `quote=${pkDumpNode(d.quoteBody, withMeta)}`; }
 	if (kind == NodeKind.ComptimeBlock) { const d = n.data as ComptimeBlockData; return s + `cp=${pkDumpNode(d.comptimeBody, withMeta)}`; }
 	if (kind == NodeKind.SizeofExpr) { const d = n.data as SizeofExprData; return s + `sizeof=${d.sizeofType}`; }

@@ -1233,6 +1233,7 @@ function addKindFields(node: Node, keys: string[], values: Node[], loc: SourceLo
 		addStrField(keys, values, "macroDeclName", d.macroDeclName, loc);
 		addStrArrayField(keys, values, "macroDeclParams", d.macroDeclParams, loc);
 		addStrArrayField(keys, values, "macroDeclParamTypes", d.macroDeclParamTypes, loc);
+		addStrField(keys, values, "macroDeclTypeParams", d.macroDeclTypeParams, loc);
 		addStrField(keys, values, "macroDeclReturnType", d.macroDeclReturnType, loc);
 		addNodeField(keys, values, "macroDeclBody", d.macroDeclBody, loc);
 		return;
@@ -2700,7 +2701,7 @@ test "nodeToASTLiteral writes the explicit type arguments of a call" {
 
 function defineTestMacro(ctx: CheckerContext, name: string, loc: SourceLocation): void {
 	const decl = createNode(NodeKind.MacroDecl, {
-		macroDeclName: name, macroDeclParams: [], macroDeclParamTypes: [], macroDeclReturnType: "",
+		macroDeclName: name, macroDeclParams: [], macroDeclParamTypes: [], macroDeclTypeParams: "", macroDeclReturnType: "",
 		macroDeclBody: createNode(NodeKind.BlockStmt, { statements: [] }, synthToken(loc)),
 	}, synthToken(loc));
 	const sym = makeSymbol(name, SymbolKind.Macro, noneType(), false);

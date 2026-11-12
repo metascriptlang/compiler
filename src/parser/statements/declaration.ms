@@ -2052,7 +2052,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 }
 
 // ===== Macro Declaration =====
-// syntax: 'macro' ID '(' params ')' (':' type)? block
+// syntax: 'macro' ID ('<' type params '>')? '(' params ')' (':' type)? block
 
 export function parseMacroDecl(state: ParserState): NodeResult {
 	const macroToken = current(state);
@@ -2064,6 +2064,7 @@ export function parseMacroDecl(state: ParserState): NodeResult {
 	}
 	advance(state);
 
+	const macroDeclTypeParams = captureGenericParams(state);
 	const raw = parseParamList(state, nameToken.value);
 	const macroDeclParams = extractParamNames(raw);
 	const macroDeclParamTypes = extractParamTypes(raw);
@@ -2081,6 +2082,7 @@ export function parseMacroDecl(state: ParserState): NodeResult {
 		macroDeclName: nameToken.value,
 		macroDeclParams,
 		macroDeclParamTypes,
+		macroDeclTypeParams,
 		macroDeclReturnType,
 		macroDeclBody: body,
 	}, macroToken);
@@ -2119,6 +2121,7 @@ export function parseConverterDecl(state: ParserState): NodeResult {
 		macroDeclName: nameToken.value,
 		macroDeclParams: params,
 		macroDeclParamTypes: paramTypes,
+		macroDeclTypeParams: "",
 		macroDeclReturnType,
 		macroDeclBody: body,
 	}, convToken);
@@ -2521,6 +2524,18 @@ test "macro body is block" {
 test "macro return type" { assert programOk("macro foo(): Node { return x; }"); }
 
 test "macro empty params" { assert programOk("macro noop() { }"); }
+
+test "macro type parameters are carried" {
+	const d = stmtAt("macro where<R, K>(this t: Table<R, K>, f: (row: R) => boolean): Node { return t; }", 0).data as MacroDeclData;
+	assert d.macroDeclTypeParams == "R,K";
+	assert d.macroDeclParams.length == 2;
+	assert d.macroDeclParamTypes[1] == "(row: R) => boolean";
+}
+
+test "macro without type parameters carries none" {
+	const d = stmtAt("macro foo(x) { return x; }", 0).data as MacroDeclData;
+	assert d.macroDeclTypeParams == "";
+}
 
 test "async function" { assert programOk("async function f() {}"); }
 

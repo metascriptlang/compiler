@@ -775,7 +775,7 @@ function buildNodeData(kind: NodeKind, rd: PackReader, nodes: Node[], types: Typ
 	if (kind == NodeKind.TestDecl) return { testName: rd.text(), testBody: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.AssertStmt) return { assertExpr: rd.nodeRef(nodes) as Node, assertSource: rd.text(), assertMessage: rd.text(), assertMessageExpr: rd.nodeRef(nodes) } as NodeData;
 	if (kind == NodeKind.ExternDecl) return { externKind: rd.dec() as ExternKind, externName: rd.text(), nativeName: rd.text(), externType: rd.text() } as NodeData;
-	if (kind == NodeKind.MacroDecl) return { macroDeclName: rd.text(), macroDeclParams: rd.strList(), macroDeclParamTypes: rd.strList(), macroDeclReturnType: rd.text(), macroDeclBody: rd.nodeRef(nodes) as Node } as NodeData;
+	if (kind == NodeKind.MacroDecl) return { macroDeclName: rd.text(), macroDeclParams: rd.strList(), macroDeclParamTypes: rd.strList(), macroDeclTypeParams: rd.text(), macroDeclReturnType: rd.text(), macroDeclBody: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.QuoteExpr) return { quoteBody: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.ComptimeBlock) return { comptimeBody: rd.nodeRef(nodes) as Node } as NodeData;
 	if (kind == NodeKind.TypeGeneric) return { typExprBase: rd.nodeRef(nodes) as Node, typExprArgs: rd.nodeList(nodes) } as NodeData;

@@ -811,7 +811,7 @@ test "preludePack: a macro symbol keeps its MacroDecl declaration node" {
 		(ctx.table.current.symbols as Map<int32, Symbol>).set(sym.nameId, sym);
 		const noStmts: Node[] = [];
 		const body = createNodeAt(NodeKind.BlockStmt, { statements: noStmts } as NodeData, makeLoc(3, 1));
-		const decl = createNodeAt(NodeKind.MacroDecl, { macroDeclName: "pkMacro", macroDeclParams: ["value"], macroDeclParamTypes: ["Node"], macroDeclReturnType: "Node", macroDeclBody: body } as NodeData, makeLoc(2, 1));
+		const decl = createNodeAt(NodeKind.MacroDecl, { macroDeclName: "pkMacro", macroDeclParams: ["value"], macroDeclParamTypes: ["Node"], macroDeclTypeParams: "", macroDeclReturnType: "Node", macroDeclBody: body } as NodeData, makeLoc(2, 1));
 		sym.declNode = decl;
 		const key = preludePackKey("macro-decl", ".test");
 		writePreludePack(key, PK_STAMP, ctx, emptyPreludeTables());

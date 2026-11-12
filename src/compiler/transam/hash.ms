@@ -478,7 +478,7 @@ function hashInto(h: TaText, node: Node | null, bodies: boolean): TaText {
 		},
 		NodeKind.MacroDecl => {
 			const d = node.data as MacroDeclData;
-			h = hS(h, d.macroDeclName); h = hStrings(h, d.macroDeclParams); h = hStrings(h, d.macroDeclParamTypes); h = hS(h, d.macroDeclReturnType);
+			h = hS(h, d.macroDeclName); h = hStrings(h, d.macroDeclParams); h = hStrings(h, d.macroDeclParamTypes); h = hS(h, d.macroDeclTypeParams); h = hS(h, d.macroDeclReturnType);
 			h = bodies ? hN(h, d.macroDeclBody) : hNull(h);
 		},
 		NodeKind.QuoteExpr => {

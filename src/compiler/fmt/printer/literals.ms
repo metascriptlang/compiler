@@ -257,7 +257,7 @@ function skipTemplate(source: string, pos: int32): int32 {
 	return end;
 }
 
-function skipBlanks(source: string, from: int32): int32 {
+export function skipBlanks(source: string, from: int32): int32 {
 	let pos = from;
 	while (pos < source.byteLength && (source.byteAt(pos) == " ".code || source.byteAt(pos) == "\t".code)) pos = pos + 1;
 	return pos;
@@ -310,6 +310,10 @@ export function rawBalancedAt(source: string, line: int32, column: int32): strin
 export function rawGenericsAt(source: string, line: int32, column: int32, name: string): string {
 	const start = sourceOffset(source, line, column - 1);
 	if (start < 0) return "";
+	return rawGenericsFrom(source, start, name);
+}
+
+export function rawGenericsFrom(source: string, start: int32, name: string): string {
 	const open = skipBlanks(source, start + name.byteLength);
 	if (open >= source.byteLength || source.byteAt(open) != "<".code) return "";
 	let depth = 0;

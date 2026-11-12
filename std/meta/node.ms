@@ -675,7 +675,7 @@ export type NodeData =
 	| { assertExpr: Owned<Node>, assertSource: string, assertMessage: string, assertMessageExpr: Owned<Node> | null } // AssertStmt
 	// Extern / Macro / Quote variants
 	| { externKind: ExternKind, externName: string, nativeName: string, externType: string } // ExternDecl
-	| { macroDeclName: string, macroDeclParams: string[], macroDeclParamTypes: string[], macroDeclReturnType: string, macroDeclBody: Owned<Node> } // MacroDecl
+	| { macroDeclName: string, macroDeclParams: string[], macroDeclParamTypes: string[], macroDeclTypeParams: string, macroDeclReturnType: string, macroDeclBody: Owned<Node> } // MacroDecl
 	| { quoteBody: Owned<Node> }                                          // QuoteExpr
 	| { comptimeBody: Owned<Node> }                                       // ComptimeBlock
 	// Type expression variants (positioned type AST — standard parity)
@@ -907,7 +907,7 @@ export type PropertyDeclData = { propName: string, propType: string, propIsStati
 export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Owned<Node>, methodIsStatic: boolean, methodFlags: string, methodVisibility: string, methodReturnType: string, methodDefaults: Owned<Node>[], nativeName: string, nameLocation: SourceLocation };
 export type ConstructorDeclData = { ctorParams: string[], ctorParamTypes: string[], ctorBody: Owned<Node>, ctorDefaults: Owned<Node>[], ctorVisibility: string, ctorParamProps: Owned<Node>[], ctorFlags: string }; // ctorParamProps: per parameter, the PropertyDecl a parameter property declares (propVisibility, propIsReadonly as written), null for a plain parameter
 export type ExternDeclData = { externKind: ExternKind, externName: string, nativeName: string, externType: string };
-export type MacroDeclData = { macroDeclName: string, macroDeclParams: string[], macroDeclParamTypes: string[], macroDeclReturnType: string, macroDeclBody: Owned<Node> };
+export type MacroDeclData = { macroDeclName: string, macroDeclParams: string[], macroDeclParamTypes: string[], macroDeclTypeParams: string, macroDeclReturnType: string, macroDeclBody: Owned<Node> };
 export type DecoratedDeclData = { decorators: Owned<Node>[], decoratedNode: Owned<Node> };
 export type ProgramData = { programStmts: Owned<Node>[] };
 export type SpliceManyData = { spliceNodes: Owned<Node>[] };

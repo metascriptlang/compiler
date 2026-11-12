@@ -13,3 +13,9 @@ test "fmt: a macro without a receiver is unchanged" {
 	assert assertFmtPreservesAst(src);
 	assert assertFmtContains(src, "macro whereM(src: Node): Node");
 }
+
+test "fmt: macro type parameters print back as written" {
+	const src = "macro where<R, K>(this t: Table<R, K>, f: (row: R) => boolean): Node { return t; }";
+	assert assertFmtPreservesAst(src);
+	assert assertFmtContains(src, "macro where<R, K>(this t: Table<R, K>, f: (row: R) => boolean): Node");
+}

@@ -1335,6 +1335,7 @@ export function nodeToValue(nodeIn: Node, objHeap: RaiserObjectHeap, arrHeap: Ra
 			setStr(objHeap, arrHeap, handle, "macroDeclName", d.macroDeclName);
 			setStrs(objHeap, arrHeap, handle, "macroDeclParams", d.macroDeclParams);
 			setStrs(objHeap, arrHeap, handle, "macroDeclParamTypes", d.macroDeclParamTypes);
+			setStr(objHeap, arrHeap, handle, "macroDeclTypeParams", d.macroDeclTypeParams);
 			setStr(objHeap, arrHeap, handle, "macroDeclReturnType", d.macroDeclReturnType);
 			setNode(objHeap, arrHeap, handle, "macroDeclBody", d.macroDeclBody);
 		},
@@ -2438,9 +2439,10 @@ function readNodeFromObject(h: int64, kind: NodeKind, objHeap: RaiserObjectHeap,
 			const macroDeclName = readStr(objHeap, arrHeap, h, "macroDeclName");
 			const macroDeclParams = readStrs(objHeap, arrHeap, h, "macroDeclParams");
 			const macroDeclParamTypes = readStrs(objHeap, arrHeap, h, "macroDeclParamTypes");
+			const macroDeclTypeParams = readStr(objHeap, arrHeap, h, "macroDeclTypeParams");
 			const macroDeclReturnType = readStr(objHeap, arrHeap, h, "macroDeclReturnType");
 			const macroDeclBody = readNode(objHeap, arrHeap, h, "macroDeclBody", loc);
-			return createNodeAt(NodeKind.MacroDecl, { macroDeclName, macroDeclParams, macroDeclParamTypes, macroDeclReturnType, macroDeclBody }, loc);
+			return createNodeAt(NodeKind.MacroDecl, { macroDeclName, macroDeclParams, macroDeclParamTypes, macroDeclTypeParams, macroDeclReturnType, macroDeclBody }, loc);
 		},
 		NodeKind.DecoratedDecl => {
 			const decorators = readNodes(objHeap, arrHeap, h, "decorators", loc);

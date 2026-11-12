@@ -19,8 +19,8 @@ import { callPrintNode } from "./callbacks";
 import { macroTakesReceiver, macroParamNames } from "../../../ast/macroParams";
 import { structuralType, printTypeAnnotation, commentedUnionType } from "./types";
 import { objectPatternContent, breaksPatternProperties } from "./expressions";
-import { sourceByteAt, sourceSpan, sourceOffset, writtenInitializer, writtenOptional, writtenTypeAfterOptional, writtenMemberName, unoptionalized, nativeFrom } from "./literals";
-import { flagHas, flagGet, parameterPatterns, groupsParameters, buildParamList, paramListInParens, hugsObjectParam, genericsFor, writtenName, commentedList, paramListComments, headerAsWritten, printCollapsibleBody, isSynthesized, takeStructAccessors, takeListDeclarators, typedAsWritten } from "./statements";
+import { sourceByteAt, sourceSpan, sourceOffset, skipBlanks, rawGenericsFrom, writtenInitializer, writtenOptional, writtenTypeAfterOptional, writtenMemberName, unoptionalized, nativeFrom } from "./literals";
+import { flagHas, flagGet, parameterPatterns, groupsParameters, buildParamList, paramListInParens, hugsObjectParam, genericsFor, wrapGenerics, writtenName, commentedList, paramListComments, headerAsWritten, printCollapsibleBody, isSynthesized, takeStructAccessors, takeListDeclarators, typedAsWritten } from "./statements";
 import {
 	AssignmentLayout, AssignmentShape, plainShape, printAssignmentLike, assembleAssignment, isComplexObjectPattern, isComplexTypeAnnotation,
 	isBreakableTypeAnnotation, isComplexTypeAliasGenerics, isUnbreakableTypeText,
@@ -528,13 +528,26 @@ export function printPropertyDecl(node: Node, options: FormatOptions): Doc {
 	return docGroup([printed, docText(";")]);
 }
 
+// The macro has no name location: the type parameters are read back after `macro` and its name,
+// as the parameter list's own source text carries the spacing and constraints the names drop.
+function macroGenerics(node: Node, d: MacroDeclData, options: FormatOptions): string {
+	if (d.macroDeclTypeParams == "") return "";
+	const start = sourceOffset(options.source, node.location.line, node.location.column - 1);
+	if (start >= 0) {
+		const afterKeyword = skipBlanks(options.source, start + "macro".byteLength);
+		const raw = rawGenericsFrom(options.source, afterKeyword, d.macroDeclName);
+		if (raw != "") return raw;
+	}
+	return wrapGenerics(d.macroDeclTypeParams);
+}
+
 export function printMacroDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as MacroDeclData;
 	const noDefaults: Node[] = [];
 	const params = buildParamList(macroParamNames(d), d.macroDeclParamTypes, noDefaults, options);
 	if (macroTakesReceiver(d)) params[0] = docGroup([docText("this "), params[0]]);
 	const keyword = node.flags.has(NodeFlag.Converter) ? "converter " : "macro ";
-	const parts: Doc[] = [docText(keyword + d.macroDeclName)];
+	const parts: Doc[] = [docText(keyword + d.macroDeclName + macroGenerics(node, d, options))];
 	for (const p of paramListInParens(params, options)) parts.push(p);
 	if (d.macroDeclReturnType != "") parts.push(docText(": " + d.macroDeclReturnType));
 	parts.push(docText(" "));
