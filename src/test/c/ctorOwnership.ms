@@ -102,3 +102,40 @@ test "ctorOwnership: a parent constructor call passes the child's receiver by it
 		assert !body.contains("*)this)"), child + ": " + body;
 	}
 }
+
+const LENT_SRC = `
+class P { name: string; constructor(name: string) { this.name = name; } }
+class Kid { up: Unowned<P> | null; constructor(up: P) { this.up = up; } }
+class Maybe { own: P | null = null; constructor(p: P, on: boolean) { if (on) this.own = p; } }
+function lends(): string {
+	const p = new P("a");
+	const k = new Kid(p);
+	return k.up!.name;
+}
+function branch(): string {
+	const p = new P("b");
+	const m = new Maybe(p, true);
+	return m.own!.name;
+}
+console.log(lends() + branch());
+`;
+
+test "ctorOwnership: a constructor lends a parameter it keeps only through an Unowned edge, and its caller keeps the value" {
+	const result = compileToC(LENT_SRC);
+	assert result.ok, result.error;
+	const kid = initBody(result.value, "Kid");
+	assert kid != "";
+	assert !kid.contains("WasMoved(up_p1)") && !kid.contains("Decref"), kid;
+	const caller = routineBody(result.value, "lends");
+	assert caller != "";
+	assert !caller.contains("msPtrWasMoved(p_1_)"), caller;
+	assert caller.contains("msDecref(p_1_)"), caller;
+}
+
+test "ctorOwnership: a parameter stored under a condition is lent and copied where it is stored" {
+	const result = compileToC(LENT_SRC);
+	assert result.ok, result.error;
+	const maybe = initBody(result.value, "Maybe");
+	assert maybe.contains("msIncref((*this_p0).own)") && !maybe.contains("WasMoved(p_p1)"), maybe;
+	assert !routineBody(result.value, "branch").contains("msPtrWasMoved(p_1_)");
+}

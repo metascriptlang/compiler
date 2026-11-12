@@ -90,6 +90,7 @@ import "./fnFormalArgFit";
 import "./fnParamMode";
 import "./maybeRefPayloadKey";
 import "./sinkParam";
+import "./ctorSunkParams";
 import "./callMagic";
 import "./moduleConstFold";
 import "./aggregateRelation";
