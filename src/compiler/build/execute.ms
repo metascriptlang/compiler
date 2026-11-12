@@ -1,6 +1,6 @@
 import { BuildGraph, GraphNode, GraphPath, GraphArg, GraphCheck, ArgKind, nodeById, sourcePath } from "./configure";
 import { CliOptions } from "../options";
-import { hashFile, loadFileHashes, saveFileHashes } from "../cache";
+import { hashFile, loadFileHashes, saveFileHashes, buildStartMark, changedSinceBuild } from "../cache";
 import { hashContent } from "../../utils/contentHash";
 import { stepStoreRoot, storedOutput, storeScratch, storePublish } from "./store";
 import { atomicCopyFile, atomicWriteFile } from "../io";
@@ -73,12 +73,13 @@ interface Job {
 	errEnded: boolean;
 	live: boolean;
 	expectExit: int32;
+	startMark: number;
 	finish: (j: Job) => void;
 	abandon: () => void;
 }
 
 function job(node: GraphNode, exe: string, args: string[], cwd: string, shown: string, finish: (j: Job) => void, abandon: () => void): Job {
-	return { node, exe, args, cwd, shown, child: null, out: "", err: "", outEnded: false, errEnded: false, live: false, expectExit: -1, finish, abandon };
+	return { node, exe, args, cwd, shown, child: null, out: "", err: "", outEnded: false, errEnded: false, live: false, expectExit: -1, startMark: 0, finish, abandon };
 }
 
 function storeDir(x: Execution): string {
@@ -191,9 +192,9 @@ function runCompile(x: Execution, n: GraphNode, staticLib: boolean): Job | null 
 		x.outputs.set(n.id, out);
 		x.digests.set(n.id, hashFile(out));
 		x.ran.push(label(n));
-		const read = depFileInputs(depFile, x.projectRoot).map((input: string): string => `${keyPath(x, input)}\t${hashFile(input)}`);
+		const read = readSetUnchangedSinceStart(x, j, [depFile], x.projectRoot, tmp);
 		removeAll(depFile);
-		if (read.length == 0 || !atomicCopyFile(out, join(tmp, basename(out)))) return removeAll(tmp);
+		if (read == null || read.length == 0 || !atomicCopyFile(out, join(tmp, basename(out)))) return removeAll(tmp);
 		storePublish(store, key, tmp, treeHash(tmp, []).slice(2), read);
 	}, (): void => removeAll(tmp));
 }
@@ -214,6 +215,18 @@ function depFileInputs(depFile: string, cwd: string): string[] {
 		}
 	}
 	return inputs;
+}
+
+function readSetUnchangedSinceStart(x: Execution, j: Job, depFiles: string[], cwd: string, own: string): string[] | null {
+	const read: string[] = [];
+	for (const depFile of depFiles) {
+		for (const input of depFileInputs(depFile, cwd)) {
+			if (input.startsWith(`${own}/`)) continue;
+			if (changedSinceBuild(input, j.startMark)) return null;
+			read.push(`${keyPath(x, input)}\t${hashFile(input)}`);
+		}
+	}
+	return read;
 }
 
 function writesOutput(n: GraphNode): boolean {
@@ -287,11 +300,16 @@ function runCommand(x: Execution, n: GraphNode): Job | null {
 			writeFile(join(tmp, "stdout"), j.out);
 			j.out = "";
 		}
-		const read: string[] = [];
 		for (const depFile of depFiles) {
-			for (const input of depFileInputs(depFile, dir)) {
-				if (!input.startsWith(`${tmp}/`)) read.push(`${keyPath(x, input)}\t${hashFile(input)}`);
-			}
+			if (exists(depFile)) continue;
+			removeAll(tmp);
+			throw new Error(`${label(n)}: ${argv.join(" ")} did not write its depfile ${basename(depFile)}`);
+		}
+		const read = readSetUnchangedSinceStart(x, j, depFiles, dir, tmp);
+		if (read == null) {
+			x.outputs.set(n.id, tmp);
+			x.digests.set(n.id, `ran:${n.id}:${treeHash(tmp, []).slice(2)}`);
+			return;
 		}
 		const digest = treeHash(tmp, []).slice(2);
 		const placed = storePublish(store, key, tmp, digest, read);
@@ -524,6 +542,7 @@ function executePlan(x: Execution, id: int32): string {
 					done.add(n.id);
 					continue;
 				}
+				j.startMark = buildStartMark();
 				const child = spawn(j.exe, j.args, { cwd: j.cwd });
 				if (!child.ok) {
 					j.abandon();
