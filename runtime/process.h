@@ -1626,6 +1626,7 @@ typedef struct {
 	int lastErrno;
 	int64_t written;
 	int64_t peakRss;
+	int64_t peakInheritedAtSpawn;
 } msProcChild;
 
 static inline double _msProcChildNowMs(void) {
@@ -1657,6 +1658,7 @@ static inline void _msProcChildRecordStatus(msProcChild* c, int status, const st
 #else
 	c->peakRss = (int64_t)usage->ru_maxrss * 1024;
 #endif
+	if (c->peakRss <= c->peakInheritedAtSpawn) c->peakRss = 0;
 }
 
 /* One read into the stream's buffer; the fd was reported ready, so it cannot block. */
@@ -1854,6 +1856,10 @@ static inline int64_t _msProcChildSpawnImpl(
 	if (c->err.fd >= 0) fcntl(c->err.fd, F_SETFL, fcntl(c->err.fd, F_GETFL) | O_NONBLOCK);
 #if defined(F_SETNOSIGPIPE)
 	fcntl(c->inFd, F_SETNOSIGPIPE, 1);
+#endif
+#if defined(__linux__)
+	struct rusage self;
+	if (getrusage(RUSAGE_SELF, &self) == 0) c->peakInheritedAtSpawn = (int64_t)self.ru_maxrss * 1024;
 #endif
 	return (int64_t)(intptr_t)c;
 }

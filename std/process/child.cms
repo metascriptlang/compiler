@@ -185,7 +185,7 @@ export class ChildProcess {
 		return Result.err(this.osError("kill"));
 	}
 
-	// The most memory the reaped child and the children it waited for held at once, in bytes; null before it is reaped or where the OS does not say.
+	// The most memory the reaped child and the children it waited for held at once, in bytes; null before it is reaped, where the OS does not say, and on Linux when it is no higher than this process's own peak, which a child's count starts from.
 	peakRss(): number | null {
 		const peak = msProcChildPeakRss(this.handle);
 		return peak > 0 ? peak as number : null;
