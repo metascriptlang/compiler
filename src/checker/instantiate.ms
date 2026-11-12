@@ -1681,6 +1681,7 @@ function ctorVariant(ctx: CheckerContext, owner: Symbol, impl: Symbol, sig: Symb
 	declNode.nodeType = createFunction(formals, params, voidType());
 	const thisType = impl.symbolType.typeChildren[0];
 	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
+	host.outOfTree.push(declNode);
 	const bodyCtx = pickBodyCtx(owner.modulePath, ctx, owner);
 	const routine = mintCtorVariant(host, owner, thisType, formals, params, declNode);
 	routine.state = SymbolState.Checked;

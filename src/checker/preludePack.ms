@@ -655,7 +655,7 @@ function tryLoadPreludePackBody(body: string, dispatchRegistry: DispatchRegistry
 		const oi = ctorOwnerIdx[i];
 		const ri = ctorRoutineIdx[i];
 		if (oi < 0 || oi >= syms.length || ri < 0 || ri >= syms.length) return null;
-		tables.ctorRoutines.push({ owner: syms[oi], routine: syms[ri], routineDecl: null });
+		tables.ctorRoutines.push({ owner: syms[oi], routine: syms[ri] });
 	}
 	ctx.preludeDispatchRecords = tables.dispatch;
 	replayPreludeTables(tables, dispatchRegistry);
@@ -972,7 +972,7 @@ test "preludePack: a hit links a class and its constructor routine both ways and
 		owner.nameId = getIdentId(ctx.table.identCache, owner.name);
 		(ctx.table.current.symbols as Map<int32, Symbol>).set(owner.nameId, owner);
 		const tables = emptyPreludeTables();
-		tables.ctorRoutines.push({ owner, routine, routineDecl: null });
+		tables.ctorRoutines.push({ owner, routine });
 		const key = preludePackKey("ctor-routine", ".test");
 		writePreludePack(key, PK_STAMP, ctx, tables);
 		const outer = startCtorCapture();

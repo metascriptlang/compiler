@@ -284,6 +284,14 @@ test "macro std tiers: a std class the engine checks again for a macro stays not
 	assert buffers.length == 1 && buffers[0].sym == buffer, `${buffers.length} Buffer notes`;
 }
 
+test "macro std tiers: a macro that builds a std class through a constructor signature runs in every compile of one process" {
+	for (let round = 0; round < 3; round += 1) {
+		const result = compileToCWithStd(stdCallMacro('import { toHex } from "std/crypto";', "toHex(Buffer.from([1, 2, 255]))"));
+		assert result.ok, result.ok ? "" : `round ${round}: ${result.error}`;
+		if (result.ok) assert result.value.contains("0102ff"), `round ${round}`;
+	}
+}
+
 test "macro std tiers: an extern with no host bridge called by a macro or a @comptime block is refused by its name" {
 	const viaMacro = compileToCWithStd(stdCallMacro("extern function msOsHostname(): string;", "msOsHostname().length"));
 	const viaBlock = compileToCWithStd("extern function msOsHostname(): string; const n: number = @comptime { return msOsHostname().length; }; console.log(n);");
