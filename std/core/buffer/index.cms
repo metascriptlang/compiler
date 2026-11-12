@@ -942,6 +942,7 @@ export function bufReverse(this buf: Buffer): void {
 
 // --- Variable-Length Integer Read/Write (1-6 bytes) ---
 
+@inline
 function readVariable(
 	this buf: Buffer,
 	offset: number,
@@ -956,6 +957,7 @@ function readVariable(
 	return signed ? signExtend(value, width << 3) as number : value as number;
 }
 
+@inline
 function writeVariable(
 	this buf: Buffer,
 	value: number,
