@@ -413,6 +413,36 @@ Pinned by `src/test/guard/helloLinksNoAsyncRuntime.ms`. Not measured: Windows si
 15dd34468 (`~/projects/nim/bin` holds no compiler), and wasm/emcc, whose `main` calls
 `msDrainUntilIdle` directly.
 
+## Measured 2026-11-12 — a one-char literal links the payload table only
+
+rtx, Linux x86-64, `msc build --danger --strip`; before = the compiler of tree `e9d81b35dc9e`, after =
+a candidate of that tree with the change, both building the same four programs (their sources are
+described in §Measured 2026-11-12 — what small programs link):
+
+| program | file before | after | `.rodata` before | after |
+|---|---|---|---|---|
+| hello | 8,960 B | 8,960 | 192 | 192 |
+| Map/Set/array | 39,728 | 37,600 | 5,400 | 3,280 |
+| strings | 59,528 | 57,448 | 20,352 | 18,232 |
+| two awaits in an async function | 56,192 | 54,048 | 6,112 | 3,992 |
+
+The C emitter wrote a one-char ASCII literal as `msCharTable[c]`, an element of a 128-entry
+`msString` table that points into the 128 payloads of `msCharPayloads`; the `" "` that separates
+`console.log` arguments is such a literal, so nearly every program linked both tables, 4,096 B. The
+literal and the `s[i]` fast path (`msStringCharAt`, `msStringAsciiChar`, `msCharTableAt`) now build
+the `msString` in place, `MS_STRING_LIT(&msCharPayloads[c], 1)`, which reads no table and keeps the
+payload a literal `"a"` and `"abc"[0]` share. Every program printed the same output before and after.
+Self-host chain on that candidate: g2 and g3 emit 550 byte-identical C files, with 6,063 uses of
+`msCharPayloads[` and none of `msCharTable[`. 15 string and char corpus programs: 90 cells pass, 15
+under SAN.
+
+Not done: the payload table itself (2,048 B) stays in every program with a one-char literal. Dropping
+it means giving a one-char literal its own payload, which ends the shared payload between a literal
+and an indexed char; how `s[i] == "x"` compares was not traced. Not measured: run time of `s[i]`
+(the change removes one 16-byte load), macOS and Windows sizes.
+
+Pinned by `src/test/guard/oneCharLiteralLinksNoStringTable.ms`.
+
 ## Measured 2026-11-08 — the prepared bundle becomes the default; Windows leaves zig's runtime
 
 With no `--cc`, msc builds with the prepared clang/lld bundle every target the bundle carries a runtime for, and
