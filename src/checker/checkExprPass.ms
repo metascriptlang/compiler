@@ -3954,7 +3954,7 @@ function checkMacroInvocation(ctx: CheckerContext, node: Node, expectedType: Typ
 	}
 	// @import args are pure syntax (not evaluated) — skip type-checking
 	foldComptimeNodeAliasArgs(ctx, md.macroArgs);
-	if (md.macroName != "import") { checkJsxConsumed(ctx, md.macroArgs, invokedMacroSym(ctx, node)); }
+	if (md.macroName != "import") { checkMacroArgs(ctx, node, md.macroArgs, invokedMacroSym(ctx, node)); }
 	// SERIALIZE Bug 8: deferred user macros expand eagerly when re-checked
 	// with concrete types. After mono clones a generic body, replaceTypeVars
 	// substitutes T→concrete in arg.nodeType. The re-check then hits this
@@ -4864,7 +4864,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
 import { instantiateClassConstructor, pickBodyCtx, literalFieldInitializer, instantiateParentClass, declaresUserHook, lookupInstanceHook } from "./instantiate";
-import { readSignatureReturn, iterateSpreadSource, adoptExpansionResult, anyArgIsParametric, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, keepFoldedType, keepComptimeNominalType, isNominalLiteralType, takeDefaultArgTemps, adoptAwaitedThenable, adoptAwaitedValue, awaitReturnedThenable, refuseUnhashableKey, declaresField } from "./callResolve";
+import { readSignatureReturn, iterateSpreadSource, adoptExpansionResult, anyArgIsParametric, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMacroArgs, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, keepFoldedType, keepComptimeNominalType, isNominalLiteralType, takeDefaultArgTemps, adoptAwaitedThenable, adoptAwaitedValue, awaitReturnedThenable, refuseUnhashableKey, declaresField } from "./callResolve";
 
 function bodyIntoBlock(body: Node, temps: Node[]): void {
 	const value = createNodeAt(NodeKind.Identifier, { name: "" }, body.location);

@@ -140,6 +140,7 @@ import "./localDeclarationIdentity";
 import "./macroCallbackFit";
 import "./macroConverterBoundary";
 import "./macroMethodCall";
+import "./macroLambdaContext";
 import "./macroDiagnostics";
 import "./macroExpansionBoundary";
 import "./macroReflection";

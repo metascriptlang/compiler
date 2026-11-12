@@ -20,15 +20,15 @@ import { checkImportCall } from "./importCall";
 import { isImportKeyword } from "../module/loader";
 import { getFlowTypeOfReference, isDefinitelyNonNullAt } from "./flow";
 import { BreakState, breaksBlock, collectNewInits, markInitialized, mergeInitBranches, restoreInitState, saveInitState, unwrittenOutParam } from "./initTracker";
-import { instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook, signatureCtorRoutine } from "./instantiate";
+import { declaringModuleCtx, instantiateClassConstructor, pickBodyCtx, clearCheckerState, declaresUserHook, signatureCtorRoutine } from "./instantiate";
 import { ctorRoutineOf, ctorRoutineFor, ctorFormalTypes, ctorSignaturesOf, requiredCtorArgs } from "./ctorRoutine";
-import { bindFromExplicitTypeArgs, explicitTypeArgs, hasExplicitTypeArgs, suppliedTypeArgs, annotatedType, operandAt, builtinTypeHead, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation, builtinTypeNamed, thenSignatureOf, thenablePromised } from "./resolvePass";
+import { bindFromExplicitTypeArgs, explicitTypeArgs, hasExplicitTypeArgs, suppliedTypeArgs, annotatedType, defineGenericParam, operandAt, builtinTypeHead, checkExplicitTypeArgArity, ensureShaped, resolveAnnotation, builtinTypeNamed, thenSignatureOf, thenablePromised } from "./resolvePass";
 import { markConsumedName, symbolConsumeKey } from "./spawnAffinity";
 import { isNodeWireMetaField } from "../compiler/meta/wire";
 import { isMetaNodeSym } from "../compiler/meta/nodeSym";
 import { isContextSensitive, isLiteralTree } from "./speculate";
 import { forEachChild } from "../ast/visitor";
-import { SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, enumMemberName, RoutineFlag, routineFlagSet, classDeclNodeOf, builtinKindName } from "./symbol";
+import { ScopeKind, openScope, closeScope, SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, enumMemberName, RoutineFlag, routineFlagSet, classDeclNodeOf, builtinKindName } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
 import { unwrapCursor, boxedCountedReference, boxedReferenceRefusal, boundParamName, enterSpeculation, leaveSpeculation, TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, isPlainFunctionPointer, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, createBooleanLiteral, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase, holdsInferred, createBorrow, typedArrayElement, withoutUnowned } from "./types";
@@ -357,6 +357,113 @@ export function checkJsxConsumed(ctx: CheckerContext, nodes: Node[], consumer: S
 	for (const n of nodes) {
 		if (n.nodeTypeAst != null) continue;
 		callCheckExpr(ctx, n, null);
+	}
+	ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth - 1;
+	ctx.jsxConsumer = outer;
+}
+
+// A macro formal is a contract the call site checks its argument against when it is a function
+// type or mentions a macro type parameter; every other declared type stays the macro body's own
+// business, and its slot here is null. Resolved in the declaring module's scope with the macro's
+// type parameters defined, because the caller may not import what the formal names.
+function mentionsTypeParam(text: string, names: string[]): boolean {
+	let i = 0;
+	while (i < text.length) {
+		const c = text.charCodeAt(i);
+		const start = (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95 || c == 36;
+		if (!start) { i += 1; continue; }
+		let j = i + 1;
+		while (j < text.length) {
+			const d = text.charCodeAt(j);
+			if (!((d >= 65 && d <= 90) || (d >= 97 && d <= 122) || (d >= 48 && d <= 57) || d == 95 || d == 36)) break;
+			j += 1;
+		}
+		if (names.includes(text.slice(i, j)) && !(i > 0 && text.charCodeAt(i - 1) == 46)) return true;
+		i = j;
+	}
+	return false;
+}
+
+export function macroFormalTypes(ctx: CheckerContext, sym: Symbol, decl: MacroDeclData, at: Node | null): (Type | null)[] {
+	const texts = decl.macroDeclParamTypes;
+	const formals: (Type | null)[] = [];
+	for (let i = 0; i < texts.length; i += 1) formals.push(null);
+	const home = declaringModuleCtx(ctx, sym);
+	if (home == null) return formals;
+	const saved = home.table.current;
+	let top = saved;
+	while (top.scopeKind != ScopeKind.Module && top.parent != null) top = top.parent!;
+	home.table.current = top;
+	openScope(home.table, ScopeKind.Block);
+	const written = splitTopLevel(decl.macroDeclTypeParams, ",").map((n: string): string => n.trim()).filter((n: string): boolean => n != "");
+	const names: string[] = [];
+	for (let i = 0; i < written.length; i += 1) {
+		const gp = defineGenericParam(home, written[i], sym, i as int32);
+		names.push(gp.typeName);
+	}
+	for (let i = 0; i < texts.length; i += 1) {
+		const text = texts[i].trim();
+		if (text == "") continue;
+		const t = resolveAnnotation(text, home, 0, 0);
+		const contractText = text.startsWith("(") || mentionsTypeParam(text, names);
+		if (isUnresolvedType(t) || t.kind == TypeKind.Error || (contractText && holdsInferred(t))) {
+			if (at != null && contractText) {
+				addError(ctx, `macro '${decl.macroDeclName}' parameter ${i} declares type '${text}', which does not resolve in the macro's module`, at.location.line, at.location.column);
+			}
+			continue;
+		}
+		if (t.kind == TypeKind.Function || hasGenericParams(t)) formals[i] = t;
+	}
+	closeScope(home.table);
+	home.table.current = saved;
+	return formals;
+}
+
+function macroArgMismatch(ctx: CheckerContext, node: Node, macroName: string, ai: int32, got: Type, expected: Type): void {
+	addError(ctx, "Argument type mismatch in '" + macroName + "' arg " + String(ai) + ": got " + typeDisplayName(got) + ", expected " + typeDisplayName(expected), node.location.line, node.location.column);
+}
+
+// Check a macro call's arguments. An argument whose formal is a contract is checked against it with
+// the macro's type parameters bound in argument order (the receiver first), so a lambda is typed
+// from the arguments before it and a wrong field is an error at the lambda; context-sensitive
+// arguments go last, as an ordinary generic call orders them. Every other argument is checked as
+// before, with no expected type.
+export function checkMacroArgs(ctx: CheckerContext, node: Node, args: Node[], sym: Symbol | null): void {
+	const decl = macroDeclOf(sym);
+	if (decl == null || sym == null) { checkJsxConsumed(ctx, args, sym); return; }
+	const formals = macroFormalTypes(ctx, sym, decl, node);
+	let contracts = false;
+	for (const f of formals) { if (f != null) contracts = true; }
+	if (!contracts) { checkJsxConsumed(ctx, args, sym); return; }
+	const outer = ctx.jsxConsumer;
+	ctx.jsxConsumer = sym;
+	ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth + 1;
+	const bindings = createUnifyBindings();
+	for (const ai of genericArgOrder(ctx, args, true)) {
+		const arg = args[ai];
+		if (arg.nodeTypeAst != null) continue;
+		const formal = ai < formals.length ? formals[ai] : null;
+		let expected: Type | null = null;
+		if (formal != null) {
+			expected = substituteBound(formal, bindings);
+			if (hasGenericParams(expected)) expected = null;
+		}
+		callCheckExpr(ctx, arg, expected);
+		const got = arg.nodeType;
+		if (formal == null || got == null || hasGenericParams(got) || got.kind == TypeKind.Error || isUnresolvedType(got) || isUnknownType(got)) continue;
+		const before = bindings.names.length;
+		if (hasGenericParams(formal)) {
+			const fwd = createUnifyBindings();
+			unifyType(formal, got, fwd);
+			mergeUnifyBindings(bindings, fwd);
+		}
+		const bound = substituteBound(formal, bindings);
+		const lambda = arg.kind == NodeKind.ArrowFunction || arg.kind == NodeKind.FunctionExpr;
+		if (hasGenericParams(bound)) {
+			if (!lambda && bindings.names.length == before) macroArgMismatch(ctx, node, decl.macroDeclName, ai, got, bound);
+		} else if (!isAssignable(got, bound)) {
+			macroArgMismatch(ctx, node, decl.macroDeclName, ai, got, bound);
+		}
 	}
 	ctx.jsxMacroArgDepth = ctx.jsxMacroArgDepth - 1;
 	ctx.jsxConsumer = outer;
@@ -2261,7 +2368,7 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 			// Type-check args first (errors inside them are reported)
 			foldComptimeNodeAliasArgs(ctx, d.arguments);
 			const macroArgsRef = d.arguments;
-			checkJsxConsumed(ctx, macroArgsRef, sym);
+			checkMacroArgs(ctx, node, macroArgsRef, sym);
 			rewriteCallAsMacroInvocation(node, sym);
 			// SERIALIZE A3 — Defer convention: if any arg has parametric type
 			// (contains GenericParam), DON'T eager-expand. The MacroInvocation
