@@ -999,7 +999,7 @@ test "preludePack: a node keeps a flag in bit 63" {
 		sym.nameId = getIdentId(ctx.table.identCache, sym.name);
 		(ctx.table.current.symbols as Map<int32, Symbol>).set(sym.nameId, sym);
 		const node = createNodeAt(NodeKind.Program, { programStmts: [] } as NodeData, makeLoc(1, 1));
-		node.flags = node.flags.incl(NodeFlag.FilledDefault).incl(NodeFlag.Sem);
+		node.flags = node.flags.incl(NodeFlag.PlainRelease).incl(NodeFlag.Sem);
 		sym.declNode = node;
 		const key = preludePackKey("node-high-flag", ".test");
 		writePreludePack(key, PK_STAMP, ctx, emptyPreludeTables());
@@ -1007,7 +1007,7 @@ test "preludePack: a node keeps a flag in bit 63" {
 		assert loaded != null;
 		const got = loaded.table.current.symbols.get(getIdentId(loaded.table.identCache, "pkFlagFn"));
 		assert got != null && got.declNode != null;
-		assert got.declNode.flags.has(NodeFlag.FilledDefault) && got.declNode.flags.has(NodeFlag.Sem);
+		assert got.declNode.flags.has(NodeFlag.PlainRelease) && got.declNode.flags.has(NodeFlag.Sem);
 		remove(`${packRoot()}/${key}.pk`);
 	} finally {
 		pkLeavePrivateCache(prevHome);
