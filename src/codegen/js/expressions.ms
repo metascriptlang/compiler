@@ -183,7 +183,7 @@ function jsNameOf(gen: JSGenerator, sym: Symbol | null, name: string, declared: 
 		return recordNamespaceImport(gen, sym.modulePath, safeJsName(name));
 	}
 	if (gen.multiFile && sym.jsModulePath != "" && sym.modulePath != "" && sym.modulePath != gen.currentModulePath) {
-		return recordNeededImport(gen, sym.modulePath, safeJsName(name));
+		return recordNeededImport(gen, sym.modulePath, safeJsName(declared));
 	}
 	if (sym.nativeName != null && sym.nativeName != "") {
 		return hasFlag(sym, SymbolFlag.ImportC) && !isNativePattern(sym.nativeName) ? sym.nativeName : safeJsName(name);
