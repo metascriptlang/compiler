@@ -239,3 +239,64 @@ the mixed arm, it measured 0.649 us (median) built by the installed compiler `60
 without the new rows, 0.646 by the candidate without them, and 0.655 by the candidate with
 them, one round of 1.023 at 42% spread. Before the direct calls, with each member call going
 through `value()` and a proxy, `method x1000` measured 20.11 and `field x1000` 20.31 on Node.
+
+## 2026-11-12, m1m, warmed rows; one-flag `enter`, cursor receiver, struct result slots
+
+Candidate of tree `932ebf68601b` (main `3ed9ec329be6` plus the struct result slots) with the
+`x1000` rows of all three sources changed as below. Not a quiet window (load 211 before from other
+jobs, 8 after). Median of 5 rounds, us/op.
+
+| row | mixed | wasmbindgen | mixed-chrome | wasmbindgen-chrome | neon (reference) |
+|---|---|---|---|---|---|
+| add x1000 | 2.882 | 2.516 | 3.186 | 3.889 | 40.51 |
+| add64 x1000 | 4.594 | 16.059 | 4.425 | 15.542 | 62.655 |
+| strLen16 x1000 | 23.641 | 26.154 | 24.088 | 25.415 | 72.966 |
+| echo16 x1000 | 127.07 | 153.455 | 135.426 | 209.897 | 86.943 |
+| mid x1000 | 5.12 | 324.247 | 5.802 | 214.51 | 369.148 |
+| sumVec 1k Array | 1.489 | 1.466 | 1.611 | 1.598 | 52.43 |
+| sumSpan 1k Float32Array | 1.026 | 1.007 | 1.026 | 1.008 | 1.036 |
+| scaleSpan 1k Float32Array | 0.282 | 0.42 | 0.269 | 0.432 | 0.158 |
+| scaleBox 1k held by callee | 0.111 | 0.191 | 0.114 | 0.196 | 0.096 |
+| makeVec 1k | 0.679 | 0.925 | 1.174 | 1.138 | 0.852 |
+| callback 1k | 6.844 | 117.263 | 8.34 | 120.419 | 49.936 |
+| method x1000 | 3.124 | 3.354 | 3.717 | 4.783 | - |
+| field x1000 | 3.202 | 3.283 | 3.858 | 4.502 | - |
+| construct x1000 | 49.065 | 158.474 | 42.336 | 97.058 | - |
+| primes 2M | 5815.505 | 5182.404 | 6010 | 6214 | 4418.832 |
+
+`accept node: 13/15`, the misses `add x1000` (14.5% above) and the parked `primes`; `accept chrome: 15/15`.
+
+**An `x1000` row reads its bound from a module variable and is warmed by 400 one-call ops**
+(`benchWarmed`). With the constant bound `i < 1000` used until this table, wasm-bindgen's Node rows
+`add x1000` and `method x1000` read 11.5 and 13 ns, and its own `field` row 2.85: `node --trace-opt`
+on those rows shows its glue function `add` compiled for Maglev only, while `get n` reaches TurboFan.
+The same rows warmed read 2.5 and 3.3 ns, so the earlier tables credit `mixed` with a win on `add`
+and `method` it does not have. The shape cuts the other way on one row: warmed, wasm-bindgen's
+`add64` reads 16 ns here and in Chrome, against 4.3 to 4.5 with the constant bound, so this table's
+`ok` on `add64` compares with a wasm-bindgen that is not at its best (`mixed` 4.59 is 7% above 4.3).
+Its `field` reads 2.85 with the constant bound and 3.28 warmed. Tried and not kept: warming inside
+the shared harness with the bound passed as a parameter (`method` came down to 3.4, `add` stayed at
+12.2); returning the row's value instead of adding it to `sink` (one `--trace-deopt` bailout instead
+of 131, `add` still 12.3). Not explained: why V8 leaves the glue function in Maglev.
+
+**Where a scalar call's time goes** (the same day, Node, hand-edited copies of the glue the installed
+compiler `6db51a10fb06` emitted for `add`, `h.value().bump(1)` and `h.value().n`, warmed rows, 5
+interleaved rounds, spreads under 4%, ns per call):
+
+| glue | add | method | field |
+|---|---|---|---|
+| as emitted before this day | 3.23 | 3.95 | 4.05 |
+| `enter()` behind one flag test | 2.83 | 3.69 | 3.80 |
+| that, and the member entry borrowing its receiver | 2.81 | 3.10 | 3.24 |
+| every check removed, with the borrowed receiver | 2.74 | 3.05 | 3.19 |
+| wasm-bindgen 0.2.130 | 2.49 | 3.31 | 3.28 |
+
+Removing the `try`/`die` around the call, the `dirty` test or `__msb.at` alone moved no row, so
+the checks stay: together they cost 0.05 to 0.07 ns. The time was in `enter()` as a method that
+tests a closure variable (0.25 to 0.40 ns) and in the member entry counting its receiver up and
+down (0.6 ns; `wasm-dis` shows an i64 load, two i64 stores and a last-reference branch around the
+field load, and one `i32.load` once the receiver is a `Cursor`). What is left on `add` against
+wasm-bindgen is how the wrapper reaches the export: the same wrapper inside a closure that holds
+the export in a `const` read 2.59 against wasm-bindgen's 2.60, where the module-scope function
+read 2.81 (one probe, `add` only; the loop the JS backend emits, the Emscripten instance and the
+wrapper's body each measured no difference).
