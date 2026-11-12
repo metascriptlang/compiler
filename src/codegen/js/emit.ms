@@ -88,6 +88,8 @@ export class JSGenerator {
 	// emitted as JS class fields (the tier-1 actor surface).
 	actorHandle: Node | null;
 	dynamicPlan: DynamicModulePlan;
+	unitEnds: int32[];        // bundle mode: buf length after each top-level statement
+	unitsRunOnLoad: boolean[];
 }
 
 export class JsTreeLayout {
@@ -106,7 +108,7 @@ export function createJSGenerator(): JSGenerator {
 		smap: false, sourceFile: "", smapInfo: createSourceInfo(),
 		genLine: 0 as int32, genCol: 0 as int32,
 		pendingLine: 0 as int32, pendingCol: 0 as int32, pendingName: -1 as int32,
-		actorHandle: null, dynamicPlan: new DynamicModulePlan() };
+		actorHandle: null, dynamicPlan: new DynamicModulePlan(), unitEnds: [], unitsRunOnLoad: [] };
 }
 
 export function recordNeededImport(gen: JSGenerator, modulePath: string, name: string): string {

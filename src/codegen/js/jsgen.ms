@@ -3,9 +3,11 @@
 // Registers emitNodeDispatch callback, provides generateJS entry point.
 // Tests cover the full pipeline: parse → check → transform → generateJS.
 
-import { Node, NodeKind, NodeFlag, ProgramData, ImportDeclData, HiddenDerefData, HiddenStdConvData, FunctionDeclData, ExportDeclData, DecoratedDeclData } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ProgramData, ImportDeclData, HiddenDerefData, HiddenStdConvData, FunctionDeclData, ExportDeclData, DecoratedDeclData, VariableDeclData } from "../../ast/node";
 import { JSGenerator, JSHelpers, JsTreeLayout, createJSGenerator, registerEmitNode, finalize, emit, mark, markNamed, lookupModuleSpec, importSpecifier, collectDeclaredLocals, collectInnerLocals, containsOwnAwait } from "./emit";
 import { SourceInfo, shiftLines } from "./sourcemap";
+import { BundleUnit } from "./reach";
+import { hasEffect } from "../../transform/walkEffects";
 import { createNodeAt, makeLoc } from "../../ast/node";
 import {
 	emitNumberLiteral, emitStringLiteral, emitBooleanLiteral, emitNullLiteral,
@@ -125,6 +127,9 @@ function emitNodeDispatch(gen: JSGenerator, node: Node): void {
 			}
 			for (const stmt of pd.programStmts) {
 				emitNodeDispatch(gen, stmt);
+				if (!gen.bundleMode) continue;
+				gen.unitEnds.push(gen.buf.length as int32);
+				gen.unitsRunOnLoad.push(runsOnLoad(stmt));
 			}
 		},
 
@@ -152,6 +157,20 @@ function runsInModuleBody(stmt: Node): boolean {
 			| NodeKind.MacroDecl | NodeKind.ComptimeBlock | NodeKind.TypeAnnotation | NodeKind.TestDecl | NodeKind.PropertyDecl => false,
 		_ => true,
 	};
+}
+
+function isDecorated(stmt: Node): boolean {
+	if (stmt.kind == NodeKind.ExportDecl) return isDecorated((stmt.data as ExportDeclData).exportedDecl);
+	return stmt.kind == NodeKind.DecoratedDecl;
+}
+
+function runsOnLoad(stmt: Node): boolean {
+	const decl = declarationOf(stmt);
+	if (decl.kind == NodeKind.VariableDecl) {
+		const initializer = (decl.data as VariableDeclData).initializer;
+		return initializer != null && hasEffect(initializer);
+	}
+	return runsInModuleBody(stmt) || isDecorated(stmt) || decl.kind == NodeKind.ActorDecl || classEvaluatesStatics(decl);
 }
 
 // Declarations stay in the flat bundle scope so other modules keep naming them; the
@@ -424,6 +443,7 @@ function insertAfterHeader(gen: JSGenerator, headerChunks: int32, text: string):
 // Bundle mode: generate JS for a single module without header/imports.
 export interface BundleModuleResult {
 	code: string;
+	units: BundleUnit[];
 	exportedNames: string[];
 	exportedLocals: string[];
 	smap: SourceInfo;
@@ -438,7 +458,34 @@ export function generateJSBundleModule(program: Node, sourceFile: string, source
 	gen.sourceFile = sourceFile;
 	gen.jsImports = [];
 	emitNodeDispatch(gen, program);
-	return { code: finalize(gen), exportedNames: gen.exportedNames, exportedLocals: gen.bundleExportLocals, smap: gen.smapInfo };
+	const units = bundleUnits(gen);
+	return { code: finalize(gen), units, exportedNames: gen.exportedNames, exportedLocals: gen.bundleExportLocals, smap: gen.smapInfo };
+}
+
+function endsItsLine(code: string): boolean {
+	return code.byteLength == 0 || code.byteAt(code.byteLength - 1) == "\n".code;
+}
+
+// In the order finalize writes them: the helper slots, then one unit per top-level statement.
+// A unit ends where its last line ends, so dropping one never joins two lines.
+function bundleUnits(gen: JSGenerator): BundleUnit[] {
+	const units: BundleUnit[] = [];
+	let open = false;
+	const add = (code: string, runsOnLoad: boolean): void => {
+		if (open) {
+			const last = units[units.length - 1];
+			units[units.length - 1] = { code: last.code + code, runsOnLoad: last.runsOnLoad || runsOnLoad };
+		} else units.push({ code, runsOnLoad });
+		open = !endsItsLine(units[units.length - 1].code);
+	};
+	for (const slot of gen.staticSlots) add(slot, false);
+	let from = 0;
+	for (let u = 0; u < gen.unitEnds.length; u += 1) {
+		add(gen.buf.slice(from, gen.unitEnds[u]).join(""), gen.unitsRunOnLoad[u]);
+		from = gen.unitEnds[u];
+	}
+	if (from < gen.buf.length || gen.unitEnds.length == 0) add(gen.buf.slice(from, gen.buf.length).join(""), true);
+	return units;
 }
 
 // Generate JS without header (for internal/test use)

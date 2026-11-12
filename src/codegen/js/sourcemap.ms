@@ -93,6 +93,16 @@ export function shiftLines(info: SourceInfo, count: int32): void {
 	info.mappings = blanks;
 }
 
+// The map of the text left when only the generated lines marked in `kept` are written.
+export function keepLines(info: SourceInfo, kept: boolean[]): SourceInfo {
+	const mappings: Mapping[] = [];
+	for (let line: int32 = 0; line < kept.length; line += 1) {
+		if (!kept[line]) continue;
+		mappings.push(line < info.mappings.length ? info.mappings[line] : { segments: [] });
+	}
+	return { mappings, names: info.names, files: info.files };
+}
+
 // Concatenate `src` onto `dst` at generated line `atLine`, re-indexing its
 // sources and names into the destination's tables.
 export function appendInfo(dst: SourceInfo, src: SourceInfo, atLine: int32): void {
@@ -351,4 +361,16 @@ test "ignored sources land in x_google_ignoreList" {
 	assert json.includes("\"x_google_ignoreList\":[0]");
 	const none = toSourceMapJson(info, "out.js", "", noSource, []);
 	assert !none.includes("x_google_ignoreList");
+}
+
+test "keeping some generated lines moves each kept line's segments up to its new line" {
+	const info = createSourceInfo();
+	const file = internFile(info, "a.ms");
+	recordSegment(info, 0, 0, file, 10, 0, -1);
+	recordSegment(info, 2, 4, file, 30, 2, -1);
+	const kept = keepLines(info, [false, true, true, true]);
+	assert kept.mappings.length == 3;
+	assert kept.mappings[0].segments.length == 0;
+	assert kept.mappings[1].segments[0].line == 30 && kept.mappings[1].segments[0].generated == 4;
+	assert kept.mappings[2].segments.length == 0;
 }
