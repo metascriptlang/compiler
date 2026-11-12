@@ -742,6 +742,51 @@ runtime and the program. The split, from the link map of that build (d87, the co
 program 381. What brought winpthreads in, and the hello without it (17,920 B), is in §Measured
 2026-11-12 — a Windows hello links no winpthreads.
 
+## Measured 2026-11-12 — a library exports only its API
+
+A shared library keeps every symbol it exports, and a library build exported nearly all of std and
+the runtime: every module-level `export`, generic instance, type info and runtime C function had
+default visibility. A library build (`--app=lib`, `--app=staticlib`, not `--hcr`) now compiles
+with `-fvisibility=hidden -DMS_LIB_BUILD` (`src/compiler/cc.ms` `LIBRARY_HIDES_INTERNALS`) and
+marks what a host calls `MS_LIB_EXPORT` (`runtime/core/export.h`): the project's `@exportName`
+functions, `MsMain`, `MsDestroyGlobals`, each module's `__DatInit000` and `__Init000`, and
+`msDrainAtExit` and `msReportOrphanFailures`, the two exit calls of the `main` an executable gets.
+An `@exportName` inside std pins a C name for the runtime and a constructor carries one
+internally; neither is exported. A C source the project compiles with `@compile` keeps the
+visibility it declares (`foreignSourceFlags`), because a host may load it by name
+(`tools/managedToolchain/matrix/sharedLibrary.ms`). The reference hides every routine and exports
+only one marked for the library and its `NimMain` (`lib/nimbase.h` `N_LIB_PRIVATE` and
+`N_LIB_EXPORT`, `compiler/ccgtypes.nim` `genProcHeader`, Nim `15dd34468`; a one-proc library built
+by Nim 2.2.2 on macOS exports 3 symbols, `__text` 17,308 B). The module inits and the two exit
+calls are ours: `docs/BARE.md` and `tools/crypto/x25519Build.sh` call an init by name, and the
+reference has no exit drain.
+
+`--danger --strip --app=lib`, the compiler of `c62ba752f7de` against a candidate of tree
+`4af66098dd51`, file bytes and exported symbols:
+
+| library | Linux (oci-u) | macOS arm64 (m1m), `__text` | Windows (d87) | Android arm64, NDK 28 (m1m) |
+|---|---|---|---|---|
+| one `@exportName` function adding two `int32` | 365,080 → 10,576, 739 → 31 | 214,480 → 4,040, 738 → 31 | 301,056 → 17,408, 801 → 31 | 315,528 → 18,864, 746 → 32 |
+| one that fills a `Map` and prints, with a top-level print | 378,968 → 30,696, 791 → 35 | 223,856 → 19,516, 790 → 35 | 314,368 → 37,376, 856 → 35 | not built |
+
+The 31 are the function, the four host calls and 26 module inits. With only the function,
+`MsMain` and `MsDestroyGlobals` as link roots the first Linux library is 7,536 B, and 8,448 B with
+the module inits too (the installed compiler, `--passC=-fvisibility=hidden` and one `-Wl,-u,` per
+root), so keeping the inits callable costs about 900 B. A host loads the second library with
+Python's `ctypes`, calls `MsMain`, the function, the two exit calls and `MsDestroyGlobals`, and
+gets its output, on Linux and Windows; the guard does the same wherever `python3` exists. A static archive linked into a
+host's own shared library (Linux, `--lto=off`, system `cc`) exports 20 symbols where it exported
+558. `tools/crypto/x25519Abi.sh`, whose C and C++ hosts link a static archive and call two inits
+by name, passes on the candidate. An executable keeps its size: hello 8,480 and
+`console.log("done", 15, 2.5)` 34,440 on Linux, hello's `__text` 3,456 on macOS; `MS_LIB_EXPORT`
+is empty without `-DMS_LIB_BUILD`.
+
+The Android link passes no `--gc-sections` of ours (`cliLinkFlags`), and adding it by hand moves
+the first library from 18,864 to 18,728 B, so none was added. Pinned by
+`src/test/guard/libraryExportsOnlyItsApi.ms`. Not measured: a Windows executable's bytes after the
+change, a Windows static archive (its entry points are declared `dllexport`), FreeBSD and iOS, a library that keeps vendored C (that C's exports and what they reach
+stay, as in the reference), and run speed.
+
 ## Measured 2026-11-12 — a static build without the libc formatter
 
 Where libc is linked statically, one `fprintf` links its whole formatter: in a static musl hello,

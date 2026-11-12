@@ -2008,7 +2008,7 @@ unreviewed code; macros/plugins/build actions are trusted-code boundaries.
 | Native C (`msc run` / `build`) | Runtime ownership, C toolchain/linkage and platform libraries. `build` produces a native artifact without running it; add `--emit=c` to stop after C emission, before compile/link. |
 | JS (`--target=js`, optional `--split`) | Compatible JS host; split emits ES modules. No implied native hooks, layouts, C linkage or worker-thread semantics. |
 | VM (`--target=raiser`) | Evaluator-supported APIs/extern bridges, not native/JS parity. Unbridged runtime calls are not valid merely because parsing succeeded. |
-| `--app=lib` / `staticlib` | Stable exported ABI and host init/cleanup. Initialize the entry module/dependencies, not indiscriminately program-wide `MsMain`; do not depend on mangled internal names as a public ABI. |
+| `--app=lib` / `staticlib` | Stable exported ABI and host init/cleanup. Initialize the entry module/dependencies, not indiscriminately program-wide `MsMain`; do not depend on mangled internal names as a public ABI. A library exports only the project's `@exportName` functions, the init and exit entry points and what its `@compile`d C declares; std and the runtime stay internal. |
 | Bare/manual | Explicit host/allocation/runtime boundary. Removing automatic RC does not remove cleanup obligations or provide a new allocator API. |
 | WASM / Emscripten | Distinct `--os=wasm` / `--os=emcc` toolchain/host paths for a whole program in wasm. A JS program with a hot part in wasm is `--target=js` with `@wasm` functions instead (below). |
 | HCR (`--hcr`, `std/hcr`) | Explicit reload boundary and compatible state/resources. Globals persist; a changed initializer is not migration. Restart-required/rejected reloads are real outcomes. |
