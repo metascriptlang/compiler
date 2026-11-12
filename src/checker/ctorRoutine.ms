@@ -133,6 +133,8 @@ export function ctorRoutineFor(ctx: CheckerContext, owner: Symbol): Symbol | nul
 	const host = ctx.instantiatingCtx != null ? ctx.instantiatingCtx : ctx;
 	const routine = mintCtorRoutine(host, owner, owner.name, owner.symbolType, [], [], null, []);
 	routine.instantiatedFrom = ctorRoutineOf(owner.instantiatedFrom);
+	routine.instanceArgs = owner.instanceArgs;
+	routine.instanceParams = owner.instanceParams;
 	return routine;
 }
 
