@@ -107,9 +107,11 @@ when (windows) {
 		const opened = openReparsePoint(path);
 		if (!opened.ok) { return Result.err(opened.error); }
 		const handle = opened.value;
+		const record: Span<uint8> = data;
+		const count: Span<uint8> = countBytes;
 		const read = DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, null, 0,
-			data as Span<uint8> as Ptr<void>, data.length as uint32,
-			countBytes as Span<uint8> as Ptr<void>, null);
+			record as Ptr<void>, data.length as uint32,
+			count as Ptr<void>, null);
 		const readError = read == 0 ? GetLastError() : 0;
 		CloseHandle(handle);
 		if (read == 0) {
@@ -119,11 +121,11 @@ when (windows) {
 			((countBytes[1] as int64) << 8) |
 			((countBytes[2] as int64) << 16) |
 			((countBytes[3] as int64) << 24);
-		if (returned > data.length) {
+		if (returned > record.length) {
 			return Result.err(ioError(IoErrorKind.Unknown, path,
 				"reparse byte count exceeds its buffer: " + path));
 		}
-		const parsed = parseReparseTarget(data[0..returned]);
+		const parsed = parseReparseTarget(record[0..returned]);
 		if (!parsed.ok) {
 			return Result.err(ioError(IoErrorKind.Unknown, path, parsed.error));
 		}
@@ -185,24 +187,26 @@ when (windows) {
 	function verifyKernel(path: string, target: string): Result<void, IoError> {
 		const expected = target.asBytes();
 		const data = Buffer.alloc(expected.length + 1);
+		const bytes: Span<uint8> = data;
 		const read = cReadlink(path as cstring,
-			data as Span<uint8> as Ptr<void>, data.length as uint64);
+			bytes as Ptr<void>, data.length as uint64);
 		const error = errno;
 		if (read < 0) { return Result.err(ioErrorFromErrno(error, path)); }
 		if (read != expected.length) { return Result.err(mismatch(path)); }
 		for (let i: int64 = 0; i < read; i += 1) {
-			if (data[i] != expected[i]) { return Result.err(mismatch(path)); }
+			if (bytes[i] != expected[i]) { return Result.err(mismatch(path)); }
 		}
 		return Result.ok(null);
 	}
 
 	function readSiblingKernel(path: string): Result<string, IoError> {
 		const data = Buffer.alloc(4096);
+		const all: Span<uint8> = data;
 		const read = cReadlink(path as cstring,
-			data as Span<uint8> as Ptr<void>, data.length as uint64);
+			all as Ptr<void>, data.length as uint64);
 		const error = errno;
 		if (read < 0) { return Result.err(ioErrorFromErrno(error, path)); }
-		const bytes = data[0..read];
+		const bytes = all[0..read];
 		if (wellFormedPrefix(bytes, 0, false) != read) {
 			return Result.err(ioErrorFromErrno(EINVAL, path));
 		}

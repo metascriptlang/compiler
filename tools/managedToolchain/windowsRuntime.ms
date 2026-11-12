@@ -274,10 +274,11 @@ export function childEnvironment(work: string): Record<string, string> {
 function fileStartsWith(path: string, text: string): Result<boolean, string> {
 	const data = readFileBytes(path);
 	if (!data.ok) { return Result.err(data.error.message); }
+	const bytes: Readonly<Span<uint8>> = data.value;
 	const head = text.asBytes();
-	if (data.value.length < head.length) { return Result.ok(false); }
+	if (bytes.length < head.length) { return Result.ok(false); }
 	for (let i: int64 = 0; i < head.length; i += 1) {
-		if (data.value[i] != head[i]) { return Result.ok(false); }
+		if (bytes[i] != head[i]) { return Result.ok(false); }
 	}
 	return Result.ok(true);
 }
