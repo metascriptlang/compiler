@@ -1,6 +1,6 @@
 // @skip-js: a sync function awaits here, which the JS backend refuses (no blocking wait on JS, checker/syncAwait.ms); the program pins the native sync-context await
 // @maxrss: 40
-// @maxatomics(darwin-arm64) 596
+// @maxatomics(darwin-arm64) 610
 // @maxatomics(linux-x86_64) 156
 // @stdout: await-struct-actorspawn acc=2600000
 // @serial

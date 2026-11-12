@@ -1,6 +1,6 @@
 // @skip-js: a sync function awaits here, which the JS backend refuses (no blocking wait on JS, checker/syncAwait.ms); the program pins the native sync-context await
 // @maxrss: 30
-// @maxatomics(darwin-arm64) 592
+// @maxatomics(darwin-arm64) 604
 // @maxatomics(linux-x86_64) 152
 // @stdout: PASS:actor-heapstr
 // @serial

@@ -28,7 +28,7 @@
 2	msCompletionQueuePushReleaseBatch
 2	msMainLoopIdle
 2	msPidTableFull
-2	msPoolRunEdge
+2	msPoolRunEdgeQueued
 2	msSpawnWorkerSettle
 2	msTimerDelayFrom
 2	msTimerFiresHere
@@ -37,7 +37,7 @@
 3	msHeapAlloc
 3	msHeapFree
 3	msHeapTakeTracked
-3	msPoolCompensate
+3	msPoolCompensateStart
 3	msRunOnce
 3	msWaitFor
 4	msActorLendWakeCb
