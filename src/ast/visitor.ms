@@ -610,13 +610,18 @@ function forEachJsx(node: Node, cb: ChildVisitor): void {
 // SYNC: forEachChild must handle the same NodeKinds (read-only variant).
 export function mapChildren(node: Node, f: Visitor): void {
 	match (node.kind) {
-		NodeKind.Program | NodeKind.SpliceMany | NodeKind.BlockStmt | NodeKind.IfStmt | NodeKind.WhileStmt | NodeKind.ForStmt | NodeKind.ForOfStmt | NodeKind.ForInStmt | NodeKind.DoWhileStmt | NodeKind.SwitchStmt | NodeKind.SwitchCase | NodeKind.MatchStmt | NodeKind.MatchExpr | NodeKind.MatchCase => mapFlow(node, f),
-		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr | NodeKind.ClassDecl | NodeKind.ActorDecl | NodeKind.MethodDecl | NodeKind.ConstructorDecl | NodeKind.ExportDecl | NodeKind.DecoratedDecl | NodeKind.EnumDecl | NodeKind.MacroDecl | NodeKind.PropertyDecl => mapDecl(node, f),
-		NodeKind.VariableDecl | NodeKind.ReturnStmt | NodeKind.ThrowStmt | NodeKind.ExprStmt | NodeKind.DeferStmt | NodeKind.TryCatchStmt | NodeKind.DestructuringDecl | NodeKind.QuoteExpr | NodeKind.ComptimeBlock | NodeKind.MacroInvocation | NodeKind.TestDecl | NodeKind.AssertStmt => mapSimple(node, f),
-		NodeKind.BinaryExpr | NodeKind.UnaryExpr | NodeKind.UpdateExpr | NodeKind.CallExpr | NodeKind.MemberExpr | NodeKind.ArrayAccess | NodeKind.ObjectLiteral | NodeKind.ArrayLiteral | NodeKind.ConditionalExpr | NodeKind.SpreadExpr | NodeKind.NewExpr | NodeKind.TryExpr => mapExpr(node, f),
+		NodeKind.Program | NodeKind.SpliceMany | NodeKind.BlockStmt | NodeKind.IfStmt | NodeKind.WhileStmt | NodeKind.ForStmt | NodeKind.ForOfStmt => mapFlow(node, f),
+		NodeKind.ForInStmt | NodeKind.DoWhileStmt | NodeKind.SwitchStmt | NodeKind.SwitchCase | NodeKind.MatchStmt | NodeKind.MatchExpr | NodeKind.MatchCase => mapSwitch(node, f),
+		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr | NodeKind.ClassDecl | NodeKind.MethodDecl | NodeKind.ConstructorDecl => mapDecl(node, f),
+		NodeKind.ActorDecl | NodeKind.ExportDecl | NodeKind.DecoratedDecl | NodeKind.EnumDecl | NodeKind.MacroDecl | NodeKind.PropertyDecl => mapMember(node, f),
+		NodeKind.VariableDecl | NodeKind.ReturnStmt | NodeKind.ThrowStmt | NodeKind.ExprStmt | NodeKind.DeferStmt | NodeKind.TryCatchStmt => mapSimple(node, f),
+		NodeKind.DestructuringDecl | NodeKind.QuoteExpr | NodeKind.ComptimeBlock | NodeKind.MacroInvocation | NodeKind.TestDecl | NodeKind.AssertStmt => mapMeta(node, f),
+		NodeKind.BinaryExpr | NodeKind.UnaryExpr | NodeKind.UpdateExpr | NodeKind.CallExpr | NodeKind.MemberExpr | NodeKind.ArrayAccess => mapExpr(node, f),
+		NodeKind.ObjectLiteral | NodeKind.ArrayLiteral | NodeKind.ConditionalExpr | NodeKind.SpreadExpr | NodeKind.NewExpr | NodeKind.TryExpr => mapCollection(node, f),
 		NodeKind.AwaitExpr | NodeKind.YieldExpr | NodeKind.MoveExpr | NodeKind.OutExpr | NodeKind.HiddenDeref | NodeKind.HiddenAddr | NodeKind.HiddenStdConv | NodeKind.HiddenSubConv | NodeKind.TypeAssertion => mapWrapper(node, f),
 		NodeKind.ArrayPattern | NodeKind.ObjectPattern | NodeKind.ObjectPatternProp => mapPattern(node, f),
-		NodeKind.TypeGeneric | NodeKind.TypeArray | NodeKind.TypeUnion | NodeKind.TypeIntersection | NodeKind.TypeFunction | NodeKind.TypeObject => mapType(node, f),
+		NodeKind.TypeGeneric | NodeKind.TypeArray | NodeKind.TypeUnion => mapType(node, f),
+		NodeKind.TypeIntersection | NodeKind.TypeFunction | NodeKind.TypeObject => mapTypeMore(node, f),
 		NodeKind.JSXElement | NodeKind.JSXFragment | NodeKind.JSXExpressionContainer | NodeKind.JSXAttribute | NodeKind.JSXSpreadAttribute | NodeKind.ComputedProperty => mapJsx(node, f),
 		// Genuine leaves (no Node children). Listed explicitly (not via `_`) so
 		// adding a new NodeKind forces an exhaustiveness error here — keeping
@@ -679,6 +684,12 @@ function mapFlow(node: Node, f: Visitor): void {
 			d.forOfBody = f(d.forOfBody);
 			if (d.forOfPattern != null) { d.forOfPattern = f(d.forOfPattern); }
 		},
+		_ => {},
+	};
+}
+
+function mapSwitch(node: Node, f: Visitor): void {
+	match (node.kind) {
 		NodeKind.ForInStmt => {
 			const d: Cursor<ForInStmtData> = node.data as ForInStmtData;
 			d.forInObject = f(d.forInObject);
@@ -752,12 +763,6 @@ function mapDecl(node: Node, f: Visitor): void {
 				d.classBody[i] = f(d.classBody[i]);
 			}
 		},
-		NodeKind.ActorDecl => {
-			const d: Cursor<ActorDeclData> = node.data as ActorDeclData;
-			for (let i = 0; i < d.actorBody.length; i += 1) {
-				d.actorBody[i] = f(d.actorBody[i]);
-			}
-		},
 		NodeKind.MethodDecl => {
 			const d: Cursor<MethodDeclData> = node.data as MethodDeclData;
 			d.methodBody = f(d.methodBody);
@@ -767,6 +772,18 @@ function mapDecl(node: Node, f: Visitor): void {
 			d.ctorBody = f(d.ctorBody);
 			for (let i = 0; i < d.ctorParamProps.length; i += 1) {
 				if (d.ctorParamProps[i] != null) d.ctorParamProps[i] = f(d.ctorParamProps[i]);
+			}
+		},
+		_ => {},
+	};
+}
+
+function mapMember(node: Node, f: Visitor): void {
+	match (node.kind) {
+		NodeKind.ActorDecl => {
+			const d: Cursor<ActorDeclData> = node.data as ActorDeclData;
+			for (let i = 0; i < d.actorBody.length; i += 1) {
+				d.actorBody[i] = f(d.actorBody[i]);
 			}
 		},
 		NodeKind.ExportDecl => {
@@ -827,6 +844,12 @@ function mapSimple(node: Node, f: Visitor): void {
 			d.catchBody = f(d.catchBody);
 			d.finallyBody = f(d.finallyBody);
 		},
+		_ => {},
+	};
+}
+
+function mapMeta(node: Node, f: Visitor): void {
+	match (node.kind) {
 		NodeKind.DestructuringDecl => {
 			const d: Cursor<DestructuringDeclData> = node.data as DestructuringDeclData;
 			d.destrPattern = f(d.destrPattern);
@@ -891,6 +914,12 @@ function mapExpr(node: Node, f: Visitor): void {
 			d.array = f(d.array);
 			d.index = f(d.index);
 		},
+		_ => {},
+	};
+}
+
+function mapCollection(node: Node, f: Visitor): void {
+	match (node.kind) {
 		NodeKind.ObjectLiteral => {
 			const d: Cursor<ObjectLiteralData> = node.data as ObjectLiteralData;
 			for (let i = 0; i < d.properties.length; i += 1) {
@@ -1008,6 +1037,12 @@ function mapType(node: Node, f: Visitor): void {
 				d.typExprMembers[i] = f(d.typExprMembers[i]);
 			}
 		},
+		_ => {},
+	};
+}
+
+function mapTypeMore(node: Node, f: Visitor): void {
+	match (node.kind) {
 		NodeKind.TypeIntersection => {
 			const d: Cursor<TypeIntersectionData> = node.data as TypeIntersectionData;
 			for (let i = 0; i < d.typExprMembers.length; i += 1) {
