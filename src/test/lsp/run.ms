@@ -26,7 +26,8 @@
 //
 // Env: MSC=<path to msc> (default: ./msc, else installed msc)
 //      LSP_REPLAY_TIMEOUT_MS=<deadline of each wait> (default 10000)
-//      LSP_PERF=1, LSP_PERF_REPS=<repetitions> (default 5), LSP_PERF_OUT=<file> (default stdout)
+//      LSP_PERF=1, LSP_PERF_REPS=<repetitions> (default 5), LSP_PERF_OUT=<file> (default stdout),
+//      LSP_PERF_ONLY=<part of a scenario name> runs only the matching scenarios
 //      LSP_PERF_STAGE=<dir>: read the revision and the pinned app from <dir> instead of git, for a
 //      tree copied without .git (run-remote.sh); src/test/lsp/perfStage.sh <dir> writes it
 import {
@@ -41,7 +42,7 @@ import {
 	execFileCapture,
 	findOnPath,
 } from "std/process";
-import { writeFile, readFile, exists, ensureDir, realpath, remove } from "std/fs";
+import { writeFile, readFile, exists, ensureDir, realpath, remove, readDir } from "std/fs";
 import { basename, dirname } from "std/fs/path";
 import { stringify } from "std/serialize/json/stringify";
 import { parseJson } from "std/serialize/json/parser";
@@ -526,6 +527,22 @@ function publishText(s: Session, uri: string): string {
 	return last == null ? "no publish" : stringify(last);
 }
 
+// Where a server that missed its deadline is: its state, CPU and each thread's wait (Linux).
+function stuckState(pid: int32): string {
+	if (!exists(`/proc/${pid}/status`)) return "";
+	let out = `<<< /proc/${pid} at failure\n`;
+	for (const line of (try readFile(`/proc/${pid}/status`) catch "").split("\n")) {
+		if (line.startsWith("State:") || line.startsWith("Threads:") || line.startsWith("VmRSS:")) out += `${line}\n`;
+	}
+	out += `stat ${try readFile(`/proc/${pid}/stat`) catch ""}\n`;
+	for (const task of readDir(`/proc/${pid}/task`)) {
+		const wchan = try readFile(`/proc/${pid}/task/${task}/wchan`) catch "";
+		const syscall = try readFile(`/proc/${pid}/task/${task}/syscall`) catch "";
+		out += `task ${task} wchan ${wchan} syscall ${syscall.trim()}\n`;
+	}
+	return out;
+}
+
 function freshAnswers(snap: Snapshot, asked: string[], name: string, sent: string[] | null = null): Result<string[], string> {
 	const started = startSession(`fresh session for ${name}\n`);
 	if (!started.ok) return Result.err(started.error);
@@ -542,10 +559,14 @@ function freshAnswers(snap: Snapshot, asked: string[], name: string, sent: strin
 		const drained = readToEnd(fresh);
 		if (!drained.ok) failure = drained.error;
 	}
+	if (failure != "") fresh.log += stuckState(fresh.child.pid);
 	fresh.log += `<<< stderr\n${fresh.child.takeStderr()}\n`;
 	fresh.child.close();
 	writeFile(`${OUT}/${name}-fresh.txt`, fresh.log);
-	if (failure != "") return Result.err(`fresh server: ${failure}`);
+	if (failure != "") {
+		writeFile(`${OUT}/${name}-fresh-failed.txt`, fresh.log);
+		return Result.err(`fresh server: ${failure}`);
+	}
 	const out: string[] = [];
 	for (const uri of snap.uris) out.push(`publish ${uri} => ${publishText(fresh, uri)}`);
 	for (const answer of queryAnswers(fresh, asked)) out.push(answer);
@@ -767,10 +788,12 @@ function runScenario(scenario: LspScenario): ScenarioRun {
 	if (!started.ok) return { failure: started.error, timedOut: false, samples: [], usage: [] };
 	const s = started.value;
 	const failure = replayOnProcess(s, scenario, drains, projectDir);
+	if (failure != "") s.log += stuckState(s.child.pid);
 	s.log += `<<< stderr\n${s.child.takeStderr()}\n`;
 	s.child.close();
 	s.log += `=== ${failure == "" ? "ok" : "FAIL " + failure}\n`;
 	writeFile(`${OUT}/${scenarioSlug(scenario.name)}.txt`, s.log);
+	if (failure != "") writeFile(`${OUT}/${scenarioSlug(scenario.name)}-failed.txt`, s.log);
 	for (const sample of editGrowth(s)) s.samples.push(sample);
 	return { failure, timedOut: s.timedOut, samples: s.samples, usage: s.usage };
 }
@@ -1528,6 +1551,7 @@ function cellLine(cell: PerfCell, uptimeStart: string, uptimeEnd: string, binary
 		for (const v of cell.values) sum += v;
 		if (cell.unit == "count") line += `,"sum":${sum}`;
 	}
+	line += `,"values":[${cell.values.join(",")}]`;
 	const budget = budgetOf(cell.metric, cell.fixture);
 	if (budget >= 0) line += `,"budget":${budget},"overBudget":${overBudget(cell)}`;
 	return line + `,"timeouts":${cell.timeouts},"errors":${cell.errors}`
@@ -1578,12 +1602,16 @@ function perfRun(): Result<boolean, string> {
 	}
 	const overlap = try overlapFixture();
 	const repetitions = perfRepetitions();
+	const only = env.get("LSP_PERF_ONLY");
 	for (let repetition = 0; repetition < repetitions; repetition++) {
 		for (let k = 0; k < entries.length; k++) {
 			const entry = entries[repetition % 2 == 0 ? k : entries.length - 1 - k];
+			if (only != "" && !entry.scenario.name.includes(only)) continue;
 			record(cells, entry.fixture, entry.scenario.name, runScenario(entry.scenario), repetition as int32);
 		}
-		record(cells, "todoList", "overlap", runOverlap(overlap), repetition as int32);
+		if (only == "" || "overlap".includes(only)) {
+			record(cells, "todoList", "overlap", runOverlap(overlap), repetition as int32);
+		}
 	}
 	const uptimeEnd = try commandOutput("uptime", []);
 	const lines: string[] = [];
