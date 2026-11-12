@@ -1682,6 +1682,7 @@ function passedViewEffect(dispatchRegistry: DispatchRegistry, call: Node, passed
 				if (storedBorrow(dispatchRegistry, lent) == null && isGenericArrayByteMover(t)) continue;
 				const sig = call.kind == NodeKind.CallExpr && t == targets[0] ? calledRoutineType(call) : t.symbolType;
 				const formal = sig != null && i < sig.typeChildren.length ? sig.typeChildren[i] : null;
+				if (jsSlotTakesNothing(t, formal)) continue;
 				if (!foreignSlotTakesNothing(formal, passed[i]!.nodeType) && !elementHoldsNoCount(passed[i]!.nodeType)) return lentToForeign(call, lent, name, "through a parameter of type '" + typeNameOf(formal) + "'");
 				continue;
 			}
@@ -1711,6 +1712,10 @@ const FOREIGN_ADVICE = "C may count or write what it receives there while anothe
 function lentToForeign(call: Node, what: BorrowSource, name: string, how: string): EffectCause {
 	const c = cause(call, "passes " + borrowText(what) + " to the external '" + name + "' " + how);
 	return { site: c.site, text: c.text, advice: FOREIGN_ADVICE };
+}
+
+function jsSlotTakesNothing(routine: Symbol, formal: Type | null): boolean {
+	return routine.modulePath.endsWith(".jms") && formal != null && (isReadonlyView(formal) || formal.kind == TypeKind.Array);
 }
 
 function foreignSlotTakesNothing(formal: Type | null, actual: Type | null): boolean {
