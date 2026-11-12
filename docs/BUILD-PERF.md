@@ -256,7 +256,12 @@ What the same msc build passes to the compiler under `--cc=zig` and under the in
 | stack protector | strong in a debug build, off in release | off on Linux and Windows; clang's basic one in every mode on macOS |
 | debug UBSan runtime | zig's, with recovery | compiler-rt's minimal one (standalone on Windows and musl) |
 | glibc of a host build | the host's (rtx: triple `gnu2.43.0`, the program needs `GLIBC_2.34` to `2.36`) | 2.31 (the program needs `GLIBC_2.17`) |
-| link, Linux | `EXEC`, `BIND_NOW`, RELRO, 16 MB stack, no build id | the same |
+| link, Linux | `EXEC`, `BIND_NOW`, RELRO, `PT_GNU_STACK` size 16 MB, no build id | the same |
+| main-thread stack, Linux | 8 MB: the kernel takes it from `ulimit -s` (8192 on rtx) and ignores the 16 MB `PT_GNU_STACK` size zig writes (`link/Lld.zig:221`, `-z stack-size`) | the same |
+| main-thread stack, macOS | 16 MB (`LC_MAIN` `stacksize 16777216`, zig's own linker, `link/MachO.zig:184`) | 8 MB (`stacksize 0`): `ld64.lld` 23.1.4 warns `-stack_size is not yet implemented` and drops it |
+| main-thread stack, Windows | not measured | 16 MB, `-Xlinker --stack=16777216` (`windowsConfig.ms:92`) |
+
+Main-thread stack, measured with a non-tail recursion `down(n)` (`1 + down(n - 1)`, about 76 bytes a frame at `-O0`; msc `c62ba752f7de`; one run each, depth 150000 unless noted). macOS bundle link: `LC_MAIN` `stacksize 0`, segfault (139); the same binary under `ulimit -s 16384` returns 150000 and 190000; `--cc=zig` on `hello` links `stacksize 16777216` (the run was not made). Linux rtx, bundle and `--cc=zig`: `readelf -lW` shows `GNU_STACK … 0x1000000 RW` and both segfault. Windows d87 bundle: returns 150000. So the default Linux and macOS links crash on a program Windows runs, and the `PT_GNU_STACK` size is no main-thread stack.
 
 Bit-fields are laid out the Windows way by zig and by both d87 bundles (a `_Static_assert` on
 `struct { char a : 4; int b : 4; }` being 8 bytes), although only zig's cc1 line names `-mms-bitfields`.
