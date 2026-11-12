@@ -75,6 +75,9 @@ let startsByModule = new HashMap<string, boolean>();
 let cycles = new HashMap<string, string[]>();
 let freshConsts = new HashMap<Symbol, boolean>();
 let pidConsts = new HashMap<Symbol, boolean>();
+let heldCalled = new HashMap<Node, string[]>();
+let heldQuiet = new HashMap<Node, string[]>();
+let heldOpen: HeldSlot[] = [];
 let checkedModules = new HashSet<string>();
 let moduleGraph: ModuleGraph | null = null;
 let paramStoreTables: EffectTable[] = [];
@@ -175,6 +178,9 @@ export function runDeferredEffectChecks(ctx: CheckerContext, program: Node): voi
 	cycles = new HashMap<string, string[]>();
 	freshConsts = new HashMap<Symbol, boolean>();
 	pidConsts = new HashMap<Symbol, boolean>();
+	heldCalled = new HashMap<Node, string[]>();
+	heldQuiet = new HashMap<Node, string[]>();
+	heldOpen = [];
 	paramStoreTables = [];
 	paramForeignTables = [];
 	forOfSources = new HashMap<Symbol, Node>();
@@ -525,8 +531,8 @@ function boundRoutineEffect(dispatchRegistry: DispatchRegistry, sym: Symbol, e: 
 	});
 }
 
-function argumentEffect(dispatchRegistry: DispatchRegistry, arg: Node, e: Effect): EffectCause | null {
-	if (functionSlotOf(arg.nodeType) == null) return unjudgedHolder(arg, e);
+function argumentEffect(dispatchRegistry: DispatchRegistry, site: Node, arg: Node, e: Effect): EffectCause | null {
+	if (functionSlotOf(arg.nodeType) == null) return unjudgedHolder(dispatchRegistry, site, arg, e);
 	if (reachesModuleState(e) && isSendableFunction(arg.nodeType)) return null;
 	const a = peelConv(arg);
 	if (a.kind == NodeKind.NullLiteral || isRoutineNode(a) || isOwnParam(a) || isOwnParamField(a, e)) return null;
@@ -539,10 +545,153 @@ function argumentEffect(dispatchRegistry: DispatchRegistry, arg: Node, e: Effect
 
 const HOLDER_ADVICE = "; a callee answers for the function values its parameters hold only when its caller built them, so build the value in the code that hands it on, or declare the function field Sendable<...>";
 
-function unjudgedHolder(part: Node, e: Effect): EffectCause | null {
+function unjudgedHolder(dispatchRegistry: DispatchRegistry, site: Node, part: Node, e: Effect): EffectCause | null {
 	if (!reachesModuleState(e) || !holdsUnsendableFunction(part.nodeType, 0) || judgedHere(part, 0)) return null;
+	if (!callsHeldThrough(dispatchRegistry, slotOf(dispatchRegistry, site, part))) return null;
 	const c = cause(part, "hands on a value holding a function value it did not build, which the callee may call,");
 	return { site: c.site, text: c.text, advice: HOLDER_ADVICE };
+}
+
+interface HeldSlot {
+	decl: Node | null;
+	name: string;
+}
+
+function slotOf(dispatchRegistry: DispatchRegistry, site: Node, part: Node): HeldSlot {
+	const none: HeldSlot = { decl: null, name: "" };
+	if (site.kind == NodeKind.NewExpr) {
+		const ctor = ctorRoutineOf((site.data as NewExprData).newCallee.resolvedSym);
+		const decl = ctor != null ? unpackDecl(ctor.declNode) : null;
+		if (decl == null) return none;
+		recordBodyRead(ctor!.modulePath);
+		if (routineBody(decl) == null) return none;
+		const i = (site.data as NewExprData).newArguments.indexOf(part);
+		const params = routineParams(decl);
+		return i >= 0 && i < params.length ? { decl, name: params[i] } : none;
+	}
+	const sym = calledRoutine(site);
+	if (sym == null || isExternalRoutine(sym)) return none;
+	const entry = dispatchEntryFor(dispatchRegistry, sym);
+	if (entry != null && !entry.overloaded && dispatchOverridesFor(dispatchRegistry, entry.classSym, entry.methodName).length > 0) return none;
+	const decl = unpackDecl(sym.declNode);
+	if (decl == null) return none;
+	recordBodyRead(sym.modulePath);
+	if (routineBody(decl) == null) return none;
+	const params = routineParams(decl);
+	const recv = receiverOf(site);
+	const ext = site.flags.has(NodeFlag.ExtCall);
+	if (recv != null && part == recv) return ext ? (params.length > 0 ? { decl, name: params[0] } : none) : { decl, name: "this" };
+	const shift = ext && recv != null ? 1 : 0;
+	const i = (site.data as CallExprData).arguments.indexOf(part);
+	return i >= 0 && i + shift < params.length ? { decl, name: params[i + shift] } : none;
+}
+
+function callsHeldThrough(dispatchRegistry: DispatchRegistry, slot: HeldSlot): boolean {
+	if (slot.decl == null || slot.name == "") return true;
+	const decl = slot.decl!;
+	const called = heldCalled.get(decl);
+	if (called != null && called.includes(slot.name)) return true;
+	const quiet = heldQuiet.get(decl);
+	if (quiet != null && quiet.includes(slot.name)) return false;
+	if (heldOpen.some((o: HeldSlot): boolean => o.decl == decl && o.name == slot.name)) return true;
+	heldOpen.push(slot);
+	const r = heldScan(dispatchRegistry, routineBody(decl), slot.name, []);
+	heldOpen.pop();
+	const table = r ? heldCalled : heldQuiet;
+	const known = table.get(decl);
+	if (known != null) known.push(slot.name);
+	else table.set(decl, [slot.name]);
+	return r;
+}
+
+function heldPath(n: Node): boolean {
+	const p = peelConv(n);
+	return p.kind == NodeKind.Identifier || p.kind == NodeKind.MemberExpr || p.kind == NodeKind.ArrayAccess;
+}
+
+function heldRooted(n: Node, name: string, tracked: Symbol[]): boolean {
+	let cur = peelConv(n);
+	while (cur.kind == NodeKind.MemberExpr || cur.kind == NodeKind.ArrayAccess) {
+		cur = peelConv(cur.kind == NodeKind.MemberExpr ? (cur.data as MemberExprData).object : (cur.data as ArrayAccessData).array);
+	}
+	if (cur.kind != NodeKind.Identifier) return false;
+	const sym = cur.resolvedSym;
+	if (sym != null && tracked.includes(sym)) return true;
+	return (cur.data as IdentifierData).name == name && (sym == null || sym.symbolKind == SymbolKind.Parameter || name == "this");
+}
+
+function heldScan(dispatchRegistry: DispatchRegistry, node: Node | null, name: string, tracked: Symbol[]): boolean {
+	if (node == null) return false;
+	if (heldPath(node) && heldRooted(node, name, tracked)) return holdsUnsendableFunction(node.nodeType, 0);
+	if (node.kind == NodeKind.CallExpr) {
+		const d = node.data as CallExprData;
+		const callee = d.callee != null ? peelConv(d.callee) : null;
+		const routine = isRoutine(node.resolvedSym);
+		if (callee != null && !routine && heldPath(callee) && heldRooted(callee, name, tracked)) {
+			if (functionSlotOf(callee.nodeType) == null || !isSendableFunction(callee.nodeType)) return true;
+		} else if (callee != null && !heldPath(callee) && heldScan(dispatchRegistry, callee, name, tracked)) return true;
+		const parts: Node[] = [];
+		const recv = receiverOf(node);
+		if (recv != null) parts.push(recv);
+		for (const a of d.arguments) parts.push(a);
+		for (const part of parts) {
+			if (heldPath(part) && heldRooted(part, name, tracked)) {
+				if (holdsUnsendableFunction(part.nodeType, 0) && (!routine || callsHeldThrough(dispatchRegistry, slotOf(dispatchRegistry, node, part)))) return true;
+				continue;
+			}
+			if (heldScan(dispatchRegistry, part, name, tracked)) return true;
+		}
+		if (recv == null && callee != null && heldPath(callee) && !heldRooted(callee, name, tracked)) return heldScan(dispatchRegistry, callee, name, tracked);
+		return false;
+	}
+	if (node.kind == NodeKind.NewExpr) {
+		for (const a of (node.data as NewExprData).newArguments) {
+			if (heldPath(a) && heldRooted(a, name, tracked)) {
+				if (holdsUnsendableFunction(a.nodeType, 0) && callsHeldThrough(dispatchRegistry, slotOf(dispatchRegistry, node, a))) return true;
+				continue;
+			}
+			if (heldScan(dispatchRegistry, a, name, tracked)) return true;
+		}
+		return false;
+	}
+	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null) {
+		const init = (node.data as VariableDeclData).initializer;
+		if (init != null && heldPath(init) && heldRooted(init, name, tracked) && !hasFlag(node.resolvedSym!, SymbolFlag.Mutable)) {
+			tracked.push(node.resolvedSym!);
+			return false;
+		}
+	}
+	if (node.kind == NodeKind.ForOfStmt) {
+		const d = node.data as ForOfStmtData;
+		if (heldPath(d.forOfIterable) && heldRooted(d.forOfIterable, name, tracked)) {
+			if (node.resolvedSym != null) tracked.push(node.resolvedSym!);
+			heldPatternSyms(d.forOfPattern, tracked);
+			return heldScan(dispatchRegistry, d.forOfBody, name, tracked);
+		}
+	}
+	if (node.kind == NodeKind.BinaryExpr) {
+		const d = node.data as BinaryExprData;
+		if (d.operator == "==" || d.operator == "!=" || d.operator == "===" || d.operator == "!==") {
+			for (const side of [d.left, d.right]) {
+				if (side != null && !(heldPath(side) && heldRooted(side, name, tracked)) && heldScan(dispatchRegistry, side, name, tracked)) return true;
+			}
+			return false;
+		}
+	}
+	const found: boolean[] = [false];
+	forEachChild(node, (child: Node): void => {
+		if (!found[0] && heldScan(dispatchRegistry, child, name, tracked)) found[0] = true;
+	});
+	return found[0];
+}
+
+function heldPatternSyms(pattern: Node | null, out: Symbol[]): void {
+	if (pattern == null) return;
+	if (pattern.kind == NodeKind.Identifier) {
+		if (pattern.resolvedSym != null) out.push(pattern.resolvedSym!);
+		return;
+	}
+	forEachChild(pattern, (child: Node): void => { heldPatternSyms(child, out); });
 }
 
 function holdsUnsendableFunction(t: Type | null, depth: int32): boolean {
@@ -1094,10 +1243,10 @@ export function callEffect(dispatchRegistry: DispatchRegistry, call: Node, e: Ef
 	}
 	const name = callee != null && callee.kind == NodeKind.Identifier ? (callee.data as IdentifierData).name
 		: callee != null && callee.kind == NodeKind.MemberExpr ? (callee.data as MemberExprData).property : sym!.name;
-	const handed = receiverOf(call) != null ? unjudgedHolder(receiverOf(call)!, e) : null;
+	const handed = receiverOf(call) != null ? unjudgedHolder(dispatchRegistry, call, receiverOf(call)!, e) : null;
 	if (handed != null) return through(call, "calls '" + name + "'", handed);
 	for (const arg of (call.data as CallExprData).arguments) {
-		const passed = argumentEffect(dispatchRegistry, arg, e);
+		const passed = argumentEffect(dispatchRegistry, call, arg, e);
 		if (passed != null) return through(call, "calls '" + name + "'", passed);
 	}
 	const own = through(call, "calls '" + name + "'", routineEffect(dispatchRegistry, sym!, e));
@@ -1159,7 +1308,7 @@ export function newEffect(dispatchRegistry: DispatchRegistry, newNode: Node, e: 
 	if (e == Effect.StartsTask && classSym != null && classSym.symbolKind == SymbolKind.Actor) return cause(newNode, "starts the actor '" + classSym.name + "'");
 	if (reachesModuleState(e) && classSym != null && (classSym.symbolKind == SymbolKind.Class || classSym.symbolKind == SymbolKind.Actor)) {
 		for (const arg of (newNode.data as NewExprData).newArguments) {
-			const passed = argumentEffect(dispatchRegistry, arg, e);
+			const passed = argumentEffect(dispatchRegistry, newNode, arg, e);
 			if (passed != null) return through(newNode, "constructs '" + classSym.name + "'", passed);
 		}
 	}
