@@ -1,4 +1,4 @@
-import { samePhysicalFile, containsExistingRoot } from "./nativePath";
+import { samePhysicalFile, containsExistingRoot, physicalFileIdentity } from "./nativePath";
 import { hardLink } from "./nativeAlias";
 import {
 	ensureDir, join, removeAll, resolve, symlink, writeFile,
@@ -71,6 +71,12 @@ function main(): void {
 		same(source, directoryAlias, true, "directory symlink follows identity");
 	} else { skip("directory symlink fixture", directoryLinked.error, 3); }
 	same(a, hardAlias, true, "hardlink shares identity without path equality");
+	const identity = physicalFileIdentity(a);
+	const aliasIdentity = physicalFileIdentity(hardAlias);
+	const copyIdentity = physicalFileIdentity(b);
+	check(identity.ok && aliasIdentity.ok && copyIdentity.ok &&
+		identity.value == aliasIdentity.value && identity.value != copyIdentity.value,
+		"a hardlink has the file's identity, a copy with the same bytes its own");
 	same(source, a, false, "directory and file are distinct");
 	if (platform == "windows") {
 		same(a, a.toUpperCase(), true, "Windows path spelling is not identity");
@@ -101,7 +107,7 @@ function main(): void {
 	const rightNul = samePhysicalFile(a, a + "\0suffix");
 	check(!rightNul.ok, "right NUL refused");
 	check(removeAll(root).ok, "successful private fixture cleanup");
-	if (checks + skipped != (platform == "windows" ? 19 : 18)) {
+	if (checks + skipped != (platform == "windows" ? 20 : 19)) {
 		throw new Error("native path case count changed");
 	}
 	console.log("Native paths: " + String(checks) + " checks OK; " +

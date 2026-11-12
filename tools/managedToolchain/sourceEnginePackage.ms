@@ -157,6 +157,7 @@ function copyInstall(
 	const names = readDirNames(source);
 	if (!names.ok) { return Result.err(names.error.message); }
 	const stored = new Map<string, string>();
+	const digests = new Map<string, string>();
 	for (const name of names.value) {
 		const child = rel == "" ? name : rel + "/" + name;
 		const from = join(install, child);
@@ -184,7 +185,7 @@ function copyInstall(
 		if (child.startsWith(libraryDir) && !libraries.includes(child)) {
 			continue;
 		}
-		if (rel == "bin") { try copyOnceByContent(from, to, stored); }
+		if (rel == "bin") { try copyOnceByContent(from, to, stored, digests); }
 		else { try copyEngineFile(from, to); }
 		try engineIo(chmod(to, isExecutable(from) ? 0o755 : 0o644));
 	}

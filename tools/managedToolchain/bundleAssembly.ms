@@ -55,6 +55,7 @@ export function copyBundleTree(
 	const names = readDirNames(rel == "" ? source : join(source, rel));
 	if (!names.ok) { return Result.err(names.error.message); }
 	const stored = new Map<string, string>();
+	const digests = new Map<string, string>();
 	for (const name of names.value) {
 		if (rel == "" && skipTop.includes(name)) { continue; }
 		const child = rel == "" ? name : rel + "/" + name;
@@ -78,7 +79,7 @@ export function copyBundleTree(
 			continue;
 		}
 		if (!isFile(from)) { return Result.err("not a regular file: " + child); }
-		if (rel == "bin") { try copyOnceByContent(from, to, stored); }
+		if (rel == "bin") { try copyOnceByContent(from, to, stored, digests); }
 		else { try copyEngineFile(from, to); }
 		try engineIo(chmod(to, isExecutable(from) ? 0o755 : 0o644));
 	}

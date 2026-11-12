@@ -3,7 +3,7 @@ import {
 	ensureDir, dirname, join, fileSize,
 } from "std/fs";
 import { IoError } from "std/io/errors";
-import { containsExistingRoot, absoluteNativePath } from "./nativePath";
+import { containsExistingRoot, absoluteNativePath, physicalFileIdentity } from "./nativePath";
 import { hardLink, isSymbolicLink } from "./nativeAlias";
 import { sha256File } from "./fileDigest";
 import { readUtf8File } from "./textFile";
@@ -143,10 +143,23 @@ export function copyEngineFile(
 	return engineIo(copyFile(source, target));
 }
 
+export function digestOncePerFile(
+	path: string, digests: Map<string, string>,
+): Result<string, string> {
+	const identity = physicalFileIdentity(path);
+	if (!identity.ok) { return Result.err(identity.error.message); }
+	const known = digests.get(identity.value);
+	if (known != null) { return Result.ok(known); }
+	const digest = try sha256File(path);
+	digests.set(identity.value, digest);
+	return Result.ok(digest);
+}
+
 export function copyOnceByContent(
-	source: string, target: string, stored: Map<string, string>,
+	source: string, target: string, stored: Map<string, string>, digests: Map<string, string>,
 ): Result<void, string> {
-	const sameBytesAndMode = (try sha256File(source)) + (isExecutable(source) ? " x" : " -");
+	const sameBytesAndMode = (try digestOncePerFile(source, digests)) +
+		(isExecutable(source) ? " x" : " -");
 	const first = stored.get(sameBytesAndMode);
 	if (first == null) {
 		stored.set(sameBytesAndMode, target);
@@ -163,8 +176,9 @@ export function writeEngineContract(
 	try writeEngineText(join(root, "VERSION"), version + "\n");
 	const files = try listEngineFiles(root);
 	const entries: ManifestEntry[] = [];
+	const digests = new Map<string, string>();
 	for (const path of files) {
-		entries.push({ path, digest: try sha256File(join(root, path)) });
+		entries.push({ path, digest: try digestOncePerFile(join(root, path), digests) });
 	}
 	const text = try renderManifest(entries);
 	try writeEngineText(join(root, "FILES.sha256"), text);
@@ -190,12 +204,13 @@ export function verifyEngineContract(
 	}
 	let hasHost = false;
 	let hasVersion = false;
+	const digests = new Map<string, string>();
 	for (let i: int32 = 0; i < entries.length; i += 1) {
 		const entry = entries[i];
 		if (entry.path != actual[i]) {
 			return Result.err("FILES.sha256: inventory differs at " + actual[i]);
 		}
-		const digest = try sha256File(join(root, entry.path));
+		const digest = try digestOncePerFile(join(root, entry.path), digests);
 		if (digest != entry.digest) {
 			return Result.err("hash mismatch: " + entry.path);
 		}

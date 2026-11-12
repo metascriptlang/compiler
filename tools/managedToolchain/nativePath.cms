@@ -130,6 +130,26 @@ when (windows) {
 			first.nFileIndexHigh == second.nFileIndexHigh &&
 			first.nFileIndexLow == second.nFileIndexLow);
 	}
+
+	function identityKernel(path: string): Result<string, IoError> {
+		const wide = widePath(path);
+		if (wide == null) { return Result.err(ioErrorFromErrno(EINVAL, path)); }
+		const handle = openMetadata(wide);
+		const openError = handle == INVALID_HANDLE_VALUE ? GetLastError() : 0;
+		freeWide(wide);
+		if (handle == INVALID_HANDLE_VALUE) {
+			return Result.err(ioErrorFromErrno(msFsErrnoFromWin32(openError), path));
+		}
+		let info: FileInformation = {};
+		const read = GetFileInformationByHandle(handle, info);
+		const readError = read == 0 ? GetLastError() : 0;
+		CloseHandle(handle);
+		if (read == 0) {
+			return Result.err(ioErrorFromErrno(msFsErrnoFromWin32(readError), path));
+		}
+		return Result.ok(String(info.dwVolumeSerialNumber) + ":" +
+			String(info.nFileIndexHigh) + ":" + String(info.nFileIndexLow));
+	}
 } else {
 	@include("sys/stat.h");
 	import { resolve } from "std/fs";
@@ -168,6 +188,15 @@ when (windows) {
 		return Result.ok(first.st_dev == second.st_dev &&
 			first.st_ino == second.st_ino);
 	}
+
+	function identityKernel(path: string): Result<string, IoError> {
+		let value: NativeStat = {};
+		if (cStat(path as cstring, value) != 0) {
+			const code = errno;
+			return Result.err(ioErrorFromErrno(code, path));
+		}
+		return Result.ok(String(value.st_dev) + ":" + String(value.st_ino));
+	}
 }
 
 export function absoluteNativePath(path: string): Result<string, IoError> {
@@ -187,6 +216,13 @@ export function samePhysicalFile(
 		return Result.err(ioErrorFromErrno(EINVAL, right));
 	}
 	return sameKernel(left, right);
+}
+
+export function physicalFileIdentity(path: string): Result<string, IoError> {
+	if (path.indexOf("\0") >= 0) {
+		return Result.err(ioErrorFromErrno(EINVAL, path));
+	}
+	return identityKernel(path);
 }
 
 function absent(error: IoError): boolean {
