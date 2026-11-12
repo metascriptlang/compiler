@@ -1,14 +1,14 @@
 // Transform Utilities — node-building helpers for AST transforms
 // Each helper wraps createNode with the correct NodeKind and data shape.
 
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, BinaryExprData, UpdateExprData, UnaryExprData, NumberLiteralData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, MemberExprData, noFieldDecorators, BuiltinKind } from "../ast/node";
+import { Node, NodeKind, NodeFlag, ForStmtData, ArrayAccessData, DeclKind, SourceLocation, createNode, makeLoc, Symbol, AttachedOp, BlockStmtData, VariableDeclData, IdentifierData, BinaryExprData, UpdateExprData, UnaryExprData, NumberLiteralData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, ArrayLiteralData, Type, TypeKind, SymbolKind, CallExprData, MemberExprData, noFieldDecorators, BuiltinKind } from "../ast/node";
 import { makeSymbol, setFlag, hasFlag, SymbolFlag } from "../checker/symbol";
 import { stdSymbol } from "../checker/context";
 import { literalBase, isOrdinalEnum, createFunction, createStruct, createArray, createPtr, numberType, int32Type, charType, stringType, booleanType, voidType, nullType, noneType, getSysType, isResult, getResultOkType, getResultErrType, isStringLike, setRepr, spelled, isAffineAwaitable, createClosureType, createVar, unwrapRefNullUnion, literalUnionBase, distinctBody, isNumeric, peelTransparentInstance, peelToRepr } from "../checker/types";
 import { TransformContext, freshTempSym, mintSym, NameSet, nameSetAdd } from "./context";
 import { requireOpByKey } from "../codegen/c/types";
 import { forEachChild } from "../ast/visitor";
-import { peelStdConv } from "../ast/shape";
+import { peelStdConv, isRoutineNode } from "../ast/shape";
 import { isAssignOp } from "../ast/operators";
 import { mangleQualified, mangleModuleName, buildModuleNameRoots } from "../codegen/c/names";
 import { IdentCache, getIdentId, createIdentCache } from "../checker/idents";
@@ -628,6 +628,128 @@ export function markBoundedCounterStep(sym: Symbol, test: Node, body: Node[], st
 		const sum = assign.right.data as BinaryExprData;
 		if (sum.operator == "+" && namesSymbol(sum.left, sym) && isOne(sum.right)) assign.right.flags = assign.right.flags.incl(NodeFlag.NoOverflowCheck);
 	}
+}
+
+type CounterRange = { sym: Symbol, lo: int64, hi: int64 };
+type Interval = { lo: int64, hi: int64 };
+
+export function markCounterProofs(program: Node): Node {
+	markProven(program, []);
+	return program;
+}
+
+function markProven(node: Node, ranges: CounterRange[]): void {
+	if (node == null) return;
+	if (isRoutineNode(node)) {
+		forEachChild(node, (c: Node): void => markProven(c, []));
+		return;
+	}
+	if (node.kind == NodeKind.ForStmt) {
+		const d = node.data as ForStmtData;
+		markProven(d.forInit, ranges);
+		markProven(d.forCondition, ranges);
+		markProven(d.forUpdate, ranges);
+		const r = literalCounterRange(d);
+		markProven(d.forBody, r == null ? ranges : [...ranges, r]);
+		return;
+	}
+	forEachChild(node, (c: Node): void => markProven(c, ranges));
+	if (ranges.length == 0) return;
+	if (node.kind == NodeKind.ArrayAccess) {
+		const d = node.data as ArrayAccessData;
+		const arr = sizedArrayType(d.array);
+		const at = arr == null ? null : intervalOf(d.index, ranges);
+		if (arr != null && at != null && at.lo >= 0 && at.hi < arr.typeValue) node.flags = node.flags.incl(NodeFlag.InBounds);
+	} else if (node.kind == NodeKind.BinaryExpr && isInt32(node.nodeType) && intervalOf(node, ranges) != null) {
+		node.flags = node.flags.incl(NodeFlag.NoOverflowCheck);
+	}
+}
+
+function literalCounterRange(d: ForStmtData): CounterRange | null {
+	if (d.forInit == null || d.forCondition == null || d.forUpdate == null || d.forBody == null) return null;
+	if (d.forInit.kind != NodeKind.VariableDecl || d.forCondition.kind != NodeKind.BinaryExpr) return null;
+	const decl = d.forInit.data as VariableDeclData;
+	const sym = d.forInit.resolvedSym;
+	if (sym == null || decl.declKind != DeclKind.Let || !isInt32(sym.symbolType) || decl.initializer == null) return null;
+	const test = d.forCondition.data as BinaryExprData;
+	if (test.operator != "<" || !namesSymbol(test.left, sym)) return null;
+	const lo = intervalOf(decl.initializer, []);
+	const end = intervalOf(test.right, []);
+	const step = counterStep(d.forUpdate, sym);
+	if (lo == null || end == null || lo.lo != lo.hi || end.lo != end.hi || step < 1) return null;
+	if (lo.lo < -2147483648 || end.lo - 1 + step > 2147483647 || lo.lo > end.lo - 1) return null;
+	if (writesSymbol(d.forBody, sym)) return null;
+	return { sym: sym, lo: lo.lo, hi: end.lo - 1 };
+}
+
+function counterStep(step: Node, sym: Symbol): int64 {
+	if (step.kind == NodeKind.UpdateExpr) {
+		const u = step.data as UpdateExprData;
+		return u.updateOp == "++" && namesSymbol(u.updateArg, sym) ? 1 : 0;
+	}
+	if (step.kind != NodeKind.BinaryExpr) return 0;
+	const assign = step.data as BinaryExprData;
+	if (!namesSymbol(assign.left, sym)) return 0;
+	let by: Node | null = null;
+	if (assign.operator == "+=") {
+		by = assign.right;
+	} else if (assign.operator == "=" && assign.right.kind == NodeKind.BinaryExpr) {
+		const sum = assign.right.data as BinaryExprData;
+		if (sum.operator == "+" && namesSymbol(sum.left, sym)) by = sum.right;
+	}
+	const amount = by == null ? null : intervalOf(by, []);
+	return amount != null && amount.lo == amount.hi ? amount.lo : 0;
+}
+
+function intervalOf(node: Node, ranges: CounterRange[]): Interval | null {
+	const n = peelStdConv(node);
+	if (n.kind == NodeKind.NumberLiteral) {
+		const lit = n.data as NumberLiteralData;
+		return lit.isFloat ? null : { lo: lit.intVal, hi: lit.intVal };
+	}
+	if (n.kind == NodeKind.Identifier) {
+		for (const r of ranges) {
+			if (n.resolvedSym == r.sym) return { lo: r.lo, hi: r.hi };
+		}
+		return null;
+	}
+	if (n.kind != NodeKind.BinaryExpr || !isInt32(n.nodeType)) return null;
+	const d = n.data as BinaryExprData;
+	const a = intervalOf(d.left, ranges);
+	const b = intervalOf(d.right, ranges);
+	if (a == null || b == null) return null;
+	let lo: int64 = 0;
+	let hi: int64 = 0;
+	if (d.operator == "+") {
+		lo = a.lo + b.lo;
+		hi = a.hi + b.hi;
+	} else if (d.operator == "-") {
+		lo = a.lo - b.hi;
+		hi = a.hi - b.lo;
+	} else if (d.operator == "*") {
+		const products: int64[] = [a.lo * b.lo, a.lo * b.hi, a.hi * b.lo, a.hi * b.hi];
+		lo = products[0];
+		hi = products[0];
+		for (const v of products) {
+			if (v < lo) lo = v;
+			if (v > hi) hi = v;
+		}
+	} else {
+		return null;
+	}
+	return lo >= -2147483648 && hi <= 2147483647 ? { lo, hi } : null;
+}
+
+function isInt32(t: Type | null): boolean {
+	const r = peelToRepr(t);
+	return r != null && r.kind == TypeKind.Int32;
+}
+
+function sizedArrayType(arr: Node): Type | null {
+	if (arr.nodeType == null) return null;
+	let t = peelTransparentInstance(arr.nodeType);
+	if (t.kind == TypeKind.Ref && t.typeReturn != null) t = peelTransparentInstance(t.typeReturn);
+	return t.kind == TypeKind.SizedArray ? t : null;
 }
 
 export function indexCannotLeave(index: Node, size: int32): boolean {

@@ -200,7 +200,7 @@ function rewriteArrayAccess(node: Node, boundChecks: boolean): Node {
 
 	if (arrType.kind == TypeKind.SizedArray) {
 		const size = arrType.typeValue;
-		const checked = boundChecks && !indexCannotLeave(d.index, size);
+		const checked = boundChecks && !node.flags.has(NodeFlag.InBounds) && !indexCannotLeave(d.index, size);
 		const result = makeCall(generatedRef(checked ? "msSizedArrayAccess" : "msSizedArrayAccessUnchecked", loc), [d.array, d.index, makeNumber(size, loc)], loc);
 		result.nodeType = node.nodeType;
 		return result;

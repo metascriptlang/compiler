@@ -59,6 +59,7 @@ import "./sizedArrayLiteral";
 import "./staticConstLiteralData";
 import "./arraySpreadBlock";
 import "./sizedArrayResultSlot";
+import "./counterProvenIndex";
 import "./objectLiteralDestination";
 import "./returnedCallResultSlot";
 import "./comptimeBlockStaticType";

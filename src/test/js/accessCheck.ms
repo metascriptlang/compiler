@@ -193,3 +193,54 @@ test "an int32 sum is range-tested inline and only a value out of range calls ms
 	assert result.ok;
 	assert result.value.contains("return ((($int_0 = (a + b)) === ($int_0 | 0)) ? $int_0 : msOverflowI32($int_0));"), result.value;
 }
+
+test "under a for with literal bounds a counter index that stays inside a sized array has no index or overflow check" {
+	const result = compileToJSBare("function f(w: uint32[64]): uint32 { let t: uint32 = 0; for (let i = 16; i < 64; i++) { t = t ^ w[i - 15] ^ w[i] ^ w[i * 1 + 0]; } return t; }");
+	assert result.ok;
+	assert !result.value.contains("msIndexFail"), result.value;
+	assert !result.value.contains("msOverflowI32"), result.value;
+	assert result.value.contains("w[(i - 15)]"), result.value;
+}
+
+test "a counter index that can pass the end of the sized array is checked" {
+	const result = compileToJSBare("function f(w: uint32[64]): uint32 { let t: uint32 = 0; for (let i = 0; i < 65; i++) { t = t ^ w[i]; } return t; }");
+	assert result.ok;
+	assert result.value.contains("msIndexFail(i, w.length)"), result.value;
+}
+
+test "a counter index that can go below zero is checked" {
+	const result = compileToJSBare("function f(w: uint32[64]): uint32 { let t: uint32 = 0; for (let i = 16; i < 64; i++) { t = t ^ w[i - 17]; } return t; }");
+	assert result.ok;
+	assert result.value.contains("msIndexFail"), result.value;
+}
+
+test "a counter the body writes proves nothing" {
+	const result = compileToJSBare("function f(w: uint32[64]): uint32 { let t: uint32 = 0; for (let i = 0; i < 64; i++) { i = i + 1; t = t ^ w[i]; } return t; }");
+	assert result.ok;
+	assert result.value.contains("msIndexFail"), result.value;
+}
+
+test "a bound that is not a literal proves nothing" {
+	const result = compileToJSBare("function f(w: uint32[64], n: int32): uint32 { let t: uint32 = 0; for (let i = 0; i < n; i++) { t = t ^ w[i]; } return t; }");
+	assert result.ok;
+	assert result.value.contains("msIndexFail(i, w.length)"), result.value;
+}
+
+test "a closure in the loop body keeps its check" {
+	const result = compileToJSBare("function f(w: uint32[64]): uint32 { let t: uint32 = 0; for (let i = 0; i < 64; i++) { const g = (): uint32 => w[i]; t = t ^ g(); } return t; }");
+	assert result.ok;
+	assert result.value.contains("msChkIndex(i, w.length)"), result.value;
+}
+
+test "counter arithmetic that can leave int32 keeps its overflow check" {
+	const result = compileToJSBare("function f(): int32 { let t: int32 = 0; for (let i = 0; i < 64; i++) { t = i * 100000000; } return t; }");
+	assert result.ok;
+	assert result.value.contains("msOverflowI32"), result.value;
+}
+
+test "two nested counters prove an index built from both" {
+	const result = compileToJSBare("function f(w: uint32[64]): uint32 { let t: uint32 = 0; for (let i = 0; i < 8; i++) { for (let j = 0; j < 8; j++) { t = t ^ w[i * 8 + j]; } } return t; }");
+	assert result.ok;
+	assert !result.value.contains("msIndexFail"), result.value;
+	assert !result.value.contains("msOverflowI32"), result.value;
+}

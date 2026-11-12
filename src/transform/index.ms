@@ -34,7 +34,7 @@ import { hasGenericParams } from "../checker/types";
 import { resolveImportSourcePath } from "../checker/collectPass";
 import { createTransformContextWithChecker, TransformContext, ModuleFact } from "./context";
 import { WriteSummaries, noteUnitDecls } from "../analyzer/writeEffects";
-import { bindCompilerFuncs, takeValueShareFns, addGeneratedFn, generatedFnCount } from "./util";
+import { bindCompilerFuncs, takeValueShareFns, addGeneratedFn, generatedFnCount, markCounterProofs } from "./util";
 import { skipsModule } from "./moduleFacts";
 import { flowLap, flowMark, flowTally } from "../compiler/flows";
 import { lowerDefer } from "./lowering/deferLower";
@@ -264,6 +264,8 @@ export function transformProgramHead(program: Node, checkerCtx: CheckerContext, 
 	flowLap("pass.lowerRestParams");
 	result = lowerDestructuring(result, ctx);
 	flowLap("pass.lowerDestructuring");
+	result = markCounterProofs(result);
+	flowLap("pass.markCounterProofs");
 	if (!jsBackend) { result = lowerForLoop(result, ctx); flowLap("pass.lowerForLoop"); }
 	offerIterBodies(result, ctx);
 	return { program: result, ctx, generatedFns: takeValueShareFns() };
