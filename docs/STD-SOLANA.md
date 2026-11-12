@@ -1360,3 +1360,23 @@ Same build and harness as the section above (`--os=solana --release`, LiteSVM 1.
 - **`failWith`** keeps the first error of the instruction, so a later `failWith` does not replace an earlier one.
 - **`clock(): Result<Clock, ProgramError>`**: the clock sysvar syscall can fail, and then the call is `Err(UnsupportedSysvar)` instead of a zero `Clock` the handler would read as time zero. The reference sysvar readers return the same shape (Pinocchio `sdk/src/sysvars/mod.rs:36` `fn get() -> Result<Self, ProgramError>` at `0dace48`; `solana-sysvar-2.2.2/src/lib.rs:188`). A failed read stops the handler where `try` sits; `std/solana/test.ms` pins that no line after the read runs, for `clock()` and `minimumBalance()`. The success path costs 1 CU more for `clock()` and 398 CU fewer for `minimumBalance()` than the `failWith` form (LiteSVM 1.4.1, 100 reads, `heapProbe` ops 15 and 14). Author migration: `clock().unixTimestamp` becomes `(try clock()).unixTimestamp`, `minimumBalance(n)` becomes `try minimumBalance(n)`; the rent and clock are the only sysvar readers.
 - **`requestRandomness`** pins what the VRF program itself checks (`ephemeral-vrf` `program/src/request_randomness.rs:60-78` at `52b103c`): the queue is writable and owned by the VRF program, the slot hashes account is `SLOTHASHES_ID`, and the system program account is `SYSTEM_PROGRAM_ID`.
+
+### Quasar as a comparison pillar — measured 2026-11-12
+
+`tools/solana/quasar/` holds Quasar ports of the five bench programs (build, versions and why each port has its shape in its README), a fourth column beside Anchor v2 and the Pinocchio programs of `tools/solana/pinocchio/`. One `BENCH_REFUSALS=1 node tools/solana/anchorBench.mjs` call ran all four with the `anchor` encoding, LiteSVM 1.4.1: the std ELFs built by `msc build examples/anchorBench/<suite>/program.ms --os=solana --release` with the installed `msc` (binary and support of `1b493b622aca`, tree `b9d32dd9e02c`; sha256 prefixes hello `f9f75339b20fd8ee`, vault `d2ae219ac1f65579`, nested `ee42d8d9b5d3cdad`, prop-amm `74db334ea29c5a3e`, multisig `bd1c079b6093fb07`), the Anchor v2 ELFs rebuilt by `node tools/solana/anchorReference.mjs <anchor-next clone> <fresh dir> hash` and the Pinocchio ones by its README. The rebuilt Anchor v2 and Pinocchio ELFs have the sizes of the sections above, and their CU equal that section's to the unit, so the four columns stand on the same reference.
+
+| Instruction CU | std | Anchor v2 | Pinocchio, equal checks | Quasar |
+|---|---|---|---|---|
+| hello init | 1411 | 1441 | | 1753 |
+| vault deposit; withdraw | 1583; 410 | 1602; 418 | 1593; 404 | 1626; 462 |
+| nested initialize; increment; reset | 2733; 155; 148 | 2840; 866; 861 | | 5292; 536; 536 |
+| prop-amm update; initialize; rotate | 79; 1372; 90 | 81; 1398; 93 | 91; 1375; 95 | 153; 2627; 178 |
+| multisig create; deposit; set_label; execute | 2459; 2265; 453; 2572 | 2762; 2292; 621; 2991 | | 2759; 2322; 478; 2778 |
+
+Program bytes (std; Anchor v2; Pinocchio; Quasar): hello 3456; 6400; –; 6504, vault 3776; 5632; 5544; 5832, nested 5696; 12256; –; 15392, prop-amm 4432; 8448; 6672; 8688, multisig 12320; 30496; –; 25624.
+
+- The std is below Quasar and Anchor v2 on all thirteen instructions and below Pinocchio on four of five; vault withdraw is 6 above Pinocchio.
+- Every variant leaves the watched accounts in equal states and refuses all 106 fault cases with business state unchanged. The run prints eight failures, Anchor v2's and Quasar's in multisig's four on-curve cases: both refuse the on-curve signer themselves before the CPI (Quasar with custom error 3002), where the harness expects the runtime to refuse it, as the Anchor v2 failures of the section above.
+- Where Quasar's cost is, read in its source and the LiteSVM logs, not attributed instruction by instruction: every seeded address is hashed at run time, literal seeds included, where the std folds literal seeds to one key compare (helloworld, nested); a prefunded account is created with two System calls where the std makes one (prop-amm initialize).
+
+Not measured: Quasar with the compile-time PDA fork branch its anchor-next port pins (not built here); Quasar's one-byte default tags; a real validator.
