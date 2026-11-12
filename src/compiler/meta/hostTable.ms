@@ -1625,7 +1625,7 @@ function _bridgeMsUnionWrapMaybe(vm: RaiserVM): void {
 const SYSTEM_ROUTED: string[] = [
 	"msFsExists", "msFsRealPath", "msFsIsFile", "msFsIsDir", "msFsIsExecutable", "msFsFileSize",
 	"msFsModifiedTime", "msFsReadFile", "msFsLastErrno", "msFsWriteFileMode", "msFsChangedTime",
-	"msFsChangeStamp", "std/fs.readFile", "std/fs.readFileBytes", "std/fs.readDir", "std/fs.exists",
+	"msFsChangeStamp", "std/fs.readFile", "std/fs.readDir", "std/fs.exists",
 	"std/fs.isFile", "std/fs.isDir", "std/fs.isExecutable", "std/fs.realpath", "std/fs.fileSize",
 	"std/fs.modifiedTime", "std/fs.changedTime", "std/fs.changeStamp", "std/fs.writeFile", "std/fs.appendFile",
 	"std/fs.copyFile", "std/fs.mkdir", "std/fs.ensureDir", "std/fs.rmdir", "std/fs.remove", "std/fs.removeAll",
