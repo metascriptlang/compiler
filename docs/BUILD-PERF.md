@@ -191,6 +191,57 @@ Fixed loop alignment for every program (`-falign-loops=32`, +1.1% `.text` at `--
 single-layout runs comparable; it stays off by default (the person, 2026-11-10), and layout-randomized
 runs are the measurement instead.
 
+## Measured 2026-11-12 — `--strip` drops the unwind tables of a Linux build
+
+Decision (the person, 2026-11-12): only a `--strip` build drops them. `stripUnwindFlags` in
+`src/compiler/cc.ms` adds `-fno-asynchronous-unwind-tables -fno-unwind-tables` to the compile flags
+when the target is Linux (gnu or musl), `--strip` is given and no `--sanitize` is; every other build
+compiles as before.
+
+rtx, Linux x86-64; old = the compiler of tree `e9d81b35dc9e`, new = a candidate of that tree with the
+change; each cell is `msc build <program> <mode> --strip`, file size in bytes. `.text` is
+byte-for-byte the same size in every pair, and every pair printed the same output with the same
+exit code. The programs are those of §Measured 2026-11-12 — what small programs link, plus an
+iterator-helper program (`src/test/corpus/programs/iteratorHelpersMatchNode.ms`) and one that
+catches an `Error` and then ends on an unhandled one.
+
+| program | `--danger` old → new | `--release` old → new | default (`-O0 -g`) old → new |
+|---|---|---|---|
+| hello | 8,960 → 8,384 (−6.4%) | 8,960 → 8,384 | 51,568 → 48,688 |
+| Map/Set/array | 39,728 → 36,704 (−7.6%) | 40,304 → 37,120 | 228,832 → 217,296 |
+| JSON | 104,432 → 97,408 (−6.7%) | 104,096 → 96,528 | 546,200 → 523,112 |
+| strings | 59,528 → 56,488 (−5.1%) | 57,704 → 54,520 | 229,496 → 217,992 |
+| two awaits in an async function | 56,192 → 51,520 (−8.3%) | 54,304 → 49,616 | 262,112 → 243,712 |
+| the same awaits at the top level | 68,760 → 62,792 (−8.7%) | 67,272 → 61,192 | 291,928 → 271,464 |
+| iterator helpers | 112,456 → 104,120 (−7.4%) | 107,864 → 99,640 | 513,928 → 496,632 |
+| caught and unhandled `Error` | 27,080 → 25,224 (−6.9%) | 26,808 → 24,760 | 105,304 → 98,680 |
+
+`.eh_frame` goes from 528–7,352 B to 52 B at `--danger` and `--release` (what the C startup objects
+carry), and to about 2.4 KB in a default build, whose overflow-check runtime is linked prebuilt; a
+build without `--strip` keeps its `.eh_frame` byte for byte (528–7,352 B). A static musl build of the JSON program: 132,568 → 126,064 B. The
+unhandled-`Error` program still prints `Error: unhandled exception: boom 7` with the exit code it had: the
+report reads the error flag and walks no stack. The installed Linux compiler (25.7 MB unstripped,
+`9a9713925`) carries 1,226,740 B of `.eh_frame` and 155,892 B of `.eh_frame_hdr`, 6% of its stripped
+size; it was not rebuilt with the flag.
+
+What a stripped Linux binary no longer has:
+- a debugger backtrace: gdb and lldb unwind an optimized frame through `.eh_frame`, and a stripped
+  binary has no `.debug_frame` to fall back on;
+- `perf record --call-graph dwarf` call chains (a flat profile is unaffected);
+- a C++ exception that crosses a MetaScript or runtime frame: with no table for that frame the C++
+  runtime calls `std::terminate`. C++ code keeps the tables of its own functions, so a throw caught
+  inside the C++ it came from is unaffected. Not measured here.
+
+Nothing in `runtime/` or `std/` reads the tables: no `backtrace`, `_Unwind_*`, `dladdr` or
+`pthread_cancel` (only `__builtin_frame_address` in `runtime/drc.h`, which needs none).
+
+Not changed, with the reason: macOS (the installed compiler's `__unwind_info` is 55,072 B of 21.6
+MB, and a small program's sits inside a page it occupies anyway), Windows (`.pdata` is how x64
+unwinds a hardware exception), a sanitizer build (its reports print stacks), Android (not measured).
+Pinned by the inline test `--strip drops unwind tables on Linux only, and never under a sanitizer`
+in `src/compiler/cc.ms`. Not measured: aarch64 Linux, gcc, and whether a debugger still walks a
+stripped default build.
+
 ## Measured 2026-11-10 — LTO and size flags of `--danger`, over randomized layouts
 
 m1m (M1 Pro), 8 ld64 layouts per arm, warm `check`, against O3 with thin LTO, the `--danger`
