@@ -3365,6 +3365,12 @@ called during a call with a `ref` or `out` parameter it throws `a kept callback 
 'bump' holds a copy of its ref parameter 'total', so JS would see the variable as it was before the
 call and a write to it would be lost`, for the same reason.
 
+**Top-level code runs once, on the JS side.** A module with `@wasm` functions, and every module of the
+program it imports, runs its top-level statements and the initializers of variables that no wasm-placed code
+names only on the JS side, so a `console.log` there prints once, as in the all-C program. A
+constant that wasm-placed code reads is initialized in both halves, so an initializer with an
+effect (`const k = loadK()` that prints) runs twice.
+
 **Refused at compile time, with the reason and the fix in the message:**
 
 - a `view` kept past `f`;

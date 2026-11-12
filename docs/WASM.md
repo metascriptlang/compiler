@@ -109,6 +109,20 @@ three handle checks and drop the site.
   exported function and its callees follow it through the child build's dead-code elimination.
   The old statement is refused with a pointer to the function marker. Module state reached from
   both halves is refused (`refusedSharedState`), because each half would hold its own copy.
+- **A module's top-level code runs on the JS side only** (2026-11-13). The JS prelude calls the
+  wasm half's `MsMain()`, which runs every alive module's `__Init000`, and the child build rooted
+  every top-level statement, so a `console.log` at the top of a module with `@wasm` functions, or of
+  a helper module it imports, printed twice. The child now gets `--wasm-half`: before transform it
+  drops each user module's top-level code (`placement.ms` `withoutJsSideCode`) and the initializer
+  of each module variable that no code it keeps names (`withoutUnreadInitializers`); the alive set
+  then stops the build with an internal error if wasm-placed code reaches such a variable anyway,
+  because a dropped initializer would read as zero. The checker already keeps top-level code from
+  touching state that wasm-placed code uses (`refuseJsSideHit`), so dropping it changes no wasm
+  result. Pin `wasmmix/programs/topLevelOnce`: on main's compiler mixed printed `helper ready`,
+  `unread initialized`, `placed ready` twice; with the fix all four columns print each once, and
+  the full `check.sh` reads `wasmmix: 103/103 pass` (m1m, 2026-11-13). Still twice: a constant that
+  wasm-placed code reads, initialized by a call with an effect, runs that initializer on both halves
+  (probe: `init read` and `init seed` twice, `init unread` once, the all-C program each once).
 - **Copies by default; zero copy only through a view.** A writable Span copied back measured
   2680 ns for 1000 floats where a view measured 1090 (table below), so views exist; a view is
   only safe because nothing can grow memory while it is open, which is enforced at runtime by the
