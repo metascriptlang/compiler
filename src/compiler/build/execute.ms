@@ -1,4 +1,4 @@
-import { BuildGraph, GraphNode, GraphPath, GraphArg, GraphCheck, ArgKind, nodeById, sourcePath } from "./configure";
+import { BuildGraph, GraphNode, GraphPath, GraphArg, GraphCheck, GraphEnv, ArgKind, nodeById, sourcePath } from "./configure";
 import { CliOptions } from "../options";
 import { hashFile, loadFileHashes, saveFileHashes, buildStartMark, changedSinceBuild } from "../cache";
 import { hashContent } from "../../utils/contentHash";
@@ -266,7 +266,7 @@ function runCommand(x: Execution, n: GraphNode): Job | null {
 	for (const a of n.argv) key = `${key}${a.kind}:${a.text}:${a.path == null ? "" : inputHash(x, a.path)}\n`;
 	for (const a of extra) key = `${key}arg:${a}\n`;
 	if (n.cwd != null) key = `${key}cwd:${keyPath(x, pathOf(x, n.cwd))}\n`;
-	for (const e of n.env) key = `${key}env:${e}\n`;
+	for (const e of n.env) key = `${key}${e.path == null ? `env:${e.name}=${e.value}` : `envPath:${e.name}:${inputHash(x, e.path)}`}\n`;
 	for (const p of n.inputs) key = `${key}in:${inputHash(x, p)}\n`;
 	key = `${key}stdout:${n.stdout}\nexpect:${n.expectExit}\n`;
 	for (const c of n.checks) key = `${key}check:${c.stderr}:${c.exact}:${hashContent(c.text)}\n`;
@@ -302,19 +302,21 @@ function runCommand(x: Execution, n: GraphNode): Job | null {
 	const found = isAbsolute(argv[0]) ? argv[0] : findOnPath(argv[0]);
 	let args = argv.slice(1, argv.length);
 	let exe = found;
-	if (n.env.length > 0) {
+	const env = n.env.map((e: GraphEnv): string => `${e.name}=${e.path == null ? e.value : pathOf(x, e.path)}`);
+	if (env.length > 0) {
 		if (platform == "windows") throw new Error(`${label(n)}: setEnvironmentVariable is not supported on Windows yet`);
-		args = n.env.concat([found]).concat(args);
+		args = env.concat([found]).concat(args);
 		exe = "/usr/bin/env";
 	}
+	const shown = env.concat(argv).join(" ");
 	const dir = n.cwd == null ? x.projectRoot : pathOf(x, n.cwd);
 	if (x.dryRun) {
-		console.log(`(cd ${dir} && ${argv.join(" ")})`);
+		console.log(`(cd ${dir} && ${shown})`);
 		x.outputs.set(n.id, tmp);
 		x.digests.set(n.id, `dry:${n.id}`);
 		return null;
 	}
-	const started = job(n, exe, args, dir, argv.join(" "), (j: Job): void => {
+	const started = job(n, exe, args, dir, shown, (j: Job): void => {
 		x.ran.push(label(n));
 		if (live) {
 			x.outputs.set(n.id, "");
@@ -328,7 +330,7 @@ function runCommand(x: Execution, n: GraphNode): Job | null {
 		for (const depFile of depFiles) {
 			if (exists(depFile)) continue;
 			removeAll(tmp);
-			throw new Error(`${label(n)}: ${argv.join(" ")} did not write its depfile ${basename(depFile)}`);
+			throw new Error(`${label(n)}: ${shown} did not write its depfile ${basename(depFile)}`);
 		}
 		const read = readSetUnchangedSinceStart(x, j, depFiles, dir, tmp);
 		if (read == null) {
@@ -427,11 +429,7 @@ function installNode(x: Execution, n: GraphNode): void {
 	if (!atomicCopyFile(from, dest)) throw new Error(`${label(n)}: cannot install ${from} at ${dest}`);
 }
 
-function runStep(x: Execution, n: GraphNode): void {
-	if (x.dryRun) {
-		console.log(`step: ${label(n)}`);
-		return;
-	}
+function callMake(x: Execution, n: GraphNode): void {
 	const vm = x.graph.run!.vm!;
 	const make = x.graph.steps.get(n.id)!.field("make");
 	const fn = make.field("fn").root.intVal;
@@ -443,6 +441,14 @@ function runStep(x: Execution, n: GraphNode): void {
 		vm.error = "";
 		throw new Error(`${label(n)}: ${message}`);
 	}
+}
+
+function runStep(x: Execution, n: GraphNode): void {
+	if (x.dryRun) {
+		console.log(`step: ${label(n)}`);
+		return;
+	}
+	if (n.hasMake) callMake(x, n);
 	x.ran.push(label(n));
 }
 
@@ -623,5 +629,5 @@ function executePlan(x: Execution, id: int32): string {
 export function planRunsStep(g: BuildGraph, id: int32): boolean {
 	const plan: GraphNode[] = [];
 	order(g, id, new HashSet<int32>(), new HashSet<int32>(), plan);
-	return plan.some((n: GraphNode): boolean => n.kind == "step");
+	return plan.some((n: GraphNode): boolean => n.hasMake);
 }

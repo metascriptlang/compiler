@@ -38,6 +38,7 @@ export interface OutputCheck {
 export interface EnvVar {
 	name: string;
 	value: string;
+	path: LazyPath | null;
 }
 
 let nextId: int32 = 0;
@@ -149,18 +150,17 @@ export class Command extends BuildNode {
 	env: EnvVar[];
 	stdout: boolean;
 	hasSideEffects: boolean;
-	expectedExit: int32;
+	expectedExit: int32 | null;
 	checks: OutputCheck[];
-	constructor(argv: string[]) {
+	constructor() {
 		super("command", "");
 		this.argv = [];
-		for (const text of argv) this.argv.push({ kind: ArgKind.Text, text, path: null });
 		this.cwd = null;
 		this.inputs = [];
 		this.env = [];
 		this.stdout = false;
 		this.hasSideEffects = false;
-		this.expectedExit = -1;
+		this.expectedExit = null;
 		this.checks = [];
 	}
 }
@@ -175,8 +175,8 @@ export class Install extends BuildNode {
 }
 
 export class CustomStep extends BuildNode {
-	make: () => void;
-	constructor(description: string, inputs: BuildNode[], make: () => void) {
+	make: (() => void) | null;
+	constructor(description: string, inputs: BuildNode[], make: (() => void) | null) {
 		super("step", description);
 		this.make = make;
 		for (const input of inputs) {
@@ -197,10 +197,33 @@ export function mscExe(): string {
 
 extern function msBuildOption(name: string, description: string): string;
 
+function given(name: string, description: string): string | null {
+	const text = msBuildOption(name, description);
+	return text == "" ? null : text.slice(1, text.length);
+}
+
 // `msc build -Dname=value`; a bare `-Dname` gives "true". Null when the command line does not name it.
 export function option(name: string, description: string): string | null {
-	const given = msBuildOption(name, description);
-	return given == "" ? null : given.slice(1, given.length);
+	return given(name, description);
+}
+
+export function option(name: string, description: string, fallback: string): string {
+	return given(name, `${description} (default ${fallback})`) ?? fallback;
+}
+
+export function option(name: string, description: string, fallback: number): number {
+	const text = given(name, `${description} (default ${fallback})`);
+	if (text == null) return fallback;
+	const value = Number(text);
+	if (text.trim() == "" || Number.isNaN(value)) throw new Error(`${name}: '${text}' is not a number`);
+	return value;
+}
+
+export function option(name: string, description: string, fallback: boolean): boolean {
+	const text = given(name, `${description} (default ${fallback})`);
+	if (text == null) return fallback;
+	if (text != "true" && text != "false") throw new Error(`${name}: '${text}' is not true or false`);
+	return text == "true";
 }
 
 // `-Doptimize=Debug|ReleaseSafe|ReleaseFast`, or `--release` / `--danger`; Debug otherwise.
@@ -252,9 +275,45 @@ export function library(o: LibraryOptions): Library {
 	return new Library(o.linkage, entry, from, o.target ?? host(), o.optimize ?? Optimize.Debug);
 }
 
-export function systemCommand(argv: string[]): Command {
+export type Arg = string | LazyPath | Executable;
+
+export interface RunOptions {
+	env?: Record<string, Arg>;
+	cwd?: LazyPath;
+	inputs?: LazyPath[];
+	expectExitCode?: int32;
+	description?: string;
+	maxRss?: number;
+}
+
+function withOptions(c: Command, o: RunOptions): Command {
+	const env = o.env;
+	if (env != null) {
+		for (const [name, value] of env) c.setEnvironmentVariable(name, value);
+	}
+	if (o.cwd != null) c.setCwd(o.cwd);
+	for (const p of o.inputs ?? []) c.addFileInput(p);
+	if (o.expectExitCode != null) c.expectExitCode(o.expectExitCode);
+	if (o.description != null) c.describe(o.description);
+	c.maxRss = o.maxRss ?? 0;
+	return c;
+}
+
+function fileOf(a: LazyPath | Executable): LazyPath {
+	if (a instanceof Executable) return a.getEmittedBin();
+	return a;
+}
+
+function addArg(c: Command, a: Arg): void {
+	if (typeof a == "string") c.argv.push({ kind: ArgKind.Text, text: a, path: null });
+	else c.addFileArg(fileOf(a));
+}
+
+export function systemCommand<A extends Arg>(argv: A[], o: RunOptions = {}): Command {
 	if (argv.length == 0) throw new Error("systemCommand() needs the program as its first argument");
-	return new Command(argv);
+	const c = new Command();
+	for (const a of argv) addArg(c, a);
+	return withOptions(c, o);
 }
 
 export function addArgs(this c: Command, args: string[]): void {
@@ -288,7 +347,7 @@ export function expectExitCode(this c: Command, code: int32): void {
 
 export function expectStdOutEqual(this c: Command, bytes: string): void {
 	c.checks.push({ stream: CheckedStream.StdOut, exact: true, text: bytes });
-	if (c.expectedExit < 0) c.expectExitCode(0);
+	if (c.expectedExit == null) c.expectExitCode(0);
 }
 
 export function expectStdErrEqual(this c: Command, bytes: string): void {
@@ -341,15 +400,21 @@ export function setCwd(this c: Command, p: LazyPath): void {
 	dependOn(c, p);
 }
 
-export function setEnvironmentVariable(this c: Command, name: string, value: string): void {
-	c.env.push({ name, value });
+export function setEnvironmentVariable(this c: Command, name: string, value: Arg): void {
+	if (typeof value == "string") {
+		c.env.push({ name, value, path: null });
+		return;
+	}
+	const p = fileOf(value);
+	c.env.push({ name, value: "", path: p });
+	dependOn(c, p);
 }
 
-export function runArtifact(artifact: Executable, args: string[] = []): Command {
-	const c = new Command([]);
+export function runArtifact(artifact: Executable, args: string[] = [], o: RunOptions = {}): Command {
+	const c = new Command();
 	c.addArtifactArg(artifact);
 	c.addArgs(args);
-	return c;
+	return withOptions(c, o);
 }
 
 export interface TestOptions {
@@ -383,11 +448,11 @@ export function installArtifact(artifact: BuildNode): Install {
 export interface StepOptions {
 	description: string;
 	inputs?: BuildNode[];
-	make: () => void;
+	make?: () => void;
 }
 
 export function step(o: StepOptions): CustomStep {
-	return new CustomStep(o.description, o.inputs ?? [], o.make);
+	return new CustomStep(o.description, o.inputs ?? [], o.make ?? null);
 }
 
 export function describe(this n: BuildNode, description: string): void {

@@ -48,6 +48,12 @@ export interface GraphFile {
 	dest: GraphPath | null;
 }
 
+export interface GraphEnv {
+	name: string;
+	value: string;
+	path: GraphPath | null;
+}
+
 export interface GraphNode {
 	id: int32;
 	kind: string;
@@ -67,7 +73,7 @@ export interface GraphNode {
 	argv: GraphArg[];
 	cwd: GraphPath | null;
 	inputs: GraphPath[];
-	env: string[];
+	env: GraphEnv[];
 	stdout: boolean;
 	sideEffects: boolean;
 	expectExit: int32;
@@ -75,6 +81,7 @@ export interface GraphNode {
 	artifact: int32;
 	files: GraphFile[];
 	maxRss: number;
+	hasMake: boolean;
 }
 
 export interface BuildGraph {
@@ -108,7 +115,7 @@ interface GlobListing {
 	listing: string;
 }
 
-const CONFIGURE_FORMAT = "cfg6";
+const CONFIGURE_FORMAT = "cfg7";
 
 export interface GraphOption {
 	name: string;
@@ -242,7 +249,7 @@ function shapeOf(n: GraphNode): string {
 	s = `${s}|${pathShape(n.cwd, n.id)}`;
 	for (const p of n.inputs) s = `${s}|in:${pathShape(p, n.id)}`;
 	for (const f of n.files) s = `${s}|file:${f.sub}:${hashContent(f.bytes)}:${pathShape(f.from, n.id)}:${pathShape(f.dest, n.id)}`;
-	return `${s}|${n.env.join(",")}|${n.stdout}|${n.sideEffects}|${n.expectExit}|${n.checks.map((c: GraphCheck): string => `${c.stderr}:${c.exact}:${hashContent(c.text)}`).join(",")}|${n.artifact}`;
+	return `${s}|${n.env.map((e: GraphEnv): string => `${e.name}=${e.value}:${pathShape(e.path, n.id)}`).join(",")}|${n.stdout}|${n.sideEffects}|${n.expectExit}|${n.checks.map((c: GraphCheck): string => `${c.stderr}:${c.exact}:${hashContent(c.text)}`).join(",")}|${n.artifact}`;
 }
 
 // A node with the shape of one read before becomes that node, so a dependency's build function called
@@ -292,10 +299,13 @@ function readNode(r: Reader, v: RaiserHostValue): int32 {
 		id, kind: v.field("kind").text(), name: "", description: v.field("description").text(), deps: [],
 		entry: null, from: null, os: "", cpu: "", abi: "", optimize: 0, linkage: 0, link: [], lto: -1, compiler: -1,
 		argv: [], cwd: null, inputs: [], env: [], stdout: false, sideEffects: false, expectExit: -1, checks: [], artifact: -1, files: [],
-		maxRss: unboxFloat(v.field("maxRss").root),
+		maxRss: unboxFloat(v.field("maxRss").root), hasMake: false,
 	};
 	r.nodes.push(node);
-	if (node.kind == "step") r.steps.set(id, v);
+	if (node.kind == "step" && !isNil(v.field("make"))) {
+		node.hasMake = true;
+		r.steps.set(id, v);
+	}
 	const deps = v.field("deps");
 	for (let i = 0; i < deps.length(); i += 1) {
 		const dep = readNode(r, deps.at(i));
@@ -335,10 +345,14 @@ function readNode(r: Reader, v: RaiserHostValue): int32 {
 		node.cwd = readPath(r, v.field("cwd"));
 		node.inputs = readPaths(r, v.field("inputs"));
 		const env = v.field("env");
-		for (let i = 0; i < env.length(); i += 1) node.env.push(`${env.at(i).field("name").text()}=${env.at(i).field("value").text()}`);
+		for (let i = 0; i < env.length(); i += 1) {
+			const e = env.at(i);
+			node.env.push({ name: e.field("name").text(), value: e.field("value").text(), path: readPath(r, e.field("path")) });
+		}
 		node.stdout = v.field("stdout").root.intVal != 0;
 		node.sideEffects = v.field("hasSideEffects").root.intVal != 0;
-		node.expectExit = intOf(v.field("expectedExit"));
+		const expectedExit = optionalField(v, "expectedExit");
+		if (expectedExit != null) node.expectExit = intOf(expectedExit);
 		const checks = v.field("checks");
 		for (let i = 0; i < checks.length(); i += 1) {
 			const c = checks.at(i);
