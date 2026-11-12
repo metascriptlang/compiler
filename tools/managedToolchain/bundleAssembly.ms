@@ -114,6 +114,36 @@ function addTargetRuntimeDirectories(
 	return Result.ok(made);
 }
 
+function firstDiffering(source: string, target: string, rel: string): Result<string, string> {
+	const names = readDirNames(rel == "" ? source : join(source, rel));
+	if (!names.ok) { return Result.err(names.error.message); }
+	for (const name of names.value) {
+		const child = rel == "" ? name : rel + "/" + name;
+		if (isDir(join(source, child))) {
+			const found = try firstDiffering(source, target, child);
+			if (found != "") { return Result.ok(found); }
+		} else if (isLinkLike(join(target, child)).ok) {
+			if (!isFile(join(target, child)) ||
+				(try sha256File(join(target, child))) != (try sha256File(join(source, child)))) {
+				return Result.ok(child);
+			}
+		}
+	}
+	return Result.ok("");
+}
+
+function addOverlays(partial: string, overlays: string[]): Result<void, string> {
+	for (const overlay of overlays) {
+		if (!isDir(join(overlay, "runtime"))) { return Result.err(overlay + " has no runtime/"); }
+		const taken = try firstDiffering(overlay, partial, "");
+		if (taken != "") {
+			return Result.err("overlay " + overlay + " would replace " + taken);
+		}
+		try copyBundleTree(overlay, partial, "", []);
+	}
+	return Result.ok(null);
+}
+
 function orderRuntimeLibraries(partial: string): Result<void, string> {
 	const runtime = join(partial, "runtime");
 	const names = readDirNames(runtime);
@@ -154,7 +184,7 @@ function writeReceipt(
 
 function stage(
 	engine: string, runtimeBundle: string, partial: string,
-	engineContract: EngineContract, runtimeContract: EngineContract,
+	engineContract: EngineContract, runtimeContract: EngineContract, overlays: string[],
 ): Result<AssembledBundle, string> {
 	try copyBundleTree(engine, partial, "", CONTRACT);
 	if (!isDir(join(runtimeBundle, "runtime"))) {
@@ -167,6 +197,7 @@ function stage(
 	const version = engineContract.version;
 	const directories = try addTargetRuntimeDirectories(partial, host,
 		version.split(".")[0]);
+	try addOverlays(partial, overlays);
 	try writeReceipt(partial, runtimeBundle, engineContract.identity,
 		runtimeContract.identity, host, version, directories);
 	try writeEngineContract(partial, host, version);
@@ -177,7 +208,7 @@ function stage(
 }
 
 export function assembleBundle(
-	enginePath: string, runtimeBundlePath: string, outputPath: string,
+	enginePath: string, runtimeBundlePath: string, outputPath: string, overlayPaths: string[] = [],
 ): Result<AssembledBundle, string> {
 	const host = try engineHostKey(platform, arch);
 	const engine = try absoluteEnginePath(enginePath);
@@ -204,8 +235,10 @@ export function assembleBundle(
 		return Result.err("engine is LLVM " + engineContract.version +
 			", the runtime was prepared for " + runtimeContract.version);
 	}
+	const overlays: string[] = [];
+	for (const path of overlayPaths) { overlays.push(try absoluteEnginePath(path)); }
 	const partial = try claimPartial(output);
-	const staged = stage(engine, runtimeBundle, partial, engineContract, runtimeContract);
+	const staged = stage(engine, runtimeBundle, partial, engineContract, runtimeContract, overlays);
 	if (!staged.ok) {
 		const cleaned = removeAll(partial);
 		return Result.err(staged.error + (cleaned.ok ? "" :

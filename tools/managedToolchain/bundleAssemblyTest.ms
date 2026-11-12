@@ -99,6 +99,35 @@ function assemblyCases(dir: string, host: string): void {
 	expectRefusal(assembleBundle(fresh, layeredOld, join(dir, "layeredBundle")),
 		"lists bundle overlays", "root overlays an engine swap would drop");
 	expect(!exists(join(dir, "layeredBundle")), "a refused assembly publishes nothing");
+	const overlay = join(dir, "overlay");
+	written(join(overlay, "runtime/wasm32-wasi.cfg"), "-target wasm32-wasip1\n");
+	written(join(overlay, "runtime/wasm32-wasip1/lib/wasm32-wasip1/libc.a"), "wasi libc");
+	written(join(overlay, "lib/clang/1/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a"), "wasi rt");
+	written(join(overlay, "runtime/aarch64-linux-musl.cfg"), "-target aarch64-unknown-linux-musl\n");
+	written(join(overlay, "lib/clang/1/lib/aarch64-unknown-linux-musl/libclang_rt.builtins.a"), "musl rt");
+	const carried = assembleBundle(fresh, old, join(dir, "carried"), [overlay]);
+	if (!carried.ok) { throw new Error("overlay assembly refused: " + carried.error); }
+	expect(isFile(join(dir, "carried/runtime/wasm32-wasi.cfg")) &&
+		isFile(join(dir, "carried/runtime/wasm32-wasip1/lib/wasm32-wasip1/libc.a")) &&
+		isFile(join(dir, "carried/lib/clang/1/lib/wasm32-unknown-wasip1/libclang_rt.builtins.a")) &&
+		isFile(join(dir, "carried/runtime/x86_64-linux-gnu.2.31.cfg")) &&
+		carried.value.contract.files > assembled.value.contract.files,
+		"an overlay adds its target beside the runtime bundle's, inside the contract");
+	const muslBuiltins = readUtf8File(join(dir,
+		"carried/lib/clang/1/lib/aarch64-unknown-linux-musl/libclang_rt.builtins.a"));
+	expect(muslBuiltins.ok && muslBuiltins.value == "musl rt",
+		"an overlay's Linux target keeps its own runtime libraries, not a copy of the engine's");
+	const sharing = join(dir, "sharing");
+	written(join(sharing, "runtime/wasm32-wasi.cfg"), "-target wasm32-wasip1\n");
+	written(join(sharing, "runtime/other.cfg"), "-target other\n");
+	const shared = assembleBundle(fresh, old, join(dir, "shared"), [overlay, sharing]);
+	expect(shared.ok && isFile(join(dir, "shared/runtime/other.cfg")),
+		"two overlays may carry the same file with the same bytes");
+	const clashing = join(dir, "clashing");
+	written(join(clashing, "runtime/x86_64-linux-gnu.2.31.cfg"), "-target other\n");
+	expectRefusal(assembleBundle(fresh, old, join(dir, "clashed"), [clashing]),
+		"would replace runtime/x86_64-linux-gnu.2.31.cfg", "an overlay over an existing file");
+	expect(!exists(join(dir, "clashed")), "a refused overlay publishes nothing");
 }
 
 function run(): void {

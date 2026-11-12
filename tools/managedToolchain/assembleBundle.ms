@@ -2,16 +2,17 @@ import { argv, exit } from "std/process";
 import { assembleBundle } from "./bundleAssembly";
 
 const USAGE = "assembleBundle --engine ENGINE_DIR --runtime-bundle BUNDLE_DIR " +
-	"--output NEW_DIR\n" +
+	"[--overlay OVERLAY_DIR ...] --output NEW_DIR\n" +
 	"ENGINE_DIR is a packageSourceEngine output; BUNDLE_DIR a bundle whose runtime/ " +
-	"is copied beside it";
+	"is copied beside it; each OVERLAY_DIR is a prepareTargetRuntime output added over both";
 
 function main(): int32 {
 	const options = new Map<string, string>();
+	const overlays: string[] = [];
 	for (let i: int32 = 1; i < argv.length; i += 1) {
 		const key = argv[i];
 		if (key == "--help" || key == "-h") { console.log(USAGE); return 0; }
-		if (key != "--engine" && key != "--runtime-bundle" && key != "--output") {
+		if (key != "--engine" && key != "--runtime-bundle" && key != "--output" && key != "--overlay") {
 			console.error(USAGE);
 			console.error("assembleBundle: error: unrecognized argument: " + key);
 			return 2;
@@ -21,7 +22,8 @@ function main(): int32 {
 			return 2;
 		}
 		i += 1;
-		options.set(key, argv[i]);
+		if (key == "--overlay") { overlays.push(argv[i]); }
+		else { options.set(key, argv[i]); }
 	}
 	for (const key of ["--engine", "--runtime-bundle", "--output"]) {
 		if ((options.get(key) ?? "") == "") {
@@ -31,7 +33,7 @@ function main(): int32 {
 		}
 	}
 	const packaged = assembleBundle(options.get("--engine") ?? "",
-		options.get("--runtime-bundle") ?? "", options.get("--output") ?? "");
+		options.get("--runtime-bundle") ?? "", options.get("--output") ?? "", overlays);
 	if (!packaged.ok) {
 		console.error("assembleBundle: error: " + packaged.error);
 		return 1;
