@@ -10,6 +10,7 @@ const JSON_PARSER = "function parseJson__";
 const ERROR_CLASS = "class Error__";
 const RAW_BODY_FUNCTION = "function intPrefix__";
 const LITERAL_STATICS_CLASS = "class Math__";
+const RAW_FUNCTION_BLOCK = "function msBufLoad";
 interface BundleProgram {
 	name: string;
 	source: string;
@@ -24,7 +25,7 @@ const PROGRAMS: BundleProgram[] = [
 		source: `console.log("hello");\n`,
 		output: "hello",
 		required: [],
-		forbidden: [JSON_PARSER, ERROR_CLASS, RAW_BODY_FUNCTION, LITERAL_STATICS_CLASS],
+		forbidden: [JSON_PARSER, ERROR_CLASS, RAW_BODY_FUNCTION, LITERAL_STATICS_CLASS, RAW_FUNCTION_BLOCK],
 	},
 	{
 		name: "parses",
