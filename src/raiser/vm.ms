@@ -2449,6 +2449,7 @@ function runToHalt(vm: RaiserVM): void {
 		vm.arrayHeap = main.arrayHeap;
 		vm.objectHeap = main.objectHeap;
 		vm.globals = main.globals;
+		vm.regs = main.regs;
 	}
 }
 
