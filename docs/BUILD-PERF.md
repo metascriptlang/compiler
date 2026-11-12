@@ -542,9 +542,32 @@ top-level-await corpus programs (17, among them `spawnWaitRunsOnlyItsEdge`,
 `spawnResolverLeafOnManyWorkers`, `spawnEdgeLessPileUpFailsLoud`, `spawnTimerWaitStartsNoSpare`,
 `topLevelAwaitOfTimerStartsNoPool`) passed three rounds of 58 cells on that candidate, and 16 of 17
 under SAN with the one recorded xfail. Pinned by the `topLevel` program of
-`src/test/guard/asyncTimerLinksNoPool.ms`. Not measured: the Windows size after the change, and wait
-latency (the wait loops add one atomic load per `msPoolCompensate`, and per `msPoolRunEdge` only
-while tasks are pending).
+`src/test/guard/asyncTimerLinksNoPool.ms`. Not measured: the Windows size after the change.
+
+What the arming costs a program that starts the pool: an armed operation is linked whenever the
+pool is, called or not. `405-lockedSharedCounter` and `406-arcSharedBox` never block in `msWaitFor`
+or `msWaitForReady`, the only callers of `msPoolCompensate`, and now keep `msPoolCompensateStart`
+and `msTimerFiresHere`: 406 at `--danger` on Linux goes from 78,408 to 78,904 B and from 64 to 69
+atomic instructions (rtx, one candidate of tree `b4816069bf94`, the pool source of `98d433dae402`
+against that tree's). `400-actorHeapStr` and `409-awaitStructActorSpawn`, which do block, keep their
+Linux counts (152, 156) under the new function names. Arming through two pointers instead of one
+table kept both functions (406: 78,928 B, 69), so the table stays. The `@maxatomics` budgets of the
+8 budgeted programs are re-recorded on both hosts; on darwin the pool source before the change was
+not run, so its moves (406: 183 → 221) are not split between this change and earlier drift.
+
+Wait latency, `src/bench/compiler/programs/spawnFanout.ms` at 20,000 spawns × 20 per run, the same
+candidate with both pool sources, 7 interleaved rounds on rtx at load 37–40, wall ms old / new:
+
+| case | median | fastest | slowest |
+|---|---|---|---|
+| `fan` | 271 / 271 | 247 / 248 | 411 / 399 |
+| `words` | 404 / 445 | 256 / 263 | 451 / 501 |
+| `nested` | 607 / 538 | 381 / 367 | 867 / 917 |
+
+The arms overlap in every case and one arm spreads up to 2.5×, so this shows no difference and
+resolves none under about that spread; a quiet host was not taken. What the wait loops execute
+more is one atomic load per `msPoolCompensate`, and per `msPoolRunEdge` only while tasks are
+pending, each followed by an indirect call where a direct one was.
 
 Windows hello carries 12,662 B of `.text` against 3,662 on Linux with no event loop in either; its
 `.pdata` counts 25 functions of the mingw CRT, 13 of the statically linked winpthreads and 14 of the
