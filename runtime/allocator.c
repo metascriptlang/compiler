@@ -1,4 +1,5 @@
 #include "allocator.h"
+#include "runtime/core/errorf.h"
 
 #if MS_HEAP_ENABLED
 
@@ -27,7 +28,7 @@ static void* msHeapTag(msHeapPairing* block, size_t size) {
 static msHeapPairing* msHeapUntag(void* p) {
     msHeapPairing* block = (msHeapPairing*)p - 1;
     if (block->tag != MS_HEAP_PAIRING_TAG) {
-        fprintf(stderr, "Error: msHeapFree of %p, which the managed allocator did not allocate\n", p);
+        msErrorf("Error: msHeapFree of %p, which the managed allocator did not allocate\n", p);
         abort();
     }
     block->tag = 0;
@@ -354,8 +355,8 @@ static void msHeapMarkRun(msHeapCell* head, msHeapCell* tail, uintptr_t count) {
     intptr_t span = (intptr_t)tail - (intptr_t)head;
     head->run = ((uintptr_t)span << 16) | count;
     if (((intptr_t)head->run >> 16) != span) {
-        fprintf(stderr, "msHeapFree: a remote run spans %p..%p, beyond the 48-bit distance its header holds\n",
-                (void*)head, (void*)tail);
+        msErrorf("msHeapFree: a remote run spans %p..%p, beyond the 48-bit distance its header holds\n",
+                 (void*)head, (void*)tail);
         abort();
     }
 #endif
