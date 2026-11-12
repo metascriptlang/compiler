@@ -8,6 +8,7 @@
  */
 /* Included from engineSelect.c — engine.h already included by parent */
 #include <stdio.h>
+#include "runtime/core/errorf.h"
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
@@ -395,7 +396,7 @@ static int msFseLoaded = 0;
 static void fsEventsLoad(void) {
 	void* lib = dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices", RTLD_NOW | RTLD_LOCAL);
 	if (lib == NULL) {
-		fprintf(stderr, "std/fs/watch: cannot load CoreServices: %s\n", dlerror());
+		msErrorf("std/fs/watch: cannot load CoreServices: %s\n", dlerror());
 		return;
 	}
 	const char* names[] = {
@@ -411,7 +412,7 @@ static void fsEventsLoad(void) {
 	for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
 		*slots[i] = dlsym(lib, names[i]);
 		if (*slots[i] == NULL) {
-			fprintf(stderr, "std/fs/watch: CoreServices has no %s\n", names[i]);
+			msErrorf("std/fs/watch: CoreServices has no %s\n", names[i]);
 			return;
 		}
 	}

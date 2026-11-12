@@ -8,6 +8,7 @@
  * contract (exit code 1). process.exit() bypasses both, matching Node.
  */
 #include "runtime/core/system.h"
+#include "runtime/core/errorf.h"
 #include "dispatch.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -152,7 +153,7 @@ static int msReportOrphansNow(void) {
 	}
 	msOrphanErrorCount = 0;
 	if (msOrphanOverflow > 0) {
-		fprintf(stderr, "Error: %d additional unhandled rejection(s)\n", msOrphanOverflow);
+		msErrorf("Error: %d additional unhandled rejection(s)\n", msOrphanOverflow);
 		reported++;
 	}
 	msOrphanOverflow = 0;

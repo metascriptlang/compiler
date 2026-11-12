@@ -1,4 +1,5 @@
 #include "runtime/bigint/bigint.h"
+#include "runtime/core/errorf.h"
 #include "runtime/drc.h"
 #include "runtime/core/system.h"
 #include "mbedtls/private/bignum.h"
@@ -20,7 +21,7 @@ static void msBigIntDestroy(void* p) {
 const msTypeInfo msBigIntTypeInfo = { "bigint", false, NULL, msBigIntDestroy, 0, NULL };
 
 static void bigFail(const char* msg) {
-	fprintf(stderr, "BigInt: %s\n", msg);
+	msErrorf("BigInt: %s\n", msg);
 	abort();
 }
 
@@ -289,7 +290,7 @@ int64_t msBigIntToInt64(const msBigInt* a) {
 
 static _Noreturn void bigRangeFail(const msBigInt* a, int64_t lo, int64_t hi) {
 	char* s = msBigIntToCString(a, 10);
-	fprintf(stderr, "Error: value %s not in range %lld .. %lld\n", s, (long long)lo, (long long)hi);
+	msErrorf("Error: value %s not in range %lld .. %lld\n", s, (long long)lo, (long long)hi);
 	msMemFree(s);
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);

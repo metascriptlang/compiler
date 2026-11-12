@@ -1,5 +1,6 @@
 #if defined(MSOS_WASM) || defined(MSOS_EMCC)
 #include "runtime/core/system.h"
+#include "runtime/core/errorf.h"
 #include "runtime/promise/pool.h"
 
 /* No worker thread exists on this target: every spawn runs on the spawning thread, so its
@@ -223,7 +224,7 @@ void msOnThreadDestruction(void (*handler)(void)) {
         int32_t cap = msThreadDestructionCap == 0 ? 4 : msThreadDestructionCap * 2;
         void (**fns)(void) = msRealloc(msThreadDestructionFns, (size_t)msThreadDestructionCap * sizeof(*fns), (size_t)cap * sizeof(*fns));
         if (fns == NULL) {
-            fprintf(stderr, "msOnThreadDestruction: out of memory for %d handlers\n", cap);
+            msErrorf("msOnThreadDestruction: out of memory for %d handlers\n", cap);
             abort();
         }
         msThreadDestructionFns = fns;
@@ -271,7 +272,7 @@ static BOOL CALLBACK msThreadExitCreate(PINIT_ONCE once, PVOID param, PVOID* con
 
 static void msThreadExitArm(void* armed) {
     if (!InitOnceExecuteOnce(&msThreadExitOnce, msThreadExitCreate, NULL, NULL) || !FlsSetValue(msThreadExitKey, armed)) {
-        fprintf(stderr, "msThreadAttach: no fiber-local slot for the thread-exit release (error %lu)\n", (unsigned long)GetLastError());
+        msErrorf("msThreadAttach: no fiber-local slot for the thread-exit release (error %lu)\n", (unsigned long)GetLastError());
         abort();
     }
 }
@@ -309,7 +310,7 @@ static void msThreadExitArm(void* armed) {
     pthread_once(&msThreadExitOnce, msThreadExitCreate);
     int error = msThreadExitKeyError ? msThreadExitKeyError : pthread_setspecific(msThreadExitKey, armed);
     if (error) {
-        fprintf(stderr, "msThreadAttach: no thread-specific key for the thread-exit release (error %d)\n", error);
+        msErrorf("msThreadAttach: no thread-specific key for the thread-exit release (error %d)\n", error);
         abort();
     }
 }
@@ -374,7 +375,7 @@ static void msPoolRunQueued(struct msSpawnCtx* task) {
 		msPoolRunsCap = msPoolRunsCap == 0 ? 8 : msPoolRunsCap * 2;
 		msPoolRuns = (struct msSpawnCtx*)msRealloc(msPoolRuns, (size_t)oldRunsCap * sizeof(struct msSpawnCtx), (size_t)msPoolRunsCap * sizeof(struct msSpawnCtx));
 		if (msPoolRuns == NULL) {
-			fprintf(stderr, "msPoolRunQueued: out of memory for %d running tasks\n", msPoolRunsCap);
+			msErrorf("msPoolRunQueued: out of memory for %d running tasks\n", msPoolRunsCap);
 			abort();
 		}
 	}
@@ -735,7 +736,7 @@ static msTicketLock gEdgeLock = { 0, 0 };
 void msFutureEdgeAll(void* result, void* const* inputs, int32_t count) {
 	msFutureEdge* e = (msFutureEdge*)msMemAlloc(sizeof(msFutureEdge) + (size_t)count * sizeof(void*));
 	if (e == NULL) {
-		fprintf(stderr, "msFutureEdgeAll: out of memory for %d inputs\n", count);
+		msErrorf("msFutureEdgeAll: out of memory for %d inputs\n", count);
 		abort();
 	}
 	e->count = count;
@@ -760,7 +761,7 @@ void msFutureEdgeAwait(void* retFut, void* awaited) {
 		if (awaited == NULL) return;
 		e = (msFutureEdge*)msMemAlloc(sizeof(msFutureEdge) + sizeof(void*));
 		if (e == NULL) {
-			fprintf(stderr, "msFutureEdgeAwait: out of memory\n");
+			msErrorf("msFutureEdgeAwait: out of memory\n");
 			abort();
 		}
 		e->count = 1;
@@ -944,7 +945,7 @@ static bool msPoolCompensateStart(const void* awaited, const char* wait) {
 	/* One report: a second waiter reaching the limit waits for the first to exit. */
 	static atomic_flag reported = ATOMIC_FLAG_INIT;
 	if (atomic_flag_test_and_set(&reported)) for (;;) msSleepMs(1000);
-	fprintf(stderr, "Error: %s blocks while spawned tasks stay queued, and none of the %d pool threads is free to run them (%s)\n",
+	msErrorf("Error: %s blocks while spawned tasks stay queued, and none of the %d pool threads is free to run them (%s)\n",
 		wait, count, count < MS_POOL_MAX_WORKERS ? "a thread could not be started" : "thread limit reached");
 	if (msFatalTrap != NULL) msFatalTrap();
 	/* Not exit(): its pool shutdown joins the threads this wait starves. */

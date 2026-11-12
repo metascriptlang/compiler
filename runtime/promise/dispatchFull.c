@@ -5,6 +5,7 @@
  * Event loop implementation: timer heap, ring buffer callback deque, runOnce/poll/waitFor.
  */
 #include "runtime/core/system.h"  /* msIncRef/msDecref for async stepper lifecycle */
+#include "runtime/core/errorf.h"
 #include <pthread.h>             /* pthread_once for lazy init */
 /* selector.h is included via dispatch.h → future.h chain, but MS_EVENT_READ may not be defined.
  * Define it here for the completion pipe registration. */
@@ -75,7 +76,7 @@ static inline bool msCompletionOnActor(void* fut) {
 static inline void msRefuseActorOwnedOnChannel(void* fut, const char* what) {
 #if MS_ACTOR_JOBS
 	if (fut != NULL && __builtin_expect(((msFutureBase*)fut)->actorOwned, 0)) {
-		fprintf(stderr, "internal: %s of a future an actor's visit made reached a loop channel (ULTRALOCK M1)\n", what);
+		msErrorf("internal: %s of a future an actor's visit made reached a loop channel (ULTRALOCK M1)\n", what);
 		abort();
 	}
 #endif
@@ -484,7 +485,7 @@ static void msIocpDispatchMsg(msCompletionMsg* msg) {
 			msFutureDrcDestroy(msg->fut);
 		}
 	} else {
-		fprintf(stderr, "internal: unknown completion kind %d\n", (int)msg->kind);
+		msErrorf("internal: unknown completion kind %d\n", (int)msg->kind);
 		abort();
 	}
 	msMemFree(msg);
@@ -500,7 +501,7 @@ HANDLE msDispatcherShareIocp(msIocpEntryFn engineEntry) {
 void msDispatcherCompleteEntry(const OVERLAPPED_ENTRY* entry) {
 	if (entry->lpCompletionKey == MS_IOCP_ENGINE_KEY) {
 		if (gIocpEngineEntry == NULL) {
-			fprintf(stderr, "internal: IO engine completion on a thread with no IO engine\n");
+			msErrorf("internal: IO engine completion on a thread with no IO engine\n");
 			abort();
 		}
 		gIocpEngineEntry(entry);
@@ -755,7 +756,7 @@ static bool msChannelDrain(msLoopChannel* c) {
         } else if (msg->kind == -4) {
             msAdoptOrphanFailure(fut);
         } else if (msg->kind != -1 && msg->kind != 0) {
-            fprintf(stderr, "internal: unknown completion kind %d\n", (int)msg->kind);
+            msErrorf("internal: unknown completion kind %d\n", (int)msg->kind);
             abort();
         } else if (fut != NULL) {
             /* Fire callbacks for BOTH success and failure — the worker pre-set
@@ -855,7 +856,7 @@ void msDispatcherWatchIoEngine(int engineFd, msIoPollFn poll) {
 	msDispatcher* d = msGetDispatcher();
 	if (d->selector == NULL) return;
 	if (msSelectorRegister(d->selector, engineFd, MS_EVENT_READ, NULL) < 0) {
-		fprintf(stderr, "internal: the dispatcher selector cannot watch the io engine fd %d: %s\n", engineFd, strerror(errno));
+		msErrorf("internal: the dispatcher selector cannot watch the io engine fd %d: %s\n", engineFd, strerror(errno));
 		abort();
 	}
 	msIoEngineFd = engineFd;

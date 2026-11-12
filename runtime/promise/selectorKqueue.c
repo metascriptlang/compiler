@@ -5,6 +5,7 @@
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 
 #include "runtime/actor/selector.h"
+#include "runtime/core/errorf.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -83,8 +84,7 @@ int msSelectorUpdate(msSelector* sel, int fd, uint32_t events, void* userdata) {
 		int wanted = errs[i].filter == EVFILT_READ ? (events & MS_EVENT_READ) != 0 : (events & MS_EVENT_WRITE) != 0;
 		if (wanted) { failed = 1; continue; }
 		if (errs[i].data == ENOENT) continue;
-		fprintf(stderr,
-			"FATAL: kevent EV_DELETE (update) failed on fd=%d filter=%d data=%lld — selector state diverged.\n",
+		msErrorf("FATAL: kevent EV_DELETE (update) failed on fd=%d filter=%d data=%lld — selector state diverged.\n",
 			(int)errs[i].ident, (int)errs[i].filter, (long long)errs[i].data);
 		abort();
 	}
@@ -107,8 +107,7 @@ int msSelectorUnregister(msSelector* sel, int fd) {
 	for (int i = 0; i < n; i++) {
 		if ((errs[i].flags & EV_ERROR) == 0) continue;
 		if (errs[i].data == 0 || errs[i].data == ENOENT) continue;  /* filter wasn't registered — fine */
-		fprintf(stderr,
-			"FATAL: kevent EV_DELETE failed on fd=%d filter=%d data=%lld — selector state diverged.\n",
+		msErrorf("FATAL: kevent EV_DELETE failed on fd=%d filter=%d data=%lld — selector state diverged.\n",
 			(int)errs[i].ident, (int)errs[i].filter, (long long)errs[i].data);
 		abort();
 	}

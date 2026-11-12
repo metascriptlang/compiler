@@ -10,6 +10,8 @@
  * Adaptive threshold: 128 default, increase if <50% freed, decrease otherwise.
  */
 
+#include "runtime/core/errorf.h"
+
 /* ===== DRC Ledger (test-only, -DMS_DRC_LEDGER) — gc-mode independent ===== */
 #ifdef MS_DRC_LEDGER
 #include "runtime/drc.h"
@@ -58,7 +60,7 @@ static void msLedgerSetInsert(void* p) {
 		if (gLedgerKey[i] == p) return;
 		i = (i + 1) & MS_LEDGER_SET_MASK;
 	}
-	fprintf(stderr, "\nNIM-GUARD LEDGER: pointer set full — raise MS_LEDGER_SET_SIZE\n");
+	msErrorf("\nNIM-GUARD LEDGER: pointer set full — raise MS_LEDGER_SET_SIZE\n");
 	fflush(stderr);
 	abort();
 }
@@ -99,17 +101,17 @@ static void msLedgerDump(void) {
 	pthread_mutex_lock(&gLedgerMutex);
 	long totalA = 0, totalD = 0;
 	for (int i = 0; i < gLedgerRowCount; i++) {
-		fprintf(stderr, "LEDGER %s alloc=%ld destroy=%ld hooks=%d\n",
+		msErrorf("LEDGER %s alloc=%ld destroy=%ld hooks=%d\n",
 			msLedgerRowName(gLedgerType[i]), gLedgerAllocN[i], gLedgerDestroyN[i],
 			gLedgerType[i] != NULL && gLedgerType[i]->destroyFn != NULL);
 		totalA += gLedgerAllocN[i];
 		totalD += gLedgerDestroyN[i];
 	}
-	fprintf(stderr, "LEDGER COUNTS rc_inc=%ld rc_dec=%ld share_inc=%ld share_dec=%ld root_reg=%ld thread_start=%ld\n",
+	msErrorf("LEDGER COUNTS rc_inc=%ld rc_dec=%ld share_inc=%ld share_dec=%ld root_reg=%ld thread_start=%ld\n",
 		msLedgerCounterRead(MS_LEDGER_RC_INC), msLedgerCounterRead(MS_LEDGER_RC_DEC),
 		msLedgerCounterRead(MS_LEDGER_SHARE_INC), msLedgerCounterRead(MS_LEDGER_SHARE_DEC),
 		msLedgerCounterRead(MS_LEDGER_ROOT_REG), msLedgerCounterRead(MS_LEDGER_THREAD_START));
-	fprintf(stderr, "LEDGER TOTAL alloc=%ld destroy=%ld\n", totalA, totalD);
+	msErrorf("LEDGER TOTAL alloc=%ld destroy=%ld\n", totalA, totalD);
 	fflush(stderr);
 	pthread_mutex_unlock(&gLedgerMutex);
 }
@@ -130,7 +132,7 @@ void msLedgerDestroy(void* p, const msTypeInfo* type) {
 	if (p == NULL) return;
 	pthread_mutex_lock(&gLedgerMutex);
 	if (msLedgerSetContains(p)) {
-		fprintf(stderr, "\nNIM-GUARD LEDGER: DOUBLE-DESTROY of %s at %p\n", msLedgerRowName(type), p);
+		msErrorf("\nNIM-GUARD LEDGER: DOUBLE-DESTROY of %s at %p\n", msLedgerRowName(type), p);
 		fflush(stderr);
 		abort();
 	}
@@ -140,7 +142,7 @@ void msLedgerDestroy(void* p, const msTypeInfo* type) {
 	pthread_mutex_unlock(&gLedgerMutex);
 }
 void msRcFamilyMismatch(void* p, bool wantAtomic, const char* op) {
-	fprintf(stderr, "\nNIM-GUARD LEDGER: RC-FAMILY MISMATCH %s of %s at %p: the cell's rc is %s\n",
+	msErrorf("\nNIM-GUARD LEDGER: RC-FAMILY MISMATCH %s of %s at %p: the cell's rc is %s\n",
 		op, msLedgerRowName(msHeader(p)->type), p, wantAtomic ? "plain" : "atomic");
 	fflush(stderr);
 	abort();
@@ -149,7 +151,7 @@ void msRcFamilyMismatch(void* p, bool wantAtomic, const char* op) {
 bool msImmortalsReleasing = false;
 
 void msPlainRcOnImmortal(void* p, const char* op) {
-	fprintf(stderr, "\nNIM-GUARD LEDGER: PLAIN RC OP ON IMMORTAL %s of %s at %p: a count reached through Readonly took an op without the Ro flavor\n",
+	msErrorf("\nNIM-GUARD LEDGER: PLAIN RC OP ON IMMORTAL %s of %s at %p: a count reached through Readonly took an op without the Ro flavor\n",
 		op, msLedgerRowName(msHeader(p)->type), p);
 	fflush(stderr);
 	abort();
@@ -535,7 +537,7 @@ MS_TLS_PUBLISH(msOrcCollections)
 static void msRootOwnerCheck(void* p, const char* site) {
 	int32_t idx = msHeader(p)->rootIdx;
 	if (idx < 0 || (idx < msRoots.len && msRoots.data[idx].ptr == p)) return;
-	fprintf(stderr, "msc: M1 owner violation at %s: cell %p has root entry %d outside the running executor's root set (len %d)\n",
+	msErrorf("msc: M1 owner violation at %s: cell %p has root entry %d outside the running executor's root set (len %d)\n",
 		site, p, idx, msRoots.len);
 	abort();
 }
@@ -584,7 +586,7 @@ void msRootsEnterActor(msCellSeq* actorRoots) {
 
 void msRootsLeaveActor(msCellSeq* actorRoots) {
 	if (msActorRootsDepth <= 0) {
-		fprintf(stderr, "msc: internal: msRootsLeaveActor without a matching msRootsEnterActor\n");
+		msErrorf("msc: internal: msRootsLeaveActor without a matching msRootsEnterActor\n");
 		abort();
 	}
 	msActorRootsDepth--;

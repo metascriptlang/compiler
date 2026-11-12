@@ -7,6 +7,7 @@
 #define SYSTEM_H
 
 #include <stdint.h>
+#include "runtime/core/errorf.h"
 #include <stdbool.h>
 #include <string.h>
 
@@ -141,7 +142,7 @@ extern void (*msFatalTrap)(void);
 
 #ifndef MS_TEST_BUILD
 static inline void msAssertFail(const char* msg, const char* file, int line) {
-	fprintf(stderr, "assert failed: %s (%s:%d)\n", msg, file, line);
+	msErrorf("assert failed: %s (%s:%d)\n", msg, file, line);
 	abort();
 }
 #endif

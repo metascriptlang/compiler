@@ -12,6 +12,7 @@
 #define MS_ACTOR_H
 
 #include "mailbox.h"
+#include "runtime/core/errorf.h"
 #include "runtime/drc.h"
 #include <stdint.h>
 #include <stdbool.h>
@@ -385,16 +386,16 @@ static void msPidTableFull(msActor* spawning) {
         }
         tab[k].count++;
     }
-    fprintf(stderr, "fatal: pid table full: %lld live actors (limit %d)\n",
+    msErrorf("fatal: pid table full: %lld live actors (limit %d)\n",
             (long long)live, (int)MS_TEST_PID_SLOT_LIMIT);
     if (tabOk && used > 0) {
         const msTypeInfo* st = spawning->state != NULL ? msHeader(spawning->state)->type : NULL;
-        fprintf(stderr, "  spawning: %s\n  live by type:", msPidTypeName(st));
+        msErrorf("  spawning: %s\n  live by type:", msPidTypeName(st));
         qsort(tab, (size_t)used, sizeof(msPidTypeCount), msPidTypeCountDesc);
         int shown = used < 8 ? used : 8;
         for (int k = 0; k < shown; k++)
-            fprintf(stderr, "%s %s %lld", k == 0 ? "" : " \xc2\xb7", msPidTypeName(tab[k].type), (long long)tab[k].count);
-        if (used > shown) fprintf(stderr, " \xc2\xb7 +%d more types", used - shown);
+            msErrorf("%s %s %lld", k == 0 ? "" : " \xc2\xb7", msPidTypeName(tab[k].type), (long long)tab[k].count);
+        if (used > shown) msErrorf(" \xc2\xb7 +%d more types", used - shown);
         fputs("\n  live actors are never reclaimed until stopped: a type that keeps growing is not being stopped\n", stderr);
     }
     msMemFree(tab);
@@ -489,7 +490,7 @@ static inline void msActorCtorLeave(int64_t pid) {
 static inline int32_t msActorPin(int64_t pid) {
     int k;
     if (msActorFromPidSlot(pid, &k) == NULL) {
-        fprintf(stderr, "Error: actor %lld has stopped, so its nonisolated field cannot be read\n", (long long)pid);
+        msErrorf("Error: actor %lld has stopped, so its nonisolated field cannot be read\n", (long long)pid);
         if (msFatalTrap != NULL) msFatalTrap();
         exit(1);
     }
@@ -2250,7 +2251,7 @@ static inline int msActorReportUnreachedHooks(void) {
                 && a->onTerminateFn != NULL
                 && atomic_load_explicit(&a->stopReason, memory_order_relaxed) != MS_EXIT_KILLED) {
             if (unreached++ == 0) fflush(stdout);
-            fprintf(stderr, "Warning: Detected unsettled await in actor %s at exit: its onTerminate cannot run\n",
+            msErrorf("Warning: Detected unsettled await in actor %s at exit: its onTerminate cannot run\n",
                 msPidTypeName(a->state != NULL ? msHeader(a->state)->type : NULL));
         }
         msHazardClear(a);

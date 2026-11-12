@@ -14,6 +14,7 @@
 #define MS_IO_ENGINE_H
 
 #include "runtime/promise/future.h"
+#include "runtime/core/errorf.h"
 #ifndef _WIN32
 #include "runtime/actor/selector.h"
 #endif
@@ -101,7 +102,7 @@ int32_t msFsWriteSettled(msString path);
 #include <stdlib.h>
 static inline int32_t msFsWatchLastError(void) { return 0; }
 static inline void msFsWatchUnsupported(void) {
-	fprintf(stderr, "std/fs/watch: file watching has no backend for this platform yet\n");
+	msErrorf("std/fs/watch: file watching has no backend for this platform yet\n");
 	abort();
 }
 static inline void* msIoWatchNext(msIoEngine* e, int32_t handle, int32_t recursive) { (void)e; (void)handle; (void)recursive; msFsWatchUnsupported(); return NULL; }

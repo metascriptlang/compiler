@@ -6,6 +6,7 @@
 #define MS_MODULE_EVAL_MS_H
 
 #include <stdio.h>
+#include "runtime/core/errorf.h"
 #include <stdlib.h>
 #include <string.h>
 #include "runtime/core/system.h"
@@ -53,17 +54,17 @@ static inline bool msModuleNameIs(const void* candidate, const void* text, int64
 }
 
 static inline void msModuleAbort(const void* name, msString what) {
-	fprintf(stderr, "internal: module '%s' %.*s\n", (const char*)name, (int)msStrLen(what), msStrData(&what));
+	msErrorf("internal: module '%s' %.*s\n", (const char*)name, (int)msStrLen(what), msStrData(&what));
 	abort();
 }
 
 static inline void msModuleAbortNoRecord(const void* text, int64_t len) {
-	fprintf(stderr, "internal: import() of module '%.*s', which has no module record\n", (int)len, (const char*)text);
+	msErrorf("internal: import() of module '%.*s', which has no module record\n", (int)len, (const char*)text);
 	abort();
 }
 
 static inline void msModuleAbortPlain(msString what) {
-	fprintf(stderr, "internal: %.*s\n", (int)msStrLen(what), msStrData(&what));
+	msErrorf("internal: %.*s\n", (int)msStrLen(what), msStrData(&what));
 	abort();
 }
 

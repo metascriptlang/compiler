@@ -15,6 +15,89 @@ void* msErrPayload = NULL;
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
+#include "runtime/core/errorf.h"
+
+#ifdef MS_ERRORF_OWN_FORMATTER
+typedef struct {
+	char text[256];
+	size_t len;
+} msErrorLine;
+
+static void msErrorPut(msErrorLine* line, const char* bytes, size_t count) {
+	while (count > 0) {
+		if (line->len == sizeof(line->text)) {
+			fwrite(line->text, 1, line->len, stderr);
+			line->len = 0;
+		}
+		size_t room = sizeof(line->text) - line->len;
+		size_t take = count < room ? count : room;
+		memcpy(line->text + line->len, bytes, take);
+		line->len += take;
+		bytes += take;
+		count -= take;
+	}
+}
+
+static void msErrorUnsigned(msErrorLine* line, unsigned long long value, unsigned base) {
+	char digits[20];
+	size_t at = sizeof(digits);
+	do {
+		unsigned digit = (unsigned)(value % base);
+		digits[--at] = (char)(digit < 10 ? '0' + digit : 'a' + (digit - 10));
+		value /= base;
+	} while (value != 0);
+	msErrorPut(line, digits + at, sizeof(digits) - at);
+}
+
+void msErrorf(const char* format, ...) {
+	msErrorLine line;
+	line.len = 0;
+	va_list args;
+	va_start(args, format);
+	for (const char* at = format; *at != '\0'; at++) {
+		if (*at != '%') {
+			msErrorPut(&line, at, 1);
+			continue;
+		}
+		at++;
+		int precision = -1;
+		if (at[0] == '.' && at[1] == '*') {
+			precision = va_arg(args, int);
+			at += 2;
+		}
+		int longs = 0;
+		while (*at == 'l') {
+			longs++;
+			at++;
+		}
+		if (*at == 's') {
+			const char* text = va_arg(args, const char*);
+			if (text == NULL) text = "(null)";
+			size_t count = 0;
+			while ((precision < 0 || count < (size_t)precision) && text[count] != '\0') count++;
+			msErrorPut(&line, text, count);
+		} else if (*at == 'd') {
+			long long value = longs == 0 ? va_arg(args, int) : longs == 1 ? va_arg(args, long) : va_arg(args, long long);
+			if (value < 0) msErrorPut(&line, "-", 1);
+			msErrorUnsigned(&line, value < 0 ? 0ULL - (unsigned long long)value : (unsigned long long)value, 10);
+		} else if (*at == 'u') {
+			unsigned long long value = longs == 0 ? va_arg(args, unsigned) : longs == 1 ? va_arg(args, unsigned long) : va_arg(args, unsigned long long);
+			msErrorUnsigned(&line, value, 10);
+		} else if (*at == 'p') {
+			msErrorPut(&line, "0x", 2);
+			msErrorUnsigned(&line, (unsigned long long)(uintptr_t)va_arg(args, void*), 16);
+		} else if (*at == '%') {
+			msErrorPut(&line, "%", 1);
+		} else {
+			msErrorPut(&line, "%?", 2);
+			if (*at == '\0') break;
+		}
+	}
+	va_end(args);
+	fwrite(line.text, 1, line.len, stderr);
+}
+#endif
 
 #ifdef _WIN32
 #include <io.h>
@@ -262,7 +345,7 @@ _Noreturn void msRaiseOutOfMemory(void) {
 }
 
 _Noreturn void msRaiseIndexError(int64_t idx, int64_t len) {
-	fprintf(stderr, "Error: index %lld out of bounds (length %lld)\n",
+	msErrorf("Error: index %lld out of bounds (length %lld)\n",
 		(long long)idx, (long long)len);
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
@@ -276,59 +359,59 @@ static const char* msTypeInfoShownName(const msTypeInfo* t) {
 
 _Noreturn void msRaiseObjectConversionError(void* p, const msTypeInfo* target) {
 	const msTypeInfo* t = msHeader(p)->type;
-	fprintf(stderr, "Error: invalid object conversion: %s is not %s\n", msTypeInfoShownName(t), msTypeInfoShownName(target));
+	msErrorf("Error: invalid object conversion: %s is not %s\n", msTypeInfoShownName(t), msTypeInfoShownName(target));
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
 _Noreturn void msRaiseDestroyKeptSelf(void* p) {
-	fprintf(stderr, "Error: onDestroy kept a reference to the %s it destroys; that reference would dangle once the object is freed\n", msTypeInfoShownName(msHeader(p)->type));
+	msErrorf("Error: onDestroy kept a reference to the %s it destroys; that reference would dangle once the object is freed\n", msTypeInfoShownName(msHeader(p)->type));
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
 _Noreturn void msRaiseOwnedCycle(const msTypeInfo** types, int32_t count) {
-	fprintf(stderr, "Error: an owned cycle became garbage:");
-	for (int32_t i = 0; i < count; i++) fprintf(stderr, "%s %s", i == 0 ? "" : ",", msTypeInfoShownName(types[i]));
-	fprintf(stderr, " objects own each other only through Owned<T> edges, so a release build would leak them; make the edge back up the cycle Unowned<T>\n");
+	msErrorf("Error: an owned cycle became garbage:");
+	for (int32_t i = 0; i < count; i++) msErrorf("%s %s", i == 0 ? "" : ",", msTypeInfoShownName(types[i]));
+	msErrorf(" objects own each other only through Owned<T> edges, so a release build would leak them; make the edge back up the cycle Unowned<T>\n");
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
 _Noreturn void msRaiseUnownedDead(void* p) {
-	fprintf(stderr, "Error: an Unowned<%s> edge was read after its %s was destroyed\n", msTypeInfoShownName(msHeader(p)->type), msTypeInfoShownName(msHeader(p)->type));
+	msErrorf("Error: an Unowned<%s> edge was read after its %s was destroyed\n", msTypeInfoShownName(msHeader(p)->type), msTypeInfoShownName(msHeader(p)->type));
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
 _Noreturn void msRaiseUnownedOverflow(void* p) {
-	fprintf(stderr, "Error: too many Unowned<%s> edges point at one %s\n", msTypeInfoShownName(msHeader(p)->type), msTypeInfoShownName(msHeader(p)->type));
+	msErrorf("Error: too many Unowned<%s> edges point at one %s\n", msTypeInfoShownName(msHeader(p)->type), msTypeInfoShownName(msHeader(p)->type));
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
 _Noreturn void msRaiseSliceError(int64_t start, int64_t end, int64_t len) {
-	fprintf(stderr, "Error: slice %lld..%lld out of bounds (length %lld)\n",
+	msErrorf("Error: slice %lld..%lld out of bounds (length %lld)\n",
 		(long long)start, (long long)end, (long long)len);
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
 _Noreturn void msRaiseDivByZero(void) {
-	fprintf(stderr, "Error: division by zero\n");
+	msErrorf("Error: division by zero\n");
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
 _Noreturn void msRaiseOverflow(void) {
-	fprintf(stderr, "Error: over- or underflow\n");
+	msErrorf("Error: over- or underflow\n");
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
 /* Parity: standard reference range error handling */
 _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi) {
-	fprintf(stderr, "Error: value %lld not in range %lld .. %lld\n",
+	msErrorf("Error: value %lld not in range %lld .. %lld\n",
 		(long long)val, (long long)lo, (long long)hi);
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
@@ -336,7 +419,7 @@ _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi) {
 
 _Noreturn void msRaiseRangeErrorF(double val, int64_t lo, int64_t hi) {
 	msString text = msNumberToString(val);
-	fprintf(stderr, "Error: value %.*s not in range %lld .. %lld\n",
+	msErrorf("Error: value %.*s not in range %lld .. %lld\n",
 		(int)msStrLen(text), msStrData(&text), (long long)lo, (long long)hi);
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
@@ -344,28 +427,28 @@ _Noreturn void msRaiseRangeErrorF(double val, int64_t lo, int64_t hi) {
 
 _Noreturn void msRaiseRangeErrorFToU64(double val) {
 	msString text = msNumberToString(val);
-	fprintf(stderr, "Error: value %.*s not in range 0 .. 18446744073709551615\n",
+	msErrorf("Error: value %.*s not in range 0 .. 18446744073709551615\n",
 		(int)msStrLen(text), msStrData(&text));
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
 _Noreturn void msRaiseRangeErrorU64(uint64_t val, int64_t lo, int64_t hi) {
-	fprintf(stderr, "Error: value %llu not in range %lld .. %lld\n",
+	msErrorf("Error: value %llu not in range %lld .. %lld\n",
 		(unsigned long long)val, (long long)lo, (long long)hi);
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
 _Noreturn void msRaiseVariantError(int64_t tag, int64_t expected) {
-	fprintf(stderr, "Error: invalid union conversion: value holds member %lld, target expects %lld\n",
+	msErrorf("Error: invalid union conversion: value holds member %lld, target expects %lld\n",
 		(long long)tag, (long long)expected);
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
 _Noreturn void msRaiseStrLitError(msString s, msString target) {
-	fprintf(stderr, "Error: invalid union conversion: \"%.*s\" is not %.*s\n", (int)msStrLen(s), msStrData(&s),
+	msErrorf("Error: invalid union conversion: \"%.*s\" is not %.*s\n", (int)msStrLen(s), msStrData(&s),
 		(int)msStrLen(target), msStrData(&target));
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
@@ -390,7 +473,7 @@ msString msStrLitConv(msString s, msString members, msString target) {
 
 _Noreturn void msRaiseNumLitError(double v, msString target) {
 	msString shown = msNumberToString(v);
-	fprintf(stderr, "Error: invalid union conversion: %.*s is not %.*s\n", (int)msStrLen(shown), msStrData(&shown),
+	msErrorf("Error: invalid union conversion: %.*s is not %.*s\n", (int)msStrLen(shown), msStrData(&shown),
 		(int)msStrLen(target), msStrData(&target));
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
@@ -404,7 +487,7 @@ double msNumLitConv(double v, const double* members, int64_t n, msString target)
 }
 
 _Noreturn void msRaiseUnreachable(const char* text) {
-	fprintf(stderr, "Error: %s\n", text);
+	msErrorf("Error: %s\n", text);
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
@@ -419,14 +502,14 @@ _Noreturn void msRaiseFieldError(msString head, msString labels, int64_t tag) {
 	int64_t end = start;
 	while (end < msStrLen(labels) && text[end] != '|') end += 1;
 	if (seen < tag || tag < 0) end = start;
-	fprintf(stderr, "Error: %.*s%.*s'\n", (int)msStrLen(head), msStrData(&head),
+	msErrorf("Error: %.*s%.*s'\n", (int)msStrLen(head), msStrData(&head),
 		(int)(end - start), text + start);
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(1);
 }
 
 _Noreturn void msMapFatal(msString msg) {
-	fprintf(stderr, "fatal error: %.*s\n",
+	msErrorf("fatal error: %.*s\n",
 		(int)msStrLen(msg), msStrData(&msg));
 	if (msFatalTrap != NULL) msFatalTrap();
 	exit(2);
