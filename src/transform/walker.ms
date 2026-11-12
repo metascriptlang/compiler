@@ -103,7 +103,7 @@ function mapExprCalls<S>(node: Node, s: S, f: (s: S, child: Node) => Node): void
 			d.array = f(s, d.array);
 			d.index = f(s, d.index);
 		},
-		_ => {},
+		_ => { throw new Error(`internal: mapExprCalls got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -135,7 +135,7 @@ function mapExprLiterals<S>(node: Node, s: S, f: (s: S, child: Node) => Node): v
 			let i = 0;
 			while (i < d.newArguments.length) { d.newArguments[i] = f(s, d.newArguments[i]); i += 1; }
 		},
-		_ => {},
+		_ => { throw new Error(`internal: mapExprLiterals got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -167,7 +167,7 @@ function mapExprWrappers<S>(node: Node, s: S, f: (s: S, child: Node) => Node): v
 			const d = node.data as UpdateExprData;
 			d.updateArg = f(s, d.updateArg);
 		},
-		_ => {},
+		_ => { throw new Error(`internal: mapExprWrappers got NodeKind ${node.kind.toString()}`); },
 	};
 }
 

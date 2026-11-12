@@ -301,7 +301,7 @@ function forEachFlow(node: Node, cb: ChildVisitor): void {
 			visitChild(cb, d.caseGuard);
 			visitChild(cb, d.caseBody);
 		},
-		_ => {},
+		_ => { throw new Error(`internal: forEachFlow got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -358,7 +358,7 @@ function forEachDecl(node: Node, cb: ChildVisitor): void {
 			const d: Cursor<PropertyDeclData> = node.data as PropertyDeclData;
 			visitChild(cb, d.propInitializer);
 		},
-		_ => {},
+		_ => { throw new Error(`internal: forEachDecl got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -417,7 +417,7 @@ function forEachSimple(node: Node, cb: ChildVisitor): void {
 			visitChild(cb, d.assertExpr);
 			visitChild(cb, d.assertMessageExpr);
 		},
-		_ => {},
+		_ => { throw new Error(`internal: forEachSimple got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -479,7 +479,7 @@ function forEachExpr(node: Node, cb: ChildVisitor): void {
 			visitChild(cb, d.tryArg);
 			if (d.hasCatch) { visitChild(cb, d.catchVal); }
 		},
-		_ => {},
+		_ => { throw new Error(`internal: forEachExpr got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -513,7 +513,7 @@ function forEachWrapper(node: Node, cb: ChildVisitor): void {
 			const d: Cursor<TypeAssertionData> = node.data as TypeAssertionData;
 			visitChild(cb, d.asExpr);
 		},
-		_ => {},
+		_ => { throw new Error(`internal: forEachWrapper got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -533,7 +533,7 @@ function forEachPattern(node: Node, cb: ChildVisitor): void {
 			visitChild(cb, d.propAlias);
 			visitChild(cb, d.propDefault);
 		},
-		_ => {},
+		_ => { throw new Error(`internal: forEachPattern got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -568,7 +568,7 @@ function forEachType(node: Node, cb: ChildVisitor): void {
 			visitChild(cb, d.typExprIndexValue);
 			for (let i = 0; i < d.typExprFieldDecorators.length; i++) visitAll(cb, d.typExprFieldDecorators[i]);
 		},
-		_ => {},
+		_ => { throw new Error(`internal: forEachType got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -600,7 +600,7 @@ function forEachJsx(node: Node, cb: ChildVisitor): void {
 			visitChild(cb, d.computedKey);
 			visitChild(cb, d.computedValue);
 		},
-		_ => {},
+		_ => { throw new Error(`internal: forEachJsx got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -684,7 +684,7 @@ function mapFlow(node: Node, f: Visitor): void {
 			d.forOfBody = f(d.forOfBody);
 			if (d.forOfPattern != null) { d.forOfPattern = f(d.forOfPattern); }
 		},
-		_ => {},
+		_ => { throw new Error(`internal: mapFlow got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -738,7 +738,7 @@ function mapSwitch(node: Node, f: Visitor): void {
 			if (d.caseGuard != null) { d.caseGuard = f(d.caseGuard); }
 			d.caseBody = f(d.caseBody);
 		},
-		_ => {},
+		_ => { throw new Error(`internal: mapSwitch got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -774,7 +774,7 @@ function mapDecl(node: Node, f: Visitor): void {
 				if (d.ctorParamProps[i] != null) d.ctorParamProps[i] = f(d.ctorParamProps[i]);
 			}
 		},
-		_ => {},
+		_ => { throw new Error(`internal: mapDecl got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -811,7 +811,7 @@ function mapMember(node: Node, f: Visitor): void {
 			const d: Cursor<PropertyDeclData> = node.data as PropertyDeclData;
 			if (d.propInitializer != null) { d.propInitializer = f(d.propInitializer); }
 		},
-		_ => {},
+		_ => { throw new Error(`internal: mapMember got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -844,7 +844,7 @@ function mapSimple(node: Node, f: Visitor): void {
 			d.catchBody = f(d.catchBody);
 			d.finallyBody = f(d.finallyBody);
 		},
-		_ => {},
+		_ => { throw new Error(`internal: mapSimple got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -878,7 +878,7 @@ function mapMeta(node: Node, f: Visitor): void {
 			d.assertExpr = f(d.assertExpr);
 			if (d.assertMessageExpr != null) { d.assertMessageExpr = f(d.assertMessageExpr); }
 		},
-		_ => {},
+		_ => { throw new Error(`internal: mapMeta got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -914,7 +914,7 @@ function mapExpr(node: Node, f: Visitor): void {
 			d.array = f(d.array);
 			d.index = f(d.index);
 		},
-		_ => {},
+		_ => { throw new Error(`internal: mapExpr got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -954,7 +954,7 @@ function mapCollection(node: Node, f: Visitor): void {
 			d.tryArg = f(d.tryArg);
 			if (d.hasCatch) { d.catchVal = f(d.catchVal); }
 		},
-		_ => {},
+		_ => { throw new Error(`internal: mapCollection got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -988,7 +988,7 @@ function mapWrapper(node: Node, f: Visitor): void {
 			const d: Cursor<TypeAssertionData> = node.data as TypeAssertionData;
 			d.asExpr = f(d.asExpr);
 		},
-		_ => {},
+		_ => { throw new Error(`internal: mapWrapper got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -1014,7 +1014,7 @@ function mapPattern(node: Node, f: Visitor): void {
 			if (d.propAlias != null) { d.propAlias = f(d.propAlias); }
 			if (d.propDefault != null) { d.propDefault = f(d.propDefault); }
 		},
-		_ => {},
+		_ => { throw new Error(`internal: mapPattern got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -1037,7 +1037,7 @@ function mapType(node: Node, f: Visitor): void {
 				d.typExprMembers[i] = f(d.typExprMembers[i]);
 			}
 		},
-		_ => {},
+		_ => { throw new Error(`internal: mapType got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -1070,7 +1070,7 @@ function mapTypeMore(node: Node, f: Visitor): void {
 				}
 			}
 		},
-		_ => {},
+		_ => { throw new Error(`internal: mapTypeMore got NodeKind ${node.kind.toString()}`); },
 	};
 }
 
@@ -1102,6 +1102,6 @@ function mapJsx(node: Node, f: Visitor): void {
 			d.computedKey = f(d.computedKey);
 			d.computedValue = f(d.computedValue);
 		},
-		_ => {},
+		_ => { throw new Error(`internal: mapJsx got NodeKind ${node.kind.toString()}`); },
 	};
 }
