@@ -2679,6 +2679,12 @@ export function loadStdUnit(keyText: string, db: TransAmDb, graph: ModuleGraph):
 	return loaded;
 }
 
+export function replayStdUnitBuildTables(loaded: StdUnitLoaded): void {
+	replayHeldBeyond(loaded.held);
+	replayOps(loaded.ops);
+	replayOpCanonRows(loaded.opCanon);
+}
+
 export function applyStdUnit(loaded: StdUnitLoaded, db: TransAmDb, graph: ModuleGraph): void {
 	const started = performance.now();
 	applyWellKnown(loaded.wellKnown);

@@ -1443,13 +1443,15 @@ function restoreSourceQueries(db: TransAmDb, fileId: int32, source: string): voi
 
 export function dbRestoreCheck(db: TransAmDb, filePath: string, ctx: CheckerContext, program: Node, record: TaCheckRecord): void {
 	const fileId = getFileId(db.fileInput, filePath);
-	if (fileId < 0 || db.handedToCheck == null) throw new Error(`internal: the std unit restores ${filePath} into a db that does not hold it or is kept`);
+	if (fileId < 0) throw new Error(`internal: the std unit restores ${filePath} into a db that does not hold it`);
 	const graphMod = db.graph != null ? findModule(db.graph, filePath) : null;
 	if (graphMod != null && graphMod.program != null) {
 		const parsed = dbParsed(db, filePath);
 		if (parsed == null) throw new Error(`internal: the std unit restores ${filePath}, whose loader parse the db did not take`);
-		parsed.consumedBy = "dbTypeCheck";
-		db.handedToCheck.add(fileId);
+		if (db.handedToCheck != null) {
+			parsed.consumedBy = "dbTypeCheck";
+			db.handedToCheck.add(fileId);
+		}
 	} else {
 		restoreSourceQueries(db, fileId, graphMod != null && graphMod.source != "" ? graphMod.source : getFileText(db.fileInput, fileId));
 	}

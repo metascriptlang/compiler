@@ -21,7 +21,7 @@ import { instantiateProfile, instantiateTimings, lookupModuleCtx, lookupModulePr
 import { createTransAmDb, dbSetResolverConfig, dbBindGraph, dbTypeCheck, dbCheckRecord, dbCheckCurrent, TransAmDb } from "../compiler/transam/index";
 import { opMark, opsFrom, replayOps, KeyedOp } from "../codegen/c/types";
 import { HeldNote, heldNoteMark, heldNotesFrom, replayHeldNotes, heldNotesText } from "./types";
-import { StdUnitInput, StdUnitModule, stdUnitRequested, stdUnitStoreOff, processFreshness, engineMark, noteGraphCheck, noteStdUnitRefused, stdUnitKeyText, stdUnitTimeKey, stdUnitReport, loadStdUnit, applyStdUnit, adoptStdUnitTarget, verifyRestoredExports, writeStdUnit } from "./stdUnit";
+import { StdUnitInput, StdUnitModule, StdUnitLoaded, replayStdUnitBuildTables, stdUnitRequested, stdUnitStoreOff, processFreshness, engineMark, noteGraphCheck, noteStdUnitRefused, stdUnitKeyText, stdUnitTimeKey, stdUnitReport, loadStdUnit, applyStdUnit, adoptStdUnitTarget, verifyRestoredExports, writeStdUnit } from "./stdUnit";
 
 export class CheckSession {
 	keep: boolean;
@@ -33,6 +33,7 @@ export class CheckSession {
 	held: HashMap<string, HeldNote[]>;  // per module: the types its check accepted behind an interface or record
 	heldChanged: string;                // a module checked again whose notes differ from its last check, "" when none
 	rebuildsWhenStale: boolean;         // the driver starts a fresh session when a build reports stale state
+	unit: StdUnitLoaded | null;         // the std unit the first build restored
 	preludeStale: string;               // a prelude module a later build would check again, "" when none
 }
 
@@ -47,6 +48,7 @@ export function createCheckSession(keep: boolean): CheckSession {
 		held: new HashMap<string, HeldNote[]>(),
 		heldChanged: "",
 		rebuildsWhenStale: false,
+		unit: null,
 		preludeStale: "",
 	};
 }
@@ -183,7 +185,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 	dbBindGraph(db, graph);
 	const tBind = performance.now() - _tb0;
 
-	const plan = unitWanted ? planStdUnit(graph, session, holdsPrelude, unitFresh, resolverConfig, targetOs, targetInfo, gcMode, strictNullChecks, appMode) : null;
+	const plan = unitWanted && kept == null ? planStdUnit(graph, session, holdsPrelude, unitFresh, resolverConfig, targetOs, targetInfo, gcMode, strictNullChecks, appMode) : null;
 	if (plan != null) plan.engineMark = unitEngine;
 	const loaded = plan != null ? loadStdUnit(plan.keyText, db, graph) : null;
 	if (loaded != null) {
@@ -193,6 +195,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		db.preludeCtx = baseCtx;
 		adoptStdUnitTarget(loaded);
 		applyStdUnit(loaded, db, graph);
+		if (session != null && session.keep) session.unit = loaded;
 	}
 	if (kept != null && session != null && session.rebuildsWhenStale) {
 		for (const path of graph.loadOrder) {
@@ -202,6 +205,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 			return db.exportRegistry;
 		}
 	}
+	if (kept != null && session != null && session.unit != null) replayStdUnitBuildTables(session.unit);
 	const writePlan = plan != null && loaded == null ? plan : null;
 	let unitWritten = false;
 
@@ -329,7 +333,7 @@ function lastPreludeIndex(graph: ModuleGraph): int32 {
 function planStdUnit(graph: ModuleGraph, session: CheckSession | null, holdsPrelude: boolean, fresh: string, config: ResolverConfig, targetOs: string, targetInfo: TargetInfo, gcMode: GcMode, strictNullChecks: boolean, appMode: string): StdUnitPlan | null {
 	const started = performance.now();
 	let why = "";
-	if (session != null && session.keep) why = "a kept check session";
+	if (session != null && session.keep && !session.rebuildsWhenStale) why = "a kept check session whose driver cannot rebuild from scratch";
 	else if (!holdsPrelude) why = "the graph holds no prelude";
 	else if (fresh != "") why = fresh;
 	else if (stdUnitStoreOff()) why = "the global cache is off";
