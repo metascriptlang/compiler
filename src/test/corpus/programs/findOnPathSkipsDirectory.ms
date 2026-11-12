@@ -1,10 +1,17 @@
 // @stdout: a directory on PATH is not a program
 // @skip-js: std/process has no findOnPath on JS; node resolves its own PATH
-import { findOnPath, env, platform, cwd } from "std/process";
+import { findOnPath, env, platform, cwd, execPath, argv } from "std/process";
 import { mkdir, writeFile, chmod, removeAll } from "std/fs";
 
+function cellKey(): int64 {
+	const text = execPath + "|" + argv.join("|");
+	let h: int64 = 0;
+	for (let i = 0; i < text.length; i++) h = (h * 31 + (text.charCodeAt(i) as int64)) % 1000000007;
+	return h;
+}
+
 const name = platform == "windows" ? "msOnPathProbe.exe" : "msOnPathProbe";
-const root = `${cwd()}/out/msOnPathProbe`;
+const root = `${cwd()}/out/msOnPathProbe${cellKey()}`;
 removeAll(root);
 const shadow = `${root}/shadow`;
 const real = `${root}/real`;
