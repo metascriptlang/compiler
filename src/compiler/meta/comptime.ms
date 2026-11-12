@@ -87,9 +87,11 @@ export function evalComptimeBlock(node: Node, checkerCtx: CheckerContext): Node 
 			nameLocation: loc,
 		}, synthToken(loc));
 		const program = createNode(NodeKind.Program, { programStmts: [comptimeFn] }, synthToken(loc));
-		pushActiveMetaCtx(checkerCtx, loc.line, loc.column);
-		ctx = evalProgramViaEngine(program, checkerCtx, "__comptimeBody");
-		popActiveMetaCtx();
+		{
+			pushActiveMetaCtx(checkerCtx, loc.line, loc.column);
+			defer popActiveMetaCtx();
+			ctx = evalProgramViaEngine(program, checkerCtx, "__comptimeBody");
+		}
 		staticType = comptimeFn.nodeType != null ? comptimeFn.nodeType.typeReturn : null;
 	} else {
 		const program = createNode(NodeKind.Program, { programStmts: finalStmts }, synthToken(loc));

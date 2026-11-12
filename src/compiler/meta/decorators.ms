@@ -803,9 +803,12 @@ function runDecorator(ctx: CheckerContext, dec: Node, md: MacroInvocationData, t
 		args.push(nodeToValue(plan.accessorParts[1], objHeap, arrHeap));
 		args.push(nodeToValue(plan.accessorParts[2], objHeap, arrHeap));
 	}
-	pushActiveMetaCtx(ctx, loc.line, loc.column);
-	const res = callWithComptimeHostPolicy(vm, result.funcIdx, args, decoratorSourcePath);
-	popActiveMetaCtx();
+	let res = raiserNil();
+	{
+		pushActiveMetaCtx(ctx, loc.line, loc.column);
+		defer popActiveMetaCtx();
+		res = callWithComptimeHostPolicy(vm, result.funcIdx, args, decoratorSourcePath);
+	}
 	if (vm.error != "") {
 		addError(ctx, `decorator '${name}' failed: ${vm.error}`, loc.line, loc.column);
 		vmReleaseHeaps(vm);

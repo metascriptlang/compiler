@@ -48,14 +48,16 @@ export function callWithComptimeHostPolicy(
 	const restrictedSource = restrictedComptimeSource(modulePath);
 	vm.hostCallsRestricted = restrictedSource != "";
 	vm.hostPolicySource = restrictedSource;
+	defer {
+		vm.hostCallsRestricted = previousRestricted;
+		vm.hostPolicySource = previousSource;
+		vm.sandboxed = previousSandboxed;
+	}
 	const outer = takeTouched(vm.mod);
 	const result = vmCallFunction(vm, funcIdx, args);
 	const ran = takeTouched(vm.mod);
 	retouch(vm.mod, outer);
 	retouch(vm.mod, ran);
-	vm.hostCallsRestricted = previousRestricted;
-	vm.hostPolicySource = previousSource;
-	vm.sandboxed = previousSandboxed;
 	const observer = _runObserver;
 	if (observer != null) observer(vm, ran);
 	return result;
@@ -71,4 +73,32 @@ test "cached dependency module is a restricted compile-time source" {
 	const root = cacheRoot();
 	assert restrictedComptimeSource(root + "/extracted/p@1.0.0/index.ms") != "";
 	assert restrictedComptimeSource(root + "-copy/extracted/p@1.0.0/index.ms") == "";
+}
+
+import { createVM } from "../../raiser/vm";
+import { RaiserOpcode, RaiserInstruction, raiserABC } from "../../raiser/bytecode";
+import { makeTestModule } from "../../raiser/module";
+import { raiserConstString } from "../../raiser/value";
+import { registerHostFn, HostCapability, _resetHostRegistryForTests, RaiserHostFn } from "../../raiser/hostRegistry";
+
+test "a host call that throws leaves the host-policy flags as the caller set them" {
+	_resetHostRegistryForTests();
+	const refuse: RaiserHostFn = (args: RaiserValue[]): RaiserValue => { throw new Error("internal: test host call refused"); };
+	registerHostFn("hostPolicyTestRefuse", refuse, HostCapability.Pure);
+	const code: RaiserInstruction[] = [raiserABC(RaiserOpcode.CallHost, 0, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)];
+	const vm = createVM(makeTestModule(code, [raiserConstString("hostPolicyTestRefuse")]));
+	vm.hostCallsRestricted = true;
+	vm.hostPolicySource = "outer";
+	vm.sandboxed = false;
+	let thrown = false;
+	try {
+		callWithComptimeHostPolicy(vm, 0, [], "");
+	} catch (e) {
+		thrown = true;
+	}
+	_resetHostRegistryForTests();
+	assert thrown;
+	assert vm.hostCallsRestricted, "hostCallsRestricted was not restored";
+	assert vm.hostPolicySource == "outer", "hostPolicySource was not restored";
+	assert !vm.sandboxed, "sandboxed was not restored";
 }

@@ -70,7 +70,7 @@ import { callMacroEngineCompiler, EngineMacroResult, registerMacroBodyPreparer, 
 import { isBuiltinDirective } from "../../checker/decoratorHelpers";
 import "./decorators";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../../monomorphize/clone";
-import { heapObjectGetField, RaiserValueKind, RaiserValue } from "../../raiser/value";
+import { heapObjectGetField, RaiserValueKind, RaiserValue, raiserNil } from "../../raiser/value";
 import { RaiserContext } from "../../raiser/context";
 import { RaiserVM, vmReleaseHeaps } from "../../raiser/vm";
 import { callWithComptimeHostPolicy } from "./hostPolicy";
@@ -2062,9 +2062,12 @@ export function invokeMacro(node: Node, ctx: CheckerContext): Node {
 		marshalArgs.push(builtNodeToValue(implementation, vm.objectHeap, vm.arrayHeap));
 	}
 	const macroSourcePath = macroSym.modulePath != "" ? macroSym.modulePath : regCtx.modulePath;
-	pushActiveMetaCtx(ctx, node.location.line, node.location.column, regCtx, macroSym.name);
-	const resultVal = callWithComptimeHostPolicy(vm, cm.funcIdx, marshalArgs, macroSourcePath);
-	popActiveMetaCtx();
+	let resultVal = raiserNil();
+	{
+		pushActiveMetaCtx(ctx, node.location.line, node.location.column, regCtx, macroSym.name);
+		defer popActiveMetaCtx();
+		resultVal = callWithComptimeHostPolicy(vm, cm.funcIdx, marshalArgs, macroSourcePath);
+	}
 
 	if (vm.diagMessage != "") {
 		const diagMsg = vm.diagMessage;

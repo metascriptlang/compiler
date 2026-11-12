@@ -113,6 +113,7 @@ import "./destructuringWriteTargets";
 import "./stringMutatorsRemoved";
 import "./checkTakesParse";
 import "./hostCallbackBeforeBody";
+import "./metaFrameThrow";
 import "./engineHelperCheckedOnce";
 import "./comptimeStatement";
 import "./comptimeValues";
