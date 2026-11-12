@@ -1,0 +1,116 @@
+import { argv, cwd, exit } from "std/process";
+import { readDir, readFile } from "std/fs";
+import { JsonKind } from "std/serialize/json/types";
+
+interface Lane {
+	name: string;
+	reds: string[];
+	secs: number;
+}
+
+function plain(text: string): string {
+	const parts = text.split("\x1b[");
+	for (let i = 1; i < parts.length; i++) parts[i] = parts[i].substring(parts[i].indexOf("m") + 1);
+	return parts.join("");
+}
+
+function between(line: string, head: string, tail: string): string | null {
+	if (!line.startsWith(head)) return null;
+	const end = line.indexOf(tail, head.length);
+	return end < 0 ? null : line.substring(head.length, end);
+}
+
+function redsOf(lane: string, lines: string[]): string[] {
+	const reds: string[] = [];
+	const top = `${cwd()}/`;
+	let file = "";
+	for (const line of lines) {
+		let red: string | null = null;
+		if (lane == "boundary" || lane == "cache") {
+			red = between(line, "FAIL  ", "  expected=");
+			const setup = between(line, `${lane}: setup step failed: `, " (root ");
+			if (setup != null) red = `setup: ${setup}`;
+		} else if (lane == "suite" || lane == "tests") {
+			if (line.startsWith("NORESULT ")) red = line.substring(9);
+			else if (line.startsWith(" FAIL  ")) file = line.substring(7).startsWith(top) ? line.substring(7 + top.length) : line.substring(7);
+			else if (line.startsWith("  × ")) red = `${file} > ${line.substring(4)}`;
+		} else if (lane == "corpus" || lane == "san" || lane == "tsan") {
+			const mark = line.indexOf("✗ FAIL ");
+			const close = line.indexOf("]", mark);
+			if (mark >= 0 && close > mark && line.substring(0, mark).trim() == "") red = line.substring(mark + 7, close + 1);
+		} else if (lane == "guard" || lane == "hcr" || lane == "lsp") {
+			red = between(line, "FAIL ", ":");
+		} else if (lane == "fmt") {
+			for (const kind of ["LOSSY ", "UNSTABLE ", "NO-FMT ", "UNREADABLE "]) {
+				const end = line.indexOf(".ms");
+				if (line.startsWith(kind) && end > 0) red = line.substring(kind.length, end + 3);
+			}
+		}
+		if (red != null && !reds.includes(red)) reds.push(red);
+	}
+	return reds;
+}
+
+function trailer(lines: string[], key: string): number | null {
+	for (let i = lines.length - 1; i >= 0 && i >= lines.length - 6; i--) {
+		if (lines[i].startsWith(`${key}=`)) return Number(lines[i].substring(key.length + 1));
+	}
+	return null;
+}
+
+function knownOf(path: string): Map<string, string[]> {
+	const known = new Map<string, string[]>();
+	const text = readFile(path);
+	if (!text.ok) throw new Error(`gate: cannot read ${path}`);
+	const parsed = JSON.parseValue(text.value);
+	if (!parsed.ok || parsed.value.kind != JsonKind.Object) throw new Error(`gate: ${path} is not a JSON object of lanes`);
+	for (let i = 0; i < parsed.value.keys.length; i++) {
+		const rows = parsed.value.values[i];
+		if (rows.kind != JsonKind.Object) throw new Error(`gate: ${path}: lane ${parsed.value.keys[i]} is not an object of rows`);
+		known.set(parsed.value.keys[i], rows.keys);
+	}
+	return known;
+}
+
+if (argv.length < 2) {
+	console.error("usage: gate <directory of lane logs> <known-red.json>");
+	exit(2);
+}
+const dir = argv[argv.length - 2];
+const known = knownOf(argv[argv.length - 1]);
+const lanes: Lane[] = [];
+for (const entry of readDir(dir).sort()) {
+	if (!entry.endsWith(".log") || entry.startsWith(".")) continue;
+	const name = entry.split(".")[0];
+	const text = readFile(`${dir}/${entry}`);
+	if (!text.ok) throw new Error(`gate: cannot read ${dir}/${entry}`);
+	const lines = plain(text.value).split("\n");
+	let lane = lanes.find((l: Lane): boolean => l.name == name);
+	if (lane == null) {
+		lane = { name, reds: [], secs: 0 };
+		lanes.push(lane);
+	}
+	const rc = trailer(lines, "RC");
+	const secs = trailer(lines, "SECS");
+	const part = entry.substring(0, entry.length - 4);
+	const reds = redsOf(name, lines);
+	if (rc == null || secs == null) {
+		reds.push(`${part}: the log has no RC and SECS trailer`);
+	} else {
+		if (secs > lane.secs) lane.secs = secs;
+		if (rc != 0 && reds.length == 0) reds.push(`${part}: exit ${rc} with no named failure`);
+	}
+	for (const red of reds) if (!lane.reds.includes(red)) lane.reds.push(red);
+}
+if (lanes.length == 0) throw new Error(`gate: ${dir} holds no lane log`);
+
+let anyNew = false;
+for (const lane of lanes) {
+	const listed = known.get(lane.name) ?? [];
+	const fresh = lane.reds.filter((red: string): boolean => !listed.includes(red)).sort();
+	console.log(`gate: ${lane.name} ${lane.secs}s · ${lane.reds.length} red · ${lane.reds.length - fresh.length} known · ${fresh.length} new`);
+	for (const red of fresh) console.log(`  new: ${red}`);
+	if (fresh.length > 0) anyNew = true;
+}
+console.log(`gate: ${anyNew ? "RED" : "GREEN"} (${lanes.map((l: Lane): string => l.name).join(", ")})`);
+if (anyNew) exit(1);
