@@ -156,7 +156,9 @@ enum {
     MS_HEAP_REMOTE_BATCH_BYTES = 16384,
     MS_HEAP_DISCARD_MIN_BYTES = 65536,
     MS_HEAP_RETURN_AFTER_MS = 10000,
-    MS_HEAP_RETURN_STEP_MS = 1000
+    MS_HEAP_RETURN_STEP_MS = 1000,
+    MS_HEAP_TURN_CELLS = 16384,
+    MS_HEAP_TURN_PAGES = 4096
 };
 
 #define MS_HEAP_MAX_BIG (((size_t)1 << 30) - ((size_t)1 << 24))
@@ -858,21 +860,18 @@ static inline msHeapCell* msHeapTakeRemoteCell(msHeapRegion* a, size_t slot) {
     return cell;
 }
 
-static void msHeapRouteHome(msHeapRegion* a, msHeapCell* cell, size_t size) {
-    while (cell) {
-        msHeapCell* next = cell->next;
-        msHeapPutHome(a, (msHeapSmall*)msHeapPage(cell), cell, size);
-        cell = next;
-    }
-}
-
-static void msHeapRouteRemoteCells(msHeapRegion* a) {
+static int msHeapRouteRemoteCells(msHeapRegion* a, size_t most) {
     for (size_t slot = 1; slot < MS_HEAP_SMALL_CLASSES; ++slot) {
-        msHeapCell* cached = a->remoteCells[slot];
-        a->remoteCells[slot] = NULL;
-        msHeapRouteHome(a, cached, slot * MS_HEAP_ALIGN);
-        msHeapRouteHome(a, msHeapFetchRemoteCells(a, slot), slot * MS_HEAP_ALIGN);
+        msHeapCell* cell;
+        while ((cell = msHeapTakeRemoteCell(a, slot))) {
+            if (!most--) {
+                a->remoteCells[slot] = cell;
+                return 1;
+            }
+            msHeapPutHome(a, (msHeapSmall*)msHeapPage(cell), cell, slot * MS_HEAP_ALIGN);
+        }
     }
+    return 0;
 }
 
 static void msHeapDrainRemoteBig(msHeapRegion* a) {
@@ -890,13 +889,13 @@ static void msHeapDrainRemoteBig(msHeapRegion* a) {
 }
 #else
 #define msHeapTakeRemoteCell(a, slot) NULL
-#define msHeapRouteRemoteCells(a) ((void)0)
+#define msHeapRouteRemoteCells(a, most) 0
 #define msHeapDrainRemoteBig(a) ((void)0)
 #endif
 
-static int msHeapReleaseSmalls(msHeapRegion* a, msHeapSmall** list, int64_t since) {
+static int msHeapReleaseSmalls(msHeapRegion* a, msHeapSmall** list, int64_t since, size_t most) {
     int released = *list != NULL;
-    while (*list) {
+    while (*list && most--) {
         msHeapSmall* chunk = *list;
         *list = chunk->next;
         chunk->base.size = MS_HEAP_PAGE_SIZE;
@@ -906,7 +905,7 @@ static int msHeapReleaseSmalls(msHeapRegion* a, msHeapSmall** list, int64_t sinc
 }
 
 static int msHeapReleaseEmpty(msHeapRegion* a) {
-    msHeapRouteRemoteCells(a);
+    msHeapRouteRemoteCells(a, SIZE_MAX);
     for (size_t slot = 1; slot < MS_HEAP_SMALL_CLASSES; ++slot) {
         msHeapSmall* head = a->small[slot];
         if (!head || head->free != MS_HEAP_SMALL_ROOM) continue;
@@ -915,7 +914,7 @@ static int msHeapReleaseEmpty(msHeapRegion* a) {
         a->empties = head;
     }
     int64_t since = msHeapUnusedNow();
-    return msHeapReleaseSmalls(a, &a->empties, since) | msHeapReleaseSmalls(a, &a->agedEmpties, since);
+    return msHeapReleaseSmalls(a, &a->empties, since, SIZE_MAX) | msHeapReleaseSmalls(a, &a->agedEmpties, since, SIZE_MAX);
 }
 
 #if MS_HEAP_THREADS
@@ -935,10 +934,11 @@ static void msHeapAgeEmpties(msHeapRegion* a, int64_t now) {
     msHeapNoteAgedDue(a);
 }
 
-static void msHeapReleaseAged(msHeapRegion* a, int64_t now) {
-    msHeapRouteRemoteCells(a);
-    if (a->agedEmpties && now >= msHeapAgedDue(a)) msHeapReleaseSmalls(a, &a->agedEmpties, a->agedSince);
+static int msHeapReleaseAged(msHeapRegion* a, int64_t now) {
+    int cellsLeft = msHeapRouteRemoteCells(a, MS_HEAP_TURN_CELLS);
+    if (a->agedEmpties && now >= msHeapAgedDue(a)) msHeapReleaseSmalls(a, &a->agedEmpties, a->agedSince, MS_HEAP_TURN_PAGES);
     msHeapAgeEmpties(a, now);
+    return cellsLeft;
 }
 #endif
 
@@ -1051,21 +1051,31 @@ void msHeapFree(void* p) {
 #if MS_HEAP_THREADS
 /* Pages of a free chunk that was never handed out were never touched, so only dirty chunks go
  * back. A chunk too small to discard goes with a discarded neighbour, which a second sweep sees. */
-static int msHeapDiscardDue(msHeapRegion* a, int64_t now) {
+static int msHeapDiscardDue(msHeapRegion* a, int64_t now, size_t* pagesLeft) {
     int discarded = 0;
     a->returnDue = 0;
     for (unsigned fl = 0; fl < MS_HEAP_FL_COUNT; ++fl) {
         for (unsigned sl = 0; sl < MS_HEAP_SL_COUNT; ++sl) {
             for (msHeapBig* chunk = a->matrix[fl][sl]; chunk; chunk = chunk->next) {
                 if (chunk->zeroed || !msHeapReturnable(a, chunk)) continue;
-                int64_t due = *msHeapUnusedSince(chunk) + MS_HEAP_RETURN_AFTER_MS + MS_HEAP_RETURN_STEP_MS;
-                if (now < due) {
+                int64_t since = *msHeapUnusedSince(chunk);
+                int64_t due = since + MS_HEAP_RETURN_AFTER_MS + MS_HEAP_RETURN_STEP_MS;
+                if (now < due || !*pagesLeft) {
                     if (!a->returnDue || due < a->returnDue) a->returnDue = due;
                     continue;
                 }
-                if (chunk->base.size > MS_HEAP_PAGE_SIZE)
-                    msHeapDiscardPages((unsigned char*)chunk + MS_HEAP_PAGE_SIZE, chunk->base.size - MS_HEAP_PAGE_SIZE);
+                size_t pages = chunk->base.size / MS_HEAP_PAGE_SIZE - 1;
+                int cut = pages > *pagesLeft;
+                if (cut) {
+                    pages = *pagesLeft;
+                    msHeapRemoveBig(a, chunk);
+                    msHeapInsertUnused(a, msHeapSplit(a, chunk, (pages + 1) * MS_HEAP_PAGE_SIZE), since);
+                    msHeapInsertBig(a, chunk);
+                }
+                if (pages) msHeapDiscardPages((unsigned char*)chunk + MS_HEAP_PAGE_SIZE, pages * MS_HEAP_PAGE_SIZE);
+                *pagesLeft -= pages;
                 chunk->zeroed = MS_HEAP_DISCARDED;
+                if (cut) return 1;
                 discarded = 1;
             }
         }
@@ -1101,13 +1111,18 @@ static void msHeapReturn(msHeapRegion* a, int64_t now) {
     msHeapHandle* here = msHeapOwnerOf(a);
     msHeapCloseRuns(here);
     while (a->pendingBig || __atomic_load_n(&here->sharedBig, __ATOMIC_RELAXED)) msHeapDrainRemoteBig(a);
-    if (now == INT64_MAX) msHeapReleaseEmpty(a);
-    else msHeapReleaseAged(a, now);
-    if (msHeapDiscardDue(a, now)) {
-        while (msHeapDiscardDue(a, now)) {}
+    int cellsLeft = 0;
+    size_t pagesLeft = MS_HEAP_TURN_PAGES;
+    if (now == INT64_MAX) {
+        msHeapReleaseEmpty(a);
+        pagesLeft = SIZE_MAX;
+    } else cellsLeft = msHeapReleaseAged(a, now);
+    if (msHeapDiscardDue(a, now, &pagesLeft)) {
+        while (msHeapDiscardDue(a, now, &pagesLeft)) {}
         msHeapJoinDiscarded(a);
     }
     msHeapNoteAgedDue(a);
+    if (cellsLeft) a->returnDue = now;
 }
 
 static void msHeapReturnOld(msHeapRegion* a) {
