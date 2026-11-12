@@ -16,6 +16,7 @@ import {
 import { SourceComment } from "../comments";
 import { withComments, danglingOf, danglingLines, danglingBlock, commentsWithin, markWithin, interleave, boxed, startLineOf, joinKeepingBlankLines } from "./commentDocs";
 import { callPrintNode } from "./callbacks";
+import { macroTakesReceiver, macroParamNames } from "../../../ast/macroParams";
 import { structuralType, printTypeAnnotation, commentedUnionType } from "./types";
 import { objectPatternContent, breaksPatternProperties } from "./expressions";
 import { sourceByteAt, sourceSpan, sourceOffset, writtenInitializer, writtenOptional, writtenTypeAfterOptional, writtenMemberName, unoptionalized, nativeFrom } from "./literals";
@@ -530,7 +531,8 @@ export function printPropertyDecl(node: Node, options: FormatOptions): Doc {
 export function printMacroDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as MacroDeclData;
 	const noDefaults: Node[] = [];
-	const params = buildParamList(d.macroDeclParams, d.macroDeclParamTypes, noDefaults, options);
+	const params = buildParamList(macroParamNames(d), d.macroDeclParamTypes, noDefaults, options);
+	if (macroTakesReceiver(d)) params[0] = docGroup([docText("this "), params[0]]);
 	const keyword = node.flags.has(NodeFlag.Converter) ? "converter " : "macro ";
 	const parts: Doc[] = [docText(keyword + d.macroDeclName)];
 	for (const p of paramListInParens(params, options)) parts.push(p);

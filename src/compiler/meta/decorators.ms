@@ -1,4 +1,5 @@
 import { expansionOf, markExpansion } from "../../checker/visibility";
+import { macroParamNames } from "../../ast/macroParams";
 import {
 	Node, NodeKind, NodeFlag, SymbolKind, SourceLocation, Symbol, Type, TypeKind, createNodeAt,
 	ProgramData, ExportDeclData, ClassDeclData, ActorDeclData, DecoratedDeclData,
@@ -667,7 +668,7 @@ function buildWrapper(ctx: CheckerContext, sym: Symbol, decl: Node, md: MacroInv
 			return null as unknown as Node;
 		}
 		const macroDecl = decl.data as MacroDeclData;
-		const params = macroDecl.macroDeclParams;
+		const params = macroParamNames(macroDecl);
 		const types = macroDecl.macroDeclParamTypes;
 		for (let i = 0; i < params.length; i += 1) {
 			if (i > 0) paramList = paramList + ", ";

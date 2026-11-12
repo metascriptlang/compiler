@@ -62,6 +62,7 @@ import "./cases/awaitYieldAtom";
 import "./cases/assertEscape";
 import "./cases/deferBlock";
 import "./cases/externFunction";
+import "./cases/macroReceiver";
 import "./cases/tryExprAtom";
 import "./cases/methodDefaults";
 import "./cases/headerComment";

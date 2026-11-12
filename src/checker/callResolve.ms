@@ -2,6 +2,7 @@
 // Reaches the expression dispatcher only through the checkerCallbacks door.
 
 import { membersOf } from "./unitsInCheck";
+import { macroTakesReceiver } from "../ast/macroParams";
 import { fieldDeclarer, refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, refuseHiddenConstructor, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, refuseHookCall, abstractMethodOwnerName, befriend, unfriend, expansionOf, markExpansion, unwrapDecl } from "./visibility";
 import { AwaitExprData, HiddenStdConvData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, ConditionalExprData, ExprStmtData, IfStmtData, isEmptyBlock, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, ConstructorDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt, BuiltinKind, strongNodes } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
@@ -403,19 +404,6 @@ export function macroDeclOf(sym: Symbol | null): MacroDeclData | null {
 	const decl = sym.declNode;
 	if (decl == null || decl.kind != NodeKind.MacroDecl) return null;
 	return decl.data as MacroDeclData;
-}
-
-const MACRO_RECEIVER_PREFIX = "this:";
-
-export function macroTakesReceiver(decl: MacroDeclData): boolean {
-	return decl.macroDeclParams.length > 0 && decl.macroDeclParams[0].startsWith(MACRO_RECEIVER_PREFIX);
-}
-
-export function macroParamNames(decl: MacroDeclData): string[] {
-	if (!macroTakesReceiver(decl)) return decl.macroDeclParams;
-	const names = decl.macroDeclParams.slice(0);
-	names[0] = names[0].slice(MACRO_RECEIVER_PREFIX.length, names[0].length);
-	return names;
 }
 
 // The dot-call transformation: `x.m(a)` is `m(x, a)` when `m` is a macro whose first parameter
