@@ -53,7 +53,11 @@ const DRIVER_FILES = [
 	"crt2.o", "dllcrt2.o", "crtbegin.o", "crtend.o", "libmingw32.a",
 	"libmingwex.a", "libmoldname.a", "libmsvcrt.a", "libkernel32.a",
 	"libadvapi32.a", "libshell32.a", "libuser32.a", "libpthread.a", "libwinpthread.a",
+	"libssp.a", "libssp_nonshared.a",
 ];
+// clang's MinGW driver links these two for a protected frame. mingw-w64 keeps the guard and its failure routine
+// in libmingwex, so both are empty archives, as a clang-based mingw-w64 toolchain installs them.
+const SSP_ARCHIVES = ["libssp.a", "libssp_nonshared.a"];
 const DRIVER_ARCHIVES = ["libmingw32.a", "libmingwex.a", "libmoldname.a", "libmsvcrt.a"];
 // Symbols the zig runtime defined in its own archives; an archive the driver links must define each.
 const MOVED_SYMBOLS = [
@@ -326,6 +330,8 @@ export function checkWindowsRuntime(
 			[...config, object, ...USER_LIBRARIES, ...MINGW_LIBRARIES, "-o", mingw],
 			[...config, "-O2", "-fsanitize=undefined", fixture, ...USER_LIBRARIES,
 				"-o", join(work, name + "Ubsan" + (dll ? ".dll" : ".exe"))],
+			[...config, "-O0", "-fstack-protector-strong", fixture, ...USER_LIBRARIES,
+				"-o", join(work, name + "Protected" + (dll ? ".dll" : ".exe"))],
 		];
 		if (dll) {
 			steps.push([...config, object, ...USER_LIBRARIES,
@@ -461,6 +467,9 @@ function produce(
 	try runStep("/usr/bin/make", ["install"], threadsBuild, environment);
 	try copyTree(join(crtPrefix, "include"), join(windows, "include/libc/mingw-w64"));
 	const libraries = join(crtPrefix, "lib");
+	for (const name of SSP_ARCHIVES) {
+		try runStep(tool("llvm-ar"), ["rcs", join(libraries, name)], crtBuild, environment);
+	}
 	for (const name of DRIVER_FILES) {
 		if (!isFile(join(libraries, name))) {
 			return Result.err("the mingw-w64 build made no " + name);
