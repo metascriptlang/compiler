@@ -1146,6 +1146,8 @@ extern function msBlockWithinSpan(s: Ptr<void>, b: int64, e: int64): boolean;
 @compilerFunc
 extern function msBlockSumOf(acc: int64, sum: int64, sub: boolean): int64;
 @compilerFunc
+extern function msBlockMagnitude(bits: int64): int64;
+@compilerFunc
 extern function msPowF64(x: float64, y: float64): float64;
 @compilerFunc
 extern function msAddI8(a: int8, b: int8): int8;
@@ -1199,6 +1201,46 @@ extern function msMulAssign(lv: Ptr<void>, b: Ptr<void>): void;
 extern function msPostInc(lv: Ptr<void>): int64;
 @compilerFunc
 extern function msPostDec(lv: Ptr<void>): int64;
+@compilerFunc
+extern function msSumTryAddI8I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumTryAddI16I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumTryAddI16I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumTryAddI32I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumTryAddI32I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumTryAddI32I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumTryAddI64I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumTryAddI64I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumTryAddI64I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumTryAddI64I64(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumTrySubI8I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumTrySubI16I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumTrySubI16I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumTrySubI32I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumTrySubI32I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumTrySubI32I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumTrySubI64I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumTrySubI64I16(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumTrySubI64I32(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
+@compilerFunc
+extern function msSumTrySubI64I64(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
 @compilerFunc
 extern function msSumFitsI8I8(acc: Ptr<void>, a: Ptr<void>, b: Ptr<void>, e: int64): boolean;
 @compilerFunc

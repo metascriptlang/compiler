@@ -184,6 +184,10 @@ static inline int msBlockRangeFits(int64_t acc, int64_t n, int64_t lo, int64_t h
 	int64_t down = n * (lo < 0 ? lo : 0), up = n * (hi > 0 ? hi : 0);
 	return sub ? acc - up >= min && acc - down <= max : acc + down >= min && acc + up <= max;
 }
+static inline int64_t msBlockMagnitude(uint64_t bits) {
+	if (bits > (uint64_t)INT64_MAX) return INT64_MAX;
+	return bits == 0 ? 0 : (int64_t)(UINT64_MAX >> __builtin_clzll(bits));
+}
 #define msBlockWithin(a, b, e) ((b) >= 0 && (e) <= (int64_t)(a).len)
 #define msBlockWithinSpan(s, b, e) ((b) >= 0 && (e) <= (int64_t)(s).len)
 #define msBlockSumOf(acc, sum, sub) ((sub) ? (int64_t)(acc) - (sum) : (int64_t)(acc) + (sum))
@@ -196,6 +200,57 @@ static inline int msBlockFits_(uint64_t acc, uint64_t term, int64_t n, uint64_t 
 #define msAbsOf_(U, v) ((v) < 0 ? (U)0 - (U)(v) : (U)(v))
 #define msArrayData_(a) ((a).len > 0 ? (a).p->data : NULL)
 
+#define msOnesAbs_(x) ((x) ^ ((x) >> (sizeof(x) * 8 - 1)))
+#define MS_SUM_TRY_(A, AT, UA, AMAX, E, ET, UE) \
+static inline int msSumTry##A##E##_(AT* acc, int sub, int64_t len, const ET* p, int64_t b, int64_t e) { \
+	if (b < 0 || e > len || e <= b) return 0; \
+	UE o = 0; \
+	UA s = 0; \
+	for (int64_t i = b; i < e; i++) { \
+		ET x = p[i]; \
+		o |= (UE)msOnesAbs_(x); \
+		s += (UA)(AT)x; \
+	} \
+	uint64_t a = msAbsOf_(uint64_t, *acc); \
+	int k = o == 0 ? 0 : 64 - __builtin_clzll((uint64_t)o); \
+	if (a > (uint64_t)(AMAX) || (uint64_t)(e - b) > ((uint64_t)(AMAX) - a) >> k) return 0; \
+	*acc = (AT)(sub ? (UA)*acc - s : (UA)*acc + s); \
+	return 1; \
+}
+MS_SUM_TRY_(I8, int8_t, uint32_t, INT8_MAX, I8, int8_t, uint8_t)
+MS_SUM_TRY_(I16, int16_t, uint32_t, INT16_MAX, I8, int8_t, uint8_t)
+MS_SUM_TRY_(I16, int16_t, uint32_t, INT16_MAX, I16, int16_t, uint16_t)
+MS_SUM_TRY_(I32, int32_t, uint32_t, INT32_MAX, I8, int8_t, uint8_t)
+MS_SUM_TRY_(I32, int32_t, uint32_t, INT32_MAX, I16, int16_t, uint16_t)
+MS_SUM_TRY_(I32, int32_t, uint32_t, INT32_MAX, I32, int32_t, uint32_t)
+MS_SUM_TRY_(I64, int64_t, uint64_t, INT64_MAX, I8, int8_t, uint8_t)
+MS_SUM_TRY_(I64, int64_t, uint64_t, INT64_MAX, I16, int16_t, uint16_t)
+MS_SUM_TRY_(I64, int64_t, uint64_t, INT64_MAX, I32, int32_t, uint32_t)
+MS_SUM_TRY_(I64, int64_t, uint64_t, INT64_MAX, I64, int64_t, uint64_t)
+#define msSumTry_(fn, sub, acc, a, b, e) fn(&(acc), (sub), (a).len, msArrayData_(a), (b), (e))
+#define msSumTryAddI8I8(acc, a, b, e) msSumTry_(msSumTryI8I8_, 0, acc, a, b, e)
+#define msSumTryAddI16I8(acc, a, b, e) msSumTry_(msSumTryI16I8_, 0, acc, a, b, e)
+#define msSumTryAddI16I16(acc, a, b, e) msSumTry_(msSumTryI16I16_, 0, acc, a, b, e)
+#define msSumTryAddI32I8(acc, a, b, e) msSumTry_(msSumTryI32I8_, 0, acc, a, b, e)
+#define msSumTryAddI32I16(acc, a, b, e) msSumTry_(msSumTryI32I16_, 0, acc, a, b, e)
+#define msSumTryAddI32I32(acc, a, b, e) msSumTry_(msSumTryI32I32_, 0, acc, a, b, e)
+#define msSumTryAddI64I8(acc, a, b, e) msSumTry_(msSumTryI64I8_, 0, acc, a, b, e)
+#define msSumTryAddI64I16(acc, a, b, e) msSumTry_(msSumTryI64I16_, 0, acc, a, b, e)
+#define msSumTryAddI64I32(acc, a, b, e) msSumTry_(msSumTryI64I32_, 0, acc, a, b, e)
+#define msSumTryAddI64I64(acc, a, b, e) msSumTry_(msSumTryI64I64_, 0, acc, a, b, e)
+#define msSumTrySubI8I8(acc, a, b, e) msSumTry_(msSumTryI8I8_, 1, acc, a, b, e)
+#define msSumTrySubI16I8(acc, a, b, e) msSumTry_(msSumTryI16I8_, 1, acc, a, b, e)
+#define msSumTrySubI16I16(acc, a, b, e) msSumTry_(msSumTryI16I16_, 1, acc, a, b, e)
+#define msSumTrySubI32I8(acc, a, b, e) msSumTry_(msSumTryI32I8_, 1, acc, a, b, e)
+#define msSumTrySubI32I16(acc, a, b, e) msSumTry_(msSumTryI32I16_, 1, acc, a, b, e)
+#define msSumTrySubI32I32(acc, a, b, e) msSumTry_(msSumTryI32I32_, 1, acc, a, b, e)
+#define msSumTrySubI64I8(acc, a, b, e) msSumTry_(msSumTryI64I8_, 1, acc, a, b, e)
+#define msSumTrySubI64I16(acc, a, b, e) msSumTry_(msSumTryI64I16_, 1, acc, a, b, e)
+#define msSumTrySubI64I32(acc, a, b, e) msSumTry_(msSumTryI64I32_, 1, acc, a, b, e)
+#define msSumTrySubI64I64(acc, a, b, e) msSumTry_(msSumTryI64I64_, 1, acc, a, b, e)
+
+/* The installed msc that builds this tree's compiler still emits msSumFits, msSumAdd and msSumSub; drop them once
+   tools/syncLocalBinary.ms has delivered a compiler that emits msSumTry. */
 #define MS_SUM_BLOCK_(A, AT, UA, AMAX, E, ET, UE) \
 static inline int msSumFits##A##E##_(AT acc, int64_t len, const ET* p, int64_t b, int64_t e) { \
 	if (b < 0 || e > len || e <= b) return 0; \
