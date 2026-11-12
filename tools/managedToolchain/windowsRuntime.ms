@@ -24,6 +24,9 @@ import {
 	WindowsTarget, WindowsVariant, windowsTargetName, windowsClangTriple,
 	windowsAutoconfHost, windowsVariantDirectory, renderWindowsSourceConfig,
 } from "./windowsConfig";
+import {
+	CxxRecord, cxxCmakeArguments, cxxConfigureArguments, cxxLayout, installCxxRuntime,
+} from "./cxxRuntime";
 
 export const WINDOWS_RUNTIME_KIND = "local-source-windows-runtime";
 export const WINDOWS_RUNTIME_RECEIPT = "runtime/windows/notices/windows-provenance.json";
@@ -67,6 +70,7 @@ const LIMITS = [
 	"the archives are a local build of the release sources with the engine's clang, not upstream binaries; two runs on one host gave identical bytes, other hosts are not compared",
 	"aarch64-windows-gnu is not built: no Windows arm64 host consumes it",
 	"of the sanitizers only the standalone UBSan is built: compiler-rt has no mingw ASan or TSan",
+	"libc++, libc++abi and libunwind are static archives only",
 ];
 
 export struct WindowsRuntimeInputs {
@@ -109,6 +113,7 @@ export struct WindowsRuntimeReceipt {
 	builtins: string;
 	builtinsSha256: string;
 	compilerRtLicenseSha256: string;
+	cxx: CxxRecord;
 	engineRelative: string;
 	engineVersion: string;
 	kind: string;
@@ -372,6 +377,28 @@ export function checkWindowsRuntime(
 	return Result.ok(linked);
 }
 
+// Link an executable and a DLL from the C++ fixtures through the C++ config ahead of the C one, the order msc
+// gives them. Any failure or stderr is an error. Returns the executable.
+export function checkCxxRuntime(
+	clangxx: string, windows: string, fixtures: string, work: string,
+): Result<string, string> {
+	const program = join(work, "cpp.exe");
+	for (const variant of [WindowsVariant.Exe, WindowsVariant.Dll]) {
+		const dll = variant == WindowsVariant.Dll;
+		const stem = join(windows, windowsVariantDirectory(WindowsTarget.X64, variant));
+		const args = ["--no-default-config", "--config", stem + ".cxx.cfg", "--config", stem + ".cfg",
+			"-std=c++20", "-O2", join(fixtures, dll ? "runtimeCppDll.cpp" : "runtimeCpp.cpp"),
+			"-o", dll ? join(work, "cpp.dll") : program];
+		const done = captureToolUtf8(clangxx, args, { env: childEnvironment(work) });
+		if (!done.ok) { return Result.err(done.error); }
+		if (done.value.returnCode != 0 || done.value.errorOutput.trim() != "") {
+			return Result.err("C++ " + (dll ? "dll" : "exe") + ": clang++ exited " +
+				String(done.value.returnCode) + ": " + done.value.errorOutput.trim());
+		}
+	}
+	return Result.ok(program);
+}
+
 function toolVersion(tool: string): Result<string, string> {
 	const done = captureToolUtf8(tool, ["--version"]);
 	if (!done.ok) { return Result.err(done.error); }
@@ -470,7 +497,15 @@ function produce(
 	}
 	const builtinsPath = builtinsDirectory(target, major) + "/libclang_rt.builtins.a";
 	try engineIo(copyFile(builtins, join(stage, builtinsPath)));
-	const notices: string[] = [];
+	// The C++ runtime goes in last: its configure links against the finished C runtime of the stage.
+	const cxxBuild = join(work, "cxx");
+	const cxxInstall = join(work, "cxx-install");
+	try runStep(inputs.cmake, cxxConfigureArguments(inputs.ninja, inputs.llvmSource, cxxBuild, cxxInstall,
+		stage, config, triple, prefixMaps), work, cmakeEnvironment);
+	try runStep(inputs.ninja, ["-C", cxxBuild, "-j", String(inputs.jobs), "install"], work, cmakeEnvironment);
+	const cxx = try installCxxRuntime(cxxInstall, inputs.llvmSource, windows,
+		cxxLayout(windowsTargetName(target)), cxxCmakeArguments(triple));
+	const notices: string[] = [...cxx.notices];
 	for (const notice of MINGW_NOTICES) {
 		const source = join(inputs.mingwSource, notice[0]);
 		if (!isFile(source)) { return Result.err("mingw-w64 notice " + notice[0] + " is missing"); }
@@ -483,7 +518,7 @@ function produce(
 	return Result.ok({
 		builtins: builtinsPath, builtinsSha256: try sha256File(builtins),
 		compilerRtLicenseSha256: try sha256File(license),
-		engineRelative: ENGINE_RELATIVE, engineVersion: version, kind: WINDOWS_RUNTIME_KIND,
+		cxx, engineRelative: ENGINE_RELATIVE, engineVersion: version, kind: WINDOWS_RUNTIME_KIND,
 		limits: LIMITS,
 		llvm: { archiveSha256: inputs.llvmSha256, options: BUILTINS_DISABLED,
 			version: try llvmSourceVersion(inputs.llvmSource) },
@@ -546,6 +581,7 @@ function buildOverlay(
 	const verify = join(work, "verify");
 	try engineIo(ensureDir(verify));
 	try checkWindowsRuntime(join(stage, "bin/clang"), join(stage, "runtime/windows"), fixtures, verify);
+	try checkCxxRuntime(join(stage, "bin/clang++"), join(stage, "runtime/windows"), fixtures, verify);
 	try publish(stage, partial, receipt, inputs);
 	try refuseLeakedPaths(partial, [inputs.mingwSource, inputs.llvmSource, work, engine]);
 	return Result.ok(receipt);

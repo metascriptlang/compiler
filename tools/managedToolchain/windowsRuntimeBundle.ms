@@ -20,7 +20,7 @@ import {
 import { claimPartial, asciiEngineJson } from "./windowsEngine";
 import {
 	WINDOWS_RUNTIME_KIND, WINDOWS_RUNTIME_RECEIPT, childEnvironment,
-	checkWindowsRuntime,
+	checkCxxRuntime, checkWindowsRuntime,
 } from "./windowsRuntime";
 
 const WINDOWS = "runtime/windows/";
@@ -292,15 +292,8 @@ export function runWindowsBundle(bundle: string, fixtures: string, work: string)
 		}
 	}
 	const base = ["--no-default-config", "--config", join(windows, "x86_64-windows-gnu.cfg")];
-	const cpp = join(work, "cpp.exe");
-	const cppArgs = ["--no-default-config", "--config", join(windows, "x86_64-windows-gnu.cxx.cfg"),
-		"--config", join(windows, "x86_64-windows-gnu.cfg"), "-std=c++20", "-O2",
-		join(fixtures, "runtimeCpp.cpp"), "-o", cpp];
-	const cppBuilt = captureToolUtf8(join(bundle, "bin/clang++.exe"), cppArgs, { env: childEnvironment(work) });
-	if (!cppBuilt.ok || cppBuilt.value.returnCode != 0) {
-		return Result.err("C++ link: " + (cppBuilt.ok ? cppBuilt.value.errorOutput : cppBuilt.error));
-	}
-	const cppRan = try runProgram(cpp, work);
+	const cppRan = try runProgram(try checkCxxRuntime(join(bundle, "bin/clang++.exe"), windows, fixtures, work),
+		work);
 	if (!cppRan.startsWith("rc=0 cpp sum=")) { return Result.err("C++ program " + cppRan); }
 	lines.push("C++ " + cppRan);
 	const ubsan = join(work, "ubsan.exe");
