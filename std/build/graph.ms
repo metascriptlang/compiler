@@ -27,6 +27,14 @@ export interface CommandArg {
 	path: LazyPath | null;
 }
 
+export enum CheckedStream { StdOut, StdErr }
+
+export interface OutputCheck {
+	stream: CheckedStream;
+	exact: boolean;
+	text: string;
+}
+
 export interface EnvVar {
 	name: string;
 	value: string;
@@ -142,6 +150,7 @@ export class Command extends BuildNode {
 	stdout: boolean;
 	hasSideEffects: boolean;
 	expectedExit: int32;
+	checks: OutputCheck[];
 	constructor(argv: string[]) {
 		super("command", "");
 		this.argv = [];
@@ -152,6 +161,7 @@ export class Command extends BuildNode {
 		this.stdout = false;
 		this.hasSideEffects = false;
 		this.expectedExit = -1;
+		this.checks = [];
 	}
 }
 
@@ -274,6 +284,23 @@ export function addPrefixedArtifactArg(this c: Command, prefix: string, a: Execu
 
 export function expectExitCode(this c: Command, code: int32): void {
 	c.expectedExit = code;
+}
+
+export function expectStdOutEqual(this c: Command, bytes: string): void {
+	c.checks.push({ stream: CheckedStream.StdOut, exact: true, text: bytes });
+	if (c.expectedExit < 0) c.expectExitCode(0);
+}
+
+export function expectStdErrEqual(this c: Command, bytes: string): void {
+	c.checks.push({ stream: CheckedStream.StdErr, exact: true, text: bytes });
+}
+
+export function expectStdOutMatch(this c: Command, text: string): void {
+	c.checks.push({ stream: CheckedStream.StdOut, exact: false, text });
+}
+
+export function expectStdErrMatch(this c: Command, text: string): void {
+	c.checks.push({ stream: CheckedStream.StdErr, exact: false, text });
 }
 
 export function addFileInput(this c: Command, p: LazyPath): void {

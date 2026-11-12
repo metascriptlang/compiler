@@ -35,6 +35,12 @@ export interface GraphArg {
 	path: GraphPath | null;
 }
 
+export interface GraphCheck {
+	stderr: boolean;
+	exact: boolean;
+	text: string;
+}
+
 export interface GraphFile {
 	sub: string;
 	bytes: string;
@@ -65,6 +71,7 @@ export interface GraphNode {
 	stdout: boolean;
 	sideEffects: boolean;
 	expectExit: int32;
+	checks: GraphCheck[];
 	artifact: int32;
 	files: GraphFile[];
 	maxRss: number;
@@ -235,7 +242,7 @@ function shapeOf(n: GraphNode): string {
 	s = `${s}|${pathShape(n.cwd, n.id)}`;
 	for (const p of n.inputs) s = `${s}|in:${pathShape(p, n.id)}`;
 	for (const f of n.files) s = `${s}|file:${f.sub}:${hashContent(f.bytes)}:${pathShape(f.from, n.id)}:${pathShape(f.dest, n.id)}`;
-	return `${s}|${n.env.join(",")}|${n.stdout}|${n.sideEffects}|${n.expectExit}|${n.artifact}`;
+	return `${s}|${n.env.join(",")}|${n.stdout}|${n.sideEffects}|${n.expectExit}|${n.checks.map((c: GraphCheck): string => `${c.stderr}:${c.exact}:${hashContent(c.text)}`).join(",")}|${n.artifact}`;
 }
 
 // A node with the shape of one read before becomes that node, so a dependency's build function called
@@ -284,7 +291,7 @@ function readNode(r: Reader, v: RaiserHostValue): int32 {
 	const node: GraphNode = {
 		id, kind: v.field("kind").text(), name: "", description: v.field("description").text(), deps: [],
 		entry: null, from: null, os: "", cpu: "", abi: "", optimize: 0, linkage: 0, link: [], lto: -1, compiler: -1,
-		argv: [], cwd: null, inputs: [], env: [], stdout: false, sideEffects: false, expectExit: -1, artifact: -1, files: [],
+		argv: [], cwd: null, inputs: [], env: [], stdout: false, sideEffects: false, expectExit: -1, checks: [], artifact: -1, files: [],
 		maxRss: unboxFloat(v.field("maxRss").root),
 	};
 	r.nodes.push(node);
@@ -332,6 +339,11 @@ function readNode(r: Reader, v: RaiserHostValue): int32 {
 		node.stdout = v.field("stdout").root.intVal != 0;
 		node.sideEffects = v.field("hasSideEffects").root.intVal != 0;
 		node.expectExit = intOf(v.field("expectedExit"));
+		const checks = v.field("checks");
+		for (let i = 0; i < checks.length(); i += 1) {
+			const c = checks.at(i);
+			node.checks.push({ stderr: intOf(c.field("stream")) == 1, exact: c.field("exact").root.intVal != 0, text: c.field("text").text() });
+		}
 	}
 	if (node.kind == "install") node.artifact = readNode(r, v.field("artifact"));
 	if (node.kind == "writeFiles" || node.kind == "updateSourceFiles") {

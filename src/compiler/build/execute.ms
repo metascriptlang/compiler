@@ -1,4 +1,4 @@
-import { BuildGraph, GraphNode, GraphPath, GraphArg, ArgKind, nodeById, sourcePath } from "./configure";
+import { BuildGraph, GraphNode, GraphPath, GraphArg, GraphCheck, ArgKind, nodeById, sourcePath } from "./configure";
 import { CliOptions } from "../options";
 import { hashFile, loadFileHashes, saveFileHashes } from "../cache";
 import { hashContent } from "../../utils/contentHash";
@@ -222,7 +222,7 @@ function writesOutput(n: GraphNode): boolean {
 
 function runCommand(x: Execution, n: GraphNode): Job | null {
 	const extra = n.id == x.target ? x.passArgs : [];
-	const live = n.expectExit < 0 && !writesOutput(n);
+	const live = n.expectExit < 0 && n.checks.length == 0 && !writesOutput(n);
 	const program = n.argv[0];
 	let key = `${STORE_FORMAT}\ncommand\n${platform}\n${program.kind == ArgKind.Text ? toolIdentity(program.text) : "artifact"}\n`;
 	for (const a of n.argv) key = `${key}${a.kind}:${a.text}:${a.path == null ? "" : inputHash(x, a.path)}\n`;
@@ -231,6 +231,7 @@ function runCommand(x: Execution, n: GraphNode): Job | null {
 	for (const e of n.env) key = `${key}env:${e}\n`;
 	for (const p of n.inputs) key = `${key}in:${inputHash(x, p)}\n`;
 	key = `${key}stdout:${n.stdout}\nexpect:${n.expectExit}\n`;
+	for (const c of n.checks) key = `${key}check:${c.stderr}:${c.exact}:${hashContent(c.text)}\n`;
 	const store = storeDir(x);
 	const known = n.sideEffects || live ? "" : storedOutput(store, key, (path: string): string => {
 		x.hashed.push(rootedPath(x, path));
@@ -460,20 +461,31 @@ function settle(j: Job): string {
 		return `${label(j.node)}: ${j.shown} peaked at ${bytes(peak)}, above its declared maxRss of ${bytes(j.node.maxRss)}`;
 	}
 	const signal = status.ok ? status.value.signal : 0;
-	if (signal != 0 || code != Math.max(j.expectExit, 0)) {
+	const checks = j.node.checks;
+	const exitChecked = j.expectExit >= 0 || checks.length == 0;
+	if (!status.ok || (exitChecked && (signal != 0 || code != Math.max(j.expectExit, 0)))) {
 		if (j.out != "") console.log(j.out.trimEnd());
 		if (j.err != "") console.log(j.err.trimEnd());
 		j.abandon();
 		const how = signal != 0 ? `was killed by signal ${signal}` : `exited with ${code}`;
 		return `${label(j.node)}: ${j.shown} ${how}${j.expectExit >= 0 ? `, expected ${j.expectExit}` : ""}`;
 	}
+	for (const check of checks) {
+		const stream = check.stderr ? "stderr" : "stdout";
+		const found = check.stderr ? j.err : j.out;
+		if (check.exact ? found == check.text : found.includes(check.text)) continue;
+		j.abandon();
+		const asked = check.exact ? `========= expected this ${stream}: =========` : `========= expected to find in ${stream}: =========`;
+		const got = check.exact ? "========= but found: ====================" : `========= but ${stream} does not contain it: =====`;
+		return `${label(j.node)}: ${j.shown}\n${asked}\n${check.text}\n${got}\n${found}`;
+	}
 	try {
 		j.finish(j);
 	} catch (e) {
 		return e.message;
 	}
-	if (j.out != "") console.log(j.out.trimEnd());
-	if (j.err != "") console.log(j.err.trimEnd());
+	if (j.out != "" && !checks.some((c: GraphCheck): boolean => !c.stderr)) console.log(j.out.trimEnd());
+	if (j.err != "" && !checks.some((c: GraphCheck): boolean => c.stderr)) console.log(j.err.trimEnd());
 	return "";
 }
 
