@@ -490,10 +490,12 @@ function buildMusl(
 	const installed = join(work, "cxx-install");
 	try copyNamed(join(installed, "lib/" + recipe.runtimeTriple),
 		join(stage, "lib/" + recipe.runtimeTriple), ["libc++.a", "libc++abi.a", "libunwind.a"]);
-	try engineIo(ensureDir(join(stage, "include/c++")));
-	try copyBundleTree(join(installed, "include"), join(stage, "include"), "c++", []);
-	try engineIo(ensureDir(join(stage, "include/" + recipe.runtimeTriple)));
-	return copyBundleTree(join(installed, "include"), join(stage, "include"), recipe.runtimeTriple, []);
+	// libc++'s headers go into the sysroot: under the bundle's own include/ every target's C++ build would find them.
+	const headers = join(sysroot, "usr/include");
+	try engineIo(ensureDir(join(headers, "c++")));
+	try copyBundleTree(join(installed, "include"), headers, "c++", []);
+	try engineIo(ensureDir(join(headers, recipe.runtimeTriple)));
+	return copyBundleTree(join(installed, "include"), headers, recipe.runtimeTriple, []);
 }
 
 export function hostNeutral(token: string, places: string[][]): string {

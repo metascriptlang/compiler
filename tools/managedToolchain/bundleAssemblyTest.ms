@@ -129,6 +129,11 @@ function assemblyCases(dir: string, host: string): void {
 	const shared = assembleBundle(fresh, old, join(dir, "shared"), [overlay, sharing]);
 	expect(shared.ok && isFile(join(dir, "shared/runtime/other.cfg")),
 		"two overlays may carry the same file with the same bytes");
+	const reaching = join(dir, "reaching");
+	written(join(reaching, "runtime/other.cfg"), "-target other\n");
+	written(join(reaching, "include/c++/v1/vector"), "v");
+	expectRefusal(assembleBundle(fresh, old, join(dir, "reached"), [reaching]),
+		"has include/", "an overlay whose headers every target's build would search");
 	const clashing = join(dir, "clashing");
 	written(join(clashing, "runtime/x86_64-linux-gnu.2.31.cfg"), "-target other\n");
 	expectRefusal(assembleBundle(fresh, old, join(dir, "clashed"), [clashing]),

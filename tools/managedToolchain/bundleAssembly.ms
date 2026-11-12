@@ -152,6 +152,10 @@ function addOverlays(partial: string, overlays: string[]): Result<string[], stri
 	for (const overlay of overlays) {
 		const names = readDirNames(join(overlay, "runtime"));
 		if (!names.ok) { return Result.err(overlay + " has no runtime/"); }
+		if (isLinkLike(join(overlay, "include")).ok) {
+			return Result.err("overlay " + overlay + " has include/, which every target's build " +
+				"searches: a target's headers belong in its own sysroot");
+		}
 		const twins = try caseTwins(try inventoryTree(overlay, FileLinks.ContainedFiles));
 		if (twins != "") {
 			return Result.err("overlay " + overlay + " holds " + twins + ", which differ only " +
