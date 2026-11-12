@@ -5,7 +5,8 @@
 // holder built here and handed on as a constructor's `this`, as a method's receiver, as the element a
 // callee's for..of binds, as what an awaited call returns to an actor, or chosen against null; an
 // actor whose field holds a function value, handed on by a Sendable function, since a pid reaches
-// its fields only through messages.
+// its fields only through messages; a captured holder handed to a callee that reads only its value
+// fields and never calls its function field.
 //
 // INVARIANT (ULTRALOCK V0): a Sendable function type carries the proof, checked where the closure is
 //   stored into the field, so the call through it crosses.
@@ -39,6 +40,9 @@ function firstLoad(s: Readonly<Store>): int32 { return s.load(); }
 class C2 { f: () => int32; constructor(f: () => int32) { this.f = f; } callF(): int32 { return this.f(); } }
 actor Counter { tick: () => int32 = (): int32 => 1; n: int32 = 0; bump(): void { this.n = this.n + this.tick(); } count(): int32 { return this.n; } }
 function poke(c: Readonly<Counter>): void { c.bump(); }
+struct Routes { name: string; call: () => int32; }
+function nameLength(r: Readonly<Routes>): int32 { return r.name.length as int32; }
+function namer(r: Routes): Sendable<() => int32> { return (): int32 => nameLength(r); }
 function maybeCall(p: Readonly<P> | null): int32 { return p == null ? 0 : p.f(); }
 function sumAll(ps: Readonly<P[]>): int32 { let t = 0; for (const p of ps) { t += viaAlias(p); } return t; }
 async function mkP(): Promise<P> { return new P((): int32 => 6); }
@@ -70,10 +74,11 @@ async function main(): Promise<void> {
 	const poker: Sendable<() => void> = (): void => { poke(counter); };
 	poker();
 	const ticks = await counter.count();
+	const named = namer({ name: "abc", call: (): int32 => 1 })();
 	const opener = new Opener();
 	const opened = await opener.open();
-	console.log(`built=${built} opened=${opened} ticks=${ticks}`);
-	if (a == 7 && b == 5 && c == 3 && d == 5 && built == 59 && opened == 6 && ticks == 1) console.log("GUARD-OK");
+	console.log(`built=${built} opened=${opened} ticks=${ticks} named=${named}`);
+	if (a == 7 && b == 5 && c == 3 && d == 5 && built == 59 && opened == 6 && ticks == 1 && named == 3) console.log("GUARD-OK");
 }
 
 await main();
