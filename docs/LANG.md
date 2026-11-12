@@ -2076,11 +2076,15 @@ w.leaf.v;                        // with this line the move is refused: 'w' is u
 Where the move hands its value on (a binding, an assignment, a return, a throw, a sink or constructor
 argument, a literal), C, JS and the Raiser all leave the field empty, and all three keep the value of a
 number field or a plain-number struct field (corpus `fieldMoveLeavesZero`, `movedPathEmptiesItsSlot`).
-C and the Raiser only lend a field or element passed with `move` to a plain parameter; JS empties it
-(measured 2026-11-02 on main 786d77d46e5: C `… | borrow s1/2/leaf/4 | element a1/1/leaf`, JS
-`… | borrow /0/null/4 | element /0/null`; on `21f91dd6c66`, `take(move h.f)` with `function take(s: string)`
-leaves `h.f` as `"xxx"` on C and the Raiser and `""` on JS; inbox card
-`2026-11-02-js-move-empties-a-lent-argument-and-a-plain-struct-field-c-keeps`). The dead-local cases (a
+A field or a nullable element passed with `move` where the value is only read (an argument of a plain
+parameter, an argument of a constructor that does not keep it, a statement of its own) is emptied the same
+way on all three, and the moved value is destroyed in the scope that moved it (corpus
+`moveAtAReadOnlyPositionEmptiesItsSource`). Measured 2026-11-12 on a candidate of tree `de58c4078ae0`:
+`take(move h.s)`, `take(move h.kids[0])` with `kids: (Leaf | null)[]` and `take(move h.leaf)` print
+`s=| kids0=null| leaf=null` on C, JS and the Raiser, where main e3f94f82fda4 printed
+`s=s1| kids0=leaf| leaf=leaf` on C and the Raiser. An element whose type has no null (`take(move h.names[0])`
+with `names: string[]`) is still only lent on C and the Raiser (`names0=a1`) and emptied on JS (`names0=`);
+inbox card `2026-11-02-js-move-empties-a-lent-argument-and-a-plain-struct-field-c-keeps`. The dead-local cases (a
 field, a `Vec` element, a nested struct field, a `Result` payload, a local declared in the loop) compile and
 the refused ones are rejected through the C pipeline (handoff `bindingOwnership`); not run as programs on
 JS or the Raiser.
@@ -5145,6 +5149,25 @@ and `1130-sinkParamSuspend` (async and generator routines) pin it. A function ty
 override whose `sink` positions differ from the one it is matched against is an error. An
 actor method refuses `sink`, `ref` and `out`. Literal fitting, generic binding and `sink`
 as a parameter name: `src/test/handoff/sinkParam.ms`.
+
+A constructor takes a parameter with no `sink` written when its body keeps it on every path that
+completes normally: a store into a field or another slot that holds a count, an element of an object
+or array literal, a parameter property, an argument of a `sink` parameter, a written `move`, or an
+argument of another constructor (`new K(p)`, `super(p)`) that keeps it. The caller's last use then
+moves in. A parameter the body only reads, keeps through an `Unowned` or uncounted slot, stores under
+a condition, in a loop or after a `return`, hands to a function or method, or hands to a constructor
+of a module that imports this one back, is lent: the caller keeps the value to the end of its scope
+and the constructor copies it where it stores it. So the parent in `new Kid(parent)` with
+`up: Unowned<P> | null` lives as long as its caller holds it; when a constructor took every parameter,
+the edge read a destroyed parent. Measured 2026-11-12 on a candidate of tree `de58c4078ae0`: corpus
+`constructorLendsAParameterItOnlyStoresUnowned`, `constructorParameterOwnershipAgreesAcrossModules`
+and `constructorHandsAParameterAcrossAnImportCycle` print their values on C, danger, JS, the Raiser
+and under SAN, and each stops on main 12379b8ae2b9 with `an Unowned<P> edge was read after its P was
+destroyed`; `src/test/handoff/ctorSunkParams.ms` lists the shapes that take and those that lend.
+Counted per construction on the same rule (a bench of 15 constructor shapes, 100000 rounds each,
+`MS_DRC_STAT`): a direct store, `super`, a nested `new`, an inherited and a generic constructor pay no
+count, as before; a constructor that hands its parameter to a helper function or method, or stores it
+under `if`, pays one count pair it did not pay before.
 
 On C under DRC the compiler also infers `sink` for a parameter the body always stores into a
 field or a non-local, puts in an object or array literal, or passes to a `sink` parameter,
