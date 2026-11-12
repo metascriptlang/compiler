@@ -1071,7 +1071,7 @@ triage_side() {
           [ ! -f "$out.threaded" ] || mv -f "$out.threaded" out/corpus/threaded.txt
           exit $r ;;
         guard) env -u FORCE_COLOR NO_COLOR=1 GUARD_ONLY="$csv" MSC="$cmp" "$cmp" run --target=raiser src/test/guard/run.ms ;;
-        hcr) env -u FORCE_COLOR NO_COLOR=1 HCR_ONLY="$csv" MSC="$cmp" "$cmp" run --target=raiser src/test/hcr/run.ms ;;
+        hcr) r=0; for f in ${csv//,/ }; do env -u FORCE_COLOR NO_COLOR=1 HCR_ONLY="$f" MSC="$cmp" "$cmp" run --target=raiser src/test/hcr/run.ms || r=1; done; exit $r ;;
         lsp) env -u FORCE_COLOR NO_COLOR=1 MSC="$cmp" "$cmp" run --target=raiser src/test/lsp/run.ms ;;
         tests|suite)
           [ "$lane" = tests ] || cmp=$bld
@@ -1128,6 +1128,10 @@ triage_self_test() (
   printf '#!/bin/bash\necho "only=$MSCORPUS_ONLY" >out/corpus/threaded.txt\necho "  ✗ FAIL p1 [c] exit 1"\nexit 1\n' >"$d/bld"; chmod +x "$d/bld"
   triage_side san "$d/tree" "$d/bld" "$d/bld" "$d/new" 1 "$d/tri" >/dev/null
   [ "$(cat "$d/tree/out/corpus/threaded.txt")" = 'only=' ] || { echo "FAIL triage: a san rerun left threaded.txt as '$(cat "$d/tree/out/corpus/threaded.txt")', want the lane's 'only='"; bad=1; }
+  printf '%s\n' hcrFirst hcrSecond >"$d/hcrNew"
+  printf '#!/bin/bash\ncase ",$HCR_ONLY," in *,hcrFirst,*) echo "FAIL hcrFirst: stops the runner"; exit 1 ;; esac\necho "ok   hcrSecond"\n' >"$d/hcr"; chmod +x "$d/hcr"
+  triage_side hcr "$d/tree" "$d/hcr" "$d/hcr" "$d/hcrNew" 1 "$d/hcrTri" >/dev/null && [ "$(cat "$d/hcrTri")" = hcrFirst ] \
+    || { echo "FAIL triage: an hcr rerun of two names, the first red, judged '$(cat "$d/hcrTri" 2>/dev/null)', want hcrFirst with hcrSecond run"; bad=1; }
   return $bad
 )
 
