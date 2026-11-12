@@ -33,36 +33,41 @@ rtx, against 7.5, 7.0 and 19 us/op with a local copy below. `module object read 
 
 ## rtx — AMD Ryzen 9 9950X, Linux x86_64
 
-Commit `25e95678cd3` (main), builder msc `02029f04dc4`, 2026-11-08, load 20.1 before, 7.1 after (32 threads). Host
-flags `--linux --host rtx --cores 16`; candidate built `--danger` with the default thin LTO.
+Commit `b8cd6f4631e2` (main), builder msc `1b493b622aca`, 2026-11-13, load 11.1 before, 4.9 after (32 threads). Host
+flags `--linux --host rtx --cores 16`; candidate built `--danger --cc=clang --passC=-g --passL=-g` (thin LTO).
 
 | row | unit | raiser | c | luajit-joff | luajit-jon | lua54 |
 |---|---|---|---|---|---|---|
-| int add loop 1k | us/op | 2.229 | 0.196 | 2.287 | 0.491 | 2.172 |
-| float add loop 1k | us/op | 2.628 | 0.35 | 2.277 | 0.356 | 2.297 |
-| int to float 1k | us/op | 2.643 | 0.477 | 2.281 | 0.492 | 2.302 |
-| fib(25) recursion | us/op | 2543 | 205.7 | 1731 | 278.8 | 2426 |
-| module variable read 1k | us/op | 7.872 | 0.194 | 2.289 | 0.355 | 2.549 |
-| module object read 1k | us/op | 8.794 | 0.194 | 3.022 | 0.355 | 3.732 |
-| field read/write 1k | us/op | 7.43 | 0.207 | 7.85 | 0.423 | 11.28 |
-| ms call 1k | us/op | 3.136 | 0.185 | 5.287 | 0.505 | 8.68 |
-| closure call 1k | us/op | 16.2 | 0.955 | 6.816 | 0.503 | 10.32 |
-| Math.sqrt host call 1k | us/op | 22.74 | 4.26 | 9.027 | 4.184 | 9.187 |
-| user C sqrt call 1k | us/op | 25.62 | 4.253 | 31.55 | 4.243 | - |
-| array push 1k | us/op | 2.896 | 0.524 | 3.797 | 1.134 | 5.37 |
-| array index 1k | us/op | 3.813 | 0.197 | 2.807 | 0.361 | 3.355 |
-| string concat 1k | us/op | 13.04 | 1.022 | 133.1 | 89.76 | 37.86 |
-| Map set 1k | us/op | 307.9 | 3.527 | 11.6 | 1.75 | 4.159 |
-| Map get 1k | us/op | 243 | 2.429 | 13.6 | 1.764 | 6.554 |
-| object alloc 1k | us/op | 56.86 | 2.725 | 29.76 | 0.498 | 52.58 |
-| union string tag 1k | us/op | 55.2 | 2.244 | 13.21 | 2.331 | 18.61 |
-| union number tag 1k | us/op | 47.86 | 2.235 | 12.93 | 2.61 | 17.74 |
-| int tag record 1k | us/op | 47.23 | 0.985 | 12.36 | 3.017 | 19.11 |
-| sha256 64 KB host bridge | MB/s | 2514 | 2626 | - | - | - |
+| int add loop 1k | us/op | 2.285 | 0.188 | 2.21 | 0.475 | 2.188 |
+| float add loop 1k | us/op | 2.683 | 0.339 | 2.227 | 0.349 | 2.249 |
+| int to float 1k | us/op | 3.215 | 0.474 | 2.206 | 0.48 | 2.248 |
+| fib(25) recursion | us/op | 2516.141 | 199.788 | 1684.635 | 268.442 | 2317.336 |
+| module variable read 1k | us/op | 4.137 | 0.002 | 2.237 | 0.35 | 2.637 |
+| module object read 1k | us/op | 4.845 | 0.099 | 3.114 | 0.347 | 3.82 |
+| field read/write 1k | us/op | 7.693 | 0.198 | 7.71 | 0.404 | 11.754 |
+| ms call 1k | us/op | 3.208 | 0.177 | 5.309 | 0.496 | 8.914 |
+| closure call 1k | us/op | 16.065 | 0.924 | 6.682 | 0.491 | 10.141 |
+| Math.sqrt host call 1k | us/op | 9.533 | 4.136 | 8.797 | 4.128 | 9.36 |
+| user C sqrt call 1k | us/op | 12.827 | 4.072 | 31.19 | 4.139 | - |
+| array push 1k | us/op | 2.991 | 0.511 | 3.666 | 1.081 | 5.242 |
+| array index 1k | us/op | 3.761 | 0.194 | 2.738 | 0.355 | 3.32 |
+| string concat 1k | us/op | 11.543 | 0.967 | 133.474 | 90.357 | 32.499 |
+| Map set 1k | us/op | 286.361 | 3.069 | 11.431 | 1.656 | 3.996 |
+| Map get 1k | us/op | 230.816 | 2.168 | 13.399 | 1.726 | 6.404 |
+| object alloc 1k | us/op | 51.658 | 3.679 | 29.227 | 0.486 | 53.198 |
+| union string tag 1k | us/op | 52.974 | 1.049 | 13.016 | 2.261 | 18.481 |
+| union number tag 1k | us/op | 44.51 | 0.906 | 12.702 | 2.528 | 17.131 |
+| int tag record 1k | us/op | 43.161 | 1.064 | 12.089 | 2.962 | 16.535 |
+| sha256 64 KB host bridge | MB/s | 2658.575 | 2692.286 | - | - | - |
+
+Against the 2026-11-08 table (`25e95678cd3`): module variable read 7.87 → 4.14 (module TDZ guard), Math.sqrt 22.7 → 9.53
+and user C sqrt 25.6 → 12.8 (in-place host call); other rows within 10%, except `int to float` 2.64 → 3.22, one
+run, not rechecked. Six of 20 rows reach `-joff` as before (field read/write, ms call, user C sqrt, array push, string
+concat, int add at 1.03x).
 
 ### Where each row's gap comes from
 
-Instructions per iteration, on the same main: Raiser counted at run time (a per-opcode counter applied to a probe
+Instructions per iteration, on main `25e95678cd3` (the 2026-11-08 table): Raiser counted at run time (a per-opcode counter applied to a probe
 build only, each row's program run with and without the row, divided by 1000), LuaJIT read from `luajit -bl
 bench.lua`. One plain instruction costs about 1.1 ns on both sides, so a row at parity runs as many instructions as
 LuaJIT and a row behind runs more of them or dearer ones.
@@ -83,30 +88,71 @@ The ns costs of the call opcodes are differences between rows, not measured in i
 
 ## m1m — Apple M1 Pro, macOS arm64
 
-Commit `1b4eafd7173`, tree `d49e622c620`, builder msc `9f2ef7ed6b7`, 2026-11-04, load 7.6 before, 12.8 after (8
-cores). Host flags `--mac --host m1m --cores 6`, with `--cc=clang` on the candidate build.
+Commit `b8cd6f4631e2` (main), builder msc `1b493b622aca`, 2026-11-13, load 15.3 before, 9.1 after (8 cores): loaded,
+so `-joff` itself reads slower than on 11-04. Host flags `--mac --cores 8`, `--cc=clang` on the candidate build. Lua 5.4
+did not build on the host.
 
 | row | unit | raiser | c | luajit-joff | luajit-jon | lua54 |
 |---|---|---|---|---|---|---|
-| int add loop 1k | us/op | 4.107 | 0.332 | 6.521 | 0.34 | 3.747 |
-| float add loop 1k | us/op | 5.083 | 0.829 | 6.694 | 0.909 | 3.793 |
-| int to float 1k | us/op | 10.49 | 0.851 | 6.088 | 0.337 | 3.621 |
-| fib(25) recursion | us/op | 4265 | 292.9 | 3124 | 480.3 | 4170 |
-| module variable read 1k | us/op | 12.45 | 0.65 | 6.825 | 0.34 | 3.973 |
-| module object read 1k | us/op | 78.28 | 0.65 | 7.407 | 0.421 | 5.957 |
-| field read/write 1k | us/op | 9.559 | 0.333 | 14.35 | 0.675 | 18.3 |
-| ms call 1k | us/op | 23.95 | 0.33 | 10.39 | 0.523 | 17.05 |
-| closure call 1k | us/op | 29.68 | 1.312 | 11.17 | 0.595 | 19.21 |
-| Math.sqrt host call 1k | us/op | 92.73 | 4.96 | 11.29 | 5.173 | 15.87 |
-| array push 1k | us/op | 12.96 | 1.653 | 8.571 | 1.646 | 9.028 |
-| array index 1k | us/op | 10.03 | 0.539 | 8.139 | 0.607 | 4.89 |
-| string concat 1k | us/op | 15.74 | 3.187 | 217.6 | 190.8 | 74.62 |
-| Map set 1k | us/op | 817.2 | 8.796 | 14.47 | 2.199 | 6.24 |
-| Map get 1k | us/op | 841.9 | 6.96 | 29.51 | 2.399 | 9.69 |
-| object alloc 1k | us/op | 141.9 | 5.198 | 48.91 | 0.362 | 82.34 |
-| sha256 64 KB host bridge | MB/s | 315.5 | 2142 | - | - | - |
+| int add loop 1k | us/op | 4.067 | 0.321 | 6.074 | 0.338 | - |
+| float add loop 1k | us/op | 4.947 | 0.814 | 6.312 | 0.897 | - |
+| int to float 1k | us/op | 4.556 | 0.829 | 6.076 | 0.337 | - |
+| fib(25) recursion | us/op | 3745.463 | 290.015 | 3105.165 | 495.117 | - |
+| module variable read 1k | us/op | 4.693 | 0.003 | 6.449 | 0.337 | - |
+| module object read 1k | us/op | 5.563 | 0.321 | 7.343 | 0.363 | - |
+| field read/write 1k | us/op | 9.149 | 0.329 | 14.529 | 0.571 | - |
+| ms call 1k | us/op | 4.828 | 0.33 | 10.232 | 0.496 | - |
+| closure call 1k | us/op | 22.94 | 1.305 | 11.083 | 0.607 | - |
+| Math.sqrt host call 1k | us/op | 12.975 | 4.961 | 11.295 | 5.053 | - |
+| user C sqrt call 1k | us/op | 17.396 | 4.829 | 35.943 | 5.015 | - |
+| array push 1k | us/op | 5.097 | 1.101 | 8.328 | 1.584 | - |
+| array index 1k | us/op | 4.795 | 0.487 | 7.325 | 0.591 | - |
+| string concat 1k | us/op | 16.194 | 2.325 | 208.11 | 46.106 | - |
+| Map set 1k | us/op | 415.66 | 6.484 | 14.432 | 2.051 | - |
+| Map get 1k | us/op | 359.968 | 3.864 | 29.356 | 2.407 | - |
+| object alloc 1k | us/op | 76.169 | 7.952 | 45.738 | 0.359 | - |
+| union string tag 1k | us/op | 72.661 | 3.138 | 30.585 | 4.736 | - |
+| union number tag 1k | us/op | 62.647 | 2.679 | 30.82 | 4.885 | - |
+| int tag record 1k | us/op | 60.396 | 1.513 | 27.149 | 5.028 | - |
+| sha256 64 KB host bridge | MB/s | 2368.275 | 2364.225 | - | - | - |
 
-Furthest from LuaJIT `-joff`: Map set (56x), Map get (29x), module object read (11x), Math.sqrt (8.2x), object alloc
-(2.9x), closure call (2.7x); the Raiser is ahead on int add loop (0.63x), field read/write (0.67x), float add loop
-(0.76x) and string concat. Furthest from `-jon`: object alloc (392x), Map set (372x), Map get (351x), module object
-read (186x), closure call (50x), ms call (46x).
+Against 2026-11-04 (`1b4eafd7173`): Map set 817 → 416 and get 842 → 360, module object read 78.3 → 5.56, ms call
+24.0 → 4.83, Math.sqrt 92.7 → 13.0, sha256 bridge 316 → 2368 MB/s. Furthest from `-joff`: Map set (29x), Map get
+(12x), int tag record, union string tag and union number tag (2.0-2.4x), closure call (2.1x), object alloc (1.7x).
+
+## App-shaped rows
+
+`apps/` holds two real programs with the modules they import, copied from neon `1973f212` and haro `3dc0935`:
+`rowsEl` drives Neon's reactive core on its mock host (a keyed list of 1000 rows: create, update every 10th label,
+select, swap, remove, append, clear; 20 iterations), and `haro` drives Haro's workspace model (splits, focus, resize,
+a layout after each step) plus `urlSpans` over 2000 terminal lines (40 iterations). Each prints its own timer and a
+checksum; `MSC=<candidate> apps/run.sh 3` builds C `--danger`, runs both arms and refuses a checksum that differs.
+The Raiser time excludes its front end, which is about 19% of a run's wall time on both programs.
+
+Main `b8cd6f4631e2`, 2026-11-13, median of three runs:
+
+| host | rowsEl c ms | rowsEl raiser ms | ratio | haro c ms | haro raiser ms | ratio |
+|---|---|---|---|---|---|---|
+| rtx, load 4-11 | 185 | 5893 | 32x | 96 | 5107 | 53x |
+| m1m, load 15-21 | 279 | 7642 | 27x | 152 | 7770 | 51x |
+
+Against the 2026-11-04 profile (`56ad1fdf80f`, rtx): rowsEl 32x → 32x, haro 88x → 53x. A run at load 23-26 on rtx
+read 21x and 50x, its C arm slowed more than the Raiser: compare ratios at similar load only.
+
+Where the Raiser's run time goes on rtx (LD_PRELOAD SIGPROF sampler, about 1 ms of CPU per sample, 6185 and 4927
+run-time samples; categories by opcode arm and function):
+
+| category | rowsEl | haro |
+|---|---|---|
+| alloc and counts (`allocBlock`, `findRegion`, `writeRef`, `rcDecIsLast`, RcDec, WasMoved) | 33.3% | 15.6% |
+| fast dispatch (loop head, indirect jumps) | 12.4% | 17.3% |
+| slow-path bridge and boxed register access (`writeAbs`, `setRegConform`, `getDyn`) | 9.5% | 15.8% |
+| calls and returns (CallDirect, Ret, `leaveFrame`, safepoints) | 10.1% | 9.2% |
+| moves, constants, conversions | 4.8% | 9.8% |
+| field and global reads and writes | 7.0% | 4.7% |
+| array ops | 6.1% | 5.9% |
+| strings | 0.3% | 4.7% |
+| cycle collector | 2.4% | 0.1% |
+
+The slow-path bridge fell from 26-36% (11-04) since RcInc, RcDec and WasMoved run in the dispatch loop; allocation and
+counts now lead rowsEl, and on haro the boxed register path is what remains of the bridge.
