@@ -68,6 +68,8 @@ const CONSUMERS: Consumer[] = [
 	{ name: "ubsanSan", source: "ubsanCompanion.ms", flags: "--sanitize=undefined", kind: "exe", expect: "", code: 0, report: "overflow" },
 	{ name: "ubsanRelease", source: "ubsanCompanion.ms", flags: "--release", kind: "exe", expect: "matrix-ub -2147483648", code: 0, report: "" },
 	{ name: "hcr", source: "hcr.ms", flags: "--hcr", kind: "hcr", expect: "matrix-hcr 42", code: 0, report: "" },
+	{ name: "libraryOrder", source: "hello.ms", flags: "--passL=-Wl,--no-as-needed --passL=-lutil", kind: "order", expect: "libutil.so.1 libc.so.6", code: 0, report: "" },
+	{ name: "libraryOrderShared", source: "sharedLibrary.ms", flags: "--app=lib --passL=-Wl,--no-as-needed --passL=-lutil", kind: "orderLib", expect: "libutil.so.1 libc.so.6", code: 0, report: "" },
 ];
 
 const BUILD_LIMIT_MS = 1500000;
@@ -169,17 +171,18 @@ function bundleRefusal(compiler: string, text: string): string {
 	return "";
 }
 
-function runnerFor(hostTarget: string, target: string): string {
+function runnerFor(hostTarget: string, target: string, kind: string): string {
 	if (target == hostTarget) { return "native"; }
+	if (kind != "lib" && hostTarget == "linux-glibc-x86_64" && target == "linux-musl-x86_64") { return "native"; }
+	if (kind != "lib" && hostTarget == "linux-glibc-arm64" && target == "linux-musl-arm64") { return "native"; }
 	if (hostTarget == "macos-arm64" && target == "macos-x64") { return "rosetta"; }
-	if (hostTarget == "macos-arm64" && target == "wasm32-wasi") { return "wasi"; }
+	if (target == "wasm32-wasi" && capture("node", ["--version"], 60000).code == 0) { return "wasi"; }
 	return "";
 }
 
-function runnerReason(hostTarget: string, target: string): string {
-	if (target == "linux-glibc-x86_64") { return "built, not run (rtx offline)"; }
-	if (target == "windows-arm64") { return "built, not run (no windows arm64 host)"; }
-	if (target == "linux-musl-x86_64") { return "built, not run (rtx offline)"; }
+function runnerReason(hostTarget: string, target: string, kind: string): string {
+	if (kind == "lib" && target.startsWith("linux-musl")) { return "built, not run (the loader is a glibc python)"; }
+	if (target == "wasm32-wasi") { return `built, not run (no node on ${hostTarget})`; }
 	return `built, not run (not runnable on ${hostTarget})`;
 }
 
@@ -300,7 +303,37 @@ function runCell(results: string, host: string, consumer: Consumer, target: stri
 	}
 }
 
+function neededLibraries(artifact: string, bundle: string): string[] | null {
+	const reader = bundle != "" && exists(join(bundle, "bin/llvm-readelf")) ? join(bundle, "bin/llvm-readelf") : "readelf";
+	const read = capture(reader, ["-d", artifact], 60000);
+	if (read.code != 0) { return null; }
+	const needed: string[] = [];
+	for (const line of read.out.split("\n")) {
+		const open = line.indexOf("[");
+		const close = line.lastIndexOf("]");
+		if (line.contains("(NEEDED)") && open >= 0 && close > open) { needed.push(line.slice(open + 1, close)); }
+	}
+	return needed;
+}
+
+function orderCell(results: string, host: string, bundle: string, consumer: Consumer, target: string, compiler: string, artifact: string): void {
+	const needed = neededLibraries(artifact, bundle);
+	if (needed == null) {
+		note(results, [consumer.name, target, compiler, "run", host, "n/a", "0", "", "no readelf on host"]);
+		return;
+	}
+	const order = consumer.expect.split(" ");
+	const first = needed.indexOf(order[0]);
+	const good = first >= 0 && first < needed.indexOf(order[1]);
+	note(results, [consumer.name, target, compiler, "run", host, good ? "ok" : "FAIL", "0", `needed=${needed.join(",")}`, good ? "" : `expected ${order[0]} before ${order[1]}`]);
+}
+
 function buildCell(out: string, results: string, cells: string, host: string, hostTarget: string, bundle: string, consumer: Consumer, target: Target, compiler: string): void {
+	const ordering = consumer.kind == "order" || consumer.kind == "orderLib";
+	if (ordering && (target.os != "linux" || target.abi != "")) {
+		note(results, [consumer.name, target.name, compiler, "build", host, "n/a", "0", "", "the order of needed libraries is read on glibc Linux"]);
+		return;
+	}
 	if (consumer.kind == "lib" && target.lib == "") {
 		note(results, [consumer.name, target.name, compiler, "build", host, "n/a", "0", "", "no shared library on wasm32-wasi"]);
 		return;
@@ -318,7 +351,7 @@ function buildCell(out: string, results: string, cells: string, host: string, ho
 		return;
 	}
 	const native = target.name == hostTarget;
-	const ext = consumer.kind == "lib" ? "." + target.lib : target.exe;
+	const ext = consumer.kind == "lib" || consumer.kind == "orderLib" ? "." + target.lib : target.exe;
 	const dir = `${out}/art/${target.name}/${compiler}`;
 	ensureDir(dir);
 	const artifact = join(dir, consumer.name + ext);
@@ -351,10 +384,14 @@ function buildCell(out: string, results: string, cells: string, host: string, ho
 		return;
 	}
 	note(results, [consumer.name, target.name, compiler, "build", host, "ok", String(built.seconds), "", ""]);
+	if (ordering) {
+		orderCell(results, host, compiler == "bundle" ? bundle : "", consumer, target.name, compiler, artifact);
+		return;
+	}
 	note(cells, [consumer.name, target.name, compiler, `art/${target.name}/${compiler}/${consumer.name}${ext}`]);
-	const runner = runnerFor(hostTarget, target.name);
+	const runner = runnerFor(hostTarget, target.name, consumer.kind);
 	if (runner == "") {
-		note(results, [consumer.name, target.name, compiler, "run", host, "n/a", "0", "", runnerReason(hostTarget, target.name)]);
+		note(results, [consumer.name, target.name, compiler, "run", host, "n/a", "0", "", runnerReason(hostTarget, target.name, consumer.kind)]);
 		return;
 	}
 	runCell(results, host, consumer, target.name, compiler, artifact, runner);
@@ -421,9 +458,10 @@ function runBuilt(opts: Record<string, string>): void {
 		for (const line of text.value.split("\n")) {
 			const f = line.split("\t");
 			if (f.length < 4) { continue; }
-			const runner = runnerFor(hostTarget, f[1]);
+			const consumer = consumerNamed(f[0]);
+			const runner = runnerFor(hostTarget, f[1], consumer.kind);
 			if (runner == "" || f[1] == opts["skipTarget"]) { continue; }
-			runCell(results, host, consumerNamed(f[0]), f[1], f[2], join(out, f[3]), runner);
+			runCell(results, host, consumer, f[1], f[2], join(out, f[3]), runner);
 		}
 	}
 }
