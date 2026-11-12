@@ -10,7 +10,11 @@ import { nowSeconds, markUsed } from "../utils/stampDirs";
 import { metascriptHome, resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 import { readLine, writeStderr } from "std/io";
-import { CliOptions, CC_PREPARED, MODE_RELEASE, buildCpu, debugUbChecks, newCliOptions } from "./options";
+import { CliOptions, CC_PREPARED, MODE_RELEASE, buildCpu, debugUbChecks, namesTarget, newCliOptions } from "./options";
+
+@include("runtime/core/hostCpu.h");
+
+extern function msHostCpuSignature(): string;
 
 function eprintln(msg: string): void {
 	writeStderr(msg + "\n");
@@ -806,6 +810,13 @@ function macosSdkPath(stampRoot: string): string {
 	return sdk;
 }
 
+// The define carries the machine into every cache key the flags reach: "native" is the same text on two CPUs.
+function hostCpuFlags(cpu: string, signature: string): Result<string, string> {
+	if (signature == "") return Result.err(`native toolchain: the CPU of this ${hostKey()} host cannot be identified, so a build for it has no cache key\n  → name the target CPU with --cpu=${cpu}`);
+	const native = cpu == "arm64" || cpu == "aarch64" ? "-mcpu=native" : "-march=native";
+	return Result.ok(`${native} -DMSC_HOST_CPU_${bundleDigest(signature).slice(0, 16)}=1`);
+}
+
 function selectNativeToolchain(opts: CliOptions, path: string, stampRoot: string): Result<void, string> {
 	selectedBundle = null;
 	const bundle = try readNativeToolchain(path);
@@ -817,6 +828,10 @@ function selectNativeToolchain(opts: CliOptions, path: string, stampRoot: string
 	opts.ccBinary = `${quoteCcArg(join(bundle.root, "bin/clang"))} --no-default-config`;
 	opts.passC = `-DMSC_NATIVE_TOOLCHAIN_${bundle.identity}=1 ${opts.passC}`;
 	if (opts.targetOs == "bare") return Result.ok(null);
+	if (!namesTarget(opts)) {
+		const native = try hostCpuFlags(arch, msHostCpuSignature());
+		opts.passC = `${native} ${opts.passC}`;
+	}
 	const sdk = opts.targetOs == "darwin" || opts.targetOs == "macos" ? macosSdkPath(stampRoot) : "";
 	if (sdk != "") {
 		opts.passC = `-isysroot ${quoteCcArg(sdk)} -resource-dir ${quoteCcArg(join(bundle.root, `lib/clang/${bundle.version.split(".")[0]}`))} ${opts.passC}`;
@@ -923,6 +938,40 @@ test "a wasm bundle build keeps the console startup for every app mode and refus
 	const refused = selectNativeToolchain(hcr, root, "");
 	assert !refused.ok;
 	assert refused.error.contains("wasm32-wasi.cfg does not supply HCR startup");
+	verifySelectedToolchain();
+	assert removeAll(root).ok;
+}
+
+test "a build that names no target compiles for this machine's CPU ahead of --passC, keyed by the CPU's signature" {
+	const x86 = hostCpuFlags("amd64", "x86 d 68747541");
+	assert x86.ok && x86.value.startsWith("-march=native -DMSC_HOST_CPU_") && x86.value.endsWith("=1");
+	const arm = hostCpuFlags("arm64", "apple 8765edea");
+	assert arm.ok && arm.value.startsWith("-mcpu=native -DMSC_HOST_CPU_");
+	assert x86.value.slice(14) != arm.value.slice(13);
+	assert (try hostCpuFlags("amd64", "x86 d 68747541") catch "") == x86.value;
+	const unknown = hostCpuFlags("arm64", "");
+	assert !unknown.ok && unknown.error.contains("cannot be identified") && unknown.error.contains("--cpu=arm64");
+
+	const root = selectionProbe(true);
+	assert root != "";
+	const config = join(root, `runtime/${nativeRuntimeConfig(platform, arch, "")}`);
+	assert ensureDir(config.slice(0, config.lastIndexOf("/"))).ok && writeFile(config, "").ok;
+	const host = newCliOptions();
+	host.mode = MODE_RELEASE;
+	host.passC = "-march=x86-64-v3";
+	const selected = selectNativeToolchain(host, root, "");
+	const signature = msHostCpuSignature();
+	assert signature == msHostCpuSignature();
+	if (signature == "") {
+		assert !selected.ok && selected.error.contains("cannot be identified");
+	} else {
+		assert selected.ok;
+		const native = try hostCpuFlags(arch, signature) catch "";
+		assert host.passC.contains(native) && host.passC.indexOf(native, 0) < host.passC.indexOf("-march=x86-64-v3", 0);
+	}
+	const named = linuxOptions();
+	assert selectNativeToolchain(named, root, "").ok;
+	assert !named.passC.contains("=native") && !named.passC.contains("MSC_HOST_CPU");
 	verifySelectedToolchain();
 	assert removeAll(root).ok;
 }
