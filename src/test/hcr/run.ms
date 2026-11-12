@@ -1920,15 +1920,15 @@ function coreGenericInit(): void {
 		if (line.startsWith("HCR-GI ")) seen.push(line);
 	}
 	const want = [
-		"HCR-GI start V6 42 applib app=4 lib=3",
+		"HCR-GI start V6 42 applib app=4 lib=3 true 5",
 		"HCR-GI reloaded logic",
-		"HCR-GI after V6 357 applib app=4 lib=3",
+		"HCR-GI after V6 357 applib app=4 lib=3 true 5",
 	];
 	if (!succeeded(ran) || seen.join("
 ") != want.join("
 ")) {
 		console.log(both(ran));
-		failWith(tag, "a generic class instance a project image and a core module both construct did not link and reload");
+		failWith(tag, "a generic class instance a project image and a core module both construct, its constructor written or implicit, did not link and reload");
 	}
 	console.log(`ok   ${tag}`);
 }

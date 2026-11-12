@@ -20,3 +20,18 @@ export function libText(): Box<string> {
 export function libTagged(): Tagged<int32> {
 	return new Tagged<int32>(3, "lib");
 }
+class Held<T> {
+	held: T | null = null;
+	tags: string[] = [];
+}
+function hold<T>(v: T): Held<T> {
+	const h = new Held<T>();
+	h.held = v;
+	h.tags.push("t");
+	return h;
+}
+export function libHeld(): string {
+	const b = new Held<boolean>();
+	b.held = true;
+	return `${b.held === true} ${hold<int32>(5).held}`;
+}

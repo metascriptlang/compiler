@@ -2,11 +2,11 @@ import { readFile, writeFile } from "std/fs";
 import { exit } from "std/process";
 import { reload, lastReload, reloadKindName, ReloadKind } from "std/hcr";
 import { appBox, appText, appTagged } from "./logic";
-import { libBox, libText, libTagged } from "../lib/lib";
+import { libBox, libText, libTagged, libHeld } from "../lib/lib";
 
 function show(stage: string): void {
 	const sum = appBox().get() + libBox().get();
-	console.log(`HCR-GI ${stage} V6 ${sum} ${appText().get()}${libText().get()} ${appTagged().label()} ${libTagged().label()}`);
+	console.log(`HCR-GI ${stage} V6 ${sum} ${appText().get()}${libText().get()} ${appTagged().label()} ${libTagged().label()} ${libHeld()}`);
 }
 show("start");
 const edit = readFile("../logicEdit.ms");
