@@ -1062,12 +1062,11 @@ function discoverExpr(g: CGen, p: CProc, node: Readonly<Node>, ctx: ExprEvalCtx)
 	}
 	if (kind == NodeKind.StringLiteral) {
 		const d = node.data as StringLiteralData;
-		// Single ASCII char: use interned char table (zero alloc, pointer identity)
 		const byteLen = cStringByteLen(d.value);
 		if (byteLen == 1 && d.value.byteLength == 1) {
 			const code = d.value.byteAt(0);
 			if (code < 128) {
-				ctx.results.push(msStringPoolRef(`msCharPayloads[${code}]`, 1));
+				ctx.results.push(msStringPoolRef(`msCharLit${code}`, 1));
 				return;
 			}
 		}

@@ -25,6 +25,10 @@ const msCharPayload msCharPayloads[128] = {
 	MS_CP_ROW(96),  MS_CP_ROW(104), MS_CP_ROW(112), MS_CP_ROW(120)
 };
 
+#define MS_CHAR_LIT_DEF(c) const msCharPayload msCharLit##c = MS_CP(c);
+MS_CHAR_LITS(MS_CHAR_LIT_DEF)
+#undef MS_CHAR_LIT_DEF
+
 /* ===== Internal Allocation Helpers ===== */
 
 static void checkCap(int64_t cap) {
