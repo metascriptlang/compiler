@@ -89,11 +89,6 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 	tt = unwrapType(tt);
 	if (tt.kind == NodeKind.TypeGeneric) tt = unwrapType(tt);
 
-	// V3 — Tagged union (DU) decoding. Mirror encode shape: dispatch on disc
-	// field accessor, emit per-variant ObjectLiteral { disc: discLit, ...payload }.
-	// Supports boolean + string + enum disc. Variant payload restricted to
-	// atomic fields (string/bool/number/int*/float*) — nested struct + array
-	// in variant deferred.
 	if (tt.kind == NodeKind.TypeUnion) {
 		const info = detectUnionDisc(tt);
 		const discField: string = info.discField;
@@ -131,86 +126,14 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 				error("jsonValueToStruct: union variants must be struct types (got kind=" + v.kind + ")", witness);
 			}
 
-			// Pattern + disc literal (mirror encode shape).
 			let pattern: Node;
-			let discLiteral: Node;
 			if (discKind == "boolean") {
-				const bv: boolean = variantKey == "true";
-				pattern = { kind: NodeKind.BooleanLiteral, line: jv.line, column: jv.column, boolValue: bv };
-				discLiteral = { kind: NodeKind.BooleanLiteral, line: jv.line, column: jv.column, boolValue: bv };
+				pattern = { kind: NodeKind.BooleanLiteral, line: jv.line, column: jv.column, boolValue: variantKey == "true" };
 			} else if (discKind == "enum") {
-				// Wire format is fixed by encode: the disc travels as the member
-				// NAME string; the constructed variant carries the real enum
-				// member — MemberExpr resolves name→value at check time.
 				const dp = parseDiscKey(discKind, variantKey);
 				pattern = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: dp.memberName };
-				discLiteral = {
-					kind: NodeKind.MemberExpr, line: jv.line, column: jv.column,
-					object: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: dp.enumName },
-					property: dp.memberName,
-					isOptional: false,
-				};
 			} else {
 				pattern = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: variantKey };
-				discLiteral = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: variantKey };
-			}
-
-			// Build per-variant ObjectLiteral: disc field first, then payload.
-			const vKeyNodes: string[] = [discField];
-			const vValueNodes: Node[] = [discLiteral];
-			for (let fi = 0; fi < v.typExprFieldNames.length; fi = fi + 1) {
-				const fname: string = v.typExprFieldNames[fi];
-				const ftype: Node = v.typExprFieldTypes[fi];
-				if (fname == discField) continue;
-
-				if (ftype.kind == NodeKind.EnumDecl) {
-					const ords: Node[] = [];
-					const names: Node[] = [];
-					for (let mi = 0; mi < ftype.enumMembers.length; mi = mi + 1) {
-						const ov: number = ftype.enumValues.length == ftype.enumMembers.length ? ftype.enumValues[mi] : mi;
-						ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov as int64, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
-						names.push({ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: ftype.enumMembers[mi] });
-					}
-					vKeyNodes.push(fname);
-					vValueNodes.push({
-						kind: NodeKind.TypeAssertion, line: jv.line, column: jv.column, asType: ftype.enumName,
-						asExpr: {
-							kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
-							callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonEnumOrd" },
-							arguments: [
-								{ kind: NodeKind.CallExpr, line: jv.line, column: jv.column, callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" }, arguments: [jv, { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname }] },
-								{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: ords },
-								{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: names },
-							],
-						},
-					});
-					continue;
-				}
-				if (ftype.kind != NodeKind.Identifier) {
-					error("jsonValueToStruct: DU variant payload field '" + fname + "' must be atomic (string/bool/number/int*/float*); nested struct + array deferred", witness);
-				}
-				const a = pickAtomicAccessor(ftype.name);
-				const fieldAccess: Node = {
-					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
-					callee: {
-						kind: NodeKind.MemberExpr, line: jv.line, column: jv.column,
-						object: {
-							kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
-							callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" },
-							arguments: [
-								jv,
-								{ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname },
-							],
-						},
-						property: a.methodName,
-					},
-					arguments: [],
-				};
-				const finalAccess: Node = a.needsCast
-					? { kind: NodeKind.TypeAssertion, line: jv.line, column: jv.column, asExpr: fieldAccess, asType: a.castType }
-					: fieldAccess;
-				vKeyNodes.push(fname);
-				vValueNodes.push(finalAccess);
 			}
 
 			matchCases.push({
@@ -218,10 +141,9 @@ export macro jsonValueToStruct(jv: Node, witness: Node): Node {
 				casePatterns: [pattern],
 				caseGuard: null as unknown as Node,
 				caseBody: {
-					kind: NodeKind.ObjectLiteral, line: jv.line, column: jv.column,
-					keys: vKeyNodes,
-					properties: vValueNodes,
-					keyLocations: [],
+					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "jsonValueToStruct" },
+					arguments: [jv, { kind: NodeKind.MemberExpr, line: jv.line, column: jv.column, object: witness, property: variantKey, nodeType: v, isOptional: false }],
 				},
 			});
 		}
@@ -779,88 +701,13 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 			}
 
 			let pattern: Node;
-			let discLiteral: Node;
 			if (discKind == "boolean") {
-				const bv: boolean = variantKey == "true";
-				pattern = { kind: NodeKind.BooleanLiteral, line: jv.line, column: jv.column, boolValue: bv };
-				discLiteral = { kind: NodeKind.BooleanLiteral, line: jv.line, column: jv.column, boolValue: bv };
+				pattern = { kind: NodeKind.BooleanLiteral, line: jv.line, column: jv.column, boolValue: variantKey == "true" };
 			} else if (discKind == "enum") {
-				// Same wire contract as the lenient macro: disc string is the
-				// member NAME (what encode writes and what the gate above
-				// checked); the variant is built with the real enum member.
 				const dp = parseDiscKey(discKind, variantKey);
 				pattern = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: dp.memberName };
-				discLiteral = {
-					kind: NodeKind.MemberExpr, line: jv.line, column: jv.column,
-					object: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: dp.enumName },
-					property: dp.memberName,
-					isOptional: false,
-				};
 			} else {
 				pattern = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: variantKey };
-				discLiteral = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: variantKey };
-			}
-
-			const vKeyNodes: string[] = [discField];
-			const vValueNodes: Node[] = [discLiteral];
-			for (let fi = 0; fi < v.typExprFieldNames.length; fi = fi + 1) {
-				const fname: string = v.typExprFieldNames[fi];
-				const ftype: Node = v.typExprFieldTypes[fi];
-				if (fname == discField) continue;
-
-				if (ftype.kind == NodeKind.EnumDecl) {
-					const ords: Node[] = [];
-					const names: Node[] = [];
-					for (let mi = 0; mi < ftype.enumMembers.length; mi = mi + 1) {
-						const ov: number = ftype.enumValues.length == ftype.enumMembers.length ? ftype.enumValues[mi] : mi;
-						ords.push({ kind: NodeKind.NumberLiteral, line: jv.line, column: jv.column, value: ov as int64, isFloat: false, intVal: ov as int64, outOfRangeText: "", isBitPattern: false });
-						names.push({ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: ftype.enumMembers[mi] });
-					}
-					vKeyNodes.push(fname);
-					vValueNodes.push({
-						kind: NodeKind.TypeAssertion, line: jv.line, column: jv.column, asType: ftype.enumName,
-						asExpr: {
-							kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
-							callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "_jsonEnumOrdE" },
-							arguments: [
-								{ kind: NodeKind.CallExpr, line: jv.line, column: jv.column, callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" }, arguments: [jv, { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname }] },
-								{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: ords },
-								{ kind: NodeKind.ArrayLiteral, line: jv.line, column: jv.column, elements: names },
-								{ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: ftype.enumName },
-								errs, pfx,
-								{ kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname },
-							],
-						},
-					});
-					continue;
-				}
-				if (ftype.kind != NodeKind.Identifier) {
-					error("jsonValueToStructE: DU variant payload field '" + fname + "' must be atomic (string/bool/number/int*/float*); nested struct + array deferred", witness);
-				}
-				const a = pickAtomicAccessor(ftype.name);
-				let reqName: string = "reqInt64";
-				if (a.methodName == "asString") reqName = "reqString";
-				else if (a.methodName == "asBoolean") reqName = "reqBoolean";
-				else if (a.methodName == "asNumber") reqName = "reqNumber";
-				const fnameLit: Node = { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname };
-				const fieldAccess: Node = {
-					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
-					callee: {
-						kind: NodeKind.MemberExpr, line: jv.line, column: jv.column,
-						object: {
-							kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
-							callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "getDynamicField" },
-							arguments: [jv, fnameLit],
-						},
-						property: reqName,
-					},
-					arguments: [pfx, fnameLit, errs],
-				};
-				const finalAccess: Node = a.needsCast
-					? { kind: NodeKind.TypeAssertion, line: jv.line, column: jv.column, asExpr: fieldAccess, asType: a.castType }
-					: fieldAccess;
-				vKeyNodes.push(fname);
-				vValueNodes.push(finalAccess);
 			}
 
 			matchCases.push({
@@ -868,10 +715,9 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 				casePatterns: [pattern],
 				caseGuard: null as unknown as Node,
 				caseBody: {
-					kind: NodeKind.ObjectLiteral, line: jv.line, column: jv.column,
-					keys: vKeyNodes,
-					properties: vValueNodes,
-					keyLocations: [],
+					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
+					callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "jsonValueToStructE" },
+					arguments: [jv, { kind: NodeKind.MemberExpr, line: jv.line, column: jv.column, object: witness, property: variantKey, nodeType: v, isOptional: false }, errs, pfx],
 				},
 			});
 		}
