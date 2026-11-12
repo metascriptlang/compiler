@@ -19,3 +19,32 @@ test "macro receiver parameter: only `this name` on the first parameter is accep
 		assert !result.ok, decl;
 	}
 }
+
+const dotHead = head + `
+class Table { name: string = "t"; }
+macro twoM(this src: Node, a: Node): Node { return createNodeAt(NodeKind.StringLiteral, { value: "two" }, a.location); }
+const table = new Table();
+`;
+
+test "dot call to a macro: the call is the macro called with the receiver first" {
+	const result = compileToCWithStd(dotHead + `const v: string = table.twoM(1);`);
+	assert result.ok, result.ok ? "" : result.error;
+}
+
+test "dot call to a macro: the arity message counts the receiver" {
+	const result = compileToCWithStd(dotHead + `const v: string = table.twoM(1, 2);`);
+	assert !result.ok && result.error.includes("expects 2 args, got 3"), result.ok ? "accepted" : result.error;
+}
+
+test "dot call to a macro: a same-named extension of the receiver is an ambiguity, not a pick" {
+	const result = compileToCWithStd(dotHead + `function twoM(this t: Table, a: number): string { return "ext"; }\nconst v: string = table.twoM(1);`);
+	assert !result.ok && result.error.includes("both a macro"), result.ok ? "accepted" : result.error;
+}
+
+test "dot call to a macro: a method of the receiver wins" {
+	const result = compileToCWithStd(head + `
+class Table { twoM(a: number): string { return "method"; } }
+macro twoM(this src: Node, a: Node): Node { return createNodeAt(NodeKind.StringLiteral, { value: "two" }, a.location); }
+const v: string = new Table().twoM(1);`);
+	assert result.ok && !result.value.includes('"two"'), result.ok ? "macro ran" : result.error;
+}

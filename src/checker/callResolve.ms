@@ -418,6 +418,35 @@ export function macroParamNames(decl: MacroDeclData): string[] {
 	return names;
 }
 
+// The dot-call transformation: `x.m(a)` is `m(x, a)` when `m` is a macro whose first parameter
+// is `this`, and x has no method or function-typed field `m` (those win, as for extensions).
+function dotCallMacro(ctx: CheckerContext, callee: Node): Symbol | null {
+	const me = callee.data as MemberExprData;
+	if (me.isOptional) return null;
+	const sym = lookupSymbol(ctx.table, me.property);
+	const decl = macroDeclOf(sym);
+	if (decl == null || !macroTakesReceiver(decl)) return null;
+	checkInTypeSlot(ctx, me.object);
+	const received = me.object.nodeType;
+	if (received == null) return null;
+	const objType = peelTransparentInstance(unwrapCursor(received) ?? received);
+	if (objType.kind == TypeKind.Error || objType.kind == TypeKind.Module || objType.kind == TypeKind.Never) return null;
+	if (me.object.resolvedSym != null && me.object.resolvedSym.symbolKind == SymbolKind.Module) return null;
+	if (isTypeLevelAccess(ctx, me.object, me.property)) return null;
+	if (getProperty(objType, me.property).kind == TypeKind.Function) return null;
+	const owner = declaringSymOf(objType);
+	if (owner != null && dispatchMethodOf(ctx.dispatchRegistry, owner, me.property) != null) return null;
+	return sym;
+}
+
+function dotCallAlsoExtension(ctx: CheckerContext, callee: Node): boolean {
+	if (ctx.extensionRegistry == null) return false;
+	const me = callee.data as MemberExprData;
+	const received = me.object.nodeType!;
+	const objType = peelTransparentInstance(unwrapCursor(received) ?? received);
+	return filterExtsByReceiverType(boundExtensions(callee, findAllExtensionsByName(ctx.extensionRegistry, me.property)), objType).length > 0;
+}
+
 export function invokedMacroSym(ctx: CheckerContext, node: Node): Symbol | null {
 	const bound = node.flags.has(NodeFlag.BoundSym) && node.resolvedSym != null;
 	if (bound || macroDeclOf(node.resolvedSym) != null) return macroDeclOf(node.resolvedSym) != null ? node.resolvedSym : null;
@@ -2086,6 +2115,22 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 	if (d.callee != null && isImportKeyword(d.callee)) return checkImportCall(ctx, node);
 	if (!lowerTypedCallee(ctx, node, d)) return errorType();
 	d.callee = namespaceMacroCallee(ctx, d.callee);
+	if (d.callee.kind == NodeKind.MemberExpr) {
+		const dotMacro = dotCallMacro(ctx, d.callee);
+		if (dotMacro != null) {
+			if (dotCallAlsoExtension(ctx, d.callee)) {
+				const property = (d.callee.data as MemberExprData).property;
+				addError(ctx, `'${property}' is both a macro taking this receiver and an extension of its type: rename one, or call the macro as '${property}(receiver, ...)'`, node.location.line, node.location.column);
+				node.nodeType = errorType();
+				return errorType();
+			}
+			d.arguments = [(d.callee.data as MemberExprData).object, ...d.arguments];
+			const macroCallee = createNodeAt(NodeKind.Identifier, { name: dotMacro.name }, d.callee.location);
+			macroCallee.resolvedSym = dotMacro;
+			macroCallee.flags = macroCallee.flags.incl(NodeFlag.BoundSym);
+			d.callee = macroCallee;
+		}
+	}
 	const prevCallee = ctx.calleeExpr;
 	ctx.calleeExpr = d.callee;
 	callCheckExpr(ctx, d.callee, null);
