@@ -209,13 +209,13 @@ test "sendableFunction: a function reached through a field of a parameter is jud
 		{ name: "a field forwarded to a callback parameter", body: "const s: Sendable<(h: Host) => int32> = (h: Host): int32 => apply(h.get);" },
 		{ name: "a named function", body: "function lookup(h: Host, k: int32): int32 { return h.get(k) + 1; }\nconst s: Sendable<(h: Host, k: int32) => int32> = lookup;" },
 		{ name: "a direct function parameter", body: "const s: Sendable<(f: F) => int32> = (f: F): int32 => f() + 1;" },
+		{ name: "a field called from a plain closure the parameter escapes into, which stays on the caller's thread", body: "const s: Sendable<(h: Host) => () => int32> = (h: Host): () => int32 => (): int32 => h.get(1);" },
 	];
 	for (const row of accepted) {
 		assert strictErrorCount(HOSTED + row.body) == 0, row.name;
 	}
 	const refused = [
 		{ name: "a field called inside a spawn", body: "const s: Sendable<(h: Host) => Promise<int32>> = async (h: Host): Promise<int32> => await spawn(() => h.get(1));" },
-		{ name: "a field called from a closure the parameter escapes into", body: "const s: Sendable<(h: Host) => () => int32> = (h: Host): () => int32 => (): int32 => h.get(1);" },
 		{ name: "a field of a captured value", body: "function mk(h: Host): Sendable<() => int32> { return (): int32 => h.get(1); }" },
 	];
 	for (const row of refused) {
