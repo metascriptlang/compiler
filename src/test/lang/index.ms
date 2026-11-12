@@ -53,6 +53,7 @@ import "./genericCallbacks";
 import "./genericRoutineInstances";
 import "./lexicalIdentity";
 import "./macroCodecWitness";
+import "./narrowedVariantFieldRead";
 import "./macroConverterValues";
 import "./macroEmitInstance";
 import "./macroEmitLaterModule";

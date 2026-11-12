@@ -10,7 +10,7 @@
 //   5. Value wrapping (assign): x = tok → x = { value: tok, present: true }
 
 import { Node, NodeKind, NodeFlag, MemberExprData, TypeAssertionData, VariableDeclData, BinaryExprData, Type } from "../../ast/node";
-import { isStructType, isMaybeType, isTagCarriedUnion, getProperty } from "../../checker/types";
+import { isStructType, isMaybeType, isTagCarriedUnion, declaredFieldOfRead } from "../../checker/types";
 import { isLocation } from "../../checker/assignable";
 import { sameType } from "../../checker/compat";
 import { TransformContext } from "../context";
@@ -45,7 +45,7 @@ function maybeSlotType(n: Node): Type | null {
 		const d = n.data as MemberExprData;
 		if (d.object != null && d.object.nodeType != null
 			&& d.property != "value" && d.property != "present") {
-			const ft = getProperty(d.object.nodeType, d.property);
+			const ft = declaredFieldOfRead(d.object.nodeType, d.property, n.resolvedSym != null ? n.resolvedSym.duVariantSlot : 0);
 			if (isMaybeType(ft)) return ft;
 		}
 	}
@@ -136,7 +136,7 @@ function lowerNullableNode(node: Node): Node {
 				&& d.property != "value" && d.property != "present"
 				&& !isMaybeType(d.object.nodeType)
 				&& node.nodeType != null && !isMaybeType(node.nodeType)) {
-			const fieldType = getProperty(d.object.nodeType, d.property);
+			const fieldType = declaredFieldOfRead(d.object.nodeType, d.property, node.resolvedSym != null ? node.resolvedSym.duVariantSlot : 0);
 			if (isMaybeType(fieldType)) {
 				const member = makeMember(node, "value", loc);
 				member.nodeType = maybePayloadType(fieldType, node.nodeType);

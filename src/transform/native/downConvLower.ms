@@ -2,7 +2,7 @@ import { Node, NodeKind, NodeFlag, SymbolKind, Type, TypeKind, TypeAssertionData
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { isAssignOp } from "../../ast/operators";
-import { skipModifier, unwrapRefNullUnion, isUnknownType, isUnresolvedType, getProperty } from "../../checker/types";
+import { skipModifier, unwrapRefNullUnion, isUnknownType, isUnresolvedType, declaredFieldOfRead } from "../../checker/types";
 import { GcMode } from "../../checker/context";
 
 export function lowerDownConversions(program: Node, ctx: TransformContext): Node {
@@ -51,7 +51,7 @@ function declaredFieldType(node: Node): Type | null {
 	let owner = d.object;
 	if (owner != null && owner.kind == NodeKind.HiddenDeref) owner = (owner.data as HiddenDerefData).expr;
 	if (owner == null || owner.nodeType == null) return null;
-	const field = getProperty(owner.nodeType, d.property);
+	const field = declaredFieldOfRead(owner.nodeType, d.property, node.resolvedSym != null ? node.resolvedSym.duVariantSlot : 0);
 	return isUnresolvedType(field) ? null : field;
 }
 

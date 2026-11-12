@@ -1054,6 +1054,16 @@ function fieldOfStruct(v: Readonly<Type | null>, fieldName: string): Readonly<Ty
 	return i >= 0 && i < v.typeChildren.length ? v.typeChildren[i] : null;
 }
 
+// The declared type of a field read: the field of the variant the checker pinned the read to
+// (`variantSlot`, 1-based, from the member's sym), because the union's own lookup answers with
+// the first variant that declares the name.
+export function declaredFieldOfRead(owner: Type | null, property: string, variantSlot: int32): Type {
+	const body = variantSlot > 0 ? peelToStructOrUnion(owner) : null;
+	if (body == null || body.kind != TypeKind.Union) return getProperty(owner, property);
+	if (variantSlot > body.typeChildren.length) throw new Error(`internal: field '${property}' is pinned to variant slot ${variantSlot} of a union with ${body.typeChildren.length} members`);
+	return getProperty(body.typeChildren[variantSlot - 1], property);
+}
+
 export function unionVariantHasProperty(t: Type | null, name: string): boolean {
 	if (t == null || t.kind != TypeKind.Union || t.typeChildren == null) return false;
 	for (const variant of t.typeChildren) {
