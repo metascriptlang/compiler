@@ -99,6 +99,7 @@ import "./arrayElementSpelling";
 import "./importedScalarSpelling";
 import "./oneValueFieldStorage";
 import "./blockReduce";
+import "./walkerFrames";
 import "./spanParamAbi";
 import "./returnElementCopy";
 import "./topLevelCursors";
