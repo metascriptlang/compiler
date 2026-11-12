@@ -33,6 +33,9 @@ check() {
     else printf 'FAIL %s\n' "$name"; bad=$((bad + 1))
     fi
 }
+built_without_strip() {
+    ! grep -q -- '--strip' "$trace"
+}
 run_case() {
     rm -f "$trace"
     mkdir -p "$repo/out/release/.cache"
@@ -55,6 +58,7 @@ for spec in \
     : > "$bundle/runtime/$config"
     run_case env -u MSC_NATIVE_TOOLCHAIN bash "$repo/tools/release.sh" "$target"
     check "$target reaches compiler with its config" test -s "$trace"
+    check "$target compiler is built without --strip" built_without_strip
     check "$target keeps compiler cache" test -f "$repo/out/release/.cache/keep"
 done
 mkdir -p "$override/runtime"
