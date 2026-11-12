@@ -14,24 +14,37 @@ function manifestOf(store: string, key: string): string {
 	return `${store}/m/${hashContent(key)}.m`;
 }
 
-// A manifest is the output digest, then one `path<TAB>hash` line per input the step found while it
-// ran (a depfile); the output is reused only while each of those still hashes the same.
+const MANIFEST_ENTRIES = 16;
+
+function manifestEntries(manifest: string): string[][] {
+	const entries: string[][] = [];
+	for (const line of (exists(manifest) ? (try readFile(manifest) catch "") : "").split("\n")) {
+		if (line == "") continue;
+		if (line.includes("\t") && entries.length > 0) entries[entries.length - 1].push(line);
+		else entries.push([line]);
+	}
+	return entries;
+}
+
 export function storedOutput(store: string, key: string, hashOf: ((path: string) => string) | null = null): string {
 	const manifest = manifestOf(store, key);
-	const lines = (exists(manifest) ? (try readFile(manifest) catch "") : "").split("\n");
-	const digest = lines[0];
-	if (digest == "") return "";
-	for (let i = 1; i < lines.length; i += 1) {
-		if (lines[i] == "") continue;
-		const tab = lines[i].indexOf("\t", 0);
-		if (hashOf == null || tab < 0 || hashOf(lines[i].slice(0, tab)) != lines[i].slice(tab + 1, lines[i].length)) return "";
+	const current = new HashMap<string, string>();
+	for (const entry of manifestEntries(manifest)) {
+		let same = true;
+		for (let i = 1; same && i < entry.length; i += 1) {
+			const tab = entry[i].indexOf("\t", 0);
+			const path = entry[i].slice(0, tab);
+			if (hashOf != null && !current.has(path)) current.set(path, hashOf(path));
+			same = hashOf != null && current.get(path) == entry[i].slice(tab + 1, entry[i].length);
+		}
+		const out = `${store}/o/${entry[0]}`;
+		if (!same || !exists(out)) continue;
+		const now = nowSeconds();
+		markUsed(manifest, now);
+		markUsed(`${out}.u`, now);
+		return out;
 	}
-	const out = `${store}/o/${digest}`;
-	if (!exists(out)) return "";
-	const now = nowSeconds();
-	markUsed(manifest, now);
-	markUsed(`${out}.u`, now);
-	return out;
+	return "";
 }
 
 export function storeScratch(store: string, key: string): string {
@@ -50,7 +63,15 @@ export function storePublish(store: string, key: string, scratch: string, digest
 	}
 	atomicWriteFile(`${placed}.u`, "u");
 	ensureDir(`${store}/m`);
-	atomicWriteFile(manifestOf(store, key), found.length == 0 ? digest : `${digest}\n${found.join("\n")}\n`);
+	const manifest = manifestOf(store, key);
+	const inputs = found.join("\n");
+	const kept: string[] = [found.length == 0 ? digest : `${digest}\n${inputs}`];
+	if (found.length > 0) {
+		for (const entry of manifestEntries(manifest)) {
+			if (kept.length < MANIFEST_ENTRIES && entry.length > 1 && entry.slice(1, entry.length).join("\n") != inputs) kept.push(entry.join("\n"));
+		}
+	}
+	atomicWriteFile(manifest, `${kept.join("\n")}\n`);
 	return placed;
 }
 
