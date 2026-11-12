@@ -26,6 +26,7 @@ import { cloneFresh } from "../lowering/iterInline";
 type SumLoop = { acc: Node, sub: boolean, index: Node, bounds: Node[], decls: Node[], term: Node };
 type Fast = { bad: Symbol, counters: HashSet<Symbol>, guarded: Node[], ranges: HashMap<Symbol, Range>, counterChecks: Range[], loc: SourceLocation };
 type Range = { lo: int64, hi: int64 };
+type Wrapped = { op: string, a: Symbol, b: Symbol | null, overflow: Symbol };
 
 export function versionSumLoop(loop: Node, ctx: TransformContext): Node | null {
 	const s = matchSumLoop(loop);
@@ -446,7 +447,8 @@ function sumLoop(s: SumLoop, loop: Node, ctx: TransformContext): Node {
 	const valueRange = folded != null ? computedRange(termCopy, f) : termRange;
 	const nonNegative = valueRange != null && valueRange.lo >= 0;
 	const i32 = getSysType(TypeKind.Int32);
-	const value = narrowTerm ? convert(sticky(termCopy, f), i32, loc) : folded != null ? wideValue(termCopy, f, loc) : sticky(termCopy, f);
+	const wrapped = folded != null ? wrappedOperands(termCopy, f, head, fast, ctx, loc) : null;
+	const value = narrowTerm ? convert(sticky(termCopy, f), i32, loc) : wrapped != null ? wrappedValue(wrapped, loc) : folded != null ? wideValue(termCopy, f, loc) : sticky(termCopy, f);
 	const termType = value.nodeType!;
 	const sumType = narrowTerm ? i32 : wrappingSumType(termType);
 	const sum = declareLocal(head, ctx, "sum", sumType, zero(sumType, loc), DeclKind.Let, loc);
@@ -455,6 +457,7 @@ function sumLoop(s: SumLoop, loop: Node, ctx: TransformContext): Node {
 	termDecl.resolvedSym = termSym;
 	termDecl.nodeType = termType;
 	fast.push(termDecl);
+	if (wrapped != null) fast.push(assignTo(wrapped.overflow, typed(makeBinary(makeIdentResolved(wrapped.overflow, loc), "|", overflowBits(wrapped, termSym, loc), loc), i32), loc));
 	fast.push(assignTo(sum, typed(makeBinary(makeIdentResolved(sum, loc), "+", convert(makeIdentResolved(termSym, loc), sumType, loc), loc), sumType), loc));
 	const magnitude = narrowTerm ? null : declareLocal(head, ctx, "mag", termType, zero(termType, loc), DeclKind.Let, loc);
 	if (magnitude != null) fast.push(assignTo(magnitude, typed(makeBinary(makeIdentResolved(magnitude, loc), "|", magnitudeBits(termSym, nonNegative, loc), loc), termType), loc));
@@ -472,7 +475,9 @@ function sumLoop(s: SumLoop, loop: Node, ctx: TransformContext): Node {
 	}
 	head.push(makeWhile(typed(makeBinary(wide(makeIdentResolved(j, loc), loc), "<", makeIdentResolved(end, loc), loc), booleanType()), makeBlock(fast, loc), loc));
 	const hi = magnitude == null ? null : declareLocal(head, ctx, "hi", i64, typed(makeCall(runtimeRef("msBlockMagnitude", loc), [makeIdentResolved(magnitude, loc)], loc), i64), DeclKind.Const, loc);
-	if (folded != null) {
+	if (wrapped != null) {
+		head.push(markBad(bad, typed(makeBinary(makeIdentResolved(wrapped.overflow, loc), "<", zero(i32, loc), loc), booleanType()), loc));
+	} else if (folded != null) {
 		const below = typed(makeBinary(blockLow(hi, nonNegative, termRange, loc), "<", int64(folded.lo, loc), loc), booleanType());
 		const above = typed(makeBinary(blockHigh(hi, termRange, loc), ">", int64(folded.hi, loc), loc), booleanType());
 		head.push(markBad(bad, typed(makeBinary(below, "||", above, loc), booleanType()), loc));
@@ -503,6 +508,39 @@ function foldedCheck(term: Node, f: Fast): Range | null {
 	if (term.flags.has(NodeFlag.IntCheck) && typeRange(term.nodeType) == null) return null;
 	const r = acceptedRange(term, f);
 	return r != null && r.lo < 0 && r.hi >= 0 ? r : null;
+}
+
+function wrappedOperands(term: Node, f: Fast, head: Node[], out: Node[], ctx: TransformContext, loc: SourceLocation): Wrapped | null {
+	const k = peelToRepr(term.nodeType);
+	if (!term.flags.has(NodeFlag.IntCheck) || k == null || k.kind != TypeKind.Int32) return null;
+	const name = calleeName(term);
+	const op = name.startsWith("msNeg") ? "neg" : arithOp(name);
+	if (op != "+" && op != "-" && op != "neg") return null;
+	const args = (term.data as CallExprData).arguments;
+	for (const a of args) {
+		if (!within(rangeOf(a, f), typeRange(term.nodeType)!)) return null;
+	}
+	const i32 = term.nodeType!;
+	const overflow = declareLocal(head, ctx, "ovf", i32, zero(i32, loc), DeclKind.Let, loc);
+	const a = declareLocal(out, ctx, "a", i32, convert(sticky(args[0], f), i32, loc), DeclKind.Const, loc);
+	const b = op == "neg" ? null : declareLocal(out, ctx, "b", i32, convert(sticky(args[1], f), i32, loc), DeclKind.Const, loc);
+	return { op, a, b, overflow };
+}
+
+function wrappedValue(w: Wrapped, loc: SourceLocation): Node {
+	const u32 = getSysType(TypeKind.Uint32);
+	const left = w.op == "neg" ? zero(u32, loc) : makeHiddenStdConv(makeIdentResolved(w.a, loc), u32, loc);
+	const right = makeHiddenStdConv(makeIdentResolved(w.b != null ? w.b! : w.a, loc), u32, loc);
+	return makeHiddenStdConv(typed(makeBinary(left, w.op == "neg" ? "-" : w.op, right, loc), u32), w.a.symbolType!, loc);
+}
+
+function overflowBits(w: Wrapped, t: Symbol, loc: SourceLocation): Node {
+	const i32 = w.a.symbolType!;
+	const x = (l: Symbol, r: Symbol): Node => typed(makeBinary(makeIdentResolved(l, loc), "^", makeIdentResolved(r, loc), loc), i32);
+	if (w.op == "neg") return typed(makeBinary(makeIdentResolved(w.a, loc), "&", makeIdentResolved(t, loc), loc), i32);
+	const first = w.op == "+" ? x(w.a, t) : x(w.a, w.b!);
+	const second = w.op == "+" ? x(w.b!, t) : x(w.a, t);
+	return typed(makeBinary(first, "&", second, loc), i32);
 }
 
 function wideValue(n: Node, f: Fast, loc: SourceLocation): Node {
