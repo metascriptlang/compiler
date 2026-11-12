@@ -1385,6 +1385,61 @@ export function lowerCallInline(program: Node, inlining: CallInlining): Node {
 	return result;
 }
 
+export function lowerLambdaLeafCalls(program: Node): Node {
+	const leaves = new HashMap<Symbol, Node>();
+	collectLambdaLeaves(program, leaves);
+	return leaves.size == 0 ? program : walkNode(program, (n: Node): Node => {
+		const inlined = n.kind == NodeKind.CallExpr ? inlinedLambdaCall(n, leaves) : null;
+		return inlined != null ? inlined : n;
+	});
+}
+
+function collectLambdaLeaves(node: Node, out: HashMap<Symbol, Node>): void {
+	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null) {
+		const d = node.data as VariableDeclData;
+		const arrow = d.declKind == DeclKind.Const && d.initializer != null ? unconverted(d.initializer) : null;
+		if (arrow != null && arrow.kind == NodeKind.ArrowFunction && lambdaLeafValue(arrow) != null) out.set(node.resolvedSym, arrow);
+	}
+	forEachChild(node, (child: Node): void => { collectLambdaLeaves(child, out); });
+}
+
+function unconverted(n: Node): Node {
+	if (n.kind == NodeKind.HiddenStdConv || n.kind == NodeKind.HiddenSubConv) return unconverted((n.data as HiddenStdConvData).convExpr);
+	return n;
+}
+
+function lambdaLeafValue(arrow: Node): Node | null {
+	const d = arrow.data as ArrowFunctionData;
+	if (arrow.paramSyms == null || d.arrowBody == null || d.arrowFlags != "") return null;
+	for (const dflt of d.arrowDefaults) {
+		if (dflt != null) return null;
+	}
+	let value: Node | null = d.arrowBody;
+	if (d.arrowBody.kind == NodeKind.BlockStmt) {
+		const stmts = extractBodyStmts(d.arrowBody);
+		value = stmts.length == 1 && stmts[0].kind == NodeKind.ReturnStmt ? (stmts[0].data as ReturnStmtData).argument : null;
+	}
+	if (value == null || !isWordType(value.nodeType) || !pureOver(value, arrow.paramSyms!)) return null;
+	return nodeCount(value) <= LEAF_NODE_LIMIT ? value : null;
+}
+
+function inlinedLambdaCall(call: Node, leaves: HashMap<Symbol, Node>): Node | null {
+	const c = call.data as CallExprData;
+	if (call.flags.has(NodeFlag.ExtCall) || c.callee.kind != NodeKind.Identifier || c.callee.resolvedSym == null) return null;
+	const arrow = leaves.get(c.callee.resolvedSym!);
+	if (arrow == null) return null;
+	const params = arrow.paramSyms!;
+	const value = lambdaLeafValue(arrow)!;
+	if (c.arguments.length < params.length || !sameType(value.nodeType, call.nodeType)) return null;
+	for (let i = 0; i < c.arguments.length; i += 1) {
+		const arg = c.arguments[i];
+		if (i < params.length ? !passesAsIs(arg, params[i]) : arg.kind != NodeKind.Identifier && arg.kind != NodeKind.NumberLiteral) return null;
+	}
+	const copy = cloneNodeKeepSem(value);
+	frameCopy(copy, new InlineFrame(c.callee.resolvedSym!.name, null, call.location.line), new HashMap<InlineFrame, InlineFrame>());
+	return substituteParams(copy, params, c.arguments.slice(0, params.length));
+}
+
 function collectRoutines(node: Node, out: HashMap<Symbol, Node>): void {
 	if (node.kind == NodeKind.FunctionDecl && node.resolvedSym != null && (node.data as FunctionDeclData).fnBody != null) out.set(node.resolvedSym, node);
 	forEachChild(node, (child: Node): void => { collectRoutines(child, out); });

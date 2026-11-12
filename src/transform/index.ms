@@ -61,7 +61,7 @@ import { lowerObjectSpread } from "./desugar/objectSpreadLower";
 import { lowerArraySpread } from "./desugar/arraySpreadLower";
 import { lowerForLoop } from "./lowering/forLoopLower";
 import { lowerForOf } from "./lowering/forOfLower";
-import { lowerIterInline, offerIterBodies } from "./lowering/iterInline";
+import { lowerIterInline, offerIterBodies, lowerLambdaLeafCalls } from "./lowering/iterInline";
 import { lowerTryExpr, lowerResultConstructors } from "./desugar/resultDesugar";
 import { lowerMatch } from "./lowering/matchLower";
 import { lowerSwitch } from "./lowering/switchLower";
@@ -285,6 +285,7 @@ export function transformProgramTail(head: TransformHead, asyncModuleBody: boole
 	flowMark();
 	let result = lowerIterInline(head.program, ctx);
 	flowLap("pass.lowerIterInline");
+	if (!jsBackend) { result = lowerLambdaLeafCalls(result); flowLap("pass.lowerLambdaLeafCalls"); }
 	result = lowerForOf(result, ctx);
 	flowLap("pass.lowerForOf");
 	if (jsBackend) { result = lowerIteratorHelpersJs(result, ctx); flowLap("pass.lowerIteratorHelpersJs"); }

@@ -130,6 +130,7 @@ import "./declaredUnionIntoAnonymousCarrier";
 import "./loopSpanCacheEmit";
 import "./exactIntegerNumberEmit";
 import "./blockSumEmit";
+import "./lambdaLeafEmit";
 import "./presizedPushEmit";
 import "./literalTagDispatch";
 import "./templateIntPartEmit";
