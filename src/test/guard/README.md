@@ -152,3 +152,12 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   inline dispose marker is `msHeapFree`. The four plain releases also leave a last ref's cycle-root
   unregister to the out-of-line call (the edge release keeps it): RED on tree `516f13436208`, where
   `msDecref`, `msDecrefAny` and `msDecrefCyclic` call `msUnregisterCycle`.
+- **`oneCharLiteralLinksNoStringTable.ms`** — a one-char ASCII literal (the `" "` between
+  `console.log` arguments too) and `s[i]` on an ASCII string build their `msString` in place over
+  `msCharPayloads[c]`, as every other literal is a `MS_STRING_LIT` over its static payload, so a
+  program links the 128 payloads and not a second 128-entry `msString` table. Builds and runs a
+  program with a one-char literal and an index at `--danger` and `--release` with `--lto=off` and
+  reads the symbol table: no `msCharTable`, and `msCharPayloads` present. Proven RED on the compiler
+  of `e21c6e7c3666` (rtx: `D msCharTable` at both modes), GREEN on the fix (rtx, 2026-11-12).
+  `msCharTable` stays defined in `runtime/core/string.c` while a builder older than this change
+  emits `msCharTable[c]`; nothing in the tree reads it.
