@@ -525,6 +525,92 @@ record("--summary=new leaves out the nodes taken from the store", "Build Summary
 record("an unknown --summary mode names the modes", "--summary=some: --summary takes all, new, failures, line or none",
 	errorLine(run(kept, ["build", "--colors=off", "--summary=some", "fine"])));
 
+const surface = `${root}/surface`;
+ensureDir(`${surface}/src`);
+put(`${surface}/src/tool.ms`, "console.log(\"tool v1\");\n");
+put(`${surface}/note.txt`, "note\n");
+put(`${surface}/build.ms`, [
+	"import { executable, systemCommand, runArtifact, step, path, Command, CustomStep } from \"std/build\";",
+	"export const tool = executable({ entry: path(\"src/tool.ms\") });",
+	"const pair = (name: string, a: Command, b: Command): CustomStep => step({ description: name, inputs: [a, b] });",
+	"const argvByMethods = systemCommand([\"test\", \"-x\"]);",
+	"argvByMethods.addArtifactArg(tool);",
+	"argvByMethods.addArgs([\"-a\", \"-f\"]);",
+	"argvByMethods.addFileArg(path(\"note.txt\"));",
+	"export const argvTwin = pair(\"argv\", argvByMethods, systemCommand([\"test\", \"-x\", tool, \"-a\", \"-f\", path(\"note.txt\")]));",
+	"const ranByMethods = runArtifact(tool, [\"a\"]);",
+	"ranByMethods.expectExitCode(0);",
+	"export const artifactTwin = pair(\"artifact\", ranByMethods, runArtifact(tool, [\"a\"], { expectExitCode: 0 }));",
+	"const envByMethods = systemCommand([\"true\"]);",
+	"envByMethods.setEnvironmentVariable(\"MODE\", \"x\");",
+	"envByMethods.setEnvironmentVariable(\"TOOL\", tool);",
+	"export const envTwin = pair(\"env\", envByMethods, systemCommand([\"true\"], { env: { MODE: \"x\", TOOL: tool } }));",
+	"const cwdByMethods = systemCommand([\"true\"]);",
+	"cwdByMethods.setCwd(path(\"src\"));",
+	"export const cwdTwin = pair(\"cwd\", cwdByMethods, systemCommand([\"true\"], { cwd: path(\"src\") }));",
+	"const inputsByMethods = systemCommand([\"true\"]);",
+	"inputsByMethods.addFileInput(path(\"note.txt\"));",
+	"export const inputsTwin = pair(\"inputs\", inputsByMethods, systemCommand([\"true\"], { inputs: [path(\"note.txt\")] }));",
+	"const exitByMethods = systemCommand([\"true\"]);",
+	"exitByMethods.expectExitCode(0);",
+	"export const exitTwin = pair(\"exit\", exitByMethods, systemCommand([\"true\"], { expectExitCode: 0 }));",
+	"const describedByMethods = systemCommand([\"true\"]);",
+	"describedByMethods.describe(\"quiet\");",
+	"export const describedTwin = pair(\"described\", describedByMethods, systemCommand([\"true\"], { description: \"quiet\" }));",
+	"const boundedByMethods = systemCommand([\"true\"]);",
+	"boundedByMethods.maxRss = 500e6;",
+	"export const boundedTwin = pair(\"bounded\", boundedByMethods, systemCommand([\"true\"], { maxRss: 500e6 }));",
+	"const words: string[] = [\"true\", \"x\"];",
+	"export const listTwin = pair(\"list\", systemCommand([\"true\", \"x\"]), systemCommand(words));",
+	"export const moded = systemCommand([\"true\"], { env: { MODE: \"x\" } });",
+	"export const viaEnv = systemCommand([\"sh\", \"-c\", \"\\\"$TOOL\\\"; cat \\\"$NOTE\\\"\"], { env: { TOOL: tool, NOTE: path(\"note.txt\") } });",
+	"viaEnv.captureStdOut();",
+	"",
+].join("\n"));
+const twin = (name: string): string => summaryOf(run(surface, ["build", "--colors=off", "-j1", "--summary=line", name]));
+record("an artifact and a path in argv make the node addArtifactArg and addFileArg make", "Build Summary: 3/3 steps succeeded", twin("argvTwin"));
+record("a string[] variable is an argv", "Build Summary: 2/2 steps succeeded", twin("listTwin"));
+record("runArtifact with options makes the node its methods make", "Build Summary: 3/3 steps succeeded", twin("artifactTwin"));
+record("env in the options makes the node setEnvironmentVariable makes", "Build Summary: 3/3 steps succeeded", twin("envTwin"));
+record("cwd in the options makes the node setCwd makes", "Build Summary: 2/2 steps succeeded", twin("cwdTwin"));
+record("inputs in the options make the node addFileInput makes", "Build Summary: 2/2 steps succeeded", twin("inputsTwin"));
+record("expectExitCode in the options makes the node expectExitCode makes", "Build Summary: 2/2 steps succeeded", twin("exitTwin"));
+record("description in the options makes the node describe makes", "Build Summary: 2/2 steps succeeded", twin("describedTwin"));
+record("maxRss in the options makes the node its maxRss field makes", "Build Summary: 2/2 steps succeeded", twin("boundedTwin"));
+record("--dry-run shows a command with its environment", "MODE=x true)", lastLine(run(surface, ["build", "--colors=off", "--dry-run", "moded"])).split(" && ").pop());
+function saidThroughEnv(): string {
+	const out = run(surface, ["build", "--colors=off", "viaEnv"]);
+	const said = readFile(`${out.split(" → ").pop()}/stdout`);
+	return said.ok ? said.value.trim().split("\n").join("|") : `unreadable ${out}`;
+}
+record("an artifact and a path given as environment values reach the command as their files", "tool v1|note", saidThroughEnv());
+put(`${surface}/src/tool.ms`, "console.log(\"tool v2\");\n");
+record("a command runs again when the artifact in its environment changes", "tool v2|note", saidThroughEnv());
+
+const typed = `${root}/typed`;
+ensureDir(typed);
+put(`${typed}/build.ms`, [
+	"import { step, option } from \"std/build\";",
+	"console.log(\"configured\");",
+	"const shards: number = option(\"shards\", \"how many runners\", 8);",
+	"const fast: boolean = option(\"fast\", \"skip the slow part\", false);",
+	"const label: string = option(\"label\", \"what to print\", \"plain\");",
+	"const raw = option(\"raw\", \"untyped\");",
+	"export const say = step({ description: \"say\", make: (): void => { console.log(`${shards + 1} ${fast} ${label} ${raw}`); } });",
+	"export const group = step({ description: \"group\" });",
+	"",
+].join("\n"));
+record("an option with a fallback has the fallback's type and value", "9 false plain null", lastLine(run(typed, ["build", "--colors=off", "say"])));
+record("-D gives a typed option its value", "5 true x r", lastLine(run(typed, ["build", "--colors=off", "-Dshards=4", "-Dfast", "-Dlabel=x", "-Draw=r", "say"])));
+const configureError = (args: string[]): string => errorLine(run(typed, ["build", "--colors=off"].concat(args))).split("unhandled exception: ").pop().split("\n")[0];
+record("a number option given other text stops configure and names the option", "shards: 'abc' is not a number", configureError(["-Dshards=abc", "say"]));
+record("a number option given nothing stops configure", "shards: '' is not a number", configureError(["-Dshards=", "say"]));
+record("a boolean option given other text stops configure and names the option", "fast: 'maybe' is not true or false", configureError(["-Dfast=maybe", "say"]));
+record("build --list shows a typed option's fallback", "-Dshards=…  how many runners (default 8)|-Dfast=…  skip the slow part (default false)|-Dlabel=…  what to print (default plain)|-Draw=…  untyped",
+	run(typed, ["build", "--colors=off", "--list"]).split("\n").filter((l: string): boolean => l.startsWith("-D")).join("|"));
+const grouped = [run(typed, ["build", "--colors=off", "say"]), run(typed, ["build", "--colors=off", "group"])];
+record("a step with make configures again, one without runs from the cached graph", "evaluated|cached", grouped.map(evaluated).join("|"));
+
 let failures = 0;
 console.log(`root ${root}`);
 for (const r of results) {
