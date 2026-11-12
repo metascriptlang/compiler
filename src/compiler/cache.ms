@@ -1478,12 +1478,14 @@ export function publishToStore(key: string, oFile: string, dependencyFile: strin
 	atomicWriteFile(`${dir}/${stem}.m`, manifest);
 }
 
-export function collectGlobalCache(): void {
+const STD_UNIT_UNUSED_SECONDS: float64 = 24 * 3600;
+
+export function collectGlobalCache(now: float64 = nowSeconds()): void {
 	const root = globalCacheRoot();
 	if (root == "") return;
-	const now = nowSeconds();
 	collectStaleEntries(`${root}/store`, now, [".m", ".o"]);
 	collectStaleEntries(`${root}/headers`, now, [".hi"]);
+	collectStaleEntries(`${root}/stdunit`, now, [".su"], STD_UNIT_UNUSED_SECONDS);
 	collectStaleFlatEntries(stampMemoRoot(), now, [".sum", ".files", ".exe", ".bundle"]);
 }
 
@@ -2492,6 +2494,37 @@ test "global collection removes a stale bundle verify memo and keeps a fresh one
 		assert !exists(`${stampMemoRoot()}/old.bundle`);
 		assert exists(`${stampMemoRoot()}/new.bundle`);
 		assert exists(`${stampMemoRoot()}/notes.txt`);
+	} finally {
+		env.set("MSC_GLOBAL_CACHE_DIR", savedGlobal);
+		env.set("MSC_NO_GLOBAL_CACHE", savedOff);
+		removeAll(root);
+	}
+}
+
+test "global collection removes a std unit unused for a day, whatever its format, and keeps a memo of the same age and a foreign file" {
+	const base = env.get("TEMP") != "" ? env.get("TEMP") : "/tmp";
+	const root = `${base}/msc-collect-stdunit-${performance.now()}`;
+	const savedGlobal = env.get("MSC_GLOBAL_CACHE_DIR");
+	const savedOff = env.get("MSC_NO_GLOBAL_CACHE");
+	env.set("MSC_GLOBAL_CACHE_DIR", root);
+	env.set("MSC_NO_GLOBAL_CACHE", "");
+	try {
+		const units = `${root}/stdunit`;
+		ensureDir(`${units}/MSSU1`);
+		ensureDir(`${units}/MSSU0`);
+		ensureDir(stampMemoRoot());
+		assert writeFile(`${units}/MSSU1/a.su`, "unit").ok;
+		assert writeFile(`${units}/MSSU0/b.su`, "unit").ok;
+		assert writeFile(`${units}/MSSU1/notes.txt`, "foreign").ok;
+		assert writeFile(`${stampMemoRoot()}/day.bundle`, "seal").ok;
+		collectGlobalCache(nowSeconds() + 2 * 3600);
+		assert exists(`${units}/MSSU1/a.su`);
+		assert exists(`${units}/MSSU0/b.su`);
+		collectGlobalCache(nowSeconds() + 25 * 3600);
+		assert !exists(`${units}/MSSU1/a.su`);
+		assert !exists(`${units}/MSSU0`);
+		assert exists(`${units}/MSSU1/notes.txt`);
+		assert exists(`${stampMemoRoot()}/day.bundle`);
 	} finally {
 		env.set("MSC_GLOBAL_CACHE_DIR", savedGlobal);
 		env.set("MSC_NO_GLOBAL_CACHE", savedOff);

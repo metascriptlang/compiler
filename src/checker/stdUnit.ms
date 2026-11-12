@@ -75,13 +75,12 @@ import { getParserDefines } from "../parser/context";
 import { defineIdentity } from "../compiler/defines";
 import { globalCacheRoot } from "../utils/cachePaths";
 import { resolveRuntimeDir } from "../utils/path";
-import { collectStaleEntries, markUsed, nowSeconds } from "../utils/stampDirs";
+import { markUsed, nowSeconds } from "../utils/stampDirs";
 import { hashContent } from "../utils/contentHash";
 import { readFile, writeFile, ensureDir, rename, remove } from "std/fs";
 import { env } from "std/process";
 
 const STD_UNIT_MAGIC = "MSSU1";
-const STD_UNIT_UNUSED_SECONDS: float64 = 24 * 3600;
 const MAX_ROW_COUNT: int64 = 100000000;
 
 function encodedAs(column: string): FieldRole {
@@ -471,11 +470,6 @@ function unitPath(keyText: string): string {
 
 function unitHeader(keyText: string): string {
 	return `${STD_UNIT_MAGIC}\nK\t${escapeP(keyText)}\n`;
-}
-
-export function collectUnusedStdUnits(now: float64): void {
-	const base = unitBase();
-	if (base != "") collectStaleEntries(base, now, [".su"], STD_UNIT_UNUSED_SECONDS);
 }
 
 function publish(path: string, content: string): boolean {
@@ -1552,7 +1546,6 @@ export function writeStdUnit(u: StdUnitInput): string {
 	}
 	ensureDir(unitDir());
 	const written = publish(path, blob);
-	collectUnusedStdUnits(nowSeconds());
 	_writeMs = _writeMs + (performance.now() - started);
 	if (!written) return "the unit could not be published";
 	_bytes = blob.byteLength as int64;
