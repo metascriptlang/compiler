@@ -2470,6 +2470,7 @@ run_tool_test() {
     tools/managedToolchain/nativePathTest.ms) dir=$(mktemp -u "${TMPDIR:-/tmp}/msc-tools.XXXXXX"); "$CAND" run "$p" "$dir" ;;
     tools/managedToolchain/windowsRuntimeTest.ms) dir=$(mktemp -u "${TMPDIR:-/tmp}/msc-tools.XXXXXX"); "$CAND" run --target=raiser "$p" "$dir" ;;
     tools/managedToolchain/*Test.ms) "$CAND" run "$p" ;;
+    tools/gate.ms | tools/gateTest.ms) "$CAND" run tools/gateTest.ms "$CAND" ;;
     *) return 0 ;;
   esac
 }
