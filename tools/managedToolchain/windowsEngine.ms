@@ -33,6 +33,7 @@ const TOOLS: string[16] = [
 	"llvm-strip.exe", "llvm-objcopy.exe", "llvm-nm.exe", "llvm-dlltool.exe",
 	"llvm-symbolizer.exe", "llvm-rc.exe", INSPECTOR,
 ];
+const UCRT_API_SET = "api-ms-win-crt-";
 const SYSTEM_DLLS: string[10] = [
 	"advapi32.dll", "crypt32.dll", "kernel32.dll", "ntdll.dll", "ole32.dll",
 	"oleaut32.dll", "shell32.dll", "user32.dll", "version.dll", "winhttp.dll",
@@ -132,9 +133,9 @@ function nativeWindowsHost(): Result<string, string> {
 			machine.toString(16)),
 	};
 }
-function systemDll(folded: string): boolean {
+export function systemDll(folded: string): boolean {
 	for (const name of SYSTEM_DLLS) { if (folded == name) { return true; } }
-	return false;
+	return folded.startsWith(UCRT_API_SET) && folded.endsWith(".dll");
 }
 function whitespace(code: int32): boolean {
 	return (code >= 9 && code <= 13) || (code >= 28 && code <= 32) ||
@@ -550,6 +551,13 @@ export function verifyWindowsEngine(
 	}
 	const reader = inspector != null ? inspector :
 		try bundledInspector(root, contract.host);
+	return Result.ok({
+		contract, peFiles: try auditWindowsBinaries(root, contract.host, reader),
+	});
+}
+export function auditWindowsBinaries(
+	root: string, host: string, reader: string,
+): Result<int32, string> {
 	const folds = new Map<string, string>();
 	const files: string[] = [];
 	for (const rel of try listEngineFiles(root)) {
@@ -578,7 +586,7 @@ export function verifyWindowsEngine(
 	const infos = new Map<string, WindowsPe>();
 	for (const rel of files) {
 		const info = try readPe(join(root, rel), reader);
-		const role = windowsRoleProblem(rel, info, contract.host);
+		const role = windowsRoleProblem(rel, info, host);
 		if (!role.ok) { return Result.err(rel + ": " + role.error); }
 		infos.set(rel, info);
 	}
@@ -595,7 +603,7 @@ export function verifyWindowsEngine(
 			}
 		}
 	}
-	return Result.ok({ contract, peFiles: files.length });
+	return Result.ok(files.length);
 }
 function refuseResourceLinks(root: string): Result<void, string> {
 	const lib = join(root, "lib");

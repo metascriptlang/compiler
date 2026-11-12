@@ -4,7 +4,7 @@ import { sortEnginePaths } from "./engineFiles";
 import {
 	WindowsPe, readWindowsPeText, windowsRoleProblem, checkWindowsDllName,
 	parseWindowsToolVersion, addWindowsPlanned, asciiEngineJson,
-	windowsTools, windowsSystemDlls,
+	systemDll, windowsTools, windowsSystemDlls,
 } from "./windowsEngine";
 
 let checks: int32 = 0;
@@ -206,13 +206,17 @@ function main(): void {
 		"advapi32.dll,crypt32.dll,kernel32.dll,ntdll.dll,ole32.dll," +
 		"oleaut32.dll,shell32.dll,user32.dll,version.dll,winhttp.dll",
 		"exact system allowlist");
+	check(systemDll("api-ms-win-crt-heap-l1-1-0.dll") && systemDll("kernel32.dll"),
+		"the Universal CRT's API sets are system libraries");
+	check(!systemDll("api-ms-win-core-synch-l1-2-0.dll") && !systemDll("libc++.dll") &&
+		!systemDll("api-ms-win-crt-heap-l1-1-0"), "no other API set or runtime DLL is");
 	const paths = ["\u{10000}", "é", "z", "\uffff"];
 	sortEnginePaths(paths);
 	check(paths.join(",") == "z,é,\uffff,\u{10000}", "UTF-8 byte path order");
-	if (checks != 98) {
+	if (checks != 100) {
 		throw new Error("contract case count changed: " + String(checks));
 	}
-	console.log("Windows engine contracts: 98 checks OK");
+	console.log("Windows engine contracts: 100 checks OK");
 }
 
 when (!testBuild) { main(); }
