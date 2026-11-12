@@ -31,6 +31,7 @@ import "./globalReferences";
 import "./bareReturnLineBreak";
 import "./throwLineBreak";
 import "./stringNative";
+import "./aliasedExternImport";
 
 import "./declarations";
 import "./declarationSource/emptySource";
