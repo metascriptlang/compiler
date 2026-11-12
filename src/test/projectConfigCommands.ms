@@ -437,6 +437,40 @@ function builtOrReused(text: string): string {
 record("an executable whose sources are back at an earlier state is that state's stored binary", "built:one|built:two|reused:one|reused:two",
 	[builtOrReused("one"), builtOrReused("two"), builtOrReused("one"), builtOrReused("two")].join("|"));
 
+const racing = `${root}/racing`;
+ensureDir(racing);
+put(`${racing}/seen.txt`, "one\n");
+put(`${racing}/build.ms`, [
+	"import { systemCommand } from \"std/build\";",
+	`export const racer = systemCommand(["sh", "-c", "cat seen.txt > \\"$1\\"; echo \\"$1: seen.txt\\" > \\"$2\\"; echo more >> seen.txt", "${root}"]);`,
+	"racer.addOutputFileArg(\"copy.txt\");",
+	"racer.addDepFileOutputArg(\"copy.d\");",
+	`export const forgetful = systemCommand(["sh", "-c", "cat seen.txt > \\"$1\\"", "${root}"]);`,
+	"forgetful.addOutputFileArg(\"copy.txt\");",
+	"forgetful.addDepFileOutputArg(\"copy.d\");",
+	"",
+].join("\n"));
+record("an input that changed while its command ran keeps the output out of the store", "ran|ran",
+	[run(racing, ["build", "--colors=off", "racer"]), run(racing, ["build", "--colors=off", "racer"])].map((out: string): string => out.includes("reused: ") ? "reused" : "ran").join("|"));
+const forgetful = errorLine(run(racing, ["build", "--colors=off", "forgetful"]));
+record("a command that leaves its depfile unwritten fails the build", "did not write its depfile copy.d", forgetful.includes("did not write its depfile copy.d") ? "did not write its depfile copy.d" : forgetful);
+
+const tested = `${root}/tested`;
+ensureDir(`${tested}/src`);
+put(`${tested}/build.ms`, "import { test, path } from \"std/build\";\nexport const aTests = test({ entry: path(\"src/a.ms\") });\n");
+put(`${tested}/src/a.ms`, `import { two } from "./b";\nconst home = "${root}";\ntest "two is two" { assert two() == 2 && home != ""; }\n`);
+put(`${tested}/src/c.ms`, "export const unrelated = 1;\n");
+function testedAfter(file: string, text: string): string {
+	put(`${tested}/src/${file}`, text);
+	const out = run(tested, ["build", "--colors=off", "aTests"]);
+	return out.startsWith("exit ") ? "failed" : out.includes("reused: aTests") ? "reused" : "ran";
+}
+const two = (body: string): string => `export function two(): int32 { return ${body}; }\n`;
+record("a test node runs again only when a module its entry imports changed, and never keeps a failure", "ran|reused|failed|failed|reused|ran|reused", [
+	testedAfter("b.ms", two("2")), testedAfter("b.ms", two("2")), testedAfter("b.ms", two("3")), testedAfter("b.ms", two("3")),
+	testedAfter("b.ms", two("2")), testedAfter("b.ms", two("1 + 1")), testedAfter("c.ms", "export const unrelated = 2;\n"),
+].join("|"));
+
 let failures = 0;
 console.log(`root ${root}`);
 for (const r of results) {
