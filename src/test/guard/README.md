@@ -88,7 +88,8 @@ drift still compiles. Same `main()` + `run.sh` shape; no ledger directive.
   bundles (default and `--danger`), runs each under node and reads the text: hello holds no JSON
   parser, no `Error` class, no `intPrefix` (a prelude function whose raw body continues at column 0)
   and no `Math` class (static fields with literal initializers; both RED on the compiler of
-  `e3f94f82fda4`), the JSON program holds the parser and its used class and neither its
+  `e3f94f82fda4`), and no `msBufLoad` (a top-level `@emit` that holds only functions), the JSON
+  program holds the parser and its used class and neither its
   unused class nor the function only that class calls. A host without `node` prints GUARD-SKIP.
   Proven RED on the compiler of `e21c6e7c3666` (rtx: every bundle holds the whole prelude), GREEN
   on the fix (rtx, 2026-11-12).

@@ -822,7 +822,8 @@ the same `.ms` file and line under both compilers (`p9map.ms:5`, `:2`, `:1`, `in
 How it decides (`src/codegen/js/reach.ms`, `runsOnLoad` and `bundleUnits` in
 `src/codegen/js/jsgen.ms`, the filter in `cmdBuildJS`):
 - A unit is one top-level statement of a module, or one helper the generator adds.
-- A unit runs on load, and is always kept, when it is a statement, a binding whose initializer has
+- A unit runs on load, and is always kept, when it is a statement (a top-level `@emit` holding
+  only function declarations is a declaration instead), a binding whose initializer has
   an effect (`hasEffect`: a call, `new`, `await`, an assignment), a class with a static block or a
   static field whose initializer has an effect, a decorated or actor declaration, anything in a
   module loaded through `import()`, or text in which a line at column 0 is not the start of a
@@ -848,19 +849,24 @@ static-initializer rule above remove the first two (rtx, old = the compiler of `
 new = a candidate of tree `c420c3229b99`; six programs written for this run, each pair printing the
 same under node):
 
-| program | old | new |
-|---|---|---|
-| hello | 2,038 | 716 |
-| Map/Set/array | 5,231 | 4,596 |
-| JSON parse and stringify | 82,556 | 82,158 |
-| strings, with a `parseInt` | 6,638 | 6,328 |
-| two top-level awaits, reading `Math.PI` | 3,956 | 3,200 |
-| iterator helpers (`iteratorHelpersMatchNode.ms`) | 68,150 | 67,427 |
+| program | old | new | with the raw-block rule |
+|---|---|---|---|
+| hello | 2,038 | 716 | 298 |
+| Map/Set/array | 5,231 | 4,596 | 4,178 |
+| JSON parse and stringify | 82,556 | 82,158 | 81,740 |
+| strings, with a `parseInt` | 6,638 | 6,328 | 5,910 |
+| two top-level awaits, reading `Math.PI` | 3,956 | 3,200 | 2,782 |
+| iterator helpers (`iteratorHelpersMatchNode.ms`) | 68,150 | 67,427 | 67,009 |
 
 The corpus `js` lane on that candidate: 2,211 cells pass, 23 xfail, 4 fail, the four programs red on
-main. What fills the 716 B: the buffer module's top-level `@emit` (a `new DataView` binding and four
-functions in one statement) and `const HashMap = Map; const HashSet = Set;`, raw statements the
-filter cannot judge. For comparison, esbuild `--bundle --tree-shaking=true` over the unfiltered
+main. The 716 B were the buffer module's top-level `@emit` (a `new DataView` binding and four
+functions in one statement) and `const HashMap = Map; const HashSet = Set;`. The last column is a
+candidate of tree `c5e5537f4c7b` (same host and old compiler): a top-level `@emit` whose text is only
+function declarations is read as a declaration (`declaresOnlyFunctions` in
+`src/codegen/js/reach.ms`), and the buffer block is split into its binding and its functions. The
+corpus `js` lane on it: 2,211 pass, 23 xfail, the same 4 fail. hello's 298 B are the header, the
+two aliases and the `DataView` binding: raw bindings, whose initializers the filter cannot judge.
+For comparison, esbuild `--bundle --tree-shaking=true` over the unfiltered
 hello bundle leaves 307 B and over the unfiltered JSON bundle 78,410 B (same output under node).
 
 Not changed: the `--split` module tree (`msc build --target=js --split`, `msc run`/`msc test
