@@ -10,10 +10,24 @@ import { execPath, platform, findOnPath } from "std/process";
 import { spawn, ChildProcess, ChildStream } from "std/process/child";
 import { totalMem } from "std/os";
 import { writeStdout, writeStderr } from "std/io";
+import { error } from "../../utils/color";
 import { vmCallFunction } from "../../raiser/vm";
 import { field } from "../../raiser/marshal";
 
 const STORE_FORMAT = "bg1";
+
+export enum NodeState {
+	Success,
+	Reused,
+	Failure,
+	DependencyFailure,
+}
+
+export interface NodeResult {
+	state: NodeState;
+	ms: number;
+	peakRss: number;
+}
 
 export interface Execution {
 	graph: BuildGraph;
@@ -24,6 +38,10 @@ export interface Execution {
 	dryRun: boolean;
 	ran: string[];
 	reused: string[];
+	fromStore: HashSet<int32>;
+	results: HashMap<int32, NodeResult>;
+	succeeded: int32;
+	failures: int32;
 	passArgs: string[];
 	target: int32;
 	jobs: int32;
@@ -44,7 +62,7 @@ function bytes(n: number): string {
 }
 
 export function newExecution(graph: BuildGraph, opts: CliOptions, projectRoot: string, dryRun: boolean, passArgs: string[], target: int32, jobs: int32): Execution {
-	return { graph, opts, projectRoot, outputs: new HashMap<int32, string>(), digests: new HashMap<int32, string>(), dryRun, ran: [], reused: [], passArgs, target, jobs, seed: opts.graphSeed, hashed: [], maxRss: buildMaxRss(opts), claimedRss: 0 };
+	return { graph, opts, projectRoot, outputs: new HashMap<int32, string>(), digests: new HashMap<int32, string>(), dryRun, ran: [], reused: [], fromStore: new HashSet<int32>(), results: new HashMap<int32, NodeResult>(), succeeded: 0, failures: 0, passArgs, target, jobs, seed: opts.graphSeed, hashed: [], maxRss: buildMaxRss(opts), claimedRss: 0 };
 }
 
 function shuffle(plan: GraphNode[], seed: int32): void {
@@ -74,12 +92,14 @@ interface Job {
 	live: boolean;
 	expectExit: int32;
 	startMark: number;
+	startedAt: number;
+	peakRss: number;
 	finish: (j: Job) => void;
 	abandon: () => void;
 }
 
 function job(node: GraphNode, exe: string, args: string[], cwd: string, shown: string, finish: (j: Job) => void, abandon: () => void): Job {
-	return { node, exe, args, cwd, shown, child: null, out: "", err: "", outEnded: false, errEnded: false, live: false, expectExit: -1, startMark: 0, finish, abandon };
+	return { node, exe, args, cwd, shown, child: null, out: "", err: "", outEnded: false, errEnded: false, live: false, expectExit: -1, startMark: 0, startedAt: 0, peakRss: 0, finish, abandon };
 }
 
 function storeDir(x: Execution): string {
@@ -87,10 +107,15 @@ function storeDir(x: Execution): string {
 	return root == "" ? join(x.projectRoot, "out/.build") : root;
 }
 
-function label(n: GraphNode): string {
+export function label(n: GraphNode): string {
 	if (n.name != "") return n.name;
 	if (n.description != "") return n.description;
 	return `${n.kind} #${n.id}`;
+}
+
+function reuse(x: Execution, n: GraphNode): void {
+	x.reused.push(label(n));
+	x.fromStore.add(n.id);
 }
 
 function pathOf(x: Execution, p: GraphPath): string {
@@ -182,7 +207,7 @@ function runCompile(x: Execution, n: GraphNode, staticLib: boolean): Job | null 
 		if ((!exists(out) || hashFile(out) != hashFile(stored)) && !atomicCopyFile(stored, out)) throw new Error(`${label(n)}: cannot restore ${out} from ${stored}`);
 		x.outputs.set(n.id, out);
 		x.digests.set(n.id, hashFile(out));
-		x.reused.push(label(n));
+		reuse(x, n);
 		return null;
 	}
 	const tmp = storeScratch(store, key);
@@ -253,7 +278,7 @@ function runCommand(x: Execution, n: GraphNode): Job | null {
 	if (known != "") {
 		x.outputs.set(n.id, known);
 		x.digests.set(n.id, basename(known));
-		x.reused.push(label(n));
+		reuse(x, n);
 		return null;
 	}
 	const tmp = x.dryRun ? `${store}/tmp/dry-run` : live ? "" : storeScratch(store, key);
@@ -330,7 +355,7 @@ function runWriteFiles(x: Execution, n: GraphNode): void {
 	if (known != "") {
 		x.outputs.set(n.id, known);
 		x.digests.set(n.id, basename(known));
-		x.reused.push(label(n));
+		reuse(x, n);
 		return;
 	}
 	if (x.dryRun) {
@@ -472,6 +497,7 @@ function settle(j: Job): string {
 	j.child!.close();
 	const code = status.ok ? status.value.code : -1;
 	const peak = j.child!.peakRss();
+	j.peakRss = peak ?? 0;
 	if (status.ok && j.node.maxRss > 0 && peak != null && peak > j.node.maxRss) {
 		if (j.out != "") console.log(j.out.trimEnd());
 		if (j.err != "") console.log(j.err.trimEnd());
@@ -526,27 +552,47 @@ function executePlan(x: Execution, id: int32): string {
 	}
 	const done = new HashSet<int32>();
 	const started = new HashSet<int32>();
+	const unusable = new HashSet<int32>();
 	const running: Job[] = [];
-	let failure = "";
+	const conclude = (n: GraphNode, state: NodeState, startedAt: number, peakRss: number): void => {
+		x.results.set(n.id, { state, ms: performance.now() - startedAt, peakRss });
+		done.add(n.id);
+		if (state == NodeState.Success || state == NodeState.Reused) x.succeeded += 1;
+		else unusable.add(n.id);
+	};
+	const fail = (n: GraphNode, startedAt: number, problem: string): void => {
+		console.log(`${error("error")}: ${problem}`);
+		x.failures += 1;
+		conclude(n, NodeState.Failure, startedAt, 0);
+	};
 	while (done.size < plan.length) {
 		let moved = false;
 		for (const n of plan) {
-			if (failure != "" || started.has(n.id) || running.length >= x.jobs) continue;
+			if (started.has(n.id)) continue;
+			if (n.deps.some((d: int32): boolean => unusable.has(d))) {
+				started.add(n.id);
+				conclude(n, NodeState.DependencyFailure, performance.now(), 0);
+				moved = true;
+				continue;
+			}
+			if (running.length >= x.jobs) continue;
 			if (!n.deps.every((d: int32): boolean => done.has(d))) continue;
 			if (x.claimedRss + n.maxRss > x.maxRss) continue;
 			started.add(n.id);
 			moved = true;
+			const startedAt = performance.now();
 			try {
 				const j = startNode(x, n);
 				if (j == null) {
-					done.add(n.id);
+					conclude(n, x.fromStore.has(n.id) ? NodeState.Reused : NodeState.Success, startedAt, 0);
 					continue;
 				}
+				j.startedAt = startedAt;
 				j.startMark = buildStartMark();
 				const child = spawn(j.exe, j.args, { cwd: j.cwd });
 				if (!child.ok) {
 					j.abandon();
-					failure = `${label(n)}: cannot start ${j.shown}: ${child.error.message}`;
+					fail(n, startedAt, `${label(n)}: cannot start ${j.shown}: ${child.error.message}`);
 					continue;
 				}
 				j.child = child.value;
@@ -554,7 +600,7 @@ function executePlan(x: Execution, id: int32): string {
 				x.claimedRss += n.maxRss;
 				running.push(j);
 			} catch (e) {
-				failure = e.message;
+				fail(n, startedAt, e.message);
 			}
 		}
 		for (let i = running.length - 1; i >= 0; i -= 1) {
@@ -563,11 +609,10 @@ function executePlan(x: Execution, id: int32): string {
 			running.splice(i, 1);
 			x.claimedRss -= j.node.maxRss;
 			const problem = settle(j);
-			if (problem != "" && failure == "") failure = problem;
-			done.add(j.node.id);
+			if (problem != "") fail(j.node, j.startedAt, problem);
+			else conclude(j.node, NodeState.Success, j.startedAt, j.peakRss);
 			moved = true;
 		}
-		if (failure != "" && running.length == 0) throw new Error(failure);
 		if (!moved && running.length > 0) pump(running[0], 10);
 		else if (!moved) throw new Error(`internal: the build graph stalled with ${plan.length - done.size} node(s) left`);
 	}

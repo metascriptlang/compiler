@@ -69,6 +69,7 @@ export function printUsage(): void {
 	console.log("  " + cyan("--no-global-cache") + "       Disable shared build cache");
 	console.log("  " + cyan("--gendeps") + "             Write .deps file with module paths");
 	console.log("  " + cyan("--depfile") + "=<path>      build, test: write the files the build read, as a make rule");
+	console.log("  " + cyan("--summary") + "=<mode>      build graph: what the end of the build lists " + dim("(all|new|failures|line|none; default failures)"));
 	console.log("  " + cyan("--hcr") + "                 Build hot-reloadable module images " + dim("(docs/HCR.md)"));
 	console.log("                        run --hcr: build, launch under a host, rebuild and reload on every save");
 	console.log("  " + cyan("--watch") + "               With --hcr: rebuild on every source save, keeping unchanged modules warm");

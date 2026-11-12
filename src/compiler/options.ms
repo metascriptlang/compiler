@@ -25,6 +25,14 @@ import { TargetInfo, hostTargetInfo, floatInt64Align } from "../checker/types";
 
 // -- Types --
 
+export enum SummaryMode {
+	All,
+	New,
+	Failures,
+	Line,
+	None,
+}
+
 export enum Target {
 	C,
 	JS,
@@ -105,6 +113,7 @@ export interface CliOptions {
 	graphJobs: int32;          // -j<n>: build graph processes at once; 0 = one per cpu
 	graphSeed: int32;          // --seed=<n>: start ready graph nodes in a shuffled order
 	graphMaxRss: number;
+	graphSummary: SummaryMode;
 	projectRoot: string;       // set by CLI main from findProjectRoot() — dir containing build.ms
 	resolve: ResolveSection;   // build.ms resolve section of projectRoot, set by applyProjectConfig
 	extraArgs: string[];       // remaining args passed through for package manager commands (add, remove, etc.)
@@ -235,6 +244,7 @@ export function newCliOptions(): CliOptions {
 		graphJobs: 0,
 		graphSeed: 0,
 		graphMaxRss: 0,
+		graphSummary: SummaryMode.Failures,
 		projectRoot: "",
 		resolve: defaultResolveSection(),
 		extraArgs: [],
@@ -274,6 +284,17 @@ export function parseArgs(): CliOptions {
 	opts.targetInfo = resolveTargetSizes(opts.targetOs, opts.cpuTarget);
 
 	return opts;
+}
+
+function summaryNamed(arg: string): Result<SummaryMode, string> {
+	return match (arg.slice(10, arg.length)) {
+		"all" => Result.ok(SummaryMode.All),
+		"new" => Result.ok(SummaryMode.New),
+		"failures" => Result.ok(SummaryMode.Failures),
+		"line" => Result.ok(SummaryMode.Line),
+		"none" => Result.ok(SummaryMode.None),
+		_ => Result.err(`${arg}: --summary takes all, new, failures, line or none`),
+	};
 }
 
 function targetNamed(name: string): Result<Target, string> {
@@ -604,6 +625,8 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 		} else if (arg.startsWith("--maxrss=")) {
 			opts.graphMaxRss = parseSize(arg.slice(9, arg.length));
 			if (opts.graphMaxRss < 1) return Result.err(`${arg}: --maxrss takes a byte count, at least 1, with an optional K, M, G or T (Ki, Mi, Gi, Ti for powers of 1024)`);
+		} else if (arg.startsWith("--summary=")) {
+			opts.graphSummary = try summaryNamed(arg);
 		} else if (arg.startsWith("-j") && arg.length > 2) {
 			opts.graphJobs = parseIntStr(arg.slice(2, arg.length));
 			if (opts.graphJobs < 1 || `${opts.graphJobs}` != arg.slice(2, arg.length)) return Result.err(`${arg}: -j takes a whole number of processes, at least 1`);

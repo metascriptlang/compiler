@@ -3,6 +3,10 @@ import { env } from "std/process";
 let enabled = true;
 let initialized = false;
 
+export function colorEnabled(): boolean {
+	return isEnabled();
+}
+
 function isEnabled(): boolean {
 	if (!initialized) {
 		initialized = true;

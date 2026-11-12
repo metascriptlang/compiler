@@ -1,6 +1,7 @@
 import { cpuCount } from "std/os";
 import { configure, configureCached, nodeById, BuildGraph, GraphNode, ConfigureProblem } from "./configure";
 import { newExecution, executeNode, planRunsStep } from "./execute";
+import { printSummary } from "./summary";
 import { CliOptions } from "../options";
 import { error, bold, dim, success } from "../../utils/color";
 import { execFile } from "std/process";
@@ -69,6 +70,8 @@ export function cmdBuildGraph(buildFile: string, projectRoot: string, opts: CliO
 		const out = executeNode(x, id);
 		if (x.reused.length > 0) console.log(dim(`reused: ${x.reused.join(", ")}`));
 		if (x.dryRun) return 0;
+		printSummary(x, id, opts.graphSummary);
+		if (x.failures > 0) return 1;
 		if (run && target.kind == "executable") return execFile(out, passArgs) as int32;
 		if (out != "" && target.kind != "step") console.log(success(`Built ${bold(target.name != "" ? target.name : "default")} → ${out}`));
 		return 0;
