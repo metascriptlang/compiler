@@ -50,16 +50,18 @@ const withTrailer = 't0=$SECONDS; "$@" 2>&1; rc=$?; printf "\\nSECS=%d\\nRC=%d\\
 
 const selected = option("lanes", "the gate lanes to run, comma-separated; every lane when unset", "");
 export const lanes = writeFiles();
+const noColourVariable = ["suite", "tests", "fmt", "cache", "crypto", "tools"];
 function lane(name: string, command: Arg[], env: Record<string, Arg> = {}, inputs: LazyPath[] = sources): void {
 	if (selected != "" && !selected.split(",").includes(name.split(".")[0])) return;
-	const argv: Arg[] = ["bash", "-c", withTrailer, name, "env", "-u", "FORCE_COLOR", "NO_COLOR=1"];
-	const log = systemCommand(argv.concat(command), { env, inputs, description: `lane ${name}` }).captureStdOut();
+	const colour: Arg[] = noColourVariable.includes(name.split(".")[0]) ? ["-u", "NO_COLOR"] : ["NO_COLOR=1"];
+	const argv: Arg[] = ["bash", "-c", withTrailer, name, "env", "-u", "FORCE_COLOR"];
+	const log = systemCommand(argv.concat(colour).concat(command), { env, inputs, description: `lane ${name}` }).captureStdOut();
 	lanes.addCopyFile(log, `${name}.log`);
 }
 
 const raiser: Arg[] = [candidate, "run", "--target=raiser"];
 const under: Record<string, Arg> = { MSC: candidate };
-lane("suite", [candidate, "test", "--time", "src/index.ms"]);
+lane("suite", [candidate, "test", "--time", "src/index.ms"], under);
 for (const name of ["js", "handoff", "checker3pass", "lang", "fmt", "crypto"]) lane(`tests.${name}`, [candidate, "test", "--time", `src/test/${name}/index.ms`, "--tests-in-dir"], under);
 lane("tests.helpers", [candidate, "test", "--time", "src/test/helpers.ms", "--tests-in-dir"], under);
 for (let i = 0; i < 3; i++) lane(`tests.c${i}`, [candidate, "test", "--time", "src/test/c/index.ms", "--tests-in-dir", `--tests-shard=${i}/3`], under);
@@ -88,9 +90,6 @@ for (const file of solanaNative.concat(solanaBoth)) solanaTest(`std/solana/${fil
 for (const entry of ["examples/escrow/program.ms", "examples/escrow/idl.cms", "examples/anchorBench/helloworld/program.ms"]) solanaTest(entry, []);
 for (const file of solanaBoth.concat(["memoryMachineTest.jms", "kernelTest.jms"])) solanaTest(`std/solana/${file}`, ["--target=js"]);
 
-const gateTool = executable({ entry: path("tools/gate.ms"), optimize });
-export const gate = systemCommand([gateTool, lanes.getDirectory(), path("src/test/known-red.json")], { expectExitCode: 0, description: "the verdict over the lane logs" });
-
 const named = 'label=$1; shift; "$@"; rc=$?; [ $rc -eq 0 ] || printf "FAIL %s\\n" "$label"; exit $rc';
 function tool(label: string, command: Arg[], inputs: LazyPath[]): void {
 	const argv: Arg[] = ["bash", "-c", named, "tool", label];
@@ -115,3 +114,6 @@ for (const source of toolSources) {
 	else tool(`${source.sub}: run`, [candidate, "run", source], toolSources);
 }
 tool("tools/gateTest.ms: run", [candidate, "run", "tools/gateTest.ms", candidate], toolSources);
+
+const gateTool = executable({ entry: path("tools/gate.ms"), optimize });
+export const gate = systemCommand([gateTool, lanes.getDirectory(), path("src/test/known-red.json")], { expectExitCode: 0, description: "the verdict over the lane logs" });
