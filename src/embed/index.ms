@@ -1,7 +1,7 @@
 import { compileRaiser, runRaiser, setDiagnosticHook } from "../compiler/compile";
 import { setRecoverableBuild, BUILD_STOPPED } from "../compiler/io";
 import { CliOptions, newCliOptions } from "../compiler/options";
-import { BuildSession, createBuildSession } from "../compiler/buildSession";
+import { BuildSession, createBuildSession, holdsBuildState } from "../compiler/buildSession";
 import { ModuleError, ErrorSeverity } from "../module/graph";
 import { RaiserModule } from "../raiser/module";
 import { RaiserContext } from "../raiser/context";
@@ -105,6 +105,7 @@ export function evalModule(interp: Interpreter, path: string): Result<Evaluation
 	});
 	setRecoverableBuild(true);
 	interp.run = null;
+	if (!holdsBuildState(interp.session)) interp.session = createBuildSession(true);
 	let compiled: RaiserModule | null = null;
 	try {
 		compiled = compileRaiser(path, interp.opts, interp.session, true);
@@ -750,5 +751,23 @@ test "a host routine receives a nested struct with a nullable field and returns 
 	assert teal.text() == "true 3 true teal";
 	const plain = routineValue(interp, "paint", [hostValue(boxInt(1)), hostValue(boxVoid())]);
 	assert plain.text() == "true 1 false none";
+	removeAll(dir);
+}
+
+test "two interpreters in one process each recompile after the other compiled" {
+	const dir = scratchDir();
+	const kinds = (names: string): string => `import { JsonKind } from "std/serialize/json/types";\nconst kinds: JsonKind[] = [${names}];\n`;
+	writeFile(`${dir}/editor.ms`, kinds("JsonKind.Array, JsonKind.Bool") + "console.log(`editor ${kinds[0]} ${kinds.length}`);\n");
+	writeFile(`${dir}/app.ms`, "enum Tone { Low, High }\n" + kinds("JsonKind.Bool") + "console.log(`app ${Tone.High} ${kinds[0]}`);\n");
+	const editor = testInterpreter();
+	const app = testInterpreter();
+	assert outputOf(editor, `${dir}/editor.ms`) == "editor Array 2\n";
+	assert outputOf(app, `${dir}/app.ms`) == "app High Bool\n";
+	writeFile(`${dir}/editor.ms`, kinds("JsonKind.Object") + "console.log(`editor ${kinds[0]} ${kinds.length}`);\n");
+	const edited = outputOf(editor, `${dir}/editor.ms`);
+	assert edited == "editor Object 1\n", edited;
+	writeFile(`${dir}/app.ms`, "enum Tone { Low, High }\n" + kinds("JsonKind.Null") + "console.log(`app ${Tone.Low} ${kinds[0]}`);\n");
+	const again = outputOf(app, `${dir}/app.ms`);
+	assert again == "app Low Null\n", again;
 	removeAll(dir);
 }

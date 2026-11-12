@@ -133,8 +133,16 @@ export function resetBuildState(): void {
 	resetLiftedOps();
 }
 
+let _buildStateOwner: BuildSession | null = null;
+
+export function holdsBuildState(session: BuildSession): boolean {
+	return session.check.db == null || _buildStateOwner == session;
+}
+
 export function startSessionBuild(session: BuildSession): void {
+	if (!holdsBuildState(session)) throw new Error("internal: a kept build session resumes after another session built in this process; start that build from a fresh session");
 	if (session.check.db == null) resetBuildState();
+	_buildStateOwner = session;
 	session.staleReason = "";
 	session.moduleCount = 0;
 	session.loweredCount = 0;
