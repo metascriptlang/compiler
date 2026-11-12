@@ -1,4 +1,4 @@
-import { option, step, executable, runArtifact, systemCommand, updateSourceFiles, writeFiles, path, Optimize, mscExe, LtoMode, Command, BuildNode, Arg } from "std/build";
+import { option, step, executable, runArtifact, systemCommand, updateSourceFiles, writeFiles, path, glob, Optimize, mscExe, LtoMode, Command, BuildNode, Arg, LazyPath } from "std/build";
 
 const optimize = Optimize.ReleaseFast;
 
@@ -50,10 +50,10 @@ const withTrailer = 't0=$SECONDS; "$@" 2>&1; rc=$?; printf "\\nSECS=%d\\nRC=%d\\
 
 const selected = option("lanes", "the gate lanes to run, comma-separated; every lane when unset", "");
 export const lanes = writeFiles();
-function lane(name: string, command: Arg[], env: Record<string, Arg> = {}): void {
+function lane(name: string, command: Arg[], env: Record<string, Arg> = {}, inputs: LazyPath[] = sources): void {
 	if (selected != "" && !selected.split(",").includes(name.split(".")[0])) return;
 	const argv: Arg[] = ["bash", "-c", withTrailer, name, "env", "-u", "FORCE_COLOR", "NO_COLOR=1"];
-	const log = systemCommand(argv.concat(command), { env, inputs: sources, description: `lane ${name}` }).captureStdOut();
+	const log = systemCommand(argv.concat(command), { env, inputs, description: `lane ${name}` }).captureStdOut();
 	lanes.addCopyFile(log, `${name}.log`);
 }
 
@@ -72,6 +72,46 @@ lane("cache", raiser.concat(["src/test/cache/run.ms", candidate]));
 for (const name of ["nativeBuildBoundary", "projectConfigCommands", "preludePackKey"]) lane(`boundary.${name}`, raiser.concat([`src/test/${name}.ms`, candidate]));
 lane("corpus", [corpusRunner], { MSC: candidate, MSCORPUS_RAISER: "1" });
 lane("san", [corpusRunner], { MSC: candidate, MSCORPUS_SAN: "1" });
+lane("tsan", [corpusRunner], { MSC: candidate, MSCORPUS_TSAN: "1" });
+lane("crypto", ["bash", "src/test/crypto/suite.sh"], under);
+
+const namedTest = 'name=$1; shift; out=$("$@" 2>&1); rc=$?; printf "%s\\n" "$out"; [ $rc -eq 0 ] || { printf "FAIL solana %s: exit %d\\n" "$name" $rc; exit 1; }; esc=$(printf "\\033"); sed "s/$esc\\[[0-9;]*m//g" <<<"$out" | grep -Eq "^ *Test Files +[0-9]" || { printf "FAIL solana %s: no test result\\n" "$name"; exit 1; }';
+function solanaTest(entry: string, flags: string[]): void {
+	const name = [entry].concat(flags).join(" ");
+	const command: Arg[] = ["bash", "-c", namedTest, "solana", name, candidate, "test", entry];
+	for (const flag of flags) command.push(flag);
+	lane(`solana.${name.split("/").join("_").split(" ").join("_")}`, command);
+}
+const solanaBoth = ["accountCodecTest.ms", "memoryTest.ms", "simulatorContextTest.ms", "simulatorSeedsTest.ms", "simulatorMetasTest.ms", "simulatorLogTest.ms", "simulatorHostTest.ms"];
+const solanaNative = ["test.ms", "hostTest.ms", "token.ms", "index.ms", "vrf.ms", "idlTest.ms", "simulatorProgramsTest.ms", "simulatorTokenTest.ms", "simulatorInvokeTest.ms"];
+for (const file of solanaNative.concat(solanaBoth)) solanaTest(`std/solana/${file}`, []);
+for (const entry of ["examples/escrow/program.ms", "examples/escrow/idl.cms", "examples/anchorBench/helloworld/program.ms"]) solanaTest(entry, []);
+for (const file of solanaBoth.concat(["memoryMachineTest.jms", "kernelTest.jms"])) solanaTest(`std/solana/${file}`, ["--target=js"]);
 
 const gateTool = executable({ entry: path("tools/gate.ms"), optimize });
 export const gate = systemCommand([gateTool, lanes.getDirectory(), path("src/test/known-red.json")], { expectExitCode: 0, description: "the verdict over the lane logs" });
+
+const named = 'label=$1; shift; "$@"; rc=$?; [ $rc -eq 0 ] || printf "FAIL %s\\n" "$label"; exit $rc';
+function tool(label: string, command: Arg[], inputs: LazyPath[]): void {
+	const argv: Arg[] = ["bash", "-c", named, "tool", label];
+	lane(`tools.${label.split("/").join("_").split(": ").join(".").split(" ").join("_")}`, argv.concat(command), {}, inputs);
+}
+for (const script of glob("tools/**/*.sh")) tool(`${script.sub}: bash -n`, ["bash", "-n", script], [script]);
+tool("tools/gate.sh: self-test", ["bash", "tools/gate.sh", "--self-test"], [path("tools/gate.sh")]);
+tool("tools/landQueueTest.sh: self-test", ["bash", "tools/landQueueTest.sh"], [path("tools/wt.sh"), path("tools/landQueue.sh"), path("tools/landQueueTest.sh")]);
+tool("tools/releaseToolchainTest.sh: self-test", ["bash", "tools/releaseToolchainTest.sh"], [path("tools/release.sh"), path("tools/releaseToolchainTest.sh")]);
+tool("tools/managedToolchain: self-test", ["python3", "-I", "-m", "unittest", "discover", "-s", "tools/managedToolchain", "-p", "*Test.py"], [path("tools/managedToolchain")]);
+
+const toolSources = glob("tools/**/*.ms");
+const inScratch = '"$@" "$(mktemp -u "${TMPDIR:-/tmp}/msc-tools.XXXXXX")"';
+const windowsOnly = ["archiveBatchContractTest.ms", "windowsEngineProducerTest.ms"];
+for (const source of toolSources) {
+	const file = source.sub.split("/").pop();
+	tool(`${source.sub}: check`, [candidate, "check", source], toolSources);
+	if (!source.sub.startsWith("tools/managedToolchain/") || !file.endsWith("Test.ms") || windowsOnly.includes(file)) continue;
+	if (file == "processContractTest.ms") tool(`${source.sub}: run`, ["bash", "-c", inScratch, "scratch", candidate, "run", source, "parent"], toolSources);
+	else if (file == "nativePathTest.ms") tool(`${source.sub}: run`, ["bash", "-c", inScratch, "scratch", candidate, "run", source], toolSources);
+	else if (file == "windowsRuntimeTest.ms") tool(`${source.sub}: run`, ["bash", "-c", inScratch, "scratch", candidate, "run", "--target=raiser", source], toolSources);
+	else tool(`${source.sub}: run`, [candidate, "run", source], toolSources);
+}
+tool("tools/gateTest.ms: run", [candidate, "run", "tools/gateTest.ms", candidate], toolSources);
