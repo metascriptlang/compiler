@@ -51,9 +51,8 @@ static int gfRef##A##E(AT acc, const ET* x, int64_t n, int sub, AT* out, int64_t
 static int gfBlk##A##E(AT acc, gfArr##A##E a, int sub, AT* out, int64_t* at) { \
 	for (int64_t i = 0; i < a.len;) { \
 		int64_t e = msBlockEndOf(i, a.len, 1024); \
-		if (msSumFits##A##E(acc, a, i, e)) { \
+		if (sub ? msSumTrySub##A##E(acc, a, i, e) : msSumTryAdd##A##E(acc, a, i, e)) { \
 			gfFast++; \
-			acc = sub ? msSumSub##A##E(acc, a, i, e) : msSumAdd##A##E(acc, a, i, e); \
 			i = e; \
 			continue; \
 		} \
@@ -64,7 +63,7 @@ static int gfBlk##A##E(AT acc, gfArr##A##E a, int sub, AT* out, int64_t* at) { \
 	*out = acc; \
 	return 0; \
 } \
-static int64_t gfFuzz##A##E(int64_t cases) { \
+static int64_t gfFuzz##A##E(int64_t cases, int (*blk)(AT, gfArr##A##E, int, AT*, int64_t*)) { \
 	int64_t bad = 0; \
 	gfArr##A##E a; \
 	a.p = malloc(sizeof(*a.p) + 5000 * sizeof(ET)); \
@@ -78,7 +77,7 @@ static int64_t gfFuzz##A##E(int64_t cases) { \
 		AT r1 = 0, r2 = 0; \
 		int64_t i1 = -1, i2 = -1; \
 		int s1 = gfRef##A##E(acc, a.p->data, n, sub, &r1, &i1); \
-		int s2 = gfBlk##A##E(acc, a, sub, &r2, &i2); \
+		int s2 = blk(acc, a, sub, &r2, &i2); \
 		gfStops += s1; \
 		if (s1 != s2 || (!s1 && r1 != r2) || (s1 && i1 != i2)) bad++; \
 	} \
@@ -95,6 +94,36 @@ GF_SUM(I64, int64_t, 64, I8, int8_t, 8)
 GF_SUM(I64, int64_t, 64, I16, int16_t, 16)
 GF_SUM(I64, int64_t, 64, I32, int32_t, 32)
 GF_SUM(I64, int64_t, 64, I64, int64_t, 64)
+
+#define GF_MAG(A, AT, AW, E, ET, EW) \
+static int gfMag##A##E(AT acc, gfArr##A##E a, int sub, AT* out, int64_t* at) { \
+	for (int64_t i = 0; i < a.len;) { \
+		int64_t e = msBlockEndOf(i, a.len, 1024); \
+		uint32_t s = 0; \
+		ET m = 0; \
+		for (int64_t j = i; j < e; j++) { \
+			ET x = a.p->data[j]; \
+			s += (uint32_t)x; \
+			m |= (ET)(x ^ (x >> (EW - 1))); \
+		} \
+		int64_t hi = msBlockMagnitude(m); \
+		if (msBlockRangeFits(acc, e - i, -1 - hi, hi, sub, -((int64_t)1 << (AW - 1)), ((int64_t)1 << (AW - 1)) - 1)) { \
+			gfFast++; \
+			acc = (AT)(sub ? (uint32_t)acc - s : (uint32_t)acc + s); \
+			i = e; \
+			continue; \
+		} \
+		for (; i < e; i++) { \
+			if (sub ? __builtin_sub_overflow(acc, (AT)a.p->data[i], &acc) : __builtin_add_overflow(acc, (AT)a.p->data[i], &acc)) { *at = i; return 1; } \
+		} \
+	} \
+	*out = acc; \
+	return 0; \
+}
+GF_MAG(I8, int8_t, 8, I8, int8_t, 8)
+GF_MAG(I16, int16_t, 16, I16, int16_t, 16)
+GF_MAG(I32, int32_t, 32, I16, int16_t, 16)
+GF_MAG(I32, int32_t, 32, I32, int32_t, 32)
 
 #define GF_DOT(T, ET, W) \
 typedef MS_ARRAY(ET) gfDot##T; \
@@ -156,8 +185,12 @@ GF_DOT(I32, int32_t, 32)
 GF_DOT(I64, int64_t, 64)
 
 int64_t msTestBlockReduceMismatches(int64_t cases) {
-	return gfFuzzI8I8(cases) + gfFuzzI16I8(cases) + gfFuzzI16I16(cases) + gfFuzzI32I8(cases) + gfFuzzI32I16(cases)
-		+ gfFuzzI32I32(cases) + gfFuzzI64I8(cases) + gfFuzzI64I16(cases) + gfFuzzI64I32(cases) + gfFuzzI64I64(cases)
+	return gfFuzzI8I8(cases, gfBlkI8I8) + gfFuzzI16I8(cases, gfBlkI16I8) + gfFuzzI16I16(cases, gfBlkI16I16)
+		+ gfFuzzI32I8(cases, gfBlkI32I8) + gfFuzzI32I16(cases, gfBlkI32I16) + gfFuzzI32I32(cases, gfBlkI32I32)
+		+ gfFuzzI64I8(cases, gfBlkI64I8) + gfFuzzI64I16(cases, gfBlkI64I16) + gfFuzzI64I32(cases, gfBlkI64I32)
+		+ gfFuzzI64I64(cases, gfBlkI64I64)
+		+ gfFuzzI8I8(cases, gfMagI8I8) + gfFuzzI16I16(cases, gfMagI16I16) + gfFuzzI32I16(cases, gfMagI32I16)
+		+ gfFuzzI32I32(cases, gfMagI32I32)
 		+ gfDotFuzzI8(cases) + gfDotFuzzI16(cases) + gfDotFuzzI32(cases) + gfDotFuzzI64(cases);
 }
 
