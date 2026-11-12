@@ -639,11 +639,14 @@ Traps, all paid for on 2026-09-05:
   integration guard/SAN lane or the arm64/i386 runtime filenames.
 - Heap corruption inside the compiler itself: build it under ASan with the
   DRC slab off, `msc build src/index.ms --sanitize=address
-  --passC=-DMS_SLAB_MAX=0 --passL=-fsanitize=address --cc=clang
-  --output=/tmp/msc-asan`, then compile a real program with it. zig cc on
-  macOS cannot link the ASan runtime, and slab recycling hides use-after-free
-  (`runtime/drc.h`). Fixing one layer often exposes the next; re-run until clean.
-  Recipe from 2026-06-11, not re-measured.
+  --passC=-DMS_SLAB_MAX=0 --output=/tmp/msc-asan`, then compile a real
+  program with it. Slab recycling hides use-after-free (`runtime/drc.h`).
+  Fixing one layer often exposes the next; re-run until clean. Measured
+  2026-11-13 on m1m (msc `1b493b622aca`, bundle `be33328d1c99`): the build
+  takes 64 s and links `libclang_rt.asan_osx_dynamic.dylib`, and the result
+  builds `tools/managedToolchain/matrix/hello.ms` in 51 s with no report.
+  Name no `--cc` for it: `--cc=zig` cannot link the ASan runtime on macOS
+  (`undefined symbol: ___asan_handle_no_return`).
 
 More traps, measured 2026-09-06 on the pattern-default AST-slot change
 (186 programs, 245 emitted C files per pass):
