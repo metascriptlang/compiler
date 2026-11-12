@@ -309,7 +309,7 @@ build_target() {
     # Compile
     echo "  compiling..."
     # shellcheck disable=SC2086
-    if ! msc build src/index.ms --release --strip $cross_flags --time 2>&1 | tee "$DIST_DIR/${archive_name}.log" | tail -5; then
+    if ! msc build src/index.ms --release $cross_flags --time 2>&1 | tee "$DIST_DIR/${archive_name}.log" | tail -5; then
         echo "  FAILED — see $DIST_DIR/${archive_name}.log"
         return 1
     fi
