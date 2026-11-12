@@ -42,7 +42,7 @@ export const lsp = runArtifact(msc, ["run", "--target=raiser", "src/test/lsp/run
 
 const tables = systemCommand(["node", "tools/genStringCaseTables.mjs"], { inputs: [path("tools/genStringCaseTables.mjs")] });
 export const stringCaseTables = updateSourceFiles();
-stringCaseTables.addCopyFileToSource(tables.captureStdOut(), path("runtime/core/stringCaseTables.h"));
+stringCaseTables.addCopyFileToSource(tables.captureStdOut(), path("std/core/string/caseTables.ms"));
 
 const subject = option("subject", "the compiler the gate lanes test; the graph's own msc when unset", "");
 const candidate: Arg = subject == "" ? msc : path(subject);
