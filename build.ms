@@ -83,8 +83,8 @@ lane("lsp", raiser.concat(["src/test/lsp/run.ms"]), under);
 lane("cache", raiser.concat(["src/test/cache/run.ms", candidate]));
 for (const name of ["nativeBuildBoundary", "projectConfigCommands", "preludePackKey"]) lane(`boundary.${name}`, raiser.concat([`src/test/${name}.ms`, candidate]));
 lane("corpus", [corpusRunner], { MSC: candidate, MSCORPUS_RAISER: "1" });
-lane("san", [corpusRunner], { MSC: candidate, MSCORPUS_SAN: "1" });
-lane("tsan", [corpusRunner], { MSC: candidate, MSCORPUS_TSAN: "1" });
+const afterSanWroteTheThreadedList = wanted("san") ? [laneNode("san", [corpusRunner], { MSC: candidate, MSCORPUS_SAN: "1" }).captureStdOut()] : [];
+lane("tsan", [corpusRunner], { MSC: candidate, MSCORPUS_TSAN: "1" }, sources.concat(afterSanWroteTheThreadedList));
 lane("crypto", ["bash", "src/test/crypto/suite.sh"], under);
 
 const rerun = option("rerun", "the new reds a gate runs again, as <lane>=<subject>,<subject>;<lane>=<subject>", "");
