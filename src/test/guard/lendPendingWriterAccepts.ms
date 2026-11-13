@@ -1,7 +1,7 @@
 // The legal neighbours of lendPendingWriterRefuses.ms: a value is lent after the routine that
 // writes it was awaited, while a pending routine only reads it, after a closure that writes it was
-// only called, after a callback handed to a callee that runs it before returning, and before a timer
-// that writes it is armed.
+// only called, after a callback handed to a callee that runs it before returning, before a timer
+// that writes it is armed, and after a callee whose spawn took a moved value beside it.
 //
 // INVARIANT (ULTRALOCK V4, V6): only code that can still run while the lender waits blocks a lend;
 //   reads stay legal, and a writer that has finished or has not started yet blocks nothing.
@@ -74,6 +74,20 @@ async function timerAfter(r: Reader): Promise<int32> {
 	return n;
 }
 
+class Tag { n: int32 = 6; }
+
+async function tagged(a: int32[]): Promise<int32> {
+	const t = new Tag();
+	const h = spawn((): int32 => t.n + a.length, { move: [t] });
+	return await h;
+}
+
+async function spawnedBefore(r: Reader): Promise<int32> {
+	const a: int32[] = [1, 2, 3];
+	const n = await tagged(a);
+	return await r.watch(a) + n;
+}
+
 async function main(): Promise<void> {
 	const r = new Reader();
 	const a = await awaitedFirst(r);
@@ -82,9 +96,10 @@ async function main(): Promise<void> {
 	const d = await calledClosure(r);
 	const e = await ranCallback(r);
 	const f = await timerAfter(r);
+	const g = await spawnedBefore(r);
 	stop(r.pid, ExitReason.Normal);
-	console.log(`a=${a} b=${b} c=${c} d=${d} e=${e} f=${f}`);
-	if (a == 43 && b == 43 && c == 15 && d == 53 && e == 15 && f == 13) console.log("GUARD-OK");
+	console.log(`a=${a} b=${b} c=${c} d=${d} e=${e} f=${f} g=${g}`);
+	if (a == 43 && b == 43 && c == 15 && d == 53 && e == 15 && f == 13 && g == 22) console.log("GUARD-OK");
 }
 
 await main();
