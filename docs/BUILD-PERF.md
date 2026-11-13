@@ -285,6 +285,61 @@ and danger `eager map filter reduce` 66.332/63.119. Those remain audit rows, not
 mean does not close them. Not verified here: post-transform baseline x86-64, other CPUs/hosts, or a general
 alignment policy.
 
+### Follow-up controls on the same native-rtx source
+
+Tree `8c94cc14be2b54979896129123f14e20a252bea8` changes only the measured documentation relative to the
+post-M2 source above. Each of the following controls used a separate quiet window and three reversed-order
+rounds. They are experiments, not default flags or binary patches in the build path.
+
+Matching frame-pointer policy does not close release `keys()` or `zip product`. Each flip keeps all 20 C
+files and their cache paths, and the generated prologue is asserted to change in the requested direction:
+
+| release, us/op | zig default | zig omit FP | bundle default | bundle keep FP |
+|---|---|---|---|---|
+| keys | 1.355 | 1.355 | 1.554 | 1.562 |
+| zip product | 1073.163 | 1084.564 | 1235.199 | 1203.948 |
+
+Zig `Module.zig:214-225` defaults to keeping FP; `Compilation.zig:6707` forwards it. Evidence:
+`out/tail-fp.remote.log`, `out/tail-fp-evidence/`, `.probe/tailFpTrace.sh`. Danger had occasional process
+outliers above 2x even during this admitted window; those results are not a parity certificate.
+
+A separate keys control pins every arm to CPU 6 (sibling 22). It changes only a 144-byte vector loop and its
+preceding NOP padding, leaving code/data outside that region fixed. Register/flag dependencies, the backedge
+and absence of other entries into the loop are asserted; two bad reorderings fail the dependency check.
+
+| keys release, us/op | bundle | reordered bundle | moved 4 bytes earlier | reordered and moved |
+|---|---|---|---|---|
+| median | 1.570 | 1.586 | 1.297 | 1.294 |
+
+Zig is 1.380 us. Reordering alone does not recover the gap; the padding/placement control does. This keys
+experiment did not separately measure rewritten NOPs at unchanged placement, so it does not isolate their
+encoding from the shift or identify a hardware-counter mechanism. The unchanged zip code remains about
+1210 us against zig's 1083. Evidence: `out/keys-schedule.remote.log`, `out/keys-schedule-evidence/`,
+`.probe/keysSchedule.py` and `.probe/keysScheduleTrace.sh`.
+
+The link pipelines also differ: actual tiny-C driver plans show clang 23.1.4 release passing
+`-plugin-opt=O2`, while zig 0.16.0 passes `--lto-O3` for both `-O2` and `-O3`. Zig source at the revision above,
+`src/link/Lld.zig:883-888`, selects that level. `out/lto-plans.remote.log` records both plans.
+
+A link-level-only control keeps front-end `-O2`, all 20 C files/paths and all 174 cached object inputs fixed.
+Explicit LTO O2 reproduces the default binary's text exactly. On CPU 6:
+
+| release, us/op | bundle LTO O2 | bundle LTO O3 |
+|---|---|---|
+| zip product | 1204.505 | 1022.829 |
+| indexed for int32[] | 1.160 | 1.567 |
+| keys | 1.566 | 1.586 |
+| map toArray | 6.322 | 6.391 |
+| eager map filter reduce | 70.595 | 72.545 |
+
+Zig's zip is 1098.190 us. LTO O3 alone closes that row, but loses 35% on indexed relative to bundle O2;
+this is not evidence to flip the fleet default. Text grows from 62828 to 64988 bytes. The 16-row bundle/zig
+geometric mean barely changes (0.9269 to 0.9245), again hiding a per-row trade-off. Evidence:
+`out/lto-level.remote.log`, `out/lto-level-evidence/`, `.probe/ltoLevelTrace.sh`.
+
+Not verified by these controls: compile/link cost of a level change, other hosts/CPUs or baseline targets,
+and source changes after this tree. A rebase needs fresh program evidence before any policy change.
+
 ## Measured 2026-11-12 — the source-built engine against the installed engines
 
 `tools/managedToolchain/llvmEngine.cmake` builds the engine the way LLVM's own releases are built:
