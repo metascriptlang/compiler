@@ -19,6 +19,8 @@ test "E2E C: a checked reduction of any pure integer term runs in sticky blocks"
 		"function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (let i: int32 = 0; i < n; i++) t += xs[i + 1]; return t; }",
 		"function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (let k = 0; k < xs.length; k++) t += xs[k] * xs[k + 1]; return t; }",
 		"function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (let i = 0; i < n; i++) t += xs[i]; return t; }",
+		"function f(xs: int32[], n: int32): int32 { let t: int32 = 0; let i: int64 = 0; while (i < xs.length && i < n) { t += xs[i] * 3; i += 1; } return t; }",
+		"function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const [x, y] of Iterator.zip([xs.values(), xs.values()])) t += (x * y) & 1023; return t; }",
 	];
 	for (const fn of fns) {
 		const c = built("sticky", fn);
