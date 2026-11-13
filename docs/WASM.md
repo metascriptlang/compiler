@@ -141,6 +141,13 @@ three handle checks and drop the site.
   reads `wasmmix: 104/104 pass` (m1m, 2026-11-13); the probe of a random constant prints
   `same true`, where it printed `same false`. Not measured: the startup cost of one boundary call
   per moved initializer.
+- **The entry module can hold `@wasm` functions** (2026-11-13). It was refused because its
+  top-level code would run again in wasm; the wasm half now drops every user module's top-level
+  code and moves the initializers wasm code reads into thunks (the two bullets above), the entry
+  included, so the refusal had no reason left. Pin `wasmmix/programs/entryPlaced` (top-level
+  prints around two `@wasm` functions in `main.ms`, one reading an initializer that prints):
+  refused on the previous compiler in the mixed and tree columns, the same output as all-C in
+  c, js, mixed and tree on the candidate (m1m, 2026-11-13). A lazily imported module stays refused.
 - **Copies by default; zero copy only through a view.** A writable Span copied back measured
   2680 ns for 1000 floats where a view measured 1090 (table below), so views exist; a view is
   only safe because nothing can grow memory while it is open, which is enforced at runtime by the
