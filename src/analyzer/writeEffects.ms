@@ -1844,10 +1844,7 @@ function rebinds(n: Node, sym: Symbol): boolean {
 }
 
 function isObjectOrArrayReference(t: Type): boolean {
-	const held = holderType(t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t);
-	if (held == null) return false;
-	if (held.kind == TypeKind.Array) return true;
-	return held.sym != null && (held.sym.symbolKind == SymbolKind.Class || held.sym.symbolKind == SymbolKind.Interface);
+	return holderType(t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t) != null;
 }
 
 function isLoop(n: Node): boolean {
