@@ -199,3 +199,12 @@ to C:
 
 `schemeAt` went from 54 instructions to 37. rowsEl does not take this path, so its counts stand. Wall time not yet
 measured in a quiet window.
+
+rowsEl's gap was `splice`, by a probe that keys RcInc, RcDec and Try by function: the generic `.rms` body shifted
+every kept element with a counted copy, and `T[].splice` over `ref MockNode` carried 119M of rowsEl's 207M RcInc +
+RcDec and 590M of its 1.59G instructions (both arms in danger mode). C rotates the payload with no count. Since
+`7ea12454f96c` the generic `splice` and `reverse` run the `ArraySplice`, `ArraySplice3` and `ArrayReverse` opcodes,
+which move the elements and release only those taken out (corpus `spliceReleasesOnlyRemovedElements`). Same probe,
+rtx, both arms `--danger` (before: 1.59G instructions, 207M RcInc + RcDec): rowsEl 1.00G instructions, checksums
+equal to C. `apps/run.sh` runs the Raiser arm in danger mode since `6aa07d7c365d`; until then it ran debug mode,
+with Neon's `when (debug)` blocks and range checks, which cost rowsEl 4% of its instructions (1.66G against 1.59G).
