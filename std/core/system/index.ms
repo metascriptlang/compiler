@@ -1115,6 +1115,8 @@ extern function msStickyMulI32(a: int64, b: int64, bad: boolean): int64;
 @compilerFunc
 extern function msStickyMulI64(a: int64, b: int64, bad: boolean): int64;
 @compilerFunc
+extern function msStickyMulMagI32(a: int64, b: int64, ma: uint32, mb: uint32): int64;
+@compilerFunc
 extern function msStickyNegI8(a: int64, bad: boolean): int64;
 @compilerFunc
 extern function msStickyNegI16(a: int64, bad: boolean): int64;
@@ -1152,6 +1154,8 @@ extern function msBlockSameData(a: Ptr<void>, b: Ptr<void>): boolean;
 extern function msBlockSumOf(acc: int64, sum: int64, sub: boolean): int64;
 @compilerFunc
 extern function msBlockMagnitude(bits: int64): int64;
+@compilerFunc
+extern function msBlockProductFits(ma: uint32, mb: uint32): boolean;
 @compilerFunc
 extern function msPowF64(x: float64, y: float64): float64;
 @compilerFunc
