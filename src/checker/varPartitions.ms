@@ -10,7 +10,7 @@ import {
 	ObjectPatternPropData, ArrayPatternData, ActorDeclData, createNodeAt, BuiltinKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { receiverOf, returnsView, routineBody, viewCallSources, isViewCall, aliasTarget, boundRoutine, isImmortalModuleConst, moduleSourceOf, moduleStateCause, mayStoreIntoReceiver, runsVisibleBody, EffectCause } from "./effects";
-import { isOwnedRef, ownsNoStorage, typeVisitAdd, viewStructChangesInPlace, isPrimitiveKind, isViewType, isViewStruct, nestedViewType, nestedViewShown, ownedAlternativeOf, holdsViewSkippingClear, TypeVisitSet, isReadonlyView, isStructType, typeDisplayName, isLockedRef, isAtomicRef, typeCarriesRef, withoutReadonlyView, withoutNullMember } from "./types";
+import { isAwaitable, isOwnedRef, ownsNoStorage, typeVisitAdd, viewStructChangesInPlace, isPrimitiveKind, isViewType, isViewStruct, nestedViewType, nestedViewShown, ownedAlternativeOf, holdsViewSkippingClear, TypeVisitSet, isReadonlyView, isStructType, typeDisplayName, isLockedRef, isAtomicRef, typeCarriesRef, withoutReadonlyView, withoutNullMember } from "./types";
 import { hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "./symbol";
 import { CheckerContext, DispatchRegistry, addError, dispatchEntryFor, dispatchOverridesFor } from "./context";
 import { isAddressTaking, checkPointerEscapesIn } from "./pointerAddress";
@@ -330,6 +330,7 @@ interface ResizeSummary {
 	unknown: boolean;
 	keys: HandleKey[];
 	writes: boolean;
+	leavesRunning: boolean;
 }
 
 let resizeDone = new HashMap<Symbol, ResizeSummary>();
@@ -349,11 +350,11 @@ export function resetResizeSummaries(): void {
 }
 
 function noResize(): ResizeSummary {
-	return { unknown: false, keys: [], writes: false };
+	return { unknown: false, keys: [], writes: false, leavesRunning: false };
 }
 
 function anyResize(): ResizeSummary {
-	return { unknown: true, keys: [], writes: true };
+	return { unknown: true, keys: [], writes: true, leavesRunning: false };
 }
 
 function anyKey(): HandleKey {
@@ -507,12 +508,28 @@ function externSummary(sym: Symbol): ResizeSummary {
 	return noResize();
 }
 
+function valueCallSummary(call: Node): ResizeSummary {
+	const callee = peelConv((call.data as CallExprData).callee);
+	const sym = call.resolvedSym != null ? call.resolvedSym : (callee != null && callee.kind == NodeKind.Identifier ? callee.resolvedSym : null);
+	const answeredByItsMaker = sym != null && (sym.symbolKind == SymbolKind.Parameter || boundRoutine(sym) != null);
+	return { unknown: true, keys: [], writes: true, leavesRunning: !answeredByItsMaker && handsOverPointer(call) };
+}
+
+function dispatchedSummary(dispatchRegistry: DispatchRegistry, sym: Symbol): ResizeSummary {
+	const entry = dispatchEntryFor(dispatchRegistry, sym)!;
+	let leavesRunning = routineBody(sym.declNode) != null && summaryOf(dispatchRegistry, sym).leavesRunning;
+	for (const o of dispatchOverridesFor(dispatchRegistry, entry.classSym, entry.methodName)) {
+		if (routineBody(o.sym.declNode) != null && summaryOf(dispatchRegistry, o.sym).leavesRunning) leavesRunning = true;
+	}
+	return { unknown: true, keys: [], writes: true, leavesRunning };
+}
+
 function calleeSummary(dispatchRegistry: DispatchRegistry, call: Node): ResizeSummary {
 	const sym = call.resolvedSym;
-	if (sym == null) return anyResize();
-	if (sym.symbolKind != SymbolKind.Function && sym.symbolKind != SymbolKind.Method) return anyResize();
+	if (sym == null) return valueCallSummary(call);
+	if (sym.symbolKind != SymbolKind.Function && sym.symbolKind != SymbolKind.Method) return valueCallSummary(call);
 	if (hasFlag(sym, SymbolFlag.GeneratedOp)) return noResize();
-	if (isDispatched(dispatchRegistry, sym)) return anyResize();
+	if (isDispatched(dispatchRegistry, sym)) return dispatchedSummary(dispatchRegistry, sym);
 	if (routineBody(sym.declNode) == null) {
 		if (receiverOf(call) != null && !hasFlag(sym, SymbolFlag.ImportC)) return noResize();
 		return externSummary(sym);
@@ -585,10 +602,140 @@ function spawnsInlineThunk(call: Node): boolean {
 	return thunk != null && (thunk.kind == NodeKind.ArrowFunction || thunk.kind == NodeKind.FunctionExpr);
 }
 
-function scanResizes(dispatchRegistry: DispatchRegistry, node: Node | null, s: ResizeSummary, fresh: Symbol[]): void {
-	if (node == null || s.unknown) return;
+function isRoutineValue(node: Node | null): boolean {
+	return node != null && (node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr);
+}
+
+function mentions(node: Node | null, sym: Symbol): boolean {
+	if (node == null) return false;
+	if (node.kind == NodeKind.Identifier) return node.resolvedSym == sym;
+	let found = false;
+	forEachChild(node, (child: Node): void => { if (!found) found = mentions(child, sym); });
+	return found;
+}
+
+function onlyCalls(node: Node | null, routine: Symbol): boolean {
+	if (node == null) return true;
+	if (node.kind == NodeKind.Identifier) return node.resolvedSym != routine;
+	if (isNestedRoutineNode(node)) return !mentions(node, routine);
+	const callee = node.kind == NodeKind.CallExpr ? peelConv((node.data as CallExprData).callee) : null;
+	const calledHere = callee != null && callee.kind == NodeKind.Identifier && callee.resolvedSym == routine;
+	let only = true;
+	forEachChild(node, (child: Node): void => {
+		if (only && !(calledHere && peelConv(child) == callee)) only = onlyCalls(child, routine);
+	});
+	return only;
+}
+
+function keepsRoutine(dispatchRegistry: DispatchRegistry, call: Node): boolean {
+	if (isSpawnCall(call) || isMessageSend(call)) return false;
+	const args = (call.data as CallExprData).arguments;
+	if (!args.some((a: Node): boolean => a.nodeType != null && a.nodeType.kind == TypeKind.Function)) return false;
+	const sym = call.resolvedSym;
+	if (sym == null || sym.declNode == null || !runsVisibleBody(call) || isDispatched(dispatchRegistry, sym)) return true;
+	const body = routineBody(sym.declNode);
+	for (const p of sym.declNode.paramSyms ?? []) {
+		if (p.symbolType != null && p.symbolType.kind == TypeKind.Function && !onlyCalls(body, p)) return true;
+	}
+	return false;
+}
+
+function staysPending(call: Node): boolean {
+	return !isSpawnCall(call) && !isMessageSend(call) && isAwaitable(call.nodeType);
+}
+
+function leavesItsMaker(parent: Node, child: Node): boolean {
+	const value = peelConv(child);
+	if (value == null || value.nodeType == null || value.nodeType.kind != TypeKind.Function || value.kind == NodeKind.FunctionDecl) return false;
+	return match (parent.kind) {
+		NodeKind.ReturnStmt | NodeKind.ArrayLiteral | NodeKind.ObjectLiteral => true,
+		NodeKind.BinaryExpr => isAssignOp((parent.data as BinaryExprData).operator) && (parent.data as BinaryExprData).right == child,
+		NodeKind.NewExpr => parent.resolvedSym == null || parent.resolvedSym.builtinKind != BuiltinKind.Promise,
+		_ => false,
+	};
+}
+
+function handsOverPointer(call: Node): boolean {
+	const callee = (call.data as CallExprData).callee;
+	const fnType = callee != null ? callee.nodeType : null;
+	const recv = receiverOf(call);
+	if (recv != null && carriesPointer(recv.nodeType) && !isReadonlyView(recv.nodeType)) return true;
+	const args = (call.data as CallExprData).arguments;
+	for (let i = 0; i < args.length; i += 1) {
+		const formal = formalAt(fnType, i);
+		if (carriesPointer(args[i].nodeType) && !(formal != null && isReadonlyView(formal))) return true;
+	}
+	return false;
+}
+
+function writesOutside(dispatchRegistry: DispatchRegistry, node: Node | null, own: Symbol[]): boolean {
+	if (node == null) return false;
+	const outside = (n: Node | null): boolean => {
+		const r = borrowedRoot(n);
+		return r != null && r.resolvedSym != null && !own.includes(r.resolvedSym) && carriesPointer(r.resolvedSym.symbolType);
+	};
+	const recv = node.kind == NodeKind.CallExpr ? receiverOf(node) : null;
+	let found = match (node.kind) {
+		NodeKind.BinaryExpr => isAssignOp((node.data as BinaryExprData).operator) && outside((node.data as BinaryExprData).left),
+		NodeKind.UpdateExpr => outside((node.data as UpdateExprData).updateArg),
+		NodeKind.MoveExpr => outside((node.data as MoveExprData).moveArg),
+		NodeKind.CallExpr => ((recv != null && resizesReceiver(node, recv)) || calleeMayWrite(dispatchRegistry, node))
+			&& ((recv != null && outside(recv)) || (node.data as CallExprData).arguments.some((a: Node): boolean => outside(a))),
+		_ => false,
+	};
+	forEachChild(node, (child: Node): void => { if (!found) found = writesOutside(dispatchRegistry, child, own); });
+	return found;
+}
+
+function writesWhatItCaptures(dispatchRegistry: DispatchRegistry, value: Node | null): boolean {
+	const made = isRoutineValue(value) ? value : (value != null && value.kind == NodeKind.Identifier ? boundRoutine(value.resolvedSym) : null);
+	if (made == null) return false;
+	const own: Symbol[] = [];
+	declaredIn(made, own);
+	return writesOutside(dispatchRegistry, routineBody(made), own);
+}
+
+function handsOverLeaver(dispatchRegistry: DispatchRegistry, call: Node): boolean {
+	for (const a of (call.data as CallExprData).arguments) {
+		if (a.nodeType == null || a.nodeType.kind != TypeKind.Function) continue;
+		const value = peelConv(a)!;
+		const made = isRoutineValue(value) ? value : (value.kind == NodeKind.Identifier ? boundRoutine(value.resolvedSym) : null);
+		if (made != null) {
+			const s = noResize();
+			scanResizes(dispatchRegistry, routineBody(made), s, []);
+			if (s.leavesRunning) return true;
+		} else if (value.kind == NodeKind.Identifier && value.resolvedSym != null && value.resolvedSym.symbolKind == SymbolKind.Function
+			&& routineBody(value.resolvedSym.declNode) != null && summaryOf(dispatchRegistry, value.resolvedSym).leavesRunning) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function leavesWriterRunning(dispatchRegistry: DispatchRegistry, call: Node, joined: Node[]): boolean {
+	if (keepsRoutine(dispatchRegistry, call)) {
+		for (const a of (call.data as CallExprData).arguments) {
+			if (writesWhatItCaptures(dispatchRegistry, peelConv(a))) return true;
+		}
+	}
+	if (!handsOverPointer(call)) return false;
+	const c = calleeSummary(dispatchRegistry, call);
+	return c.leavesRunning || handsOverLeaver(dispatchRegistry, call) || (staysPending(call) && !joined.includes(call) && (c.writes || c.unknown));
+}
+
+const NOT_JOINED: Node[] = [];
+
+function scanResizes(dispatchRegistry: DispatchRegistry, node: Node | null, s: ResizeSummary, fresh: Symbol[], joined: Node[] = NOT_JOINED): void {
+	if (node == null || (s.unknown && s.leavesRunning)) return;
+	let joins = joined;
 	match (node.kind) {
+		NodeKind.AwaitExpr => { joins = joinedBy(node); },
+		NodeKind.ReturnStmt => {
+			const value = peelConv((node.data as ReturnStmtData).argument);
+			if (value != null) joins = [value];
+		},
 		NodeKind.CallExpr => {
+			if (leavesWriterRunning(dispatchRegistry, node, joined)) s.leavesRunning = true;
 			const recv = receiverOf(node);
 			if (recv != null && resizesReceiver(node, recv)) {
 				const r = peelConv(recv);
@@ -600,7 +747,11 @@ function scanResizes(dispatchRegistry: DispatchRegistry, node: Node | null, s: R
 				joinSummary(s, calleeSummary(dispatchRegistry, node));
 			}
 		},
-		NodeKind.NewExpr => joinSummary(s, newSummary(dispatchRegistry, node)),
+		NodeKind.NewExpr => {
+			const made = newSummary(dispatchRegistry, node);
+			joinSummary(s, made);
+			if (made.leavesRunning) s.leavesRunning = true;
+		},
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
 			if (isAssignOp(d.operator)) {
@@ -615,8 +766,11 @@ function scanResizes(dispatchRegistry: DispatchRegistry, node: Node | null, s: R
 		},
 		_ => {},
 	};
-	if (s.unknown) return;
-	forEachChild(node, (child: Node): void => { scanResizes(dispatchRegistry, child, s, fresh); });
+	if (s.unknown && s.leavesRunning) return;
+	forEachChild(node, (child: Node): void => {
+		if (leavesItsMaker(node, child) && writesWhatItCaptures(dispatchRegistry, peelConv(child))) s.leavesRunning = true;
+		scanResizes(dispatchRegistry, child, s, fresh, joins);
+	});
 }
 
 function replacedKeys(target: Node | null, s: ResizeSummary): void {
@@ -628,7 +782,7 @@ function replacedKeys(target: Node | null, s: ResizeSummary): void {
 }
 
 function sameSummary(a: ResizeSummary, b: ResizeSummary): boolean {
-	if (a.unknown != b.unknown || a.writes != b.writes || a.keys.length != b.keys.length) return false;
+	if (a.unknown != b.unknown || a.writes != b.writes || a.leavesRunning != b.leavesRunning || a.keys.length != b.keys.length) return false;
 	for (const k of a.keys) {
 		if (!matchesAnyKey(k, b.keys)) return false;
 	}
@@ -963,12 +1117,21 @@ interface BorrowUnit {
 	thunks: Node[];
 	writers: Symbol[];
 	callWrites: CallWrite[];
+	joins: Node[];
+	joinTimes: int32[];
+	named: Node[];
+	namedSyms: Symbol[];
+	closures: Node[];
+	closureWrites: Symbol[][];
+	leavers: Node[];
 	worker: boolean;
 	actorCtor: string;
 }
 
 interface CallWrite {
 	time: int32;
+	until: int32;
+	kept: boolean;
 	roots: Symbol[];
 	site: Node;
 }
@@ -1748,10 +1911,35 @@ function callEffects(u: BorrowUnit, node: Node): void {
 	const local = sym != null && sym.declNode != null && u.routines.includes(sym.declNode);
 	const runsClosures = summary.unknown || passesRoutine || local;
 	changeEscaped(u, node, passesRoutine ? anyResize() : summary, runsClosures);
-	if (summary.writes || runsClosures) noteCallWrite(u, node, all, fnType, recv != null && !node.flags.has(NodeFlag.ExtCall) ? -1 : 0, runsClosures);
+	if (summary.writes || runsClosures) noteCallWrite(u, node, all, fnType, recv != null && !node.flags.has(NodeFlag.ExtCall) ? -1 : 0, runsClosures, summary.leavesRunning || handsOverLeaver(u.ctx.dispatchRegistry, node));
+	if (u.lends.length > 0 && keepsRoutine(u.ctx.dispatchRegistry, node)) noteKeptRoutines(u, node);
 }
 
-function noteCallWrite(u: BorrowUnit, site: Node, parts: Node[], fnType: Type | null, offset: int32, runsClosures: boolean): void {
+function joinTime(u: BorrowUnit, call: Node): int32 {
+	const at = u.named.indexOf(call);
+	const handle = at >= 0 ? u.namedSyms[at] : null;
+	for (let i = 0; i < u.joins.length; i += 1) {
+		const op = u.joins[i];
+		if (u.joinTimes[i] < u.p.abstractTime) continue;
+		if (op == call || (handle != null && op.kind == NodeKind.Identifier && op.resolvedSym == handle)) return u.joinTimes[i];
+	}
+	return MAX_TIME;
+}
+
+function noteKeptRoutines(u: BorrowUnit, call: Node): void {
+	const roots: Symbol[] = [];
+	for (const a of (call.data as CallExprData).arguments) {
+		if (a.nodeType == null || a.nodeType.kind != TypeKind.Function) continue;
+		const value = peelConv(a)!;
+		const made = isRoutineValue(value) ? value : (value.kind == NodeKind.Identifier ? boundRoutine(value.resolvedSym) : null);
+		const at = made != null ? u.closures.indexOf(made) : -1;
+		const written = made == null ? u.writers : (at >= 0 ? u.closureWrites[at] : []);
+		for (const w of written) { if (!roots.includes(w)) roots.push(w); }
+	}
+	if (roots.length > 0) u.callWrites.push({ time: u.p.abstractTime, until: staysPending(call) ? joinTime(u, call) : MAX_TIME, kept: true, roots, site: call });
+}
+
+function noteCallWrite(u: BorrowUnit, site: Node, parts: Node[], fnType: Type | null, offset: int32, runsClosures: boolean, leavesRunning: boolean): void {
 	if (u.lends.length == 0 && !u.worker) return;
 	const roots: Symbol[] = [];
 	for (let i = 0; i < parts.length; i += 1) {
@@ -1762,7 +1950,9 @@ function noteCallWrite(u: BorrowUnit, site: Node, parts: Node[], fnType: Type | 
 	if (runsClosures) {
 		for (const w of u.writers) { roots.push(w); }
 	}
-	if (roots.length > 0) u.callWrites.push({ time: u.p.abstractTime, roots, site });
+	if (roots.length == 0) return;
+	const until = leavesRunning ? MAX_TIME : (staysPending(site) ? joinTime(u, site) : u.p.abstractTime);
+	u.callWrites.push({ time: u.p.abstractTime, until, kept: false, roots, site });
 }
 
 function thunkOf(arg: Node): Node {
@@ -1806,6 +1996,11 @@ function recordClosure(u: BorrowUnit, node: Node): void {
 	if (s.writes) {
 		for (const sym of captured) {
 			if (!u.writers.includes(sym)) u.writers.push(sym);
+		}
+		u.closures.push(node);
+		u.closureWrites.push(captured);
+		if ((s.leavesRunning || u.leavers.includes(node)) && u.lends.length > 0 && captured.length > 0) {
+			u.callWrites.push({ time: u.p.abstractTime, until: MAX_TIME, kept: true, roots: captured, site: node });
 		}
 	}
 	if (!s.unknown && s.keys.length == 0) return;
@@ -1998,6 +2193,10 @@ function walk(u: BorrowUnit, node: Node | null): void {
 			u.p.abstractTime += 1;
 			declare(u, node.resolvedSym, u.p.inLoop > 0);
 			if (u.pass == 1) nameLend(u, node.resolvedSym, d.initializer);
+			if (u.pass == 1 && node.resolvedSym != null && peelConv(d.initializer) != null) {
+				u.named.push(peelConv(d.initializer)!);
+				u.namedSyms.push(node.resolvedSym);
+			}
 			if (u.pass == 2) deps(u, node.resolvedSym, d.initializer);
 		},
 		NodeKind.DestructuringDecl => {
@@ -2035,7 +2234,7 @@ function walk(u: BorrowUnit, node: Node | null): void {
 			if (u.pass == 2) {
 				const summary = newSummary(u.ctx.dispatchRegistry, node);
 				for (const a of d.newArguments) { argEffect(u, a, null, false, summary); }
-				if (summary.writes) noteCallWrite(u, node, d.newArguments, null, 0, false);
+				if (summary.writes) noteCallWrite(u, node, d.newArguments, null, 0, false, summary.leavesRunning);
 			}
 		},
 		NodeKind.MoveExpr => {
@@ -2124,6 +2323,12 @@ function walk(u: BorrowUnit, node: Node | null): void {
 		NodeKind.AwaitExpr | NodeKind.YieldExpr => {
 			if (u.pass == 1 && node.kind == NodeKind.AwaitExpr) markJoins(u, node);
 			forEachChild(node, (child: Node): void => { walk(u, child); });
+			if (u.pass == 1 && node.kind == NodeKind.AwaitExpr) {
+				for (const op of joinedBy(node)) {
+					u.joins.push(op);
+					u.joinTimes.push(u.p.abstractTime);
+				}
+			}
 			if (u.pass == 1) endLends(u, node);
 			u.p.abstractTime += 1;
 			if (u.pass == 2) {
@@ -2431,9 +2636,17 @@ function checkLends(u: BorrowUnit, unitEnd: string): void {
 				addError(u.ctx, `'${r.name}' is lent to the ${spawnAt}, but it holds a value that ${reached.text}${MODULE_LEND_RULE}`, l.site.location.line, l.site.location.column);
 				break;
 			}
-			const call = callWriteIn(u, l, root);
-			if (call != null) {
-				addError(u.ctx, `'${r.name}' is lent to the ${spawnAt} until ${until}, and the call at ${call.location.line}:${call.location.column} can change it while ${reader} reads it; make the call after the await, or declare the parameter that receives it Readonly<...> if the callee only reads it`, l.site.location.line, l.site.location.column);
+			const w = callWriteIn(u, l, root);
+			if (w != null) {
+				const at = `${w.site.location.line}:${w.site.location.column}`;
+				const why = w.kept
+					? `the function ${isRoutineValue(w.site) ? "made" : "handed over"} at ${at} can still run and change it while ${reader} reads it; hand that function over after the await, or give ${reader} its own copy`
+					: w.until == MAX_TIME
+						? `the call at ${at} leaves code running that can change it while ${reader} reads it; give ${reader} its own copy, or declare the parameter that receives it Readonly<...> if the callee only reads it`
+						: w.time < l.start
+							? `the call at ${at} can still be running and change it while ${reader} reads it; await that call before the lend, or declare the parameter that receives it Readonly<...> if the callee only reads it`
+							: `the call at ${at} can change it while ${reader} reads it; make the call after the await, or declare the parameter that receives it Readonly<...> if the callee only reads it`;
+				addError(u.ctx, `'${r.name}' is lent to the ${spawnAt} until ${until}, and ${why}`, l.site.location.line, l.site.location.column);
 				break;
 			}
 			if (u.p.vars[root].con.kind != CK_ROOT_OF) continue;
@@ -2448,15 +2661,27 @@ function checkLends(u: BorrowUnit, unitEnd: string): void {
 	}
 }
 
-function callWriteIn(u: BorrowUnit, l: Lend, root: int32): Node | null {
+function callWriteIn(u: BorrowUnit, l: Lend, root: int32): CallWrite | null {
 	for (const w of u.callWrites) {
-		if (w.time < l.start || w.time > l.end) continue;
+		if (w.until < l.start || w.time > l.end || w.site == l.site) continue;
 		for (const s of w.roots) {
 			const id = variableId(u.p, s);
-			if (id >= 0 && ufRoot(u.p, id) == root) return w.site;
+			if (id >= 0 && ufRoot(u.p, id) == root) return w;
 		}
 	}
 	return null;
+}
+
+function collectLeavers(node: Node | null, out: Node[]): void {
+	if (node == null) return;
+	forEachChild(node, (child: Node): void => {
+		if (leavesItsMaker(node, child)) {
+			const value = peelConv(child)!;
+			const made = isRoutineValue(value) ? value : (value.kind == NodeKind.Identifier ? boundRoutine(value.resolvedSym) : null);
+			if (made != null) out.push(made);
+		}
+		if (!isNestedRoutineNode(child)) collectLeavers(child, out);
+	});
 }
 
 interface UnitScan {
@@ -2520,7 +2745,8 @@ function runPass(u: BorrowUnit, body: Node, pass: int32): void {
 function newUnit(ctx: CheckerContext, pointers: Symbol[], worker: boolean): BorrowUnit {
 	return {
 		p: createPartitions(), pass: 1, scope: [], defers: [], ctx, pointers, blocks: [], captured: [], routines: [], suspends: [], suspendSites: [], escaped: [],
-		lends: [], closerSites: [], closerAwaits: [], thunks: [], writers: [], callWrites: [], worker, actorCtor: "",
+		lends: [], closerSites: [], closerAwaits: [], thunks: [], writers: [], callWrites: [], joins: [], joinTimes: [], named: [], namedSyms: [],
+		closures: [], closureWrites: [], leavers: [], worker, actorCtor: "",
 	};
 }
 
@@ -2690,6 +2916,7 @@ function checkUnit(ctx: CheckerContext, body: Node | null, routine: Node | null 
 	}
 	const u = newUnit(ctx, scan.pointers, false);
 	u.actorCtor = actorCtor;
+	collectLeavers(body, u.leavers);
 	runPass(u, body, 1);
 	for (const l of u.lends) {
 		if (l.end < 0) l.end = u.p.abstractTime;
