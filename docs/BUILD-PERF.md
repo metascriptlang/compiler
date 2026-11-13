@@ -88,8 +88,59 @@ messages, `-framework Foundation`) fail with the installed msc `c62ba752f7de` an
 macos-x64 through the bundle links both; its debug cell dies loading the missing x86_64 runtime dylib like every
 debug cell of that target, and zig finds no `Foundation/Foundation.h` for it.
 
-Not done: the engine still bakes its build machine's linker version (a hidden input of the producer); a driver that
-decided the stubs by the linker being lld would need no number, and that is a source edit for the next engine round.
+### Recheck 2026-11-14 — the bootstrap forwards its built linker
+
+The failing backup `8d7d908f2630`, not the rollback bundle, was checked again with candidate `a14cd2efc278`
+(tree `7f0babf0ab4ee19c01e127ab54a21ecc68da8bdd`) and the installed Mac binary/support `fca3f0a80cc6`.
+Both msc drivers build and run `objcCompanion` in debug and release, printing `matrix-objc 8`. Changing only
+`--passC=-mlinker-version=1267` reproduces the two undefined class-selector symbols. Active bundle
+`be33328d1c99` was not replaced; this is not Haro's paused native/AppKit acceptance. Evidence:
+`out/objc8d-release-pin.remote.log`, `out/objc8d-pin/`, `out/objc8d-installed.remote.log`.
+
+The producer was then checked from base tree `7e7d40d62910290c22e09ec598924d9c1af89f0f` plus the
+`sourceEngine.ms` edit SHA256 `f26c8f582ee9ca010ebd9491a22de47431f90827698c31a4383f7c17c15aef91`.
+The LLVM 23.1.4 archive SHA256 is `819ecf7351f1a66f76b2d701d8942faaf5faeb324cb90c9d5b090de142434bb2`;
+the complete producer/cache/probe fingerprints are in `out/darwin-source-linker-engine/input.json`.
+LLVM's Darwin host-version guard is in `clang/CMakeLists.txt:417–424`; its bootstrap linker handoff at
+788–803 names Windows and cross-Linux linkers but omitted native Darwin. The producer's existing
+`LLVM_SOURCE_EDITS` mechanism now carries that handoff for Darwin too, without inventing a linker version.
+The regression first failed with `failed: a Darwin bootstrap passes the selected lld path to the next stage`,
+then printed `sourceEngine: 63 cases OK` on rtx. Isolated canonical CMake fragments passed 14 configurations:
+only the two Darwin/lld stage shapes changed; five neighbouring shapes stayed equal. These are CMake
+branch controls on a Mac, not Windows/Linux execution certificates.
+
+A fresh private PGO multicall build through `prepareSourceEngine`, 14 cores and 20 GiB declared growth via
+`run-remote.sh --mac` (local fallback), completed in **3256 s** including the raw consumer checks. Its actual
+caches show the intended distinction:
+
+| stage | `CMAKE_LINKER` | `HOST_LINK_VERSION` |
+|---|---|---|
+| unshipped stage1 | `/usr/bin/ld` | `1267` |
+| instrumented | stage1's `bin/ld64.lld` | empty |
+| final engine | instrumented stage's `bin/ld64.lld` | empty |
+
+The resulting multicall/clang SHA256 is `c94818155456b7bf6f51e0dc49e49bb8d42526ddc002755fbe5cbd56b52dcae0`.
+Raw `clang --no-default-config -fuse-ld=lld`, Foundation and the same matrix companion print
+`matrix-objc 8` at each of **O0/O2/O3**. The cc1 plan has neither `-target-linker-version` nor
+`-fobjc-msgsend-class-selector-stubs`. Adding only `-mlinker-version=1267` to this same engine/source again
+fails with the class-selector symbols. `otool -l` finds no DWARF in the multicall; no dSYM was retained.
+The raw install contains **116931629 regular-file bytes and 26 symlinks**, not the sum obtained by following
+and counting every alias again.
+
+Receipt `out/darwin-source-linker-engine/receipt.json` SHA256
+`c33aa9d158659c7e3e2a9d031bee5087d33f675dc3031d3fe908f352cfc3051e` carries commands, outputs and input hashes;
+`remote.log` and `out/llvm-linker-metadata/manifest.json` retain the build and CMake controls.
+
+`packageSourceEngine --install <private-engine> --source <same-extracted-source> --output <new-private-dir>`
+then reported `packaged aarch64-macos engine 23.1.4 identity 84dad304ef2db0a6131d29f9af76b3dba6dc6dbbc5ddf165945d244180529590 files=354`.
+Its clang still hashes to the same multicall, and a raw O2 compile/run through the packaged `bin/clang`
+again prints `matrix-objc 8`. Package regular files total **116163007 B**; `tar` preserving symlinks piped
+to `xz -6` produces **28144220 B**, SHA256 `42d3f27d1eb5d4cc778a5dab739018e453e14c90e8e263864dc922958d97af08`.
+Package receipt SHA256 `2f1c23ae74d4691758990720b00fe074cefca4c25b9a152dcc3f987720c31301` is in
+`out/darwin-source-linker-engine/package-receipt.json`; `package.remote.log` retains the consumer output.
+This private archive is not a redistribution certificate or a size comparison with a source-matched Zig bundle.
+No host bundle was installed or replaced. This proves the private producer and raw ObjC path, **not** msc's LTO matrix,
+a candidate self-build, compile-time/per-row speed parity, another host's engine or Haro acceptance.
 
 ## Measured 2026-11-13 — a debug build guards its stack frames, as under `zig cc`
 
