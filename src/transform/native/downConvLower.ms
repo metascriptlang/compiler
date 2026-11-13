@@ -4,6 +4,9 @@ import { walkNode } from "../walker";
 import { isAssignOp } from "../../ast/operators";
 import { skipModifier, unwrapRefNullUnion, isUnknownType, isUnresolvedType, declaredFieldOfRead } from "../../checker/types";
 import { GcMode } from "../../checker/context";
+import { widenVariantToUnion } from "../../checker/fit";
+import { cloneNodeKeepSem } from "../../monomorphize/clone";
+import { makeBinary, makeConditional, makeTypedIdentResolved } from "../util";
 
 export function lowerDownConversions(program: Node, ctx: TransformContext): Node {
 	const headersCarryType = ctx.checkerCtx == null || ctx.checkerCtx.gcMode != GcMode.Manual;
@@ -55,13 +58,46 @@ function declaredFieldType(node: Node): Type | null {
 	return isUnresolvedType(field) ? null : field;
 }
 
+// A reference narrowed to a union of classes (`e instanceof A || e instanceof B`) is still the one pointer
+// its declaration holds, while a value of that union type is a tagged carrier: the read tags the pointer
+// with the member it is an instance of, as converting `new A()` into the union does.
+function carrierOfStoredClass(node: Node, narrowed: Type, held: Type): Node {
+	const members = narrowed.typeChildren;
+	if (members == null || members.length < 2) return node;
+	for (const m of members) {
+		if (m == null || m.kind != TypeKind.Ref || m.sym == null || m.sym.symbolKind != SymbolKind.Class) return node;
+	}
+	let carrier: Node | null = null;
+	for (let i = members.length - 1; i >= 0; i -= 1) {
+		const m = members[i];
+		const stored = cloneNodeKeepSem(node);
+		stored.nodeType = held;
+		const cast = createNodeAt(NodeKind.TypeAssertion, { asExpr: stored, asType: "" } as TypeAssertionData, node.location);
+		cast.nodeType = m;
+		cast.flags = cast.flags.incl(NodeFlag.Sem);
+		const tagged = widenVariantToUnion(cast, narrowed, m);
+		if (tagged == null as unknown as Node) return node;
+		if (carrier == null) {
+			carrier = tagged;
+			continue;
+		}
+		const probe = cloneNodeKeepSem(node);
+		probe.nodeType = held;
+		const test = makeBinary(probe, "instanceof", makeTypedIdentResolved(m.sym!, null, node.location), node.location);
+		carrier = makeConditional(test, tagged, carrier, node.location);
+		carrier.nodeType = narrowed;
+	}
+	return carrier!;
+}
+
 function convertNarrowedRead(node: Node, declared: Type | null): Node {
 	const narrowed = node.nodeType;
 	if (narrowed == null || declared == null || narrowed == declared) return node;
-	if (narrowed.kind != TypeKind.Ref || narrowed.sym == null || narrowed.sym.symbolKind != SymbolKind.Class) return node;
 	const bare = skipModifier(declared);
 	const held = bare != null && bare.kind == TypeKind.Union ? unwrapRefNullUnion(bare) : bare;
 	if (held == null) return node;
+	if (narrowed.kind == TypeKind.Union) return held.kind == TypeKind.Ref && held.sym != null && held.sym.symbolKind == SymbolKind.Class ? carrierOfStoredClass(node, narrowed, held) : node;
+	if (narrowed.kind != TypeKind.Ref || narrowed.sym == null || narrowed.sym.symbolKind != SymbolKind.Class) return node;
 	const fromOther = isUnknownType(held) || (held.kind == TypeKind.Ref && held.sym != null && held.sym != narrowed.sym);
 	if (!fromOther) return node;
 	const conv = createNodeAt(NodeKind.TypeAssertion, { asExpr: node, asType: "" } as TypeAssertionData, node.location);
