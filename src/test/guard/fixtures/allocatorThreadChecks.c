@@ -162,11 +162,15 @@ static void remoteSmallReuse(void) {
     for (int i = 0; i < CELLS; ++i) msHeapFree(again[i]);
 }
 
-/* M10: a thread with its own region gathers the blocks it frees for one owner into a batch of
- * pointers, which reaches the owner's inbox in one CAS when the thread flushes, parks or exits,
- * or when its batches hold 16 KiB; it writes the batch, never the blocks, and gets the batch back
- * once the owner has freed them. */
-enum { RUN_CELLS = 100, CAP_CELLS = MS_HEAP_REMOTE_BATCH_BYTES / 48 + 1, RUN_TOTAL = RUN_CELLS + CAP_CELLS + 1 };
+/* M10: a thread with its own region gathers the addresses it frees for one owner into a batch, a
+ * small cell of its own region, which reaches the owner's inbox in one CAS when the thread flushes,
+ * parks or exits, when the batch is full, or when its batches hold 16 KiB of freed blocks; it writes
+ * the batch and the claim, nothing else of the blocks, and gets the batch back once the owner has
+ * freed them. */
+enum { RUN_CELLS = 20, WIDE = 1504, CAP_CELLS = MS_HEAP_REMOTE_BATCH_BYTES / WIDE + 1, RUN_TOTAL = RUN_CELLS + MS_HEAP_BATCH_BLOCKS + CAP_CELLS + 1 };
+_Static_assert(RUN_CELLS < MS_HEAP_BATCH_BLOCKS && CAP_CELLS < MS_HEAP_BATCH_BLOCKS &&
+               (MS_HEAP_BATCH_BLOCKS + 1) * 48 < MS_HEAP_REMOTE_BATCH_BYTES, "remoteBatches needs each rule to post its own batch");
+static size_t cellSize(int i) { return i >= RUN_CELLS + (int)MS_HEAP_BATCH_BLOCKS && i < RUN_TOTAL - 1 ? WIDE : 48; }
 static msHeapHandle* batchOwner;
 static msHeapHandle* batchSender;
 static void freeIntoBatches(void* arg) {
@@ -180,9 +184,14 @@ static void freeIntoBatches(void* arg) {
     msHeapBatch* head = __atomic_load_n(inbox, __ATOMIC_ACQUIRE);
     CHECK(head && head->count == RUN_CELLS && head->next == NULL && head->owner == batchOwner);
     for (int i = 0; i < RUN_CELLS; ++i) CHECK(head->blocks[i] == cells[i]);
-    for (int i = RUN_CELLS; i < RUN_CELLS + CAP_CELLS; ++i) msHeapFree(cells[i]);
+    int at = RUN_CELLS;
+    for (int i = 0; i < (int)MS_HEAP_BATCH_BLOCKS; ++i) msHeapFree(cells[at + i]);
     head = __atomic_load_n(inbox, __ATOMIC_ACQUIRE);
-    CHECK(head->count == CAP_CELLS && head->blocks[0] == cells[RUN_CELLS]);
+    CHECK(head->count == MS_HEAP_BATCH_BLOCKS && head->blocks[0] == cells[at]);
+    at += MS_HEAP_BATCH_BLOCKS;
+    for (int i = 0; i < CAP_CELLS; ++i) msHeapFree(cells[at + i]);
+    head = __atomic_load_n(inbox, __ATOMIC_ACQUIRE);
+    CHECK(head->count == CAP_CELLS && head->blocks[0] == cells[at]);
     msHeapFree(cells[RUN_TOTAL - 1]);
     CHECK(__atomic_load_n(inbox, __ATOMIC_ACQUIRE) == head);
     msHeapThreadRelease();
@@ -201,22 +210,22 @@ static void remoteBatches(void) {
     msHeapReturnIdle();
     CHECK(__atomic_load_n(&batchOwner->inbox, __ATOMIC_ACQUIRE) == NULL);
     size_t before = a->occupied;
-    for (int i = 0; i < RUN_TOTAL; ++i) { cells[i] = msHeapAlloc(48); memset(cells[i], 0x4e, 48); }
+    for (int i = 0; i < RUN_TOTAL; ++i) { cells[i] = msHeapAlloc(cellSize(i)); memset(cells[i], 0x4e, cellSize(i)); }
     probeJoin(probeSpawn(freeIntoBatches, NULL));
     msHeapBatch* head = __atomic_load_n(&batchOwner->inbox, __ATOMIC_ACQUIRE);
-    CHECK(head->count == 1 && head->blocks[0] == cells[RUN_TOTAL - 1] && batchesIn(head) == 3);
-    for (int i = 0; i < RUN_TOTAL; ++i) checkUntouchedButClaim(cells[i], 48, 0x4e);
+    CHECK(head->count == 1 && head->blocks[0] == cells[RUN_TOTAL - 1] && batchesIn(head) == 4);
+    for (int i = 0; i < RUN_TOTAL; ++i) checkUntouchedButClaim(cells[i], cellSize(i), 0x4e);
     int reused = 0;
     void* again[RUN_TOTAL];
     for (int i = 0; i < RUN_TOTAL; ++i) {
-        again[i] = msHeapAlloc(48);
+        again[i] = msHeapAlloc(cellSize(i));
         reused += inSet(again[i], cells, RUN_TOTAL);
     }
     CHECK(reused > RUN_TOTAL / 2);
     for (int i = 0; i < RUN_TOTAL; ++i) msHeapFree(again[i]);
     msHeapReturnIdle();
     CHECK(a->occupied == before && a->received == NULL);
-    CHECK(batchesIn(__atomic_load_n(&batchSender->returned, __ATOMIC_ACQUIRE)) + batchesIn(batchSender->idle) == 3);
+    CHECK(batchesIn(__atomic_load_n(&batchSender->returned, __ATOMIC_ACQUIRE)) + batchesIn(batchSender->idle) == 4);
 }
 
 /* M10: a thread without a region holds back no more than 16 KiB either, so each 64 KiB chunk it
@@ -600,7 +609,7 @@ static void racingFreesAreRefusedOnce(void) {
 }
 
 /* M10: a sender keeps at most one batch per open slot for reuse once its owner gives them back;
- * a timed return gives the rest back to the sender's region, and its release gives back all. */
+ * a timed return frees the rest into the sender's region, and its release frees all. */
 enum { SPARE_BATCHES = MS_HEAP_OPEN_BATCHES + 2 };
 static int spareStep;
 static msHeapBatch* spare[SPARE_BATCHES];
@@ -609,8 +618,12 @@ static int countBatches(msHeapBatch* batch) {
     for (; batch; batch = batch->next) ++n;
     return n;
 }
-static int batchChunkInUse(msHeapBatch* batch) {
-    return (((msHeapBig*)((unsigned char*)batch - offsetof(msHeapBig, data)))->base.prevSize & 1) != 0;
+static int batchInUse(msHeapBatch* batch) {
+    msHeapSmall* chunk = (msHeapSmall*)msHeapPage(batch);
+    if (chunk->base.size != MS_HEAP_BATCH_CELL || !(chunk->base.prevSize & 1)) return 0;
+    for (msHeapCell* cell = chunk->freeList; cell; cell = cell->next)
+        if ((void*)cell == (void*)batch) return 0;
+    return 1;
 }
 static void sendSpareBatches(void* arg) {
     (void)arg;
@@ -626,21 +639,21 @@ static void sendSpareBatches(void* arg) {
     msHeapReturn(MS_HEAP_REGION(here), MS_HEAP_NOW_MS());
     CHECK(countBatches(here->idle) + countBatches(__atomic_load_n(&here->returned, __ATOMIC_ACQUIRE)) == MS_HEAP_OPEN_BATCHES);
     int inUse = 0;
-    for (int i = 0; i < SPARE_BATCHES; ++i) inUse += batchChunkInUse(spare[i]);
+    for (int i = 0; i < SPARE_BATCHES; ++i) inUse += batchInUse(spare[i]);
     CHECK(inUse == MS_HEAP_OPEN_BATCHES);
     msHeapThreadRelease();
-    for (int i = 0; i < SPARE_BATCHES; ++i) CHECK(!batchChunkInUse(spare[i]));
+    for (int i = 0; i < SPARE_BATCHES; ++i) CHECK(!batchInUse(spare[i]));
 }
 
 static void spareBatchesGoBack(void) {
-    phase = "batches back from their owner stay one per open slot, and the rest go back to the sender's region";
+    phase = "batches back from their owner stay one per open slot, and the rest are freed into the sender's region";
     batchOwner = msHeapCurrent;
     msHeapReturnIdle();
     for (int i = 0; i < SPARE_BATCHES; ++i) cells[i] = msHeapAlloc(48);
     __atomic_store_n(&spareStep, 0, __ATOMIC_RELEASE);
     probeThread t = probeSpawn(sendSpareBatches, NULL);
     while (__atomic_load_n(&spareStep, __ATOMIC_ACQUIRE) != 1) {}
-    for (int i = 0; i < SPARE_BATCHES; ++i) CHECK(spare[i] && batchChunkInUse(spare[i]));
+    for (int i = 0; i < SPARE_BATCHES; ++i) CHECK(spare[i] && batchInUse(spare[i]));
     msHeapReturnIdle();
     __atomic_store_n(&spareStep, 2, __ATOMIC_RELEASE);
     probeJoin(t);

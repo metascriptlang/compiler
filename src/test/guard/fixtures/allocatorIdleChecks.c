@@ -572,19 +572,24 @@ static void chunkWaitsForACellInAnotherThreadsBatch(void) {
     msHeapFree(other);
 }
 
-/* M10: the owner receives at most a batch's worth of blocks at a class's slow path. A chunk with a
- * cell still waiting in the owner's inbox is not empty, and the next return receives the rest and
- * releases the chunk. */
+/* M10: the owner receives at most MS_HEAP_RECEIVE_BLOCKS blocks at a class's slow path. A chunk
+ * with a cell still waiting in the owner's inbox is not empty, and the next return receives the
+ * rest and releases the chunk. */
 enum { WAIT_PER_PAGE = MS_HEAP_SMALL_ROOM / 16, WAIT_CELLS = 3 * WAIT_PER_PAGE };
-_Static_assert(WAIT_CELLS > MS_HEAP_BATCH_BLOCKS && WAIT_CELLS < 2 * MS_HEAP_BATCH_BLOCKS &&
-               MS_HEAP_REMOTE_BATCH_BYTES / 16 > MS_HEAP_BATCH_BLOCKS,
-               "the waiting-cell phase needs one full batch and a second one");
+_Static_assert(WAIT_CELLS > MS_HEAP_RECEIVE_BLOCKS && WAIT_CELLS < 2 * MS_HEAP_RECEIVE_BLOCKS,
+               "the waiting-cell phase needs more cells than one receive takes");
 static void* waitCells[WAIT_CELLS];
 static void freeWaitCells(void* arg) {
     (void)arg;
     msHeapFree(msHeapAlloc(16));
     for (int i = 0; i < WAIT_CELLS; ++i) msHeapFree(waitCells[i]);
     msHeapThreadRelease();
+}
+
+static size_t blocksLeft(msHeapBatch* batch, size_t at) {
+    size_t left = 0;
+    for (; batch; batch = batch->next, at = 0) left += batch->count - at;
+    return left;
 }
 
 static void chunkWaitsForACellItsOwnerHasNotReceived(void) {
@@ -600,7 +605,7 @@ static void chunkWaitsForACellItsOwnerHasNotReceived(void) {
     probeJoin(probeSpawn(freeWaitCells, NULL));
     unsigned char* again = msHeapAlloc(16);
     msHeapBatch* left = region()->received;
-    CHECK(left && region()->receivedAt + (WAIT_CELLS - MS_HEAP_BATCH_BLOCKS) == left->count);
+    CHECK(left && blocksLeft(left, region()->receivedAt) == WAIT_CELLS - MS_HEAP_RECEIVE_BLOCKS);
     void* waiting = left->blocks[region()->receivedAt];
     msHeapSmall* home = (msHeapSmall*)msHeapPage(waiting);
     CHECK(isSmallChunkOf(waiting, 16) && home->free < MS_HEAP_SMALL_ROOM);
