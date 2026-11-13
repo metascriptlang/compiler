@@ -210,14 +210,14 @@ void msHeapResetPages(void) {
 #endif
 
 #if MS_HEAP_THREADS
-#include <stdio.h>
 #include <stdlib.h>
+#include "runtime/core/errorf.h"
 _Noreturn void msRaiseOutOfMemory(void);
 _Noreturn void msHeapOutOfMemory(void) {
 	msRaiseOutOfMemory();
 }
 _Noreturn void msHeapFreedTwice(void* p) {
-	fprintf(stderr, "Error: msHeapFree of a block that is not allocated, at %p: it was freed before, or never came from this allocator\n", p);
+	msErrorf("Error: msHeapFree of a block that is not allocated, at %p: it was freed before, or never came from this allocator\n", p);
 	abort();
 }
 #else
