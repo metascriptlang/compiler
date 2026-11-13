@@ -690,6 +690,9 @@ extern function msUnownedRefArraySetLen(arr: Ptr<void>, newLen: int64): void;
 extern function msGenericArraySetLen(arr: Ptr<void>, newLen: int64): void;
 
 @compilerFunc
+extern function msGenericArraySetLenUninit(arr: Ptr<void>, newLen: int64): void;
+
+@compilerFunc
 extern function msNumberArraySetLen(arr: Ptr<void>, newLen: int64): void;
 
 @compilerFunc

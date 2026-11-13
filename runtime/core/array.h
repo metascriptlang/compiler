@@ -290,6 +290,13 @@ void msUint8ArraySplice3(msUint8Array* arr, int64_t start, int64_t deleteCount, 
 	(arr_ptr)->len = _nl; \
 } while(0)
 
+#define msGenericArraySetLenUninit(arr_ptr, newLen) do { \
+	int64_t _nl = (newLen); \
+	if (_nl < 0) _nl = 0; \
+	if (_nl > (arr_ptr)->len) msGenericArrayReserve(arr_ptr, _nl); \
+	(arr_ptr)->len = _nl; \
+} while(0)
+
 /* Destroy (free payload). */
 #define msGenericArrayDestroy(arr_ptr) do { \
 	if ((arr_ptr)->p != NULL) { msArrayPayloadFree((arr_ptr)->p); (arr_ptr)->p = NULL; } \
