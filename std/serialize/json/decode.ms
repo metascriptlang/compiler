@@ -19,6 +19,7 @@ import {
 	namesStruct,
 	parseDiscKey,
 	pickAtomicAccessor,
+	reqIntName,
 	unwrapType,
 	implementationOf,
 	distinctBase,
@@ -994,7 +995,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 			}
 			if (optSawNull && optCount == 1 && optMember != null && optMember.kind == NodeKind.Identifier) {
 				const a = pickAtomicAccessor(optMember.name);
-				let reqName: string = "reqInt64";
+				let reqName: string = reqIntName(a);
 				if (a.methodName == "asString") reqName = "reqString";
 				else if (a.methodName == "asBoolean") reqName = "reqBoolean";
 				else if (a.methodName == "asNumber") reqName = "reqNumber";
@@ -1392,7 +1393,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 			error("jsonValueToStructE: unsupported field type kind=" + fcore.kind + extra + "; field '" + fname + "'", witness);
 		}
 		const a = pickAtomicAccessor(fcore.name);
-		let reqName: string = "reqInt64";
+		let reqName: string = reqIntName(a);
 		if (a.methodName == "asString") reqName = "reqString";
 		else if (a.methodName == "asBoolean") reqName = "reqBoolean";
 		else if (a.methodName == "asNumber") reqName = "reqNumber";

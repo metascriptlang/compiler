@@ -20,7 +20,7 @@ export {
 	jsonToStringArrayE, jsonToBooleanArrayE, jsonToNumberArrayE, jsonToFloat32ArrayE,
 	jsonToInt8ArrayE, jsonToInt16ArrayE, jsonToInt32ArrayE, jsonToInt64ArrayE,
 	jsonToUint8ArrayE, jsonToUint16ArrayE, jsonToUint32ArrayE,
-	kindName, reqString, reqBoolean, reqNumber, reqInt64, reqArray, reqObject, joinDecodeErrors,
+	kindName, reqString, reqBoolean, reqNumber, reqInt64, reqInt8, reqInt16, reqInt32, reqUint8, reqUint16, reqUint32, reqUint64, reqArray, reqObject, joinDecodeErrors,
 	_jsonCheckDiscStr, _jsonIsNull, _jsonDistinct, _jsonDistinctNull, _jsonEnumOrd, _jsonEnumOrdE, _jsonLiteralMatches,
 } from "std/serialize/json/accessors";
 

@@ -180,6 +180,13 @@ export function pickAtomicAccessor(tn: string): AtomicAccessor {
 	return { methodName, needsCast, castType: needsCast ? tn : "" };
 }
 
+// Strict JSON reader for an integer field: a sized width reads through its own range-checking
+// `req<Width>`, so an out-of-range number is a decode error before the narrowing cast runs.
+export function reqIntName(a: AtomicAccessor): string {
+	if (!a.needsCast || a.methodName != "asInt64") return "reqInt64";
+	return "req" + a.castType.slice(0, 1).toUpperCase() + a.castType.slice(1);
+}
+
 export function implementationOf(value: Node): Node {
 	const variant = getTypeImpl(value);
 	if (variant == null) throw new Error("the type node has no checked implementation");

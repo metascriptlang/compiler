@@ -86,6 +86,53 @@ export function reqInt64(this v: JsonValue, pfx: string, field: string, errs: st
 	return 0 as int64;
 }
 
+// A sized-int field takes only the Int carrier that fits its width. An
+// out-of-range value is a failed decode, never a wrapped or aborting cast:
+// the typed readers below return in-range int64 values, so the emitted
+// `as <width>` cast that follows them cannot trap. uint64 stops at the
+// int64 maximum because the Int carrier holds an int64.
+function reqIntIn(v: JsonValue, pfx: string, field: string, errs: string[], lo: int64, hi: int64, typeName: string): int64 {
+	const n = reqInt64(v, pfx, field, errs);
+	if (n < lo || n > hi) {
+		errs.push("field '" + pfx + field + "': expected " + typeName + ", got " + n.toString());
+		return 0 as int64;
+	}
+	return n;
+}
+
+function reqIntAt(v: JsonValue, arrPath: string, i: int32, errs: string[], lo: int64, hi: int64, typeName: string): int64 {
+	if (v != null && v.kind == JsonKind.Int && v.intVal >= lo && v.intVal <= hi) return v.intVal;
+	return reqIntIn(v, jsonElemPath(arrPath, i), "", errs, lo, hi, typeName);
+}
+
+export function reqInt8(this v: JsonValue, pfx: string, field: string, errs: string[]): int64 {
+	return reqIntIn(v, pfx, field, errs, -128 as int64, 127 as int64, "int8");
+}
+
+export function reqInt16(this v: JsonValue, pfx: string, field: string, errs: string[]): int64 {
+	return reqIntIn(v, pfx, field, errs, -32768 as int64, 32767 as int64, "int16");
+}
+
+export function reqInt32(this v: JsonValue, pfx: string, field: string, errs: string[]): int64 {
+	return reqIntIn(v, pfx, field, errs, -2147483648 as int64, 2147483647 as int64, "int32");
+}
+
+export function reqUint8(this v: JsonValue, pfx: string, field: string, errs: string[]): int64 {
+	return reqIntIn(v, pfx, field, errs, 0 as int64, 255 as int64, "uint8");
+}
+
+export function reqUint16(this v: JsonValue, pfx: string, field: string, errs: string[]): int64 {
+	return reqIntIn(v, pfx, field, errs, 0 as int64, 65535 as int64, "uint16");
+}
+
+export function reqUint32(this v: JsonValue, pfx: string, field: string, errs: string[]): int64 {
+	return reqIntIn(v, pfx, field, errs, 0 as int64, 4294967295 as int64, "uint32");
+}
+
+export function reqUint64(this v: JsonValue, pfx: string, field: string, errs: string[]): int64 {
+	return reqIntIn(v, pfx, field, errs, 0 as int64, 9223372036854775807 as int64, "uint64");
+}
+
 export function reqArray(this v: JsonValue, pfx: string, field: string, errs: string[]): JsonValue {
 	if (v != null && v.kind == JsonKind.Array) return v;
 	pushKindErr(errs, pfx, field, "array", v);
@@ -468,7 +515,7 @@ export function jsonToInt8ArrayE(this v: JsonValue, errs: string[], arrPath: str
 	const out: int8[] = [];
 	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
-		out.push(reqInt64At(v.items[i], arrPath, i, errs) as int8);
+		out.push(reqIntAt(v.items[i], arrPath, i, errs, -128 as int64, 127 as int64, "int8") as int8);
 	}
 	return out;
 }
@@ -477,7 +524,7 @@ export function jsonToInt16ArrayE(this v: JsonValue, errs: string[], arrPath: st
 	const out: int16[] = [];
 	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
-		out.push(reqInt64At(v.items[i], arrPath, i, errs) as int16);
+		out.push(reqIntAt(v.items[i], arrPath, i, errs, -32768 as int64, 32767 as int64, "int16") as int16);
 	}
 	return out;
 }
@@ -486,7 +533,7 @@ export function jsonToInt32ArrayE(this v: JsonValue, errs: string[], arrPath: st
 	const out: int32[] = [];
 	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
-		out.push(reqInt64At(v.items[i], arrPath, i, errs) as int32);
+		out.push(reqIntAt(v.items[i], arrPath, i, errs, -2147483648 as int64, 2147483647 as int64, "int32") as int32);
 	}
 	return out;
 }
@@ -504,7 +551,7 @@ export function jsonToUint8ArrayE(this v: JsonValue, errs: string[], arrPath: st
 	const out: uint8[] = [];
 	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
-		out.push(reqInt64At(v.items[i], arrPath, i, errs) as uint8);
+		out.push(reqIntAt(v.items[i], arrPath, i, errs, 0 as int64, 255 as int64, "uint8") as uint8);
 	}
 	return out;
 }
@@ -513,7 +560,7 @@ export function jsonToUint16ArrayE(this v: JsonValue, errs: string[], arrPath: s
 	const out: uint16[] = [];
 	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
-		out.push(reqInt64At(v.items[i], arrPath, i, errs) as uint16);
+		out.push(reqIntAt(v.items[i], arrPath, i, errs, 0 as int64, 65535 as int64, "uint16") as uint16);
 	}
 	return out;
 }
@@ -522,7 +569,7 @@ export function jsonToUint32ArrayE(this v: JsonValue, errs: string[], arrPath: s
 	const out: uint32[] = [];
 	if (v == null || v.kind != JsonKind.Array) return out;
 	for (let i = 0; i < v.items.length; i = i + 1) {
-		out.push(reqInt64At(v.items[i], arrPath, i, errs) as uint32);
+		out.push(reqIntAt(v.items[i], arrPath, i, errs, 0 as int64, 4294967295 as int64, "uint32") as uint32);
 	}
 	return out;
 }
