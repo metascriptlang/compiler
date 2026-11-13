@@ -129,6 +129,26 @@ export const LLVM_SOURCE_EDITS: SourceEdit[] = [{
 		"       !llvm::sys::path::stem(Path).equals_insensitive(\n" +
 		"           llvm::sys::path::stem(ToolContext.Path))))\n" +
 		"    TheDriver.setPrependArg(ToolContext.PrependArg);\n",
+}, {
+	file: "clang/CMakeLists.txt",
+	reason: "Darwin bootstrap stages use lld, but CMake kept the system linker " +
+		"in CMAKE_LINKER and baked its version into clang. Pass the built " +
+		"ld64.lld path to the next stage as for the other bootstrap linkers.",
+	before: "    if((WIN32 AND NOT BOOTSTRAP_CMAKE_SYSTEM_NAME) OR " +
+		"BOOTSTRAP_CMAKE_SYSTEM_NAME STREQUAL \"Windows\")\n" +
+		"      set(${CLANG_STAGE}_LINKER " +
+		"-DCMAKE_LINKER=${LLVM_RUNTIME_OUTPUT_INTDIR}/lld-link" +
+		"${CMAKE_EXECUTABLE_SUFFIX})\n" +
+		"    endif()\n",
+	after: "    if((WIN32 AND NOT BOOTSTRAP_CMAKE_SYSTEM_NAME) OR " +
+		"BOOTSTRAP_CMAKE_SYSTEM_NAME STREQUAL \"Windows\")\n" +
+		"      set(${CLANG_STAGE}_LINKER " +
+		"-DCMAKE_LINKER=${LLVM_RUNTIME_OUTPUT_INTDIR}/lld-link" +
+		"${CMAKE_EXECUTABLE_SUFFIX})\n" +
+		"    elseif(APPLE)\n" +
+		"      set(${CLANG_STAGE}_LINKER " +
+		"-DCMAKE_LINKER=${LLVM_RUNTIME_OUTPUT_INTDIR}/ld64.lld)\n" +
+		"    endif()\n",
 }];
 
 export function digitsOnly(text: string): boolean {

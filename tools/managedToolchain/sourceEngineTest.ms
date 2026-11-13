@@ -297,6 +297,12 @@ function editCases(dir: string): void {
 		expect(shipped.before != shipped.after && shipped.reason != "" &&
 			!shipped.after.contains(shipped.before), "a shipped edit changes its text for a stated reason");
 	}
+	expect(LLVM_SOURCE_EDITS.some((edit: SourceEdit): boolean =>
+		edit.file == "clang/CMakeLists.txt" && edit.after.contains(
+			"    elseif(APPLE)\n" +
+			"      set(${CLANG_STAGE}_LINKER " +
+			"-DCMAKE_LINKER=${LLVM_RUNTIME_OUTPUT_INTDIR}/ld64.lld)\n")),
+		"a Darwin bootstrap passes the selected lld path to the next stage");
 }
 
 function run(): void {
