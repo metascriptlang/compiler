@@ -833,14 +833,36 @@ export function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type 
 	return results;
 }
 
-export function findAccessor(ctx: CheckerContext, objType: Type, routineName: string): ExtensionMethod | null {
-	if (ctx.extensionRegistry == null) return null;
+export function hasAccessor(ctx: CheckerContext, objType: Type, routineName: string): boolean {
+	const owner = nominalTypeSym(objType);
+	const declared = owner != null ? dispatchMethodOf(ctx.dispatchRegistry, owner, routineName) : null;
+	if (declared != null && declared.sym.declNode != null && declared.sym.declNode.flags.has(NodeFlag.Accessor)) return true;
+	if (ctx.extensionRegistry == null) return false;
 	const exts: ExtensionMethod[] = [];
 	for (const e of findAllExtensionsByName(ctx.extensionRegistry, routineName)) {
 		if (e.sym != null && e.sym.declNode != null && e.sym.declNode.flags.has(NodeFlag.Accessor)) exts.push(e);
 	}
-	if (exts.length == 0) return null;
-	return findFirstMatchingExt(exts, objType);
+	return exts.length > 0 && findFirstMatchingExt(exts, objType) != null;
+}
+
+// The property names a class and its bases declare as get/set accessors, the members its field list does not carry.
+export function accessorNamesOf(registry: DispatchRegistry, classSym: Symbol): string[] {
+	const names: string[] = [];
+	let cur: Type | null = classSym.symbolType;
+	for (let d = 0; cur != null && d < 64; d += 1) {
+		const own = classOwnSym(cur);
+		const entries = own != null ? registry.byClass.get(own) : null;
+		if (entries != null) {
+			for (const e of entries) {
+				const decl = e.sym.declNode;
+				if (decl == null || !decl.flags.has(NodeFlag.Accessor)) continue;
+				const name = e.methodName.substring(4);
+				if (names.indexOf(name) < 0) names.push(name);
+			}
+		}
+		cur = classBaseOwner(cur);
+	}
+	return names;
 }
 
 export function hasConcreteReceiver(ext: ExtensionMethod): boolean {

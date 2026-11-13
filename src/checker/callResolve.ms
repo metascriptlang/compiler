@@ -3,7 +3,7 @@
 
 import { membersOf } from "./unitsInCheck";
 import { macroTakesReceiver } from "../ast/macroParams";
-import { fieldDeclarer, refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, refuseHiddenConstructor, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, refuseHookCall, abstractMethodOwnerName, befriend, unfriend, expansionOf, markExpansion, unwrapDecl } from "./visibility";
+import { fieldDeclarer, refuseUnassignedRead, requiresInit, noDefaultReason, hiddenHolder, refuseMemberAccess, refuseHiddenConstructor, isSuperReceiver, declaringSymOf, refuseHiddenMethodCall, refuseHookCall, hiddenPrivateField, abstractMethodOwnerName, befriend, unfriend, expansionOf, markExpansion, unwrapDecl } from "./visibility";
 import { AwaitExprData, HiddenStdConvData, UnaryExprData, ArrayAccessData, ArrayLiteralData, ArrowFunctionData, BlockStmtData, BooleanLiteralData, ConditionalExprData, ExprStmtData, IfStmtData, isEmptyBlock, CallExprData, TypeGenericData, CallingConvention, ClassDeclData, ConstructorDeclData, DecoratedDeclData, PropertyDeclData, FunctionDeclData, FunctionExprData, IdentifierData, MacroDeclData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, NewExprData, SpreadExprData, Node, NodeData, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, OutExprData, ReturnStmtData, SourceLocation, SpliceManyData, StringLiteralData, Symbol, SymbolKind, SymbolState, TryExprData, Type, TypeAssertionData, TypeKind, VariableDeclData, createNode, createNodeAt, BuiltinKind, strongNodes } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
@@ -13,7 +13,7 @@ import { findChar, splitTopLevel } from "../utils/string";
 import { WriteSite, isLocation, lvalueText, viewRefusal, writeRefusal, readonlyRootType, writeThroughArc } from "./assignable";
 import { callCheckStmt, callReadonlyFieldWrite, callDemandReturn, callDemandField, callSelfReadType, callEvalComptimeBlock, callExpandMacroInvocation, callInstantiateGeneric, callCheckExpr, checkInTypeSlot, boundModuleCtx } from "./checkerCallbacks";
 import { isCompileTimeValue, isUserOperatorConstant } from "./constFold";
-import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, sourceOfDefault, findAccessor, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, stdSymbol, assignTemp, boundRead, hoistedTemp, getExtTypeName, isStaticExtensionFlag, ExtensionRegistry, resolveUserOperator } from "./context";
+import { macroPreludeKind, markUsedIn, noteImported, shadowedImportOf, refusesTypeAsValue, CheckerContext, ExportedSymInfo, ExtensionMethod, addError, addErrorRange, addWarning, extractGenericNames, filterExtsByReceiverType, findAllExtensionsByName, findExportedSymbol, findFirstMatchingExt, getExtFnType, isEngineCheckMode, isGenericFn, sgRecordSym, stripReceiverParam, errorCount, extDeclaresReceiver, extReceiverDisplay, extReceiverSym, filterStaticExtsByOwner, nominalTypeSym, stampItem, defaultCheckedAtDeclaration, sourceOfDefault, hasAccessor, accessorNamesOf, dispatchMethodOf, dispatchEntryFor, findDeclaredExt, declaredKeyHash, stdSymbol, assignTemp, boundRead, hoistedTemp, getExtTypeName, isStaticExtensionFlag, ExtensionRegistry, resolveUserOperator } from "./context";
 import { duVariantIndexOfType, findVariantByEnumMember, CandidateScore, convertsImplicitly, numericConvRefuses, numericRefusalReason, checkGenericSpecialization, cmpCandidates, complexDisambiguation, emptyCandidateScore, explainStructuralPrefix, findFirstMismatch, isAssignable, foldTypeParamCandidates, TypeParamFold, isNoMatch, isNominalMismatch, needsStdConv, promotesToNullablePtr, sameNominal, expectsEnumMember, sameType, scoreCandidatePriority, scoreCandidateWithSkip, takesAddressAtCArg, TypeRelation, countRelation, unmetConstraint, typeRelation, unknownReturnRefusal, returnReprRefusal, unownedElementsRefusal, arityAdapts, dropsReadonlyView, nonNullMemberOfNullable, closureIntoCPointerReason } from "./compat";
 import { branchFitsSlot, nullConstantOfRead, comparesAtBase, convertsBetweenUnions, convertUnionToUnion, fitUnionIntoUnion, numericUnionRefusal, checkSwitchCase, convertIntoUnknown, fitIntegerConstant, storedTypeOfNullRead, fitJoinedBranch, fitNode, slotRefuses, instantiateGenericFnValue, isFittingNumericConstant, float32ConstantLiteral, widenNumberLiteral, numericConstantForCarrier, fitNumericIntoUnion, reportNumericConvConstAware, isNodeIntLit, intLiteralExactInFloat, joinBranchTypes, literalFitsInType, narrowUnionToVariant, synthCStringConv, synthClosureThunk, synthMaybeWrap, tryAdoptAnonStruct, tryApplyConverter, valueOfInPlace, widenMaybePayload, widenVariantToUnion, declaredTagUnionOf, propagatedErrorConverter, synthStringify, refDerefHint, cstringIntoStringHint, adoptLiteralArms, adoptLiteralTo, kindArmHandled, distinctText, refuseNamespaceText, distinctTextRefusal, textlessValue, wrappedFnText, wrapInConv, tryStructUpcast, boundCallOf, variantIntoObjectRefusal, offersProtocol, fitSendable, refuseDanglingCString, fitOwnership, checkedProjection, isSlotUnion, tagUnionMemberSlot, convertsUnionImplicitly, formsOwnedClosure } from "./fit";
 import { checkImportCall } from "./importCall";
@@ -6961,8 +6961,8 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	}
 	if (isUnresolvedType(propType) && !d.isOptional && !isUnresolvedType(resolvedObjType) && resolvedObjType.kind != TypeKind.Error) {
 		if (ctx.initTracker.leftPartOfAsgn > 0) {
-			if (findAccessor(ctx, objType, "set_" + d.property) != null || findAccessor(ctx, objType, "get_" + d.property) != null) return propType;
-		} else if (findAccessor(ctx, objType, "get_" + d.property) != null) {
+			if (hasAccessor(ctx, objType, "set_" + d.property) || hasAccessor(ctx, objType, "get_" + d.property)) return propType;
+		} else if (hasAccessor(ctx, objType, "get_" + d.property)) {
 			return callGetter(ctx, node, d);
 		}
 	}
@@ -7088,15 +7088,18 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 		if (engineVirtual != null) return engineVirtual;
 		if (!suppressDynWrite) {
 			const typeName = typeDisplayName(resolvedObjType);
-			let suggestion = "";
+			const available: string[] = [];
 			if (resolvedObjType.typeNames != null) {
 				for (const fn of resolvedObjType.typeNames) {
-					if (fn != d.property && fn.length > 0) {
-						if (suggestion == "") { suggestion = fn; }
-						else { suggestion = suggestion + ", " + fn; }
-					}
+					if (fn != d.property && fn.length > 0 && hiddenPrivateField(ctx, fieldOwnerSym, [fn]) == "") available.push(fn);
 				}
 			}
+			if (fieldOwnerSym != null) {
+				for (const an of accessorNamesOf(ctx.dispatchRegistry, fieldOwnerSym)) {
+					if (an != d.property && available.indexOf(an) < 0) available.push(an);
+				}
+			}
+			const suggestion = available.join(", ");
 			const mutableForm = isStringLike(resolvedObjType) ? removedStringMutatorForm(d.property) : "";
 			if (mutableForm != "") {
 				addError(ctx, `strings are immutable, so string has no '${d.property}': write ${mutableForm}`, node.location.line, node.location.column);
