@@ -6,7 +6,7 @@ import { stepStoreRoot, storedOutput, storeScratch, storePublish } from "./store
 import { atomicCopyFile, atomicWriteFile } from "../io";
 import { exists, isDir, readDir, readFile, writeFile, ensureDir, removeAll } from "std/fs";
 import { join, dirname, basename, isAbsolute } from "std/fs/path";
-import { execPath, platform, findOnPath } from "std/process";
+import { execPath, platform, findOnPath, envPairs } from "std/process";
 import { spawn, ChildProcess, ChildStream } from "std/process/child";
 import { totalMem } from "std/os";
 import { writeStdout, writeStderr } from "std/io";
@@ -84,6 +84,7 @@ interface Job {
 	args: string[];
 	cwd: string;
 	shown: string;
+	env: Record<string, string> | null;
 	child: ChildProcess | null;
 	out: string;
 	err: string;
@@ -99,7 +100,19 @@ interface Job {
 }
 
 function job(node: GraphNode, exe: string, args: string[], cwd: string, shown: string, finish: (j: Job) => void, abandon: () => void): Job {
-	return { node, exe, args, cwd, shown, child: null, out: "", err: "", outEnded: false, errEnded: false, live: false, expectExit: -1, startMark: 0, startedAt: 0, peakRss: 0, finish, abandon };
+	return { node, exe, args, cwd, shown, env: null, child: null, out: "", err: "", outEnded: false, errEnded: false, live: false, expectExit: -1, startMark: 0, startedAt: 0, peakRss: 0, finish, abandon };
+}
+
+function inheritedEnvironmentWith(x: Execution, set: GraphEnv[]): Record<string, string> {
+	const variables = envPairs();
+	for (const e of set) {
+		const upper = e.name.toUpperCase();
+		for (const inherited of variables.keys()) {
+			if (inherited.toUpperCase() == upper) variables.delete(inherited);
+		}
+		variables.set(e.name, e.path == null ? e.value : pathOf(x, e.path));
+	}
+	return variables;
 }
 
 function storeDir(x: Execution): string {
@@ -303,8 +316,7 @@ function runCommand(x: Execution, n: GraphNode): Job | null {
 	let args = argv.slice(1, argv.length);
 	let exe = found;
 	const env = n.env.map((e: GraphEnv): string => `${e.name}=${e.path == null ? e.value : pathOf(x, e.path)}`);
-	if (env.length > 0) {
-		if (platform == "windows") throw new Error(`${label(n)}: setEnvironmentVariable is not supported on Windows yet`);
+	if (env.length > 0 && platform != "windows") {
 		args = env.concat([found]).concat(args);
 		exe = "/usr/bin/env";
 	}
@@ -346,6 +358,7 @@ function runCommand(x: Execution, n: GraphNode): Job | null {
 	}, (): void => { if (tmp != "") removeAll(tmp); });
 	started.live = live;
 	started.expectExit = n.expectExit;
+	if (env.length > 0 && platform == "windows") started.env = inheritedEnvironmentWith(x, n.env);
 	return started;
 }
 
@@ -605,7 +618,11 @@ function executePlan(x: Execution, id: int32): string {
 				}
 				j.startedAt = startedAt;
 				j.startMark = buildStartMark();
-				const child = spawn(j.exe, j.args, { cwd: j.cwd, ownProcessGroup: n.timeout > 0 && platform != "windows" });
+				const variables = j.env;
+				const killsItsTree = n.timeout > 0 && platform != "windows";
+				const child = variables == null
+					? spawn(j.exe, j.args, { cwd: j.cwd, ownProcessGroup: killsItsTree })
+					: spawn(j.exe, j.args, { cwd: j.cwd, ownProcessGroup: killsItsTree, env: variables });
 				if (!child.ok) {
 					j.abandon();
 					fail(n, startedAt, `${label(n)}: cannot start ${j.shown}: ${child.error.message}`);
