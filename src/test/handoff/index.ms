@@ -168,6 +168,7 @@ import "./raiserPackedCalls";
 import "./raiserPackedLegacy";
 import "./raiserModuleTdzEntry";
 import "./raiserConstBindingLoadedBeforeLoop";
+import "./raiserCursorBindingKeepsItsInitializer";
 import "./raiserReturnLeavesTries";
 import "./raiserRequiredField";
 import "./raiserRuntimeLayout";
