@@ -1094,7 +1094,7 @@ triage_side() {
 # lane: moves the new reds that are not the slice's from $OUT/<lane>.new to $OUT/<lane>.notyours
 triage_lane() {
   local lane=$1 n d slice main
-  : >"$OUT/$lane.notyours"
+  : >"$OUT/$lane.notyours"; rm -f "$OUT/$lane.judged"
   [ "$record" -eq 0 ] && [ "$release" -eq 0 ] && [ "${GATE_TRIAGE:-1}" != 0 ] || return 0
   case "$TRIAGE_LANES" in *" $lane "*) ;; *) return 0 ;; esac
   triage_eligible "$lane" <"$OUT/$lane.new" >"$OUT/$lane.triage"
@@ -1109,6 +1109,7 @@ triage_lane() {
   rm -rf "$d/out/corpus" "$d/out/hcr" "$d.lock"
   if [ "$slice" -ne 0 ] || [ "$main" -ne 0 ]; then say "  triage: a rerun could not judge ($OUT/$lane.triage.log), so the new reds stay the slice's"; return 0; fi
   triage_judge "$OUT/$lane.triage" "$OUT/$lane.tri.main" "$OUT/$lane.tri.slice" "$TRIAGE_RUNS" >"$OUT/$lane.notyours"
+  : >"$OUT/$lane.judged"
   cut -f1 "$OUT/$lane.notyours" | grep -vxF -f - "$OUT/$lane.new" >"$OUT/$lane.new.next"
   mv "$OUT/$lane.new.next" "$OUT/$lane.new"
 }
@@ -3043,14 +3044,19 @@ shadow_verdict() {
   [ "${GATE_SHADOW:-1}" != 0 ] && [ -x "$CAND" ] && [ ! -s "$OUT/build.new" ] && [ -f tools/gate.ms ] && [ -n "$ran" ] || return 0
   [ ! -f "$KNOWN_LOCAL" ] || known+=("$KNOWN_LOCAL")
   rm -rf "$d"; mkdir -p "$d" || return 0
-  for lane in $ran; do cp "$OUT/$lane.log" "$d/" 2>/dev/null; done
+  printf '%s\n' "$paths" >"$d/changed.paths"
+  for lane in $ran; do
+    cp "$OUT/$lane.log" "$d/" 2>/dev/null
+    [ ! -f "$OUT/$lane.judged" ] || { cp "$OUT/$lane.tri.main" "$d/$lane.reruns.main"; cp "$OUT/$lane.tri.slice" "$d/$lane.reruns.slice"; }
+  done
   env -u NO_COLOR -u FORCE_COLOR "$CAND" build tools/gate.ms --output="$d/verdict$EXE_SUFFIX" >"$d/build.txt" 2>&1 \
     || { say "gate: shadow verdict: tools/gate.ms did not build ($d/build.txt)"; return 0; }
   "$d/verdict$EXE_SUFFIX" "$d" "${known[@]}" >"$d/verdict.txt" 2>&1
   for lane in $ran; do
     n=$((n + 1))
-    sh="$(grep -c . "$OUT/$lane.red" | tr -d ' ') red · $(cat "$OUT/$lane.new" "$OUT/$lane.notyours" 2>/dev/null | grep -c . | tr -d ' ') new"
+    sh="$(grep -c . "$OUT/$lane.red" | tr -d ' ') red · $(grep -c . "$OUT/$lane.new" | tr -d ' ') new · $(grep -c . "$OUT/$lane.notyours" | tr -d ' ') not the slice's"
     ms=$(sed -n "s/^gate: $lane [0-9]*s · \\([0-9]* red\\) · [0-9]* known · \\([0-9]* new\\).*$/\\1 · \\2/p" "$d/verdict.txt")
+    ms="$ms · $(sed -n "s/^gate: $lane [0-9]*s · .* · \\([0-9]*\\) not the slice's.*$/\\1/p" "$d/verdict.txt" | grep . || echo 0) not the slice's"
     [ "$sh" = "$ms" ] || differs="$differs $lane (gate.sh $sh; gate.ms ${ms:-no line})"
   done
   if [ -z "$differs" ]; then say "gate: shadow verdict: tools/gate.ms counts the same reds in $n lane(s)"
