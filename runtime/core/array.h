@@ -296,6 +296,10 @@ void msUint8ArraySplice3(msUint8Array* arr, int64_t start, int64_t deleteCount, 
 	(arr_ptr)->len = 0; \
 } while(0)
 
+/* The tail of an array of Unowned elements is given up by the helper the compiler names in this call's place
+   (msUnownedRefArraySetLen); an array of any other element keeps its tail for the caller to destroy. */
+#define msGenericArrayGiveUpEdges(arr_ptr, n) ((void)0)
+
 /* Capacity query. */
 #define msGenericArrayCapacity(arr_ptr) \
 	((arr_ptr)->p != NULL ? (int64_t)(((msArrayPayloadBase*)(arr_ptr)->p)->cap & MS_CAP_MASK) : (int64_t)0)

@@ -238,10 +238,13 @@ export function at<T>(this arr: Vec<T>, idx: number): T {
 
 extern function raiseRange(value: int64, lo: int64, hi: int64): never from "msRaiseRangeError";
 
+extern function giveUpEdgesFrom<T>(this arr: T[], n: int64): void from "&msGenericArrayGiveUpEdges";
+
 /** Cuts the array to n elements and destroys every evicted one; an n outside 0..length is a range error. */
 @compilerFunc
 export function shrink<T>(this arr: T[], n: int64): void {
 	if (n < 0 || n > arr.length) raiseRange(n, 0, arr.length);
+	arr.giveUpEdgesFrom(n);
 	while (arr.length > n) {
 		arr.pop();
 	}

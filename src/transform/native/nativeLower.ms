@@ -265,7 +265,7 @@ export function evictHelperName(nativeName: string, elemType: Type | null, ctx: 
 	const bare = countedEvictElement(elemType);
 	if (bare == null) return "";
 	if (isUnownedSlot(elemType)) {
-		if (nativeName != "msGenericArraySetLen") return "";
+		if (nativeName != "msGenericArraySetLen" && nativeName != "msGenericArrayGiveUpEdges") return "";
 		return isReadonlyView(arrT) || isReadonlyUnownedSlot(elemType) ? "msUnownedRoRefArraySetLen" : "msUnownedRefArraySetLen";
 	}
 	if (readonlyCountedElement(arrT, elemType)) {
