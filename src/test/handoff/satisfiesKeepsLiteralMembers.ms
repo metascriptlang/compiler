@@ -61,3 +61,26 @@ test "satisfiesKeepsLiteralMembers: true under boolean and a member under its en
 		"const s: \"lib\" = t.name;";
 	assert hasError(widened, "is not assignable to type '\"lib\"'");
 }
+
+test "satisfiesKeepsLiteralMembers: a nested literal reaches Readonly<T>, whose nested object is read-only too" {
+	const source = SHAPE +
+		"interface Outer { inner: { kind: Kind }; n: number }\n" +
+		"function readOuter(o: Readonly<Outer>): string { return o.inner.kind; }\n" +
+		"const o = { inner: { kind: \"circle\" }, n: 1 } satisfies Outer;\n" +
+		"console.log(readOuter(o));";
+	assert strictErrorCount(source) == 0;
+}
+
+test "satisfiesKeepsLiteralMembers: `as const` takes its context, keeps every literal and stays read-only" {
+	const source = SHAPE +
+		"function area(s: Readonly<Shape>): number { return s.size; }\n" +
+		"const p = { kind: \"circle\", size: 2.5 } as const satisfies Shape;\n" +
+		"const k: \"circle\" = p.kind;\n" +
+		"const z: 2.5 = p.size;\n" +
+		"const r: Readonly<Shape> = { kind: \"square\", size: 1 } as const;\n" +
+		"console.log(k, z, area(p), area(r));";
+	assert strictErrorCount(source) == 0;
+	assert hasError(SHAPE + "const p = { kind: \"circle\", size: 2 } as const satisfies Shape;\np.size = 3;", "cannot write through Readonly<");
+	assert hasError(SHAPE + "interface Outer { inner: { kind: Kind }; n: number }\nconst o = { inner: { kind: \"circle\" }, n: 1 } as const satisfies Outer;\no.inner.kind = \"square\";", "cannot write through Readonly<");
+	assert hasError(SHAPE + "function mutate(s: Shape): void { s.kind = \"square\"; }\nconst p = { kind: \"circle\", size: 2 } as const satisfies Shape;\nmutate(p);", "declare the parameter Readonly<Shape>");
+}
