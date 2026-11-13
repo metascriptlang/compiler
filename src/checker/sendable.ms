@@ -1,7 +1,7 @@
 // Actor sendability + this-write isolation rules.
 
 import { stmtsOf } from "./unitsInCheck";
-import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrayPatternData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ObjectPatternData, ObjectPatternPropData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, ThrowStmtData, Type, TypeKind, UpdateExprData, VariableDeclData, YieldExprData, BuiltinKind, ProgramData } from "../ast/node";
+import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrayPatternData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, HiddenDerefData, HiddenStdConvData, IdentifierData, MacroInvocationData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ObjectPatternData, ObjectPatternPropData, OutExprData, PropertyDeclData, ReturnStmtData, SourceLocation, SpreadExprData, Symbol, SymbolKind, TestDeclData, ThrowStmtData, Type, TypeKind, UpdateExprData, VariableDeclData, YieldExprData, BuiltinKind, ProgramData, TypeAssertionData, createNodeAt } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { exportedFunctionOf, decoratorNamed } from "./decoratorHelpers";
 import { CheckerContext, DispatchRegistry, addError, addWarning, dispatchEntryFor, dispatchOverridesFor, isGenericFn, isOutsideResolvedStd } from "./context";
@@ -363,7 +363,43 @@ function consumeSentClosure(ctx: CheckerContext, ident: Node): void {
 
 // Returns true when this arg is a plain-ref BORROW the caller must not discard
 // (the discard itself is diagnosed at the call site via ctx.stmtPosExpr).
+function withOperand(arg: Node, operand: Node, replacement: Node): Node {
+	if (arg === operand) return replacement;
+	if (arg.kind == NodeKind.HiddenStdConv || arg.kind == NodeKind.HiddenSubConv) {
+		const d = arg.data as HiddenStdConvData;
+		d.convExpr = withOperand(d.convExpr, operand, replacement);
+	} else if (arg.kind == NodeKind.HiddenDeref) {
+		const d = arg.data as HiddenDerefData;
+		d.expr = withOperand(d.expr, operand, replacement);
+	} else if (arg.kind == NodeKind.TypeAssertion) {
+		const d = arg.data as TypeAssertionData;
+		d.asExpr = withOperand(d.asExpr, operand, replacement);
+	} else {
+		throw new Error(`internal: the sent closure binding '${describeExpr(operand)}' is not reached through the conversions around its argument`);
+	}
+	return arg;
+}
+
+function sendMovesClosureBinding(ctx: CheckerContext, call: Node, pi: number): void {
+	const args = call.kind == NodeKind.NewExpr ? (call.data as NewExprData).newArguments : (call.data as CallExprData).arguments;
+	const sent = peelView(args[pi]);
+	const sym = sent.resolvedSym;
+	if (sent.kind != NodeKind.Identifier || !isSendableFunction(args[pi].nodeType) || sym == null) return;
+	if (sym.symbolKind != SymbolKind.Variable || hasFlag(sym, SymbolFlag.Global)) return;
+	const handedOver = createNodeAt(NodeKind.MoveExpr, { moveArg: sent }, sent.location);
+	handedOver.nodeType = sent.nodeType;
+	args[pi] = withOperand(args[pi], sent, handedOver);
+	recordActorMove(ctx, handedOver);
+}
+
 export function checkActorArgSendable(ctx: CheckerContext, call: Node, argNode: Node, pi: number, sendClass: boolean): boolean {
+	const mark = ctx.errors.length;
+	const borrowed = judgeActorArg(ctx, call, argNode, pi, sendClass);
+	if (sendClass && ctx.errors.length == mark) sendMovesClosureBinding(ctx, call, pi);
+	return borrowed;
+}
+
+function judgeActorArg(ctx: CheckerContext, call: Node, argNode: Node, pi: number, sendClass: boolean): boolean {
 	const t = argNode.nodeType;
 	if (t == null) return false;
 	const sent = peelView(argNode);
@@ -2484,9 +2520,19 @@ function followMovedSource(rhs: Node, w: OwnerWalk): boolean {
 	return true;
 }
 
+function ownsAnEnvOfCopies(ctx: CheckerContext, closure: Node): boolean {
+	if (!closure.flags.has(NodeFlag.SendableClosure)) return false;
+	const views: Symbol[] = [];
+	const moved: Symbol[] = [];
+	collectBorrowCaptures(ctx, closure, views, moved);
+	return views.every((v: Symbol): boolean => moved.includes(v));
+}
+
 function requireFreshBinding(init: Node | null, w: OwnerWalk): void {
 	const lit = init == null ? null : peelView(init);
-	const held = lit != null && (lit.kind == NodeKind.ArrowFunction || lit.kind == NodeKind.FunctionExpr) ? borrowedCapture(w.ctx, lit) : null;
+	const closure = lit != null && (lit.kind == NodeKind.ArrowFunction || lit.kind == NodeKind.FunctionExpr) ? lit : null;
+	if (closure != null && ownsAnEnvOfCopies(w.ctx, closure)) return;
+	const held = closure != null ? borrowedCapture(w.ctx, closure) : null;
 	if (held == null || w.reported) { requireFresh(init, "the value bound to '" + w.name + "'", w); return; }
 	reportNotSoleOwner(w, "the closure bound to '" + w.name + "' captures '" + describeExpr(held) + "' at " + held.location.line + ":" + held.location.column + ", and the parent still names that captured graph");
 }
