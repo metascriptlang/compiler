@@ -2,7 +2,7 @@
 // AST statement nodes → bytecode instructions.
 
 import {
-	Node, NodeKind, NodeFlag, TypeKind, DeclKind, Symbol, SymbolFlag,
+	Node, NodeKind, NodeFlag, TypeKind, DeclKind, Symbol, SymbolFlag, SymbolKind,
 	BinaryExprData, UnaryExprData, UpdateExprData, MemberExprData, ArrayAccessData, HiddenStdConvData, HiddenDerefData, NumberLiteralData,
 	ReturnStmtData, BlockStmtData, ExprStmtData, MacroInvocationData, UnreachableStmtData, ConditionalExprData,
 	VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData,
@@ -15,7 +15,7 @@ import { RaiserOpcode, RaiserRegClass, RaiserRole, RaiserInstruction, raiserABC,
 import { raiserNil, raiserInt, raiserConstString } from "../../raiser/value";
 import {
 	RaiserCompState, RaiserTryInfo, emitInst, allocReg, allocBlock, allocWord, allocRef, allocDyn, classOfReg, emitLoadConst, emitRet, emitReturnNothing,
-	declareLocal, declaredSymbol, regIsFixedLocal, resetTemps,
+	declareLocal, declaredSymbol, regIsFixedLocal, resetTemps, resolveLocal,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	emitAbxPlaceholder, patchAbxTo,
 	pushLoop, jumpTarget, currentLoop, landsPast, patchLoopBreaks, patchLoopContinues, queueRaiserCompileError, emitTrapNil,
@@ -290,6 +290,12 @@ function compileIfStmt(s: RaiserCompState, node: Node): void {
 
 function compileDoWhileStmt(s: RaiserCompState, node: Node): void {
 	const d = node.data as DoWhileStmtData;
+	const outerLocals = loadConstGlobalsBeforeLoop(s, [d.doCondition, d.doBody]);
+	compileDoWhileLoop(s, d);
+	s.locals.items.shrink(outerLocals);
+}
+
+function compileDoWhileLoop(s: RaiserCompState, d: DoWhileStmtData): void {
 	const loopStart = codeLen(s);
 	pushLoop(s, loopStart, d.dwLabel);
 
@@ -306,6 +312,42 @@ function compileDoWhileStmt(s: RaiserCompState, node: Node): void {
 
 function compileWhileStmt(s: RaiserCompState, node: Node): void {
 	const d = node.data as WhileStmtData;
+	const outerLocals = loadConstGlobalsBeforeLoop(s, [d.whileCondition, d.whileBody]);
+	compileWhileLoop(s, d);
+	s.locals.items.shrink(outerLocals);
+}
+
+function loadConstGlobalsBeforeLoop(s: RaiserCompState, parts: (Node | null)[]): int32 {
+	const outerLocals = s.locals.items.length;
+	const declared = new HashSet<Symbol>();
+	const read: Symbol[] = [];
+	for (const part of parts) collectConstGlobalReads(s, part, declared, read);
+	for (const sym of read) {
+		if (declared.has(sym) || resolveLocal(s, sym) >= 0) continue;
+		const reg = allocFor(s, sym.symbolType);
+		emitInst(s, raiserABC(RaiserOpcode.LoadGlobal, reg, resolveGlobal(s, sym), 0));
+		declareLocal(s, sym, reg);
+	}
+	return outerLocals;
+}
+
+function collectConstGlobalReads(s: RaiserCompState, node: Node | null, declared: HashSet<Symbol>, read: Symbol[]): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.ClassDecl) return;
+	const sym = node.resolvedSym;
+	if (node.kind == NodeKind.VariableDecl && sym != null) declared.add(sym);
+	if (node.kind == NodeKind.Identifier && isConstGlobal(s, sym) && !read.includes(sym!)) read.push(sym!);
+	forEachChild(node, (child: Node): void => { collectConstGlobalReads(s, child, declared, read); });
+}
+
+function isConstGlobal(s: RaiserCompState, sym: Symbol | null): boolean {
+	if (sym == null || sym.symbolKind != SymbolKind.Variable || !hasFlag(sym, SymbolFlag.Global)) return false;
+	if (hasFlag(sym, SymbolFlag.Mutable) || hasFlag(sym, SymbolFlag.StaticLocal) || hasFlag(sym, SymbolFlag.Static)) return false;
+	if (sym.symbolType == null || sym.symbolType.kind == TypeKind.Var) return false;
+	return resolveGlobal(s, sym) >= 0;
+}
+
+function compileWhileLoop(s: RaiserCompState, d: WhileStmtData): void {
 	const loopStart = codeLen(s);
 	pushLoop(s, loopStart, d.whileLabel);
 
@@ -413,6 +455,12 @@ function compileForStmt(s: RaiserCompState, node: Node): void {
 		compileStmt(s, d.forInit);
 	}
 
+	const outerLocals = loadConstGlobalsBeforeLoop(s, [d.forCondition, d.forBody, d.forUpdate]);
+	compileForLoop(s, d);
+	s.locals.items.shrink(outerLocals);
+}
+
+function compileForLoop(s: RaiserCompState, d: ForStmtData): void {
 	const loopStart = codeLen(s);
 	pushLoop(s, loopStart, d.forLabel);
 

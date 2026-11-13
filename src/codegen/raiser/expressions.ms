@@ -1036,6 +1036,8 @@ function compileExprRaw(s: RaiserCompState, node: Node): int32 {
 			const d = node.data as IdentifierData;
 			const global = resolveGlobal(s, node.resolvedSym);
 			if (global >= 0) {
+				const loaded = resolveLocal(s, node.resolvedSym);
+				if (loaded >= 0) return loaded;
 				const destination = allocFor(s, node.resolvedSym != null && node.resolvedSym!.symbolType != null ? node.resolvedSym!.symbolType : node.nodeType);
 				emitInst(s, raiserABC(RaiserOpcode.LoadGlobal, destination, global, 0));
 				return destination;
