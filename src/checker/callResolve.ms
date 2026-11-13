@@ -3532,6 +3532,11 @@ function fitArgsToBoundFormals(ctx: CheckerContext, node: Node, fnType: Type, bi
 		const formal = applySubstitutions(fnType.typeChildren[ai], bindings);
 		if (formal != null && restWithoutElements(formal)) continue;
 		if (formal == null || hasGenericParams(formal)) continue;
+		const unionFit = fitUnionIntoUnion(arg, peelTransparentInstance(arg.nodeType), peelTransparentInstance(formal));
+		if (unionFit != null) {
+			cd.arguments[ai] = unionFit;
+			continue;
+		}
 		if (!isAssignable(arg.nodeType, formal) && !needsStdConv(arg.nodeType, formal) && !wrapsIntoMaybe(arg.nodeType, formal)) {
 			addError(ctx, "Argument type mismatch in '" + getCalleeName(cd.callee) + "' arg " + String(ai) + ": got " + typeDisplayName(arg.nodeType) + ", expected " + typeDisplayName(formal) + returnReprRefusal(arg.nodeType, formal, wrappedFnText(arg)) + unownedElementsRefusal(arg.nodeType, formal) + refDerefHint(arg, arg.nodeType, formal) + cstringIntoStringHint(arg.nodeType, formal),
 				arg.location.line, arg.location.column);
