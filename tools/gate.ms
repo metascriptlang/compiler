@@ -24,9 +24,8 @@ function between(line: string, head: string, tail: string): string | null {
 	return end < 0 ? null : line.substring(head.length, end);
 }
 
-function redsOf(lane: string, lines: string[]): string[] {
+function redsOf(lane: string, lines: string[], top: string): string[] {
 	const reds: string[] = [];
-	const top = `${cwd()}/`;
 	let file = "";
 	for (const line of lines) {
 		let red: string | null = null;
@@ -93,7 +92,37 @@ function subjectOf(lane: string, red: string): string {
 function rerunJudges(lane: string, red: string, changed: string[]): boolean {
 	if (red.endsWith("no result") || red.includes("no named failure") || red == "timed out" || red.startsWith("setup:") || red.startsWith("self-host: ")) return false;
 	const subject = subjectOf(lane, red);
-	return subject != "" && !changed.some((path: string): boolean => path.includes(subject));
+	if (subject == "" || subject.includes(",") || subject.includes(";")) return false;
+	return !changed.some((path: string): boolean => path.includes(subject));
+}
+
+function rerunSubjects(lane: string, fresh: string[], changed: string[]): string[] {
+	const subjects: string[] = [];
+	if (!rerunLanes.includes(lane)) return subjects;
+	for (const red of fresh) {
+		if (rerunJudges(lane, red, changed) && !subjects.includes(subjectOf(lane, red))) subjects.push(subjectOf(lane, red));
+	}
+	return subjects.sort();
+}
+
+function rerunReds(lane: string, root: string, subjects: string[]): Result<string[], string> {
+	const names: string[] = [];
+	for (let run = 1; run <= rerunCount; run++) {
+		const path = `${root}/out/reruns/${lane}.${run}.log`;
+		const text = readFile(path);
+		if (!text.ok) return Result.err(`${path} is missing`);
+		const lines = plain(text.value).split("\n");
+		const rc = trailer(lines, "RC");
+		if (rc == null) return Result.err(`${path} has no RC trailer`);
+		if (lines.some((line: string): boolean => line.startsWith("TIMEOUT after "))) return Result.err(`${path} timed out`);
+		const reds = redsOf(lane, lines, `${root}/`);
+		if (rc != 0 && reds.length == 0) return Result.err(`${path}: exit ${rc} with no named failure`);
+		for (const subject of subjects) {
+			if (!text.value.includes(subject)) return Result.err(`${path} never ran ${subject}`);
+		}
+		for (const red of reds) names.push(red);
+	}
+	return Result.ok(names);
 }
 
 function notTheSlices(red: string, onMain: string[], onSlice: string[]): string | null {
@@ -161,9 +190,18 @@ function readKnown(known: Map<string, string[]>, path: string): void {
 	}
 }
 
-const params = argv.slice(1);
-if (params.length < 2) {
-	console.error("usage: gate <directory of lane logs> <known-red.json>...");
+const params = argv.slice(1).filter((a: string): boolean => !a.startsWith("--"));
+const flags = argv.slice(1).filter((a: string): boolean => a.startsWith("--"));
+function flag(name: string): string | null {
+	const given = flags.find((f: string): boolean => f.startsWith(`--${name}=`));
+	return given == null ? null : given.substring(name.length + 3);
+}
+const planOnly = flags.includes("--plan");
+const mainRoot = flag("main");
+const sliceRoot = flag("slice") ?? cwd();
+const strangers = flags.filter((f: string): boolean => f != "--plan" && !f.startsWith("--main=") && !f.startsWith("--slice="));
+if (params.length < 2 || strangers.length > 0) {
+	console.error("usage: gate <directory of lane logs> <known-red.json>... [--plan | --main=<checkout of main that ran the reruns> [--slice=<this checkout>]]");
 	exit(2);
 }
 const dir = params[0];
@@ -184,7 +222,7 @@ for (const entry of readDir(dir).sort()) {
 	const rc = trailer(lines, "RC");
 	const secs = trailer(lines, "SECS");
 	const part = entry.substring(0, entry.length - 4);
-	const reds = redsOf(name, lines);
+	const reds = redsOf(name, lines, `${cwd()}/`);
 	const tally = casesOf(name, lines);
 	if (tally.length == 2) {
 		lane.passed += tally[0];
@@ -213,15 +251,46 @@ function firstThree(names: string[]): string {
 }
 
 const changed = linesOf(`${dir}/changed.paths`);
+function freshOf(lane: Lane): string[] {
+	const listed = (known.get(lane.name) ?? []).filter(steady);
+	return lane.reds.filter(steady).filter((red: string): boolean => !listed.includes(red)).sort();
+}
+if (planOnly) {
+	if (changed == null) throw new Error(`gate: --plan needs ${dir}/changed.paths`);
+	const plan: string[] = [];
+	for (const lane of lanes) {
+		const subjects = rerunSubjects(lane.name, freshOf(lane), changed);
+		if (subjects.length > 0) plan.push(`${lane.name}=${subjects.join(",")}`);
+	}
+	console.log(plan.join(";"));
+	exit(0);
+}
 let anyNew = false;
 for (const lane of lanes) {
 	const listed = (known.get(lane.name) ?? []).filter(steady);
 	const reds = lane.reds.filter(steady).sort();
 	const flakes = lane.reds.filter((red: string): boolean => !steady(red)).sort();
-	const fresh = reds.filter((red: string): boolean => !listed.includes(red));
+	const fresh = freshOf(lane);
 	const fixed = listed.filter((row: string): boolean => !reds.includes(row)).sort();
-	const onMain = rerunLanes.includes(lane.name) ? linesOf(`${dir}/${lane.name}.reruns.main`) : null;
-	const onSlice = rerunLanes.includes(lane.name) ? linesOf(`${dir}/${lane.name}.reruns.slice`) : null;
+	let onMain = rerunLanes.includes(lane.name) ? linesOf(`${dir}/${lane.name}.reruns.main`) : null;
+	let onSlice = rerunLanes.includes(lane.name) ? linesOf(`${dir}/${lane.name}.reruns.slice`) : null;
+	let unjudged = "";
+	if (mainRoot != null) {
+		if (changed == null) throw new Error(`gate: --main needs ${dir}/changed.paths`);
+		const subjects = rerunSubjects(lane.name, fresh, changed);
+		onMain = null;
+		onSlice = null;
+		if (subjects.length > 0) {
+			const main = rerunReds(lane.name, mainRoot, subjects);
+			const slice = rerunReds(lane.name, sliceRoot, subjects);
+			if (!main.ok) unjudged = main.error;
+			else if (!slice.ok) unjudged = slice.error;
+			else {
+				onMain = main.value;
+				onSlice = slice.value;
+			}
+		}
+	}
 	if ((onMain == null) != (onSlice == null)) throw new Error(`gate: ${lane.name} has the reruns of one side only`);
 	const owed: string[] = [];
 	const others: string[] = [];
@@ -241,6 +310,7 @@ for (const lane of lanes) {
 	if (flakes.length > 0) line += ` · ${flakes.length} flaky (${firstThree(flakes)})`;
 	if (lane.counted) line += ` · ${lane.passed}/${lane.cases} case`;
 	console.log(line);
+	if (unjudged != "") console.log(`  reruns could not judge, so the new reds stay the slice's: ${unjudged}`);
 	for (const red of owed) console.log(`  new: ${red}`);
 	for (const other of others) console.log(`  not the slice's: ${other}`);
 	for (const row of fixed) console.log(`  known-now-green: ${row}`);

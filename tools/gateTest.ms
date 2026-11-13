@@ -27,6 +27,7 @@ if (!built.ok) {
 }
 
 function put(path: string, content: string): void {
+	ensureDir(path.substring(0, path.lastIndexOf("/")));
 	if (writeFile(path, content).ok) return;
 	console.log(`gate verdict: cannot write ${path}`);
 	exit(1);
@@ -37,15 +38,19 @@ function log(body: string[], rc: number, secs: number = 3): string {
 }
 
 let cases = 0;
-function verdict(known: string, logs: string[][], hostKnown: string = "{}", files: string[][] = []): string {
+function nextDir(): string {
+	return `${root}/case${cases + 1}`;
+}
+function verdict(known: string, logs: string[][], hostKnown: string = "{}", files: string[][] = [], mode: string = ""): string {
+	const dir = nextDir();
 	cases = cases + 1;
-	const dir = `${root}/case${cases}`;
 	ensureDir(dir);
 	put(`${dir}.json`, known);
 	put(`${dir}.host.json`, hostKnown);
 	for (const pair of logs) put(`${dir}/${pair[0]}.log`, pair[1]);
 	for (const pair of files) put(`${dir}/${pair[0]}`, pair[1]);
-	const r = execFileCapture(tool, [dir, `${dir}.json`, `${dir}.host.json`], cwd());
+	const flags = mode == "plan" ? ["--plan"] : mode == "run logs" ? [`--slice=${dir}/slice`, `--main=${dir}/main`] : [];
+	const r = execFileCapture(tool, [dir, `${dir}.json`, `${dir}.host.json`].concat(flags), cwd());
 	const out = r.ok ? r.value : `${r.error.output}${r.error.errorOutput}exit ${r.error.exitCode}`;
 	return out.trim().split("\n").map((l: string): string => l.trim()).join("|");
 }
@@ -144,6 +149,46 @@ record("a lane's line ends with its passed and total cases, and names its xpass 
 		["tests.c0", log(["      Tests  80 passed (80)"], 0)],
 		["tests.c1", log(["      Tests  3 failed | 2 passed (5)", "      Tests  none"], 0)],
 	]));
+
+record("the plan names once each subject a rerun can judge, lane by lane",
+	"corpus=once,twice;tests=src/test/c/other.ms",
+	verdict("{\"corpus\":{\"old [c]\":{}}}", [
+		["corpus", log(["  ✗ FAIL twice [c] exit 1", "  ✗ FAIL twice [js] exit 1", "  ✗ FAIL once [c] exit 1", "  ✗ FAIL old [c] exit 1"], 1)],
+		["fmt", log(["LOSSY src/a.ms drops a comment"], 1)],
+		["tests", log([` FAIL  ${cwd()}/src/test/c/json.ms`, "  × parses numbers", ` FAIL  ${cwd()}/src/test/c/other.ms`, "  × adds", "  × subtracts", "NORESULT src/test/c/index.ms > no result"], 1)],
+	], "{}", [["changed.paths", "src/test/c/json.ms\n"]], "plan"));
+
+function runs(side: string, lane: string, bodies: string[][]): string[][] {
+	return bodies.map((body: string[], i: number): string[] => [`${side}/out/reruns/${lane}.${i + 1}.log`, log(body, body.some((l: string): boolean => l.includes("FAIL")) ? 1 : 0)]);
+}
+const ran = "ran onMain once twice never";
+record("a new red is judged from the three run logs of each side",
+	"gate: corpus 3s · 4 red · 0 known · 1 new · 3 not the slice's|new: twice [c]|not the slice's: never [c] (red 0/3 on this candidate, 0/3 on main)|not the slice's: onMain [c] (red on main 1/3)|not the slice's: once [c] (red 1/3 on this candidate, 0/3 on main)|gate: RED (corpus)|exit 1",
+	verdict("{}", [["corpus", rerun]], "{}", [["changed.paths", "src/checker/checkPass.ms\n"]]
+		.concat(runs("main", "corpus", [[ran, "  ✗ FAIL onMain [c] exit 1"], [ran], [ran]]))
+		.concat(runs("slice", "corpus", [[ran, "  ✗ FAIL once [c] exit 1", "  ✗ FAIL twice [c] exit 1", "  ✗ FAIL onMain [c] exit 1"], [ran, "  ✗ FAIL twice [c] exit 1"], [ran]])), "run logs"));
+
+const failsIn = (top: string): string[] => [` FAIL  ${top}/src/x.ms`, "  × adds"];
+record("a test file red in each checkout's run logs is one name, whatever the checkout's path",
+	"gate: tests 3s · 1 red · 0 known · 0 new · 1 not the slice's|not the slice's: src/x.ms > adds (red on main 3/3)|gate: GREEN (tests)",
+	verdict("{}", [["tests", log(failsIn(cwd()), 1)]], "{}", [["changed.paths", ""]]
+		.concat(runs("main", "tests", [failsIn(`${nextDir()}/main`), failsIn(`${nextDir()}/main`), failsIn(`${nextDir()}/main`)]))
+		.concat(runs("slice", "tests", [failsIn(`${nextDir()}/slice`), failsIn(`${nextDir()}/slice`), failsIn(`${nextDir()}/slice`)])), "run logs"));
+
+function unjudged(reason: string, main: string[][], slice: string[][]): string {
+	const out = verdict("{}", [["guard", log(["FAIL hookOrder: the ledger differs"], 1)]], "{}", [["changed.paths", ""]].concat(main).concat(slice), "run logs");
+	return out.includes("|new: hookOrder|") && out.includes("gate: RED") && out.includes(`reruns could not judge, so the new reds stay the slice's: `) && out.includes(reason) ? reason : out;
+}
+const redRun = ["FAIL hookOrder: the ledger differs"];
+const threeRed = runs("slice", "guard", [redRun, redRun, redRun]);
+record("a run that is missing, names nothing, never ran the subject or timed out judges nothing",
+	"guard.3.log is missing|guard.2.log: exit 1 with no named failure|guard.1.log never ran hookOrder|guard.2.log timed out",
+	[
+		unjudged("guard.3.log is missing", runs("main", "guard", [redRun, redRun]), threeRed),
+		unjudged("guard.2.log: exit 1 with no named failure", runs("main", "guard", [redRun, ["FAILED to start hookOrder"], redRun]), threeRed),
+		unjudged("guard.1.log never ran hookOrder", threeRed, runs("main", "guard", [["ok other"], redRun, redRun])),
+		unjudged("guard.2.log timed out", runs("main", "guard", [redRun, redRun.concat(["TIMEOUT after 5s, process tree killed"]), redRun]), threeRed),
+	].join("|"));
 
 let failures = 0;
 console.log(`root ${root}`);
