@@ -13,7 +13,7 @@
 // multiply, negate and range checks, so the sticky block changes nothing but its own locals and the checked
 // BODY re-runs a block it refuses and stops at the exact element.
 
-import { Node, NodeKind, Symbol, SymbolFlag, Type, TypeKind, DeclKind, SourceLocation, BinaryExprData, UnaryExprData, CallExprData, BlockStmtData, ExprStmtData, VariableDeclData, MemberExprData, ArrayAccessData, WhileStmtData, HiddenStdConvData, HiddenDerefData, NumberLiteralData, TypeAssertionData, ConditionalExprData, NodeFlag } from "../../ast/node";
+import { Node, NodeKind, Symbol, SymbolFlag, Type, TypeKind, DeclKind, SourceLocation, BinaryExprData, UnaryExprData, CallExprData, IfStmtData, BooleanLiteralData, BreakStmtData, BlockStmtData, ExprStmtData, VariableDeclData, MemberExprData, ArrayAccessData, WhileStmtData, HiddenStdConvData, HiddenDerefData, NumberLiteralData, TypeAssertionData, ConditionalExprData, NodeFlag } from "../../ast/node";
 import { peelToRepr, peelTransparentInstance, getSysType, booleanType } from "../../checker/types";
 import { TransformContext, freshTempSym } from "../context";
 import { makeCall, runtimeRef, generatedRef, makeIdentResolved, cloneIdent, makeVarDecl, makeBlock, makeWhile, makeIf, makeBinary, makeUnary, makeAssign, makeExprStmt, makeHiddenDeref, makeHiddenStdConv, makeConditional, isRuntimeProcCall } from "../util";
@@ -25,7 +25,8 @@ import { cloneFresh } from "../lowering/iterInline";
 import { hasFlag } from "../../checker/symbol";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 
-type SumLoop = { acc: Node, sub: boolean, index: Node, bounds: Node[], decls: Node[], term: Node };
+type SumLoop = { acc: Node, sub: boolean, index: Node, bounds: Node[], guard: Node[], decls: Node[], term: Node };
+type Guard = { cond: Node, length: int32 };
 type Fast = { bad: Symbol, counters: HashSet<Symbol>, guarded: Node[], ranges: HashMap<Symbol, Range>, counterChecks: Range[], loc: SourceLocation };
 type StoreLoop = { index: Node, bounds: Node[], body: Node[], states: Symbol[], views: Symbol[] };
 type Range = { lo: int64, hi: int64 };
@@ -40,9 +41,18 @@ function matchSumLoop(loop: Node): SumLoop | null {
 	const w = loop.data as WhileStmtData;
 	if (w.whileLabel != "" || w.whileBody.kind != NodeKind.BlockStmt) return null;
 	const bounds: Node[] = [];
-	const index = boundedIndex(w.whileCondition, bounds);
+	let stmts = flatStatements(w.whileBody);
+	const guard = isTrue(w.whileCondition) ? loweredGuard(stmts) : null;
+	const index = boundedIndex(guard != null ? guard.cond : w.whileCondition, bounds);
 	if (index == null) return null;
-	const stmts = flatStatements(w.whileBody);
+	const guardStmts = guard != null ? stmts.slice(0, guard.length) : [];
+	if (guard != null) stmts = stmts.slice(guard.length);
+	for (const g of guardStmts) {
+		if (g.kind != NodeKind.VariableDecl) continue;
+		for (const rest of stmts) {
+			if (reads(rest, g.resolvedSym!)) return null;
+		}
+	}
 	if (stmts.length < 2 || !isStep(stmts[stmts.length - 1], index)) return null;
 	const reduce = stmts[stmts.length - 2];
 	if (reduce.kind != NodeKind.ExprStmt) return null;
@@ -62,7 +72,63 @@ function matchSumLoop(loop: Node): SumLoop | null {
 	for (const b of bounds) {
 		if (reads(b, acc.resolvedSym!) || reads(b, index.resolvedSym!)) return null;
 	}
-	return { acc, sub: !add, index, bounds, decls, term: args[1] };
+	return { acc, sub: !add, index, bounds, guard: guardStmts, decls, term: args[1] };
+}
+
+function isTrue(n: Node): boolean {
+	return n.kind == NodeKind.BooleanLiteral && (n.data as BooleanLiteralData).boolValue;
+}
+
+function loweredGuard(stmts: Node[]): Guard | null {
+	const values = new HashMap<Symbol, Node>();
+	for (let k = 0; k < stmts.length; k++) {
+		const s = stmts[k];
+		if (s.kind == NodeKind.VariableDecl) {
+			const init = (s.data as VariableDeclData).initializer;
+			if (s.resolvedSym == null || !isBoolean(s.resolvedSym.symbolType) || init == null || !isPure(init, null)) return null;
+			values.set(s.resolvedSym, readBack(init, values));
+			continue;
+		}
+		if (s.kind != NodeKind.IfStmt) return null;
+		const d = s.data as IfStmtData;
+		if (d.alternate == null && isBreakBlock(d.consequent) && d.condition.kind == NodeKind.UnaryExpr && (d.condition.data as UnaryExprData).unaryOp == "!") {
+			return { cond: readBack((d.condition.data as UnaryExprData).operand, values), length: (k + 1) as int32 };
+		}
+		const yes = d.alternate != null ? soleAssign(d.consequent) : null;
+		const no = d.alternate != null ? soleAssign(d.alternate) : null;
+		if (yes == null || no == null || yes.left.resolvedSym == null || yes.left.resolvedSym != no.left.resolvedSym || !values.has(yes.left.resolvedSym)) return null;
+		if (!isPure(d.condition, null) || !isPure(yes.right, null) || !isPure(no.right, null)) return null;
+		const test = readBack(d.condition, values);
+		const then = readBack(yes.right, values);
+		const other = readBack(no.right, values);
+		const op = sameRead(other, test) ? "&&" : sameRead(then, test) ? "||" : "";
+		if (op == "") return null;
+		values.set(yes.left.resolvedSym, typed(makeBinary(test, op, op == "&&" ? then : other, s.location), booleanType()));
+	}
+	return null;
+}
+
+function readBack(n: Node, values: HashMap<Symbol, Node>): Node {
+	if (n.kind == NodeKind.Identifier && n.resolvedSym != null && values.has(n.resolvedSym)) return values.get(n.resolvedSym)!;
+	return n;
+}
+
+function sameRead(a: Node, b: Node): boolean {
+	return a == b || (a.kind == NodeKind.Identifier && b.kind == NodeKind.Identifier && a.resolvedSym != null && a.resolvedSym == b.resolvedSym);
+}
+
+function soleAssign(block: Node): BinaryExprData | null {
+	const stmts = block.kind == NodeKind.BlockStmt ? (block.data as BlockStmtData).statements : [block];
+	if (stmts.length != 1 || stmts[0].kind != NodeKind.ExprStmt) return null;
+	const e = (stmts[0].data as ExprStmtData).expr;
+	if (e.kind != NodeKind.BinaryExpr || (e.data as BinaryExprData).operator != "=") return null;
+	const b = e.data as BinaryExprData;
+	return b.left.kind == NodeKind.Identifier ? b : null;
+}
+
+function isBreakBlock(block: Node): boolean {
+	const stmts = block.kind == NodeKind.BlockStmt ? (block.data as BlockStmtData).statements : [block];
+	return stmts.length == 1 && stmts[0].kind == NodeKind.BreakStmt && (stmts[0].data as BreakStmtData).breakLabel == "";
 }
 
 function boundedIndex(cond: Node, bounds: Node[]): Node | null {
@@ -419,11 +485,11 @@ function sumLoop(s: SumLoop, loop: Node, ctx: TransformContext): Node {
 	const i64 = getSysType(TypeKind.Int64);
 	const indexType = s.index.nodeType!;
 	const head: Node[] = [];
-	let bound = wide(clonePlace(s.bounds[0], loc), loc);
+	let bound = wide(cloneNodeKeepSem(s.bounds[0]), loc);
 	for (let k = 1; k < s.bounds.length; k++) {
-		const next = wide(clonePlace(s.bounds[k], loc), loc);
+		const next = wide(cloneNodeKeepSem(s.bounds[k]), loc);
 		const less = typed(makeBinary(bound, "<", next, loc), booleanType());
-		bound = typed(makeConditional(less, clonePlace(bound, loc), clonePlace(next, loc), loc), i64);
+		bound = typed(makeConditional(less, cloneNodeKeepSem(bound), cloneNodeKeepSem(next), loc), i64);
 	}
 	const endCall = typed(makeCall(runtimeRef("msBlockEndOf", loc), [wide(cloneIdent(s.index, loc), loc), bound, int64(REDUCE_BLOCK, loc)], loc), i64);
 	const end = declareLocal(head, ctx, "end", i64, endCall, DeclKind.Const, loc);
@@ -487,6 +553,7 @@ function sumLoop(s: SumLoop, loop: Node, ctx: TransformContext): Node {
 		head.push(markBad(bad, typed(makeBinary(below, "||", above, loc), booleanType()), loc));
 	}
 
+	const guard = s.guard.length > 0 ? (cloneFresh(makeBlock(s.guard, loc), new HashMap<Symbol, Symbol>(), ctx, true).data as BlockStmtData).statements : [];
 	const accType = s.acc.nodeType!;
 	const accRange = typeRange(accType)!;
 	const count = typed(makeBinary(makeIdentResolved(end, loc), "-", wide(cloneIdent(s.index, loc), loc), loc), i64);
@@ -503,7 +570,7 @@ function sumLoop(s: SumLoop, loop: Node, ctx: TransformContext): Node {
 	const inBlock = typed(makeBinary(wide(cloneIdent(s.index, loc), loc), "<", makeIdentResolved(end, loc), loc), booleanType());
 	const checked = makeBlock([makeWhile(inBlock, w.whileBody, loc)], loc);
 	head.push(makeIf(fits, take, checked, loc));
-	return makeWhile(w.whileCondition, makeBlock(head, loc), loc);
+	return makeWhile(w.whileCondition, makeBlock(guard.concat(head), loc), loc);
 }
 
 export function versionStoreLoop(loop: Node, ctx: TransformContext): Node | null {
