@@ -1720,14 +1720,14 @@ function generateCleanup(scope: DrcScope, loc: SourceLocation): Node[] {
 
 // ===== Try/Finally Wrapping =====
 
-// Implementation parity: hoist a single VariableDecl if it's an RC var tracked in scope.
+// Implementation parity: hoist a single VariableDecl if it's an RC var the scope's cleanup destroys.
 // Mirrors standard scope processing which emits variables as declarations before the try body.
 // Returns true if hoisted (caller emits assignment in try body instead).
 function tryHoistVar(stmt: Node, scope: DrcScope, hoisted: Node[], body: Node[], loc: SourceLocation): boolean {
 	if (stmt.kind != NodeKind.VariableDecl) return false;
 	const d = stmt.data as VariableDeclData;
 	const vi = findVarInfo(scope, stmt.resolvedSym);
-	if (vi == null || !vi.rcInfo.needsCleanup) return false;
+	if (vi == null || !vi.rcInfo.needsCleanup || vi.isCursor) return false;
 	const hoistDecl = makeVarDecl(d.declName, d.initializer == null ? null as unknown as Node : makeNull(loc), DeclKind.Let, loc);
 	if (stmt.nodeType != null) {
 		hoistDecl.nodeType = stmt.nodeType;
