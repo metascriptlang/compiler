@@ -19,6 +19,7 @@ extern function msProcessArch(): string from "msProcessArch";
 extern function msProcessGetEnv(name: string): string from "msProcessGetEnv";
 extern function msProcessSetEnv(name: string, value: string): number from "msProcessSetEnv";
 extern function msProcessUnsetEnv(name: string): number from "msProcessUnsetEnv";
+extern function msProcessEnvAt(index: int32): string from "msProcessEnvAt";
 extern function msProcessArgv(): string[] from "msProcessArgv";
 extern function msProcessExecPath(): string from "msProcessExecPath";
 extern function msProcessSpawnSync(command: string): string from "msProcessSpawnSync";
@@ -126,6 +127,17 @@ export class env {
 	static delete(name: string): boolean {
 		return msProcessUnsetEnv(name) != 0.0;
 	}
+}
+
+export function envPairs(): Map<string, string> {
+	const variables = new Map<string, string>();
+	for (let i = 0; true; i++) {
+		const entry = msProcessEnvAt(i);
+		if (entry == "") break;
+		const equals = entry.indexOf("=", 1);
+		if (equals > 0 && !entry.startsWith("=")) variables.set(entry.slice(0, equals), entry.slice(equals + 1));
+	}
+	return variables;
 }
 
 export const platform: string = msProcessPlatform();

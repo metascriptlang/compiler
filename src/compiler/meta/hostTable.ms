@@ -72,7 +72,7 @@ import {
 	ensureDir, removeAll, copyFile, cwd, env, execPath,
 } from "../../utils/system";
 import { writeFileBytes, chmod, mkdirExclusive, readLines, writeLines } from "std/fs";
-import { platform, arch, env as machineEnv, exec, argv, execFile, execFileResult } from "std/process";
+import { platform, arch, env as machineEnv, envPairs, exec, argv, execFile, execFileResult } from "std/process";
 import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
 import { utf8String, findBytesFrom, byteEqAt, asciiWords } from "std/core/string/bytes";
 import { wellFormedPrefix } from "std/core/string/utf8Repair";
@@ -557,6 +557,14 @@ function _bridgeMsProcessSetEnv(args: RaiserValue[]): RaiserValue {
 
 function _bridgeMsProcessUnsetEnv(args: RaiserValue[]): RaiserValue {
 	return boxInt(machineEnv.delete(unboxString(args[0])) ? 1 : 0);
+}
+
+function _bridgeMsProcessEnvAt(args: RaiserValue[]): RaiserValue {
+	registerCompileTimeProcess();
+	const variables = envPairs();
+	const names = variables.keys();
+	const index = unboxInt(args[0]);
+	return boxString(index < names.length ? `${names[index]}=${variables.get(names[index]) ?? ""}` : "");
 }
 
 function _unboxStringArrayArg(v: RaiserValue): string[] {
@@ -1737,6 +1745,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msProcessArgv",         _bridgeMsProcessArgv, HostCapability.Local);
 	registerHostFn("msProcessSetEnv",       _bridgeMsProcessSetEnv);
 	registerHostFn("msProcessUnsetEnv",     _bridgeMsProcessUnsetEnv);
+	registerHostFn("msProcessEnvAt",        _bridgeMsProcessEnvAt);
 	registerHostFn("msProcessExecFile",     _bridgeMsProcessExecFile);
 	registerHostFn("msProcessSpawnSyncArgv", _bridgeMsProcessSpawnSyncArgv);
 	registerHostFn("std/process.execFileResult", _stdProcessExecFileResult);

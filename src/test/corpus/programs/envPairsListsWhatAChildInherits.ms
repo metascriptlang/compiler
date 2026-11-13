@@ -1,4 +1,3 @@
-// @skip-raiser: the compile-time bridge of envPairs is built by a compiler whose own std has it, so it lands after the next sync
 // @stdout: set=a=b c
 // @stdout: deleted=absent
 // @stdout: PATH is the one get reads=true
