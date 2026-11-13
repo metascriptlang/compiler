@@ -27,13 +27,13 @@ extern function msProcChildSpawn(
 	path: string,
 	args: string[],
 	cwd: string,
-	mergeStderr: int32,
+	flags: int32,
 ): int64 from "msProcChildSpawn";
 extern function msProcChildSpawnEnv(
 	path: string,
 	args: string[],
 	cwd: string,
-	mergeStderr: int32,
+	flags: int32,
 	environment: string[],
 ): int64 from "msProcChildSpawnEnv";
 extern function msProcessPlatform(): string from "msProcessPlatform";
@@ -84,6 +84,7 @@ export struct ByteChunk {
 export interface SpawnOptions {
 	cwd?: string;
 	mergeStderr?: boolean;
+	ownProcessGroup?: boolean;
 	env?: Record<string, string>;
 }
 
@@ -242,7 +243,8 @@ export function spawn(
 	args: string[] = [],
 	opts: SpawnOptions = {},
 ): Result<ChildProcess, ProcessError> {
-	const merge = opts.mergeStderr ?? false;
+	const flags: int32 = ((opts.mergeStderr ?? false) ? 1 : 0) + ((opts.ownProcessGroup ?? false) ? 2 : 0);
+	if (flags >= 2 && msProcessPlatform() == "windows") return Result.err(startFailed(path, "ENOTSUP: ownProcessGroup is not supported on Windows yet"));
 	const variables = opts.env;
 	let handle: int64 = 0;
 	if (variables != null) {
@@ -251,10 +253,10 @@ export function spawn(
 		);
 		if (!prepared.ok) { return Result.err(startFailed(path, "EINVAL")); }
 		handle = msProcChildSpawnEnv(
-			path, args, opts.cwd ?? "", merge ? 1 : 0, prepared.value,
+			path, args, opts.cwd ?? "", flags, prepared.value,
 		);
 	} else {
-		handle = msProcChildSpawn(path, args, opts.cwd ?? "", merge ? 1 : 0);
+		handle = msProcChildSpawn(path, args, opts.cwd ?? "", flags);
 	}
 	if (handle > 0) return Result.ok(new ChildProcess(handle, path));
 	if (msProcChildIsUnsupported(handle) != 0) return Result.err(startFailed(path, NO_SPAWN));

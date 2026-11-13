@@ -157,6 +157,7 @@ static inline int msSpawnFork(pid_t *pid, const char *file, int searchPath, cons
 			}
 		}
 		if (attr != NULL && (attr->flags & POSIX_SPAWN_SETSIGMASK) && sigprocmask(SIG_SETMASK, &attr->mask, NULL) != 0) msSpawnChildFail(report[1]);
+		if (attr != NULL && (attr->flags & POSIX_SPAWN_SETPGROUP) && setpgid(0, 0) != 0) msSpawnChildFail(report[1]);
 		for (int i = 0; actions != NULL && i < actions->count; i++) {
 			int failed = 0;
 			if (actions->steps[i].kind == 0) failed = close(actions->steps[i].fd);
@@ -1192,6 +1193,8 @@ static inline msString msProcessSpawnSyncArgv(msString exe, msStringArray* args,
 // A stream buffer stops reading at MS_PROC_CHILD_BUFFER_CAP instead of
 // dropping bytes, and the next read of that stream reports the overflow.
 
+#define MS_PROC_CHILD_MERGE_STDERR 1
+#define MS_PROC_CHILD_OWN_GROUP 2
 #define MS_PROC_CHILD_OK 0
 #define MS_PROC_CHILD_ENDED 1
 #define MS_PROC_CHILD_TIMEOUT 2
@@ -1383,9 +1386,11 @@ static inline wchar_t* _msProcChildCommandLine(msString path, msStringArray* arg
 }
 
 static inline int64_t _msProcChildSpawnImpl(
-	msString path, msStringArray* args, msString cwd, int32_t mergeStderr,
+	msString path, msStringArray* args, msString cwd, int32_t flags,
 	msStringArray* environment, int supplied
 ) {
+	if (flags & MS_PROC_CHILD_OWN_GROUP) return -(int64_t)ENOTSUP;
+	const int mergeStderr = flags & MS_PROC_CHILD_MERGE_STDERR;
 	if (_msWinRunsThroughCmd(msStringToCString(path))) return -(int64_t)EINVAL;
 	wchar_t* wcmd = _msProcChildCommandLine(path, args);
 	wchar_t* wcwd = cwd.len > 0 ? _msProcChildWide(msStringToCString(cwd), 1) : NULL;
@@ -1617,6 +1622,7 @@ typedef struct {
 
 typedef struct {
 	pid_t pid;
+	int ownGroup;
 	int inFd;
 	msProcChildStream out;
 	msProcChildStream err;
@@ -1754,9 +1760,11 @@ static inline void _msProcChildPump(msProcChild* c, const char* data, size_t len
 static inline msProcChild* _msProcChildOf(int64_t h) { return (msProcChild*)(intptr_t)h; }
 
 static inline int64_t _msProcChildSpawnImpl(
-	msString path, msStringArray* args, msString cwd, int32_t mergeStderr,
+	msString path, msStringArray* args, msString cwd, int32_t flags,
 	msStringArray* environment, int supplied
 ) {
+	const int mergeStderr = flags & MS_PROC_CHILD_MERGE_STDERR;
+	const int ownGroup = (flags & MS_PROC_CHILD_OWN_GROUP) != 0;
 	int inPipe[2], outPipe[2], errPipe[2] = { -1, -1 };
 	if (_msSpawnPipe(inPipe) < 0) return -(int64_t)errno;
 	if (_msSpawnPipe(outPipe) < 0) {
@@ -1799,7 +1807,7 @@ static inline int64_t _msProcChildSpawnImpl(
 		sigaddset(&defaults, SIGPIPE);
 		posix_spawnattr_setsigmask(&attr, &emptyMask);
 		posix_spawnattr_setsigdefault(&attr, &defaults);
-		posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF);
+		posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF | (ownGroup ? POSIX_SPAWN_SETPGROUP : 0));
 		int childErr = mergeStderr ? outPipe[1] : errPipe[1];
 		posix_spawn_file_actions_addclose(&fa, inPipe[1]);
 		posix_spawn_file_actions_addclose(&fa, outPipe[0]);
@@ -1849,6 +1857,7 @@ static inline int64_t _msProcChildSpawnImpl(
 	}
 
 	c->inFd = inPipe[1];
+	c->ownGroup = ownGroup;
 	c->out.fd = outPipe[0];
 	c->err.fd = mergeStderr ? -1 : errPipe[0];
 	fcntl(c->inFd, F_SETFL, fcntl(c->inFd, F_GETFL) | O_NONBLOCK);
@@ -1983,7 +1992,7 @@ static inline int32_t msProcChildWait(int64_t h, int64_t timeoutMs) {
 static inline int32_t msProcChildKill(int64_t h) {
 	msProcChild* c = _msProcChildOf(h);
 	if (c->reaped) return MS_PROC_CHILD_OK;
-	kill(c->pid, SIGKILL);
+	kill(c->ownGroup ? -c->pid : c->pid, SIGKILL);
 	int status = 0;
 	struct rusage usage;
 	pid_t got;
