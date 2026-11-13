@@ -8,23 +8,27 @@
 
 /* ===== Promise.allSettled ===== */
 
-static void msPromiseAllSettledCb(void* env) {
+static void msPromiseAllSettledInputDone(void* env, bool abandoned) {
 	msPromiseAllSettledCbEnv* e = (msPromiseAllSettledCbEnv*)env;
 	msPromiseAllSettledState* s = e->state;
 	int idx = e->index;
 	msMemFree(e);
+	if (abandoned) s->abandoned = true;
 	msFutureEdgeSettle(s->result, idx);
 	msDecrefAny(s->inputs[idx]);
 
 	/* Always decrement. Last callback completes (never fails). */
 	s->remaining--;
 	if (s->remaining == 0) {
-		msFutureComplete(s->result, NULL);
+		if (!s->abandoned) msFutureComplete(s->result, NULL);
 		msDecrefAny(s->result);
 		msMemFree(s->inputs);
 		msMemFree(s);
 	}
 }
+
+static void msPromiseAllSettledCb(void* env) { msPromiseAllSettledInputDone(env, false); }
+static void msPromiseAllSettledDrop(void* env) { msPromiseAllSettledInputDone(env, true); }
 
 void* msPromiseAllSettled(msRefArray* arr) {
 	int count = (arr != NULL) ? (int)arr->len : 0;
@@ -52,10 +56,10 @@ void* msPromiseAllSettled(msRefArray* arr) {
 		msPromiseAllSettledCbEnv* env = (msPromiseAllSettledCbEnv*)msMemAlloc(sizeof(msPromiseAllSettledCbEnv));
 		env->state = state;
 		env->index = i;
-		msFutureAddCallback(futures[i], (msClosure){
+		msFutureAddCallback(futures[i], msActorStampCollectorIf((msClosure){
 			.fn = (msClosureFn)msPromiseAllSettledCb,
 			.env = env
-		});
+		}, msPromiseAllSettledDrop));
 	}
 	return result;
 }

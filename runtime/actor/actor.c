@@ -107,6 +107,12 @@ msClosure msActorStamp(msClosure cb, void (*drop)(void*), void* chain) {
     return (msClosure){ .fn = (msClosureFn)msActorJobFire, .env = msActorJobNew(cb, drop, chain) };
 }
 
+msClosure msActorStampCollector(msClosure cb, void (*drop)(void*)) {
+    msActorJob* r = msActorJobNew(cb, drop, NULL);
+    r->completion = true;
+    return (msClosure){ .fn = (msClosureFn)msActorJobFire, .env = r };
+}
+
 static void msActorEnvDrop(void* env) {
     const msTypeInfo* t = msHeader(env)->type;
     if (msDecRefIsLast(env)) {

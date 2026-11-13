@@ -90,20 +90,23 @@ static inline void* msPromiseAllRejectedError(void) {
 }
 
 void msPromiseFirstCb(void* env);
+void msPromiseFirstDrop(void* env);
 
 static inline void msPromiseFirstWatch(void* fut, void* env) {
-	msFutureAddCallback(fut, (msClosure){ .fn = (msClosureFn)msPromiseFirstCb, .env = env });
+	msFutureAddCallback(fut, msActorStampCollectorIf((msClosure){ .fn = (msClosureFn)msPromiseFirstCb, .env = env }, msPromiseFirstDrop));
 }
 
 void msPromiseAllCb(void* env);
+void msPromiseAllDrop(void* env);
 void msPromiseAllTypedCb(void* env);
+void msPromiseAllTypedDrop(void* env);
 
 static inline void msPromiseAllTypedWatch(void* fut, void* env) {
-	msFutureAddCallback(fut, (msClosure){ .fn = (msClosureFn)msPromiseAllTypedCb, .env = env });
+	msFutureAddCallback(fut, msActorStampCollectorIf((msClosure){ .fn = (msClosureFn)msPromiseAllTypedCb, .env = env }, msPromiseAllTypedDrop));
 }
 
 static inline void msPromiseAllWatch(void* fut, void* env) {
-	msFutureAddCallback(fut, (msClosure){ .fn = (msClosureFn)msPromiseAllCb, .env = env });
+	msFutureAddCallback(fut, msActorStampCollectorIf((msClosure){ .fn = (msClosureFn)msPromiseAllCb, .env = env }, msPromiseAllDrop));
 }
 
 #define MS_PTR sizeof(void*)

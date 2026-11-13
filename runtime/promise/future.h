@@ -85,6 +85,7 @@ typedef struct msActor msActor;
 MS_TLS_EXTERN(msActor*, msCurrentActor);
 #define MS_ACTOR_JOB_PATH __attribute__((cold, noinline))
 MS_ACTOR_JOB_PATH msClosure msActorStamp(msClosure cb, void (*drop)(void*), void* chain);
+MS_ACTOR_JOB_PATH msClosure msActorStampCollector(msClosure cb, void (*drop)(void*));
 MS_ACTOR_JOB_PATH void* msActorStampTimer(msClosure cb, int64_t id, bool periodic);
 MS_ACTOR_JOB_PATH void* msActorStampEnvRelease(void* env);
 MS_ACTOR_JOB_PATH void msActorJobEnvIdle(void* job);
@@ -120,6 +121,11 @@ static inline msClosure msActorStampIf(msClosure cb, void (*drop)(void*), void* 
 	return cb;
 }
 
+static inline msClosure msActorStampCollectorIf(msClosure cb, void (*drop)(void*)) {
+	if (__builtin_expect(msActorCurrentForJobs() != NULL, 0)) return msActorStampCollector(cb, drop);
+	return cb;
+}
+
 /* Work a visit runs that is not the actor's (a nested loop turn, an inline task) runs
  * under the thread's identity and cycle roots (ULTRALOCK M1, A4). */
 static inline msActor* msActorStepOut(void) {
@@ -135,6 +141,10 @@ static inline void msActorStepBack(msActor* a) {
 #define MS_ACTOR_JOBS 0
 static inline msClosure msActorStampIf(msClosure cb, void (*drop)(void*), void* chain) {
 	(void)drop; (void)chain;
+	return cb;
+}
+static inline msClosure msActorStampCollectorIf(msClosure cb, void (*drop)(void*)) {
+	(void)drop;
 	return cb;
 }
 #endif

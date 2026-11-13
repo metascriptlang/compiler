@@ -58,6 +58,7 @@ typedef struct {
 	msFuture** inputs;    /* input futures (borrowed) */
 	int count;            /* total inputs */
 	int remaining;        /* unsettled count */
+	bool abandoned;
 } msPromiseAllSettledState;
 
 typedef struct {
