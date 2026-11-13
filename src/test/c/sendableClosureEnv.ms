@@ -109,3 +109,49 @@ console.log(viaHelper(1));`;
 	assert holdsCopy(bodies, "base"), bodies.join(" | ");
 	assert holdsCopy(bodies, "helper"), bodies.join(" | ");
 }
+
+const ACTOR = `
+actor Sink {
+	total: int32 = 0;
+	take(f: Sendable<() => int32>): void { this.total += f(); }
+	read(): int32 { return this.total; }
+}
+function same(x: int32): int32 { return x; }
+`;
+
+function hasEnvSlot(c: string): boolean {
+	for (let d = 0; d < 10; d += 1) {
+		if (c.contains("_env" + d.toString())) return true;
+	}
+	return false;
+}
+
+test "E2E C: a Sendable closure bound to a local and sent to an actor is moved by the sender and by the send stub" {
+	const src = ACTOR + `
+function boundThenMore(a: Readonly<Sink>, b: Readonly<Sink>, n: int32): void {
+	const first: Sendable<() => int32> = () => n;
+	a.take(first);
+	const second: Sendable<() => int32> = () => n;
+	b.take(second);
+}
+const s = new Sink();
+boundThenMore(s, s, same(1));`;
+	const c = compileToC(src);
+	assert c.ok, c.ok ? "" : c.error;
+	assert !c.value.contains("msClosureCopyRo("), "a copy of the closure is still made on the way to the actor";
+	assert !hasEnvSlot(c.value), "the env of the sent closure is still held in a slot of the sender";
+}
+
+test "E2E C: a Sendable closure literal sent from an async function leaves no env slot in the frame" {
+	const src = ACTOR + `
+async function frameSender(a: Readonly<Sink>, n: int32): Promise<int32> {
+	a.take(() => n);
+	return await a.read();
+}
+const s = new Sink();
+await frameSender(s, same(1));`;
+	const c = compileToC(src);
+	assert c.ok, c.ok ? "" : c.error;
+	assert !c.value.contains("msClosureCopyRo("), "a copy of the closure is still made on the way to the actor";
+	assert !hasEnvSlot(c.value), "the env of the sent closure is still held in the frame";
+}
