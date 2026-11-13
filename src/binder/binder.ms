@@ -683,6 +683,8 @@ function bindExprStmt(state: BinderState, node: Node): void {
 function bindFunctionDecl(state: BinderState, node: Node): void {
 	const d = node.data as FunctionDeclData;
 	bindContainer(state, node, d.fnBody);
+	const declaredInsideARoutine = state.currentReturnTarget != null;
+	if (declaredInsideARoutine) state.currentFlow = createFlowMutation(state, FlowFlag.Assignment, state.currentFlow, node);
 }
 
 function bindClassDecl(state: BinderState, node: Node): void {
