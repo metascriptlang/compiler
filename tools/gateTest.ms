@@ -37,15 +37,16 @@ function log(body: string[], rc: number, secs: number = 3): string {
 }
 
 let cases = 0;
-function verdict(known: string, logs: string[][], hostKnown: string = "{}"): string {
+function verdict(known: string, logs: string[][], hostKnown: string = "{}", files: string[][] = []): string {
 	cases = cases + 1;
 	const dir = `${root}/case${cases}`;
 	ensureDir(dir);
 	put(`${dir}.json`, known);
 	put(`${dir}.host.json`, hostKnown);
 	for (const pair of logs) put(`${dir}/${pair[0]}.log`, pair[1]);
+	for (const pair of files) put(`${dir}/${pair[0]}`, pair[1]);
 	const r = execFileCapture(tool, [dir, `${dir}.json`, `${dir}.host.json`], cwd());
-	const out = r.ok ? r.value : `${r.error.output}exit ${r.error.exitCode}`;
+	const out = r.ok ? r.value : `${r.error.output}${r.error.errorOutput}exit ${r.error.exitCode}`;
 	return out.trim().split("\n").map((l: string): string => l.trim()).join("|");
 }
 
@@ -103,6 +104,35 @@ record("a new red beside a known one fails the gate",
 record("a second known file adds its rows",
 	"gate: fmt 3s · 2 red · 2 known · 0 new · 1 known-now-green (a.ms)|known-now-green: a.ms|gate: GREEN (fmt)",
 	verdict(rows, [["fmt", log(["LOSSY b.ms x", "NO-FMT e.ms"], 1)]], "{\"fmt\":{\"e.ms\":{}}}"));
+
+const rerun = log(["  ✗ FAIL onMain [c] exit 1", "  ✗ FAIL once [c] exit 1", "  ✗ FAIL twice [c] exit 1", "  ✗ FAIL never [c] exit 1"], 1);
+record("a new red that main shows, or that this candidate shows fewer than twice of three, is not the slice's",
+	"gate: corpus 3s · 4 red · 0 known · 1 new · 3 not the slice's|new: twice [c]|not the slice's: never [c] (red 0/3 on this candidate, 0/3 on main)|not the slice's: onMain [c] (red on main 1/3)|not the slice's: once [c] (red 1/3 on this candidate, 0/3 on main)|gate: RED (corpus)|exit 1",
+	verdict("{}", [["corpus", rerun]], "{}", [
+		["changed.paths", "src/checker/checkPass.ms\n"],
+		["corpus.reruns.main", "onMain [c]\n"],
+		["corpus.reruns.slice", "once [c]\ntwice [c]\ntwice [c]\nonMain [c]\n"],
+	]));
+
+record("reds that are all not the slice's leave the gate green",
+	"gate: guard 3s · 1 red · 0 known · 0 new · 1 not the slice's|not the slice's: hookOrder (red on main 3/3)|gate: GREEN (guard)",
+	verdict("{}", [["guard", log(["FAIL hookOrder: the ledger differs"], 1)]], "{}", [
+		["changed.paths", ""],
+		["guard.reruns.main", "hookOrder\nhookOrder\nhookOrder\n"],
+		["guard.reruns.slice", "hookOrder\nhookOrder\nhookOrder\n"],
+	]));
+
+record("a rerun does not judge a test the slice edits, a missing result or a timeout",
+	"src/test/c/index.ms > no result|src/test/c/json.ms > parses numbers|timed out",
+	news(verdict("{}", [["tests", log([` FAIL  ${cwd()}/src/test/c/json.ms`, "  × parses numbers", "NORESULT src/test/c/index.ms > no result", "TIMEOUT after 600s"], 1)]], "{}", [
+		["changed.paths", "src/test/c/json.ms\n"],
+		["tests.reruns.main", "src/test/c/json.ms > parses numbers\nsrc/test/c/index.ms > no result\ntimed out\n"],
+		["tests.reruns.slice", ""],
+	])));
+
+record("reruns with no list of the slice's changed paths are refused",
+	"true",
+	`${verdict("{}", [["hcr", log(["FAIL hcrRun: exit 1"], 1)]], "{}", [["hcr.reruns.main", ""], ["hcr.reruns.slice", ""]]).includes("hcr has reruns and")}`);
 
 let failures = 0;
 console.log(`root ${root}`);

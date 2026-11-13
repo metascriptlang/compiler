@@ -72,6 +72,33 @@ function trailer(lines: string[], key: string): number | null {
 	return null;
 }
 
+const rerunLanes = ["corpus", "san", "tsan", "guard", "hcr", "lsp", "tests", "suite"];
+const rerunCount = 3;
+
+function linesOf(path: string): string[] | null {
+	const text = readFile(path);
+	return text.ok ? text.value.split("\n").filter((line: string): boolean => line != "") : null;
+}
+
+function subjectOf(lane: string, red: string): string {
+	if (lane == "tests" || lane == "suite") return red.split(" > ")[0];
+	const cell = red.endsWith("]") ? red.lastIndexOf(" [") : -1;
+	return cell < 0 ? red : red.substring(0, cell);
+}
+
+function rerunJudges(lane: string, red: string, changed: string[]): boolean {
+	if (red.endsWith("no result") || red.includes("no named failure") || red == "timed out" || red.startsWith("setup:") || red.startsWith("self-host: ")) return false;
+	const subject = subjectOf(lane, red);
+	return subject != "" && !changed.some((path: string): boolean => path.includes(subject));
+}
+
+function notTheSlices(red: string, onMain: string[], onSlice: string[]): string | null {
+	const main = onMain.filter((name: string): boolean => name == red).length;
+	const slice = onSlice.filter((name: string): boolean => name == red).length;
+	if (main > 0) return `red on main ${main}/${rerunCount}`;
+	return slice < 2 ? `red ${slice}/${rerunCount} on this candidate, 0/${rerunCount} on main` : null;
+}
+
 function readKnown(known: Map<string, string[]>, path: string): void {
 	const text = readFile(path);
 	if (!text.ok) throw new Error(`gate: cannot read ${path}`);
@@ -128,6 +155,7 @@ function firstThree(names: string[]): string {
 	return names.slice(0, 3).join(", ");
 }
 
+const changed = linesOf(`${dir}/changed.paths`);
 let anyNew = false;
 for (const lane of lanes) {
 	const listed = (known.get(lane.name) ?? []).filter(steady);
@@ -135,13 +163,29 @@ for (const lane of lanes) {
 	const flakes = lane.reds.filter((red: string): boolean => !steady(red)).sort();
 	const fresh = reds.filter((red: string): boolean => !listed.includes(red));
 	const fixed = listed.filter((row: string): boolean => !reds.includes(row)).sort();
-	let line = `gate: ${lane.name} ${lane.secs}s · ${reds.length} red · ${reds.length - fresh.length} known · ${fresh.length} new`;
+	const onMain = rerunLanes.includes(lane.name) ? linesOf(`${dir}/${lane.name}.reruns.main`) : null;
+	const onSlice = rerunLanes.includes(lane.name) ? linesOf(`${dir}/${lane.name}.reruns.slice`) : null;
+	if ((onMain == null) != (onSlice == null)) throw new Error(`gate: ${lane.name} has the reruns of one side only`);
+	const owed: string[] = [];
+	const others: string[] = [];
+	for (const red of fresh) {
+		let why: string | null = null;
+		if (onMain != null && onSlice != null) {
+			if (changed == null) throw new Error(`gate: ${lane.name} has reruns and ${dir}/changed.paths is missing`);
+			if (rerunJudges(lane.name, red, changed)) why = notTheSlices(red, onMain, onSlice);
+		}
+		if (why == null) owed.push(red);
+		else others.push(`${red} (${why})`);
+	}
+	let line = `gate: ${lane.name} ${lane.secs}s · ${reds.length} red · ${reds.length - fresh.length} known · ${owed.length} new`;
+	if (others.length > 0) line += ` · ${others.length} not the slice's`;
 	if (fixed.length > 0) line += ` · ${fixed.length} known-now-green (${firstThree(fixed)})`;
 	if (flakes.length > 0) line += ` · ${flakes.length} flaky (${firstThree(flakes)})`;
 	console.log(line);
-	for (const red of fresh) console.log(`  new: ${red}`);
+	for (const red of owed) console.log(`  new: ${red}`);
+	for (const other of others) console.log(`  not the slice's: ${other}`);
 	for (const row of fixed) console.log(`  known-now-green: ${row}`);
-	if (fresh.length > 0) anyNew = true;
+	if (owed.length > 0) anyNew = true;
 }
 console.log(`gate: ${anyNew ? "RED" : "GREEN"} (${lanes.map((l: Lane): string => l.name).join(", ")})`);
 if (anyNew) exit(1);
