@@ -2235,7 +2235,7 @@ test "cms extern closure: declared externs are bridged, intercepted, or listed u
 	];
 	const unserved: string[] = [
 		"&msGenericArrayCapacity", "&msNumberArrayCapacity", "&msStringArrayCapacity", "msStringCapacity",
-		"&msGenericArrayRotate", "&msGenericArraySwap", "&msGenericArraySwapWith",
+		"&msGenericArrayRotate", "&msGenericArraySwap", "&msGenericArraySwapWith", "&msGenericArrayGiveUpEdges",
 		"msBytesSlice", "&msRefArraySplice3",
 		"&msStringAppend", "&msStringSetLength", "&msStringSetSlice", "msStringSetSlice", "&msStringStripInPlace",
 		"msStringNewUninit", "msMemCopyTo", "memcpy",
