@@ -18,7 +18,7 @@ import { hasFlag, SymbolFlag, makeSymbol } from "./symbol";
 import { hasGenericParams, isIntegerType, isFloatType, isMaybeType, arrayElementNeedsCleanup, unwrapPointerLikeForVariant, unwrapRefNullUnion, awaitedType, createArray, createRef, getAttachedOp, peelTransparentInstance, unwrapRef, classParentOf, runtimeClassSym, storesNothing, fieldTypeView, peelToStructOrUnion, isReadonlyView, declaredFieldType } from "./types";
 import { SymbolKind, Symbol, Type, CallingConvention, AttachedOp } from "../ast/node";
 import { monoInstanceName } from "../monomorphize/registry";
-import { ctorRoutineOf, ctorVariantIndex } from "./ctorRoutine";
+import { ctorRoutineOf, ctorVariantIndex, ctorVariantsOf } from "./ctorRoutine";
 import { DispatchRegistry, DispMethodEntry, dispatchEntryFor, dispatchOverridesFor } from "./context";
 import { instanceArgsOf, sameInstanceArgs } from "./instantiate";
 
@@ -492,19 +492,36 @@ function markRootDecl(dispatchRegistry: DispatchRegistry, decl: Node, modulePath
 
 // A complete HCR core keeps what an image may demand on its first use: a class's TypeInfo and
 // hooks otherwise appear only with an allocation site, and every member and constructor variant
-// of an exported class, because a use by an image is recorded only in that image. Returns the
-// class whose lifted members follow, or null.
-function markCompleteClass(dispatchRegistry: DispatchRegistry, decl: Node, modulePath: string): Node | null {
-	if (_sourceDependenciesOnly || decl.kind != NodeKind.ClassDecl || decl.resolvedSym == null) return null;
-	if (decl.nodeType != null && hasGenericParams(decl.nodeType)) return null;
-	markObjectTypeInfo(dispatchRegistry, decl.resolvedSym.symbolType, modulePath);
-	return decl;
+// of an exported class, because a use by an image is recorded only in that image. Instance
+// members come from the dispatch registry's entries of the class, constructors from its routine
+// and their variants; static members are found by `staticOwner` in markCompleteStatics.
+function markCompleteClass(dispatchRegistry: DispatchRegistry, decl: Node, modulePath: string, complete: HashSet<Symbol>): void {
+	if (_sourceDependenciesOnly || decl.kind != NodeKind.ClassDecl || decl.resolvedSym == null) return;
+	if (decl.nodeType != null && hasGenericParams(decl.nodeType)) return;
+	const classSym = decl.resolvedSym;
+	markObjectTypeInfo(dispatchRegistry, classSym.symbolType, modulePath);
+	complete.add(classSym);
+	for (const entry of dispatchRegistry.byClass.get(classSym) ?? []) {
+		if (entry.sym.symbolKind != SymbolKind.Function) throw new Error(`internal: member '${entry.methodName}' of class '${classSym.name}' in ${modulePath} is a ${entry.sym.symbolKind}, not a function`);
+		markReferenced(dispatchRegistry, entry.sym, modulePath);
+	}
+	const impl = ctorRoutineOf(classSym);
+	if (impl == null) return;
+	markSymAndWalk(dispatchRegistry, impl, modulePath);
+	for (const variant of ctorVariantsOf(impl)) markSymAndWalk(dispatchRegistry, variant, modulePath);
 }
 
-// methodToFunction appends a class's lifted members right after it, each named `<Class>_<member>`.
-function isLiftedMemberOf(owner: Node, decl: Node): boolean {
-	if (decl.kind != NodeKind.FunctionDecl || decl.resolvedSym == null) return false;
-	return (decl.data as FunctionDeclData).fnName.startsWith((owner.data as ClassDeclData).className + "_");
+function markCompleteStatics(dispatchRegistry: DispatchRegistry, program: Node, modulePath: string, complete: HashSet<Symbol>): void {
+	for (const stmt of (program.data as ProgramData).programStmts) {
+		let bare = stmt;
+		if (bare.kind == NodeKind.DecoratedDecl) {
+			const inner = (bare.data as DecoratedDeclData).decoratedNode;
+			if (inner != null) bare = inner;
+		}
+		if (bare.kind != NodeKind.FunctionDecl || bare.resolvedSym == null) continue;
+		const owner = bare.resolvedSym.staticOwner;
+		if (owner != null && complete.has(owner)) markRootDecl(dispatchRegistry, bare, modulePath);
+	}
 }
 
 function walkDecl(dispatchRegistry: DispatchRegistry, di: int32): void {
@@ -727,7 +744,7 @@ export function computeAliveSet(
 		}
 		const d = program.data as ProgramData;
 
-		let completeClass: Node | null = null;
+		const completeClasses = new HashSet<Symbol>();
 		for (const stmt of d.programStmts) {
 			if (stmt == null) continue;
 
@@ -739,13 +756,6 @@ export function computeAliveSet(
 				if (ddw.decoratedNode != null) bare = ddw.decoratedNode;
 			}
 
-			if (completeClass != null) {
-				if (isLiftedMemberOf(completeClass, bare)) {
-					markRootDecl(graph.dispatchRegistry, bare, modulePath);
-					continue;
-				}
-				completeClass = null;
-			}
 
 			if (bare.kind == NodeKind.FunctionDecl) {
 				if (bare.resolvedSym != null && rootFunctions.has(bare.resolvedSym)) {
@@ -789,13 +799,14 @@ export function computeAliveSet(
 				if (decl != null && decl.resolvedSym != null && hasFlag(decl.resolvedSym, SymbolFlag.CompileTime)) continue;
 				if (decl != null) {
 					markRootDecl(graph.dispatchRegistry, decl, modulePath);
-					if (modulePath != entryPath && !_imageModules.has(modulePath)) completeClass = markCompleteClass(graph.dispatchRegistry, decl, modulePath);
+					if (modulePath != entryPath && !_imageModules.has(modulePath)) markCompleteClass(graph.dispatchRegistry, decl, modulePath, completeClasses);
 				} else {
 					const name = getDeclName(bare);
 					if (name != "") walkNamedDecls(graph.dispatchRegistry, modulePath, name);
 				}
 			}
 		}
+		if (completeClasses.size > 0) markCompleteStatics(graph.dispatchRegistry, program, modulePath, completeClasses);
 	}
 
 	markImportedInitModulesAlive(graph, entryPath, initModules);
