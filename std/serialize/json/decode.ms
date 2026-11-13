@@ -951,7 +951,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 				}
 			}
 			const flatVariants: boolean = optVariants.length > 1 && allObjects(optVariants);
-			if (flatVariants || (optImpl != null && (optImpl.kind == NodeKind.TypeObject || optImpl.kind == NodeKind.TypeUnion))) {
+			if (flatVariants || (optImpl != null && (optImpl.kind == NodeKind.TypeObject || isTaggedStruct(optImpl)))) {
 				const optObj: Node = {
 					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
 					callee: {
