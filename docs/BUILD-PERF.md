@@ -340,6 +340,25 @@ geometric mean barely changes (0.9269 to 0.9245), again hiding a per-row trade-o
 Not verified by these controls: compile/link cost of a level change, other hosts/CPUs or baseline targets,
 and source changes after this tree. A rebase needs fresh program evidence before any policy change.
 
+### Recheck after the HCR fix landed
+
+On base `ff49b2f0ab25`, candidate `3e904406e272`, tree `ea61317549e4b0f40ef9829ea2fa99c6b8620f54`,
+the same rtx bundle and fresh four-arm builds ran three rounds on CPU 6 in a 361-second quiet window
+(13:01:43-13:07:44Z). All 20 C files are byte-identical within each driver/mode pair. No FP, LTO-level,
+alignment or debug-info override was added.
+
+| map toArray, us/op | zig | bundle |
+|---|---|---|
+| release | 8.282 | 6.843 |
+| danger | 4.327 | 4.369 |
+
+The 16-row bundle/zig geometric means are 0.9214 release and 0.9559 danger, but release keys remains
+1.623/1.419 us and zip 1272.934/1170.510 (bundle/zig). Thus the rebase preserves the toArray improvement,
+not a complete parity verdict. The largest danger median ratio is eager's 1.011; process outliers still occur.
+Candidate owner tests pass `cc.ms` 216/216 and `toolchain.ms` 152/152, and `check src/index.ms` exits 0.
+Evidence: `out/postHCRquiet.remote.log`, `out/toArray-trace-postHCRquiet-evidence/`,
+`out/postHCR-probe-manifest.txt`. Other hosts, generic targets and later main/runtime changes are not certified.
+
 ## Measured 2026-11-12 — the source-built engine against the installed engines
 
 `tools/managedToolchain/llvmEngine.cmake` builds the engine the way LLVM's own releases are built:
