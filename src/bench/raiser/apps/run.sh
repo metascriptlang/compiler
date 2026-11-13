@@ -19,7 +19,7 @@ for app in rowsEl haro; do
 	cMs=() rMs=()
 	for ((i = 0; i < ROUNDS; i++)); do
 		c=$("$OUT/$app")
-		r=$("$MSC" run --target=raiser "$app.ms")
+		r=$("$MSC" run --target=raiser --danger "$app.ms")
 		[ "$(echo "$c" | field check)" = "$(echo "$r" | field check)" ] || { echo "run.sh: $app checksums differ: c '$c', raiser '$r'" >&2; exit 1; }
 		cMs+=("$(echo "$c" | field ms)") rMs+=("$(echo "$r" | field ms)")
 	done
