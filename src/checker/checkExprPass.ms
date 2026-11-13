@@ -3485,6 +3485,8 @@ function checkArrayLiteral(ctx: CheckerContext, node: Node, expectedType: Type |
 			node.nodeType = refArrayWrap != null ? refArrayWrap : arrExpected; return;
 		} else if (arrExpected != null && arrExpected.kind == TypeKind.Array && !hasGenericParams(arrExpected) && !holdsInferred(arrExpected)) {
 			node.nodeType = refArrayWrap != null ? refArrayWrap : arrExpected; return;
+		} else if (arrExpected != null && arrExpected.kind == TypeKind.Span && elemExpected != null && !hasGenericParams(elemExpected) && !holdsInferred(elemExpected)) {
+			node.nodeType = createRef(createArray(elemExpected)); return;
 		} else {
 			// No array context: a bare `[...]` literal is a reference array (T[] = Ref<Array>),
 			// so nativeLower boxes it and it matches T[] params/returns post-flip.

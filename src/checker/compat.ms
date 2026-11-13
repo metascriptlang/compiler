@@ -65,7 +65,12 @@ function readElementsFit(source: Type, target: Type): boolean {
 	const elem = readElementOf(source.typeReturn);
 	const want = readElementOf(target.typeReturn);
 	const read = elem != null && want != null && isUnownedSlot(want) && !isUnownedSlot(elem) ? withoutUnowned(want) : want;
-	return sameElementRepr(elem, read) && sameElement(elem, read);
+	return sameElementRepr(elem, read) && (sameElement(elem, read) || literalValuesRead(elem, read));
+}
+
+// A literal element is a value nothing can retag through a read-only view, so the view may read it as its wider type.
+function literalValuesRead(elem: Type | null, want: Type | null): boolean {
+	return elem != null && want != null && holdsOnlyLiterals(elem) && isAssignable(elem, want) && !fieldReprMismatch(elem, want);
 }
 
 function sameElementRepr(a: Type | null, b: Type | null): boolean {
@@ -120,7 +125,7 @@ function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boo
 	target = skipModifier(target);
 	if (source == null || target == null) return false;
 	if (source.kind == TypeKind.Ref && target.kind == TypeKind.Ref) {
-		return isReinterpretUnsafe(source.typeReturn, target.typeReturn);
+		return isReinterpretUnsafe(source.typeReturn, isReadonlyView(target) ? createReadonlyView(target.typeReturn) : target.typeReturn);
 	}
 	// Nullable-ref (`X | null`) stores/reads the pointer as X — peel to the
 	// non-null member so enforcement reaches through nullable fields/slots.
@@ -146,7 +151,7 @@ function isReinterpretUnsafeInner(source: Type | null, target: Type | null): boo
 		const elem = readElementOf(source.typeReturn);
 		const want = readElementOf(target.typeReturn);
 		if (!sameElementRepr(elem, want)) return true;
-		if (!sameElement(elem, want)) return true;
+		if (!sameElement(elem, want) && !(isReadonlyView(target) && literalValuesRead(elem, want))) return true;
 		return isReinterpretUnsafe(elem, want);
 	}
 	// Closures are raw-copied msClosure structs and the call site casts fn to the
@@ -589,7 +594,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 	// Implicit coercion to Span: T[] -> Span<T> or T[N] -> Span<T> or string -> Span<char>
 	if (target.kind == TypeKind.Span) {
 		if (source.kind == TypeKind.Array || source.kind == TypeKind.SizedArray) {
-			return sameElement(source.typeReturn, target.typeReturn);
+			return isReadonlyView(target) ? readElementsFit(source, target) : sameElement(source.typeReturn, target.typeReturn);
 		}
 		if (source.kind == TypeKind.String && target.typeReturn != null && target.typeReturn.kind == TypeKind.Char) {
 			return true;
@@ -833,7 +838,7 @@ export function needsStdConv(source: Type, target: Type): boolean {
 	}
 	// Array/SizedArray/String to Span coercion requires struct initializer
 	if (target.kind == TypeKind.Span) {
-		if (source.kind == TypeKind.Array || source.kind == TypeKind.SizedArray) return sameElement(source.typeReturn, target.typeReturn);
+		if (source.kind == TypeKind.Array || source.kind == TypeKind.SizedArray) return isReadonlyView(target) ? readElementsFit(source, target) : sameElement(source.typeReturn, target.typeReturn);
 		if ((source.kind == TypeKind.String || source.kind == TypeKind.StringLiteral) && target.typeReturn != null && target.typeReturn.kind == TypeKind.Char) return true;
 		const viewed = typedArrayElement(source);
 		if (viewed != null) return sameElement(viewed, target.typeReturn);
