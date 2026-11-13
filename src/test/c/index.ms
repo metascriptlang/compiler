@@ -134,5 +134,6 @@ import "./blockSumEmit";
 import "./lambdaLeafEmit";
 import "./blockStoreEmit";
 import "./presizedPushEmit";
+import "./zipLockstepEmit";
 import "./literalTagDispatch";
 import "./templateIntPartEmit";
