@@ -384,6 +384,12 @@ _Noreturn void msRaiseUnownedDead(void* p) {
 	exit(1);
 }
 
+_Noreturn void msRaiseCellTooLarge(size_t total) {
+	msErrorf("Error: an object of %llu bytes is larger than the 2 GiB an object can be\n", (unsigned long long)total);
+	if (msFatalTrap != NULL) msFatalTrap();
+	exit(1);
+}
+
 _Noreturn void msRaiseUnownedOverflow(void* p) {
 	msErrorf("Error: too many Unowned<%s> edges point at one %s\n", msTypeInfoShownName(msHeader(p)->type), msTypeInfoShownName(msHeader(p)->type));
 	if (msFatalTrap != NULL) msFatalTrap();

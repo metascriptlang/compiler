@@ -46,13 +46,9 @@ typedef int64_t msRc;
 #define MS_RC_IMMORTAL_FLOOR ((msRc)1 << 62)
 #define MS_RC_IMMORTAL       ((msRc)3 << 61)
 
-/* The lower 4 bits. A destroyed object that Unowned<T> edges still point at keeps its memory as a
- * husk marked MS_COL_DEAD until the last edge goes; nothing strong reaches a husk, so the collector
- * never colors one. */
 #define MS_COL_BLACK   0
 #define MS_COL_GRAY    1
 #define MS_COL_WHITE   2
-#define MS_COL_DEAD    3
 #define MS_MAYBE_CYCLE 4
 #define MS_COLLECTING  8  /* in a dead set the collector is finalizing */
 #define MS_COLOR_MASK  3
@@ -66,6 +62,25 @@ typedef struct {
 	uint32_t allocSize;      /* Total allocation size (header + payload) — for slab recycling */
 } msRefHeader;
 _Static_assert(sizeof(msRefHeader) == 24, "msRefHeader is 24 bytes on every target");
+
+/* A destroyed object stays a husk, dead to its Unowned<T> edges, until the last edge goes. Keep the mark
+ * out of rc: workers read it during a lend while the owner and its collector count (ULTRALOCK V5). */
+#define MS_HDR_DEAD ((uint32_t)1 << 31)
+
+_Noreturn void msRaiseCellTooLarge(size_t total);
+
+static inline uint32_t msCellAllocSize(size_t total) {
+	if (__builtin_expect(total >= MS_HDR_DEAD, 0)) msRaiseCellTooLarge(total);
+	return (uint32_t)total;
+}
+
+static inline uint32_t msCellSize(const msRefHeader* h) {
+	return h->allocSize & ~MS_HDR_DEAD;
+}
+
+static inline bool msIsDeadToEdges(const msRefHeader* h) {
+	return (h->allocSize & MS_HDR_DEAD) != 0;
+}
 
 /* Get header from user pointer: header lives right before the object */
 static inline msRefHeader* msHeader(void* p) {
@@ -315,7 +330,7 @@ static inline void* msAlloc(size_t size) {
 	msRefHeader* h = (msRefHeader*)msSlabAlloc(total);   /* full zero */
 	/* rc, type already zero from msSlabAlloc; only rootIdx + allocSize need set */
 	h->rootIdx = -1;
-	h->allocSize = (uint32_t)total;
+	h->allocSize = msCellAllocSize(total);
 	MS_LEDGER_ALLOC((void*)(h + 1), NULL);
 	MS_DRC_STAT_ADD(MS_DS_ALLOC, 1); MS_DRC_STAT_ADD(MS_DS_ALLOC_BYTES, total);
 	return (void*)(h + 1);
@@ -329,7 +344,7 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
 	h->rootIdx = -1;
 	h->type = type;
 	MS_HCR_COUNT(type, 1);
-	h->allocSize = (uint32_t)total;
+	h->allocSize = msCellAllocSize(total);
 	MS_LEDGER_ALLOC((void*)(h + 1), type);
 	MS_DRC_STAT_ADD(MS_DS_ALLOC, 1); MS_DRC_STAT_ADD(MS_DS_ALLOC_BYTES, total);
 	return (void*)(h + 1);
@@ -379,7 +394,7 @@ static inline void* msAllocUninit(size_t size) {
 	h->rc = 0;
 	h->rootIdx = -1;
 	h->type = NULL;
-	h->allocSize = (uint32_t)total;
+	h->allocSize = msCellAllocSize(total);
 	MS_LEDGER_ALLOC((void*)(h + 1), NULL);
 	MS_DRC_STAT_ADD(MS_DS_ALLOC, 1); MS_DRC_STAT_ADD(MS_DS_ALLOC_BYTES, total);
 	return (void*)(h + 1);
@@ -392,7 +407,7 @@ static inline void* msAllocTypedUninit(size_t size, const msTypeInfo* type) {
 	h->rootIdx = -1;
 	h->type = type;
 	MS_HCR_COUNT(type, 1);
-	h->allocSize = (uint32_t)total;
+	h->allocSize = msCellAllocSize(total);
 	MS_LEDGER_ALLOC((void*)(h + 1), type);
 	MS_DRC_STAT_ADD(MS_DS_ALLOC, 1); MS_DRC_STAT_ADD(MS_DS_ALLOC_BYTES, total);
 	return (void*)(h + 1);
@@ -470,7 +485,7 @@ static inline void msUnownedIncref(void* p) {
 		MS_PLAIN_ON_IMMORTAL_CHECK(p, "msUnownedIncref");
 		msRefHeader* h = msHeader(p);
 		if ((h->rc & MS_UNOWNED_MASK) == MS_UNOWNED_EDGE_LIMIT) msRaiseUnownedOverflow(p);
-		if (__builtin_expect((h->rc & (MS_UNOWNED_MASK | MS_COLOR_MASK)) == MS_COL_DEAD, 0)) h->rc += MS_UNOWNED_INCREMENT;
+		if (__builtin_expect((h->rc & MS_UNOWNED_MASK) == 0 && msIsDeadToEdges(h), 0)) h->rc += MS_UNOWNED_INCREMENT;
 		h->rc += MS_UNOWNED_INCREMENT;
 	}
 }
@@ -480,12 +495,12 @@ static inline void msUnownedDecref(void* p) {
 		MS_PLAIN_ON_IMMORTAL_CHECK(p, "msUnownedDecref");
 		msRefHeader* h = msHeader(p);
 		h->rc -= MS_UNOWNED_INCREMENT;
-		if (__builtin_expect((h->rc & (MS_UNOWNED_MASK | MS_COLOR_MASK)) == MS_COL_DEAD, 0)) msUnownedFreeHusk(p);
+		if (__builtin_expect((h->rc & MS_UNOWNED_MASK) == 0 && msIsDeadToEdges(h), 0)) msUnownedFreeHusk(p);
 	}
 }
 
 static inline void msUnownedCheckLive(void* p) {
-	if (__builtin_expect((msHeader(p)->rc & MS_COLOR_MASK) == MS_COL_DEAD, 0)) msRaiseUnownedDead(p);
+	if (__builtin_expect(msIsDeadToEdges(msHeader(p)), 0)) msRaiseUnownedDead(p);
 }
 
 static inline void msUnownedAssignAt(void** slot, void* p) {
@@ -516,7 +531,7 @@ static inline void* msUnownedGive(void* p) {
 
 static inline void msUnownedKeepHusk(msRefHeader* h, void* p) {
 	if (h->rootIdx >= 0) msUnregisterCycle(p);
-	h->rc = (h->rc & ~(msRc)MS_COLOR_MASK) | MS_COL_DEAD;
+	h->allocSize |= MS_HDR_DEAD;
 }
 
 /* The target is dead to its Unowned<T> edges from here, edges made during its destroy included, and while
@@ -525,13 +540,13 @@ static inline void msUnownedKeepHusk(msRefHeader* h, void* p) {
  * free the memory under it. */
 static inline void msDestroyBegins(void* p) {
 	msRefHeader* h = msHeader(p);
-	msRc dead = (h->rc & ~(msRc)MS_COLOR_MASK) | MS_COL_DEAD;
-	h->rc = __builtin_expect((h->rc & MS_UNOWNED_MASK) != 0, 0) ? dead + MS_UNOWNED_INCREMENT : dead;
+	h->allocSize |= MS_HDR_DEAD;
+	if (__builtin_expect((h->rc & MS_UNOWNED_MASK) != 0, 0)) h->rc += MS_UNOWNED_INCREMENT;
 }
 
 static inline bool msDestroyLeavesHusk(msRefHeader* h, void* p) {
 	if (__builtin_expect((h->rc & MS_UNOWNED_MASK) == 0, 1)) return false;
-	if ((h->rc & MS_COLOR_MASK) == MS_COL_DEAD) {
+	if (msIsDeadToEdges(h)) {
 		h->rc -= MS_UNOWNED_INCREMENT;
 		if ((h->rc & MS_UNOWNED_MASK) == 0) return false;
 		if (h->rootIdx >= 0) msUnregisterCycle(p);
@@ -553,7 +568,7 @@ static inline void msDestroyAndDispose(void* p) {
 		 * (UAF in markGray/getColor). */
 		if (h->rootIdx >= 0) msUnregisterCycle(p);
 		MS_HCR_COUNT(h->type, -1);
-		msSlabFree(h, h->allocSize);
+		msSlabFree(h, msCellSize(h));
 	}
 }
 
@@ -563,7 +578,7 @@ static inline void msDropDispose(msSlab* slab, void* p) {
 	MS_DRC_STAT_ADD(MS_DS_FREE, 1);
 	if (h->rootIdx >= 0) msUnregisterCycle(p);
 	MS_HCR_COUNT(h->type, -1);
-	int b = msSlabBucket(h->allocSize);
+	int b = msSlabBucket(msCellSize(h));
 	if (b >= 0 && slab->count[b] < MS_SLAB_LIMIT) {
 		*(void**)h = slab->free[b];
 		slab->free[b] = h;

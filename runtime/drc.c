@@ -828,7 +828,7 @@ void msUnownedFreeHusk(void* p) {
 	msRefHeader* h = msHeader(p);
 	MS_DRC_STAT_ADD(MS_DS_FREE, 1);
 	MS_HCR_COUNT(h->type, -1);
-	msSlabFree(h, h->allocSize);
+	msSlabFree(h, msCellSize(h));
 }
 
 static void finalizeCollected(msGcEnv* j) {
