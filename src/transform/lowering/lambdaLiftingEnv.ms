@@ -584,7 +584,7 @@ export function wrapFnAsClosure(ident: Node, loc: SourceLocation): Node {
 // envDeclHoisted: let _envN = null (at function body start — just declares the variable)
 // envInitStmt: _envN = { field1: val1, ... } (at closure site — initializes the env)
 // closurePair: { fn: lifted, env: _envN }
-export function makeEnvVarAndClosurePair(state: LiftState, envVarSym: Symbol, liftedSym: Symbol, envStructType: Type, captures: SymSet, capturedIdents: Node[], parentEnvVarSym: Symbol | null, parentEnvStructType: Type, loc: SourceLocation): { envDeclHoisted: Node, envInitStmt: Node, closurePair: Node } {
+export function makeEnvVarAndClosurePair(state: LiftState, envVarSym: Symbol, liftedSym: Symbol, envStructType: Type, captures: SymSet, capturedIdents: Node[], parentEnvVarSym: Symbol | null, parentEnvStructType: Type, loc: SourceLocation, ownedByPair: boolean): { envDeclHoisted: Node, envInitStmt: Node, closurePair: Node } {
 	const envKeys: string[] = [];
 	const envValues: Node[] = [];
 	// Up-chain field init: pointer to lexical parent env, or null at module-level.
@@ -609,7 +609,7 @@ export function makeEnvVarAndClosurePair(state: LiftState, envVarSym: Symbol, li
 		if (isFnCapture) {
 			envVal = wrapFnAsClosure(ident, loc);
 		}
-		if (symSetContains(state.lastUseCaptures, sym)) {
+		if (!ownedByPair && symSetContains(state.lastUseCaptures, sym)) {
 			envValues.push(makeMoveExpr(envVal, loc));
 		} else {
 			envValues.push(envVal);
@@ -629,7 +629,7 @@ export function makeEnvVarAndClosurePair(state: LiftState, envVarSym: Symbol, li
 
 	// Initialization at closure site: _envN = { field1: val1, ... }
 	const envLhs = envVarRef(envVarSym, envStructType, loc);
-	const envInitStmt = makeExprStmt(makeAssign(envLhs, envObj, loc), loc);
+	const envInitStmt = makeExprStmt(makeAssign(envLhs, ownedByPair ? makeNull(loc) : envObj, loc), loc);
 
 	// Closure pair: { fn: lifted, env: _envN }
 	const closureKeys: string[] = [];
@@ -637,8 +637,7 @@ export function makeEnvVarAndClosurePair(state: LiftState, envVarSym: Symbol, li
 	closureKeys.push("env");
 	const closureValues: Node[] = [];
 	closureValues.push(makeTypedIdentResolved(liftedSym, null, loc));
-	const envRef = envVarRef(envVarSym, envStructType, loc);
-	closureValues.push(envRef);
+	closureValues.push(ownedByPair ? envObj : envVarRef(envVarSym, envStructType, loc));
 	const pair = makeObjectLiteral(closureKeys, closureValues, loc);
 	pair.flags = pair.flags.incl(NodeFlag.Closure);
 	return { envDeclHoisted, envInitStmt, closurePair: pair };

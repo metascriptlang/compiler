@@ -380,16 +380,20 @@ function liftClosure(body: Node, paramSyms: Symbol[], paramTypes: string[], flag
 		const parentEnvStructType = detached ? (null as unknown as Type) : parentLoop != null ? parentLoop.envStructType : (hasEnclosingFnEnv(state) ? state.sharedEnvStructType : (null as unknown as Type));
 		const initCaptures = preEnv != null ? preEnv.fields : captures;
 		const initIdents = preEnv != null ? preEnv.fieldIdents : state.capturedIdents;
-		const envPair = makeEnvVarAndClosurePair(state, envVarSym, liftedSym, envStructType, initCaptures, initIdents, parentEnvVarSym, parentEnvStructType, loc);
-		state.hoistedEnvDecls.push(envPair.envDeclHoisted);
-		state.pendingEnvRewrites.push({
-			envVarSym, envStructType,
-			capturedSyms: initCaptures,
-			chainNames: [] as string[],
-			chainTypes: [] as Type[],
-			envVarDecl: envPair.envInitStmt,
-			snapshotOnly: preEnv != null,
-		});
+		const envPair = makeEnvVarAndClosurePair(state, envVarSym, liftedSym, envStructType, initCaptures, initIdents, parentEnvVarSym, parentEnvStructType, loc, detached);
+		if (detached) {
+			envPair.closurePair = applyActiveRewrites(state, envPair.closurePair, state.activeEnvRewrites);
+		} else {
+			state.hoistedEnvDecls.push(envPair.envDeclHoisted);
+			state.pendingEnvRewrites.push({
+				envVarSym, envStructType,
+				capturedSyms: initCaptures,
+				chainNames: [] as string[],
+				chainTypes: [] as Type[],
+				envVarDecl: envPair.envInitStmt,
+				snapshotOnly: preEnv != null,
+			});
+		}
 		// Load-bearing for DRC (see the shared-env branch): nodeType lets the analyzer classify +
 		// destroy the fresh closure-pair temporary so its captured env doesn't leak as a call arg.
 		envPair.closurePair.nodeType = originalNodeType;
