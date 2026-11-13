@@ -181,3 +181,24 @@ console.log(take(a));
 	assert occurrences(messages, "'aToB' is imported but never used") == 0, messages.join("\n");
 	assert occurrences(messages, "'aToC' is imported but never used") == 0, messages.join("\n");
 }
+
+const macroFormalModule = `export struct Card { column: string; }
+export class Table<T> { rows: T[] = []; }
+export struct Spare { n: int32; }
+`;
+
+test "compileTimeNameUse: an imported type named only in a macro formal counts as a use; a dead import still warns" {
+	const entries: MapEntry[] = [
+		{ entryPath: "src/card.ms", entrySource: macroFormalModule },
+		{ entryPath: "src/m.ms", entrySource: `import { Node } from "std/meta";
+import { Card, Table, Spare } from "./card";
+export macro paramType(fn: (c: Card) => string): Node { return fn; }
+export macro paramTypeOf<R>(rows: R[], fn: (row: R, c: Card) => boolean): Node { return fn; }
+export macro onTable(this t: Table<Card>): Node { return t; }
+` },
+	];
+	const messages = checkProjectDiagnostics(entries, "src/m.ms");
+	assert occurrences(messages, "'Card' is imported but never used") == 0, messages.join("\n");
+	assert occurrences(messages, "'Table' is imported but never used") == 0, messages.join("\n");
+	assert occurrences(messages, "'Spare' is imported but never used") == 1, messages.join("\n");
+}
