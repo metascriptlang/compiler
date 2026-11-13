@@ -14,7 +14,9 @@ function variantReadBody(code: string): string {
 	const access = "((*doc_p0).data).v";
 	const at = code.indexOf(access);
 	if (at < 0) return "";
-	const idx = code.slice(at + access.length, code.indexOf(")", at + access.length));
+	let end = at + access.length;
+	while (end < code.length && code.charCodeAt(end) >= 48 && code.charCodeAt(end) <= 57) end += 1;
+	const idx = code.slice(at + access.length, end);
 	const memberAt = code.indexOf("* v" + idx + ";");
 	if (memberAt < 0) return "";
 	const memberType = code.slice(code.lastIndexOf(" ", memberAt - 1) + 1, memberAt);

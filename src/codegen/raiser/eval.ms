@@ -3595,10 +3595,10 @@ test "register classes: a local takes the class of its declared type, not of its
 		+ " console.log(`${l()}`);";
 	const f = compiledFunc(code, "l");
 	const table = classTable(f);
-	assert table == "RRRDFR" + "WW" + "FWFF", table;
+	assert table == "FRR" + "WW" + "FDWFF", table;
 	const text = disasmFunc(f);
 	assert countNamed(f, "ZeroN") == 1, text;
-	assert countNamed(f, "Box") == 2, text;
+	assert countNamed(f, "Box") == 1, text;
 	const vm = evalVM(code);
 	assert vm.error == "", vm.error;
 	assert vm.output == "2\n", vm.output;

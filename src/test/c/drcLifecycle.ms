@@ -467,7 +467,7 @@ test "E2E C: a non-null asserted field bound across a call that clears it takes 
 		}
 	`);
 	assert c.ok;
-	assert !c.value.contains("(d_1_ = (*h_p0).a)");
+	assert !c.value.contains("d_1_ = (*h_p0).a");
 	assert c.value.contains("msIncref(dollarborrow_");
 	assert c.value.contains("(d_1_ = dollarborrow_");
 	assert c.value.contains("msDecref(d_1_)");
@@ -498,7 +498,7 @@ test "E2E C: a non-null asserted field bound while nothing writes its holder sta
 		}
 	`);
 	assert c.ok;
-	assert c.value.contains("(d_1_ = (*h_p0).a)");
+	assert c.value.contains("d_1_ = (*h_p0).a;");
 	assert !c.value.contains("msDecref(d_1_)");
 }
 
