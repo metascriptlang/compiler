@@ -87,6 +87,7 @@ import "./paramProperty";
 import "./yieldValue";
 import "./overloadValue";
 import "./fnFormalArgFit";
+import "./taggedSubsetRefusal";
 import "./fnParamMode";
 import "./maybeRefPayloadKey";
 import "./sinkParam";

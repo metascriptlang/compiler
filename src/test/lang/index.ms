@@ -91,6 +91,7 @@ import "./suspendedBindings";
 import "./suspensionControl";
 import "./suspensionEvaluation";
 import "./unionPayloads";
+import "./taggedSubsetArgument";
 import "./unionUpdates";
 import "./valueLocations";
 import "./valueStorage";
