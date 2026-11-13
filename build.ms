@@ -182,9 +182,10 @@ if (wanted("solana")) {
 }
 
 const named = 'label=$1; shift; "$@"; rc=$?; [ $rc -eq 0 ] || printf "FAIL %s\\n" "$label"; exit $rc';
-function tool(label: string, command: Arg[], inputs: LazyPath[]): void {
+function tool(label: string, command: Arg[], inputs: LazyPath[]): LazyPath[] {
 	const argv: Arg[] = ["bash", "-c", named, "tool", label];
-	lane(`tools.${label.split("/").join("_").split(": ").join(".").split(" ").join("_")}`, argv.concat(command), {}, inputs);
+	const name = `tools.${label.split("/").join("_").split(": ").join(".").split(" ").join("_")}`;
+	return wanted(name) ? [laneNode(name, argv.concat(command), {}, inputs).captureStdOut()] : [];
 }
 for (const script of glob("tools/**/*.sh")) tool(`${script.sub}: bash -n`, ["bash", "-n", script], [script]);
 tool("tools/gate.sh: self-test", ["bash", "tools/gate.sh", "--self-test"], [path("tools/gate.sh")]);
@@ -205,6 +206,15 @@ for (const source of toolSources) {
 	else tool(`${source.sub}: run`, [candidate, "run", source], toolSources);
 }
 tool("tools/gateTest.ms: run", [candidate, "run", "tools/gateTest.ms", candidate], toolSources);
+
+const installPinned = 'mkdir -p "$1/harness" "$1/vendor" && cp tools/bundler-plugin/harness/package.json tools/bundler-plugin/harness/package-lock.json "$1/harness/" && cp tools/bundler-plugin/vendor/rollup4.tgz "$1/vendor/" && npm ci --prefix "$1/harness" --ignore-scripts --prefer-offline --no-audit --no-fund';
+const pins = [path("tools/bundler-plugin/harness/package.json"), path("tools/bundler-plugin/harness/package-lock.json"), path("tools/bundler-plugin/vendor/rollup4.tgz")];
+const pinnedBundlers = systemCommand(["bash", "-c", installPinned, "bundlers"], { inputs: pins, description: "the pinned bundlers" }).addPrefixedOutputDirectoryArg("", "bundlers");
+const adapters = glob("tools/bundler-plugin/*.js").concat(glob("tools/bundler-plugin/*.mjs")).concat(glob("tools/bundler-plugin/*.ts")).concat([path("tools/bundler-plugin/package.json"), path("src/test/js/declarationBundlers"), path("src/test/compat/typescript/run.mjs")]);
+const withPinned = 'modules=$1/harness/node_modules; rm -rf tools/bundler-plugin/node_modules && ln -s "$modules" tools/bundler-plugin/node_modules && MSC=$2 VITE_MODULE=$modules/vite/dist/node/index.js ROLLUP_MODULE=$modules/rollup/dist/es/rollup.js WEBPACK_MODULE=$modules/webpack/lib/index.js TS_ORACLE_MODULE=$modules/typescript/lib/typescript.js node tools/bundler-plugin/test.mjs';
+const adapterCheck: Arg[] = ["bash", "-c", withPinned, "adapters", pinnedBundlers, candidate];
+const afterTheSelfTestRelinkedNodeModules = tool("tools/bundler-plugin/test.test.mjs: self-test", ["node", "--test", "--test-concurrency=1", "tools/bundler-plugin/test.test.mjs"], adapters.concat([path("tools/gate.sh")]));
+tool("tools/bundler-plugin/test.mjs: check", adapterCheck, sources.concat(adapters).concat(afterTheSelfTestRelinkedNodeModules));
 
 const gateTool = executable({ entry: path("tools/gate.ms"), optimize });
 export const gate = systemCommand([gateTool, lanes.getDirectory(), path("src/test/known-red.json")], { expectExitCode: 0, description: "the verdict over the lane logs" });
