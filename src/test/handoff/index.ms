@@ -170,6 +170,7 @@ import "./raiserModuleTdzEntry";
 import "./raiserReturnLeavesTries";
 import "./raiserRequiredField";
 import "./raiserRuntimeLayout";
+import "./raiserSpliceMovesElements";
 import "./raiserValueUnionCopy";
 import "./sendableFunction";
 import "./slotRelation";
