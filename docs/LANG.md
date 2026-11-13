@@ -3927,6 +3927,7 @@ as a plain `T`; nullability stays explicit.
 | `const p = h.at`, `h.ups[0].id`, `for (const n of h.ups)` | a checked read: a strong `T` while it is used |
 | the last strong reference to the target goes while edges remain | the target is destroyed then (`onDestroy` runs); its memory stays until the last edge goes |
 | a read of an edge whose target was destroyed | the program stops: `Error: an Unowned<N> edge was read after its N was destroyed` |
+| an edge made during the target's destroy (its `onDestroy` storing `this` into an `Unowned` slot) | the target is already dead to it: a read stops, inside the hook and from an object destroyed with it |
 | `a.at = b.at`, `a.ups.push(b.ups[0])` | a copy of the edge, no read: nothing stops |
 | `h.ups.splice(i, k)`, `h.ups.shrink(n)`, `h.ups.reverse()`, `h.ups.length = 0` | the edges are dropped or moved, no read: nothing stops |
 | `h.ups.pop()`, `h.ups.shift()` | the element comes out as a strong `T`: a checked read, also when the result is not used |
@@ -4006,6 +4007,17 @@ Measured on candidates of `wt/unified-drc` (rtx, 2026-11-09, C, danger and Raise
 free disabled); `src/test/c/unownedEdge.ms` (18 tests, the refusals and the struct that holds an edge in a `Map`
 included); guard `bareWasmUnownedEdges` (wasm32: the dead read traps, 16 384 husks fit 1 MiB). Not measured: threads,
 HCR.
+
+An edge made during its target's destroy, measured on a candidate of `wt/unified-drc-destroy` over main `ea6ead2b6394`
+(rtx, 2026-11-13): corpus `unownedEdgeMadeDuringItsTargetsDestroyStopsAChildRead` (the target's own `onDestroy`
+stores `this`, a child destroyed with it reads the edge) and `unownedEdgeMadeDuringItsTargetsDestroyStopsItsOwnRead`
+(the hook reads its own new edge) stop on C, danger, the Raiser and SAN. Before, the target was dead to its edges from
+the start of its destroy only when it already had one: the child's read printed `read p1a` on C and danger, the
+object's `last` field already released, while the Raiser stopped, and the hook's own read printed on all three.
+`unownedEdgeMadeDuringItsTargetsDestroyIsCounted` (an edge made in the destroy and given up in it, one kept past it
+and given up later, 2000 objects each) prints and is clean under SAN on both. A loop destroying 40 million objects
+(`--release`, five alternating runs, rtx, the same change on main `4a9e3de55090`) took 233-244 ms with it and 228-244 ms
+without it, means 236.6 and 234.6 ms: inside the spread between runs.
 
 Dropping or moving edges whose targets were destroyed, measured on a candidate of `wt/unified-drc` over main
 `a52e4018016b` (rtx, 2026-11-13): corpus `unownedArrayCutOrReversedLeavesDeadEdgesUnread` (`splice` at the head, in
