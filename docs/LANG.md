@@ -2053,13 +2053,23 @@ here that is refused, because a write through `T` would leave the narrow member 
 
 Wider than TypeScript, each measured: a class or value-struct target, a union, `Record` and an array keep
 `T` (an array literal against `Kind[]` is `Kind[]`; `Record<string, number>` is a `Map`, so `m.a` is
-refused); an optional member the literal leaves out stays readable as `undefined`. Refused where
-TypeScript accepts: `{ … } as const satisfies Shape` ("does not satisfy"), because an integer literal under
-`as const` is stored as `int32` and `size: number` is not.
+refused); an optional member the literal leaves out stays readable as `undefined`.
+
+`{ … } as const` takes the contextual type of the assertion, as TypeScript does, so `as const satisfies T`
+and `const r: Readonly<T> = { … } as const` check the literal against `T`. Every literal member keeps its
+own type (a string under `string` too) in `T`'s fields and order, and the value is `Readonly`, nested
+objects included: a write through it is refused, and so is passing it where a writable `T` is asked for,
+which TypeScript accepts. Wider than TypeScript: an integer literal under `number` reads as `number`, not
+`2`, because an integer literal type is stored as `int32` and the field as a double (`2.5` stays `2.5`);
+a union target keeps `T`. Without a contextual object type it is the anonymous read-only literal as
+before; `[ … ] as const` stays refused (it needs a readonly tuple type).
 
 Measured on C, danger, JS, ESM and the Raiser with a candidate of `wt/ts-satisfies` (tip `499c62a`, rtx and
 d87, 2026-11-13): corpus `satisfiesKeepsLiteralMembers` prints `circle 2 6`, `circle circle`, `square 2`,
-`true lib`; the refusals above are `handoff/satisfiesKeepsLiteralMembers.ms`. Generic targets were not probed.
+`true lib`; the refusals above are `handoff/satisfiesKeepsLiteralMembers.ms`. `as const` measured on C and
+JS with a candidate on rtx (2026-11-14): corpus `asConstSatisfiesKeepsLiteralMembers` prints `circle 2 6`,
+`square 2.5`, `6`, `circle 1 circle`, `true lib`, `x a`; tsc 5.9 accepts the same program and refuses the
+same writes. Generic targets were not probed.
 
 ## MetaScript-Specific Syntax
 
