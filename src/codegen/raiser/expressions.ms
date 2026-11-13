@@ -3491,9 +3491,9 @@ function isArraySetLengthCall(call: Node): boolean {
 const ARRAY_POP_NATIVES = ["&msGenericArrayPop", "&msNumberArrayPop", "&msStringArrayPop"];
 const ARRAY_TAKE_NATIVE = "&msGenericArrayTake";
 const ARRAY_SHIFT_NATIVES = ["&msNumberArrayShift", "&msStringArrayShift"];
-const ARRAY_SPLICE_NATIVES = ["&msNumberArraySplice", "&msStringArraySplice"];
-const ARRAY_SPLICE3_NATIVES = ["&msNumberArraySplice3", "&msStringArraySplice3", "&msUint8ArraySplice3"];
-const ARRAY_REVERSE_NATIVES = ["&msNumberArrayReverse", "&msStringArrayReverse"];
+const ARRAY_SPLICE_NATIVES = ["&msNumberArraySplice", "&msStringArraySplice", "&msGenericArraySplice"];
+const ARRAY_SPLICE3_NATIVES = ["&msNumberArraySplice3", "&msStringArraySplice3", "&msUint8ArraySplice3", "&msGenericArraySplice3"];
+const ARRAY_REVERSE_NATIVES = ["&msNumberArrayReverse", "&msStringArrayReverse", "&msGenericArrayReverse"];
 const ARRAY_SORT_NATIVES = ["&msNumberArraySort", "&msStringArraySort"];
 const ARRAY_FILL_NATIVES = ["&msNumberArrayFill", "&msStringArrayFill"];
 const ARRAY_SLICE_NATIVES = ["&msNumberArraySlice", "&msStringArraySlice"];

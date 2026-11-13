@@ -2188,6 +2188,8 @@ test "rms extern closure: declared externs are bridged, intercepted, or listed d
 		"&msGenericArrayPush",                            // ArrayPush
 		"&msGenericArraySetLen",                          // ArraySetLen
 		"&msGenericArrayTake",                            // LoadIndex + StoreIndex of the typed zero
+		"&msGenericArraySplice", "&msGenericArraySplice3", // ArraySplice / ArraySplice3
+		"&msGenericArrayReverse",                         // ArrayReverse
 	];
 	// Deliberately dead — each needs work before it can come off this list.
 	const knownDead: string[] = [

@@ -5,11 +5,13 @@ import { holdsArray } from "std/typetraits";
 // MetaScript Array Prelude — Raiser Backend
 // Generic T[] methods only: Raiser values are dynamic, so one generic form
 // covers every element type (the C backend monomorphizes per element type
-// for native arrays; the VM does not need that). `push` and `setLength` are
-// intercepted by the Raiser codegen to the ArrayPush/ArraySetLen opcodes —
-// the extern declarations below exist for the checker only, mirroring the
-// push pattern. The remaining methods are portable MS over those two ops,
-// matching the C kernels' semantics (std/core/array/index.cms).
+// for native arrays; the VM does not need that). `push`, `setLength` and the
+// splice and reverse kernels are intercepted by the Raiser codegen to the
+// ArrayPush/ArraySetLen/ArraySplice/ArraySplice3/ArrayReverse opcodes, which
+// move elements without counting them, as the C kernels do — the extern
+// declarations below exist for the checker only. The remaining methods are
+// portable MS over those ops, matching the C kernels' semantics
+// (std/core/array/index.cms).
 
 @builtin("Array")
 export class Array<T> {
@@ -52,54 +54,29 @@ export function capacity<T>(this arr: Vec<T>): number {
 	return arr.length;
 }
 
+extern function removeHeld<T>(this arr: T[], start: int64, count: int64): void from "&msGenericArraySplice";
+extern function replaceHeld<T>(this arr: T[], start: int64, count: int64, item: T): void from "&msGenericArraySplice3";
+extern function reverseInPlace<T>(this arr: T[]): void from "&msGenericArrayReverse";
+
 // Removes deleteCount elements starting at start; a negative start counts from the end.
 export function splice<T>(this arr: T[], start: number, deleteCount: number): void {
 	const n = arr.length as int64;
 	const s = spliceStart(start, n);
 	const k = spliceCount(deleteCount, n - s);
 	if (k == 0) return;
-	let dst = s;
-	while (dst + k < n) {
-		arr[dst] = arr[dst + k];
-		dst = dst + 1;
-	}
-	arr.setLength((n - k) as number);
+	arr.removeHeld(s, k);
 }
 
 // Removes deleteCount elements at start, then inserts item at start; a negative start counts from the end.
 export function splice<T>(this arr: T[], start: number, deleteCount: number, item: T): void {
-	const s = spliceStart(start, arr.length as int64);
-	splice(arr, s as number, deleteCount);
 	const n = arr.length as int64;
-	arr.setLength((n + 1) as number);
-	let i = n;
-	while (i > s) {
-		arr[i] = arr[i - 1];
-		i = i - 1;
-	}
-	arr[s] = item;
+	const s = spliceStart(start, n);
+	arr.replaceHeld(s, spliceCount(deleteCount, n - s), item);
 }
 
 export function reverse<T>(this arr: T[]): Borrow<T[]> {
 	arr.reverseInPlace();
 	return arr;
-}
-
-function reverseInPlace<T>(this arr: T[]): void {
-	const n = arr.length as int64;
-	if (n < 2) return;
-	const scratch = n;
-	arr.push(arr[0]);
-	let lo: int64 = 0;
-	let hi = n - 1;
-	while (lo < hi) {
-		arr[scratch] = arr[lo];
-		arr[lo] = arr[hi];
-		arr[hi] = arr[scratch];
-		lo = lo + 1;
-		hi = hi - 1;
-	}
-	arr.setLength(n as number);
 }
 
 function mergeRuns<T>(a: T[], b: T[], lo: int64, m: int64, hi: int64, cmp: (a: T, b: T) => number): void {
