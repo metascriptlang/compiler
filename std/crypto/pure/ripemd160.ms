@@ -15,7 +15,7 @@ when (!js) {
 		return [0];
 	}
 } else {
-	type BlockBytes = Readonly<uint8[]>;
+	type BlockBytes = Readonly<Span<uint8>>;
 	type Block = uint8[];
 
 	function zeroBlock(): Block {
@@ -878,7 +878,7 @@ function compress(s: Ripemd160State, data: BlockBytes, off: int64): void {
 	s.h[0] = t;
 }
 
-export function updateRipemd160(s: Ripemd160State, data: Readonly<uint8[]>): void {
+export function updateRipemd160(s: Ripemd160State, data: Readonly<Span<uint8>>): void {
 	if (s.finished) throw new Error("ripemd160: already finished");
 	const end = data.length as int64;
 	let at: int64 = 0;
@@ -950,7 +950,7 @@ export function finishRipemd160Into(s: Ripemd160State, out: Span<uint8>): void {
 	wipeWords(s.h);
 }
 
-export function ripemd160Of(data: Readonly<uint8[]>): uint8[] {
+export function ripemd160Of(data: Readonly<Span<uint8>>): uint8[] {
 	const s = newRipemd160();
 	updateRipemd160(s, data);
 	return finishRipemd160(s);

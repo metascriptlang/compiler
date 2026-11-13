@@ -28,7 +28,6 @@ when (js) {
 }
 
 when (!(js && nodejs)) {
-	import { bytesOf, wipeIfCopied } from "./bytes";
 	import { HashState, wipeHashState } from "./state";
 	import { newHash, updateHash, finishHashInto, hashInto } from "./hash";
 	import {
@@ -254,7 +253,7 @@ function extOutputSize(algorithm: string): int32 {
 
 function extOneShotInto(
 	algorithm: string,
-	data: Readonly<uint8[]>,
+	data: Readonly<Span<uint8>>,
 	out: Span<uint8>,
 ): void {
 	if (algorithm == "ripemd160") {
@@ -270,7 +269,7 @@ function extOneShotInto(
 
 function extOneShot(
 	algorithm: string,
-	data: Readonly<uint8[]>,
+	data: Readonly<Span<uint8>>,
 ): uint8[] {
 	const out = new Array<uint8>(extOutputSize(algorithm));
 	extOneShotInto(algorithm, data, out);
@@ -284,7 +283,7 @@ class ExtHmacCtx {
 
 function newExtHmac(
 	algorithm: string,
-	key: Readonly<uint8[]>,
+	key: Readonly<Span<uint8>>,
 ): ExtHmacCtx {
 	const isRipemd = algorithm == "ripemd160";
 	const bits = isRipemd ? 0 : sha3BitsOf(algorithm);
@@ -321,7 +320,7 @@ function newExtHmac(
 
 function updateExtHmac(
 	ctx: ExtHmacCtx,
-	data: Readonly<uint8[]>,
+	data: Readonly<Span<uint8>>,
 ): void {
 	const inner = ctx._inner;
 	if (inner instanceof Ripemd160State) {
@@ -381,7 +380,7 @@ export function digestSync<D extends ByteInput>(
 			return Result.err(invalidAlgorithm(algorithm));
 		}
 		const out = new Buffer(extOutputSize(algorithm));
-		extOneShotInto(algorithm, bytesOf(data), out);
+		extOneShotInto(algorithm, typeof data == "string" ? data.asBytes() : data, out);
 		return Result.ok(out);
 	}
 }
@@ -409,10 +408,8 @@ export function hmacSync<K extends ByteInput, D extends ByteInput>(
 		if (!isExtAlg(algorithm)) {
 			return Result.err(invalidAlgorithm(algorithm));
 		}
-		const secret = bytesOf(key);
-		const ctx = newExtHmac(algorithm, secret);
-		wipeIfCopied(key, secret);
-		updateExtHmac(ctx, bytesOf(data));
+		const ctx = newExtHmac(algorithm, typeof key == "string" ? key.asBytes() : key);
+		updateExtHmac(ctx, typeof data == "string" ? data.asBytes() : data);
 		return Result.ok(finishExtHmac(ctx));
 	}
 }
@@ -534,10 +531,10 @@ when (js && nodejs) {
 				updateHash(ctx, typeof data == "string" ? data.asBytes() : data);
 			} else if (ctx instanceof Ripemd160State) {
 				if (ctx.finished) return this;
-				updateRipemd160(ctx, bytesOf(data));
+				updateRipemd160(ctx, typeof data == "string" ? data.asBytes() : data);
 			} else {
 				if (ctx.finished) return this;
-				updateSha3(ctx, bytesOf(data));
+				updateSha3(ctx, typeof data == "string" ? data.asBytes() : data);
 			}
 			return this;
 		}
@@ -576,10 +573,9 @@ when (js && nodejs) {
 					`createHmac: could not start "${algorithm}"`,
 				);
 			}
-			const secret = bytesOf(key);
+			const secret = typeof key == "string" ? key.asBytes() : key;
 			const ctx: HmacState | ExtHmacCtx = kind >= 0 ?
 				newHmac(kind, secret) : newExtHmac(algorithm, secret);
-			wipeIfCopied(key, secret);
 			return { _ctx: ctx, _done: false };
 		}
 
@@ -589,7 +585,7 @@ when (js && nodejs) {
 				if (ctx instanceof HmacState) {
 					updateHmac(ctx, typeof data == "string" ? data.asBytes() : data);
 				} else {
-					updateExtHmac(ctx, bytesOf(data));
+					updateExtHmac(ctx, typeof data == "string" ? data.asBytes() : data);
 				}
 			}
 			return this;

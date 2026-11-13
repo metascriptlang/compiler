@@ -452,7 +452,7 @@ when (c) {
 	}
 
 
-	function addBytes(state: Sha3State, data: Readonly<uint8[]>, at: int64, len: int32): void {
+	function addBytes(state: Sha3State, data: Readonly<Span<uint8>>, at: int64, len: int32): void {
 		const base = at as number;
 		let i = 0;
 		while (i + 4 <= len) {
@@ -502,7 +502,7 @@ export function newSha3(bits: int32): Sha3State {
 }
 
 /** Absorb data into the sponge. Throws if called after finishSha3. */
-export function updateSha3(state: Sha3State, data: Readonly<uint8[]>): void {
+export function updateSha3(state: Sha3State, data: Readonly<Span<uint8>>): void {
 	if (state.finished) throw new Error("SHA3: already finished");
 	const n: int64 = data.length;
 	const rate = state.rate;
@@ -557,7 +557,7 @@ export function finishSha3Into(state: Sha3State, out: Span<uint8>): void {
 }
 
 /** Hash data in one call. */
-export function sha3Of(bits: int32, data: Readonly<uint8[]>): uint8[] {
+export function sha3Of(bits: int32, data: Readonly<Span<uint8>>): uint8[] {
 	const state = newSha3(bits);
 	updateSha3(state, data);
 	return finishSha3(state);
