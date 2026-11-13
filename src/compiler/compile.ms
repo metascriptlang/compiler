@@ -6161,9 +6161,10 @@ function linkStorable(opts: CliOptions, outBinary: string, hcr: boolean): boolea
 	return pdbLinkArg(opts.mode, opts.targetOs, opts.ccCompiler, outBinary) == "" && dsymutilArgv(opts.mode, opts.targetOs, opts.ccCompiler, "", outBinary).length == 0;
 }
 
-export function runRaiser(mod: RaiserModule, programArgv: string[], printSink: RaiserPrintSink, auditLedger: boolean = true, restrictedSource: string = ""): RaiserContext {
+export function runRaiser(mod: RaiserModule, programArgv: string[], printSink: RaiserPrintSink, auditLedger: boolean = true, restrictedSource: string = "", hostTurns: boolean = false): RaiserContext {
 	const ctx = createRaiserContext(false);
 	ctx.auditLedger = auditLedger;
+	ctx.hostTurns = hostTurns;
 	ctx.restrictedSource = restrictedSource;
 	ctx.programArgv = programArgv;
 	ctx.printSink = printSink;

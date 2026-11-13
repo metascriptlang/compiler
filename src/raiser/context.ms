@@ -27,6 +27,7 @@ export interface RaiserContext {
 	printSink: RaiserPrintSink | null;
 	vm: RaiserVM | null;   // the VM of the last execute, kept so a host can call into it
 	restrictedSource: string;   // non-empty: the whole run may call only pure and file-read hosts, and errors name this source
+	hostTurns: boolean;   // the embedding host drives the event loop (vm.ms `hostTurns`)
 }
 
 export function createContext(comptime: boolean = true): RaiserContext {
@@ -37,7 +38,7 @@ export function createContext(comptime: boolean = true): RaiserContext {
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createStructHeap();
 	const orphanFailures: string[] = [];
-	return { mod: emptyMod, hasModule: false, lastResult: nilResult, lastOutput: "", arrayHeap, objectHeap, lastError: "", comptime, auditLedger: true, orphanFailures, programArgv: null, printSink: null, vm: null, restrictedSource: "" };
+	return { mod: emptyMod, hasModule: false, lastResult: nilResult, lastOutput: "", arrayHeap, objectHeap, lastError: "", comptime, auditLedger: true, orphanFailures, programArgv: null, printSink: null, vm: null, restrictedSource: "", hostTurns: false };
 }
 
 export function load(ctx: RaiserContext, mod: RaiserModule): void {
@@ -53,6 +54,7 @@ export function execute(ctx: RaiserContext): boolean {
 	vm.printSink = ctx.printSink;
 	vm.hostCallsRestricted = ctx.restrictedSource != "";
 	vm.hostPolicySource = ctx.restrictedSource;
+	vm.hostTurns = ctx.hostTurns;
 	execLoop(vm);
 	ctx.vm = vm;
 	ctx.lastResult = vm.exitValue;

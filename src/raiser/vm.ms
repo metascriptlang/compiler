@@ -252,6 +252,7 @@ export interface RaiserVM {
 	unsettled: boolean;   // stopped with a strand parked on a future nothing can complete (exit 13)
 	comptime: boolean;
 	auditLedger: boolean;
+	hostTurns: boolean;   // an embedding host drives the loop: a call returns once its routine and the promise jobs it queued ran, and timers wait for the host's turn
 	disposing: int64[];   // the cells whose destroy routine has a live frame, innermost last
 	dropped: int64[];     // last-reference cells waiting for their destroy to run once the destroys in flight have returned
 	dropNest: int32;      // generic destroy walks in flight on the host stack
@@ -372,7 +373,7 @@ export function createVM(mod: RaiserModule, comptime: boolean = true): RaiserVM 
 	const thenRuns: RaiserThen[] = [];
 	const sched: RaiserSched = { strands, futures, timers, nextStrandId: 1, modules: createModuleEval(mod), thenRuns, readyOrder: [] as number[], idleWait: false, ticked: [] as number[], freeStrands: [] as number[], spareRegs: [] as RaiserRegFile[] };
 	const safePoints: number[] = [];
-	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, disposing: [], dropped: [], dropNest: 0, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", sandboxed: activeSystem() != null, restrictedReads: 0, programArgv: null, floor: 0, suspendedRuns: [], unsettled: false, hostArgsAt: 0, hostResult: 0, floorPending: false, inPlaceHost: -1 };
+	return { mod, globals, regs, ip: 0, halted: false, exitValue: nilVal, output: "", printSink: null, funcIdx: mod.entry as int32, base: 0, callStack, arrayHeap, objectHeap, loopCount: 0, loopLimit: comptime || vmLoopLimitChosen ? vmLoopLimitDefault : NO_LOOP_LIMIT, error: "", comptime, auditLedger: true, hostTurns: false, disposing: [], dropped: [], dropNest: 0, sched, current: 0, yielded: false, safePoints, currentException: raiserNil(), diagMessage: "", diagLine: 0, diagColumn: 0, diagEndLine: 0, diagEndColumn: 0, hostCallsRestricted: false, hostPolicySource: "", sandboxed: activeSystem() != null, restrictedReads: 0, programArgv: null, floor: 0, suspendedRuns: [], unsettled: false, hostArgsAt: 0, hostResult: 0, floorPending: false, inPlaceHost: -1 };
 }
 
 // --- Register access ---
@@ -811,19 +812,23 @@ function resumeRun(vm: RaiserVM, run: RaiserRun): void {
 // --- Strand scheduling ---
 
 function resetStrands(vm: RaiserVM, entryFuncIdx: number): void {
-	vm.sched.strands.items.length = 0;
+	const keepsEarlierWork = vm.hostTurns && vm.suspendedRuns.length == 0;
+	if (!keepsEarlierWork) vm.sched.strands.items.length = 0;
 	const result = raiserNil();
 	vm.safePoints.length = 0;
 	// The main strand keeps the VM's existing heap objects: the host holds that
 	// identity across runs (context.ms captures it, vmReleaseHeaps clears it).
 	const mainStrand: RaiserStrand = { id: 0, globals: vm.globals, regs: vm.regs, callStack: vm.callStack, arrayHeap: vm.arrayHeap, objectHeap: vm.objectHeap, ip: 0, funcIdx: entryFuncIdx as int32, base: 0, loopCount: 0, status: RaiserStrandStatus.Running, result, resultFuture: -1, safePoints: vm.safePoints, currentException: vm.currentException };
-	vm.sched.strands.items.push(mainStrand);
+	if (keepsEarlierWork && vm.sched.strands.items.length > 0) vm.sched.strands.items[0] = mainStrand;
+	else vm.sched.strands.items.push(mainStrand);
 	vm.current = 0;
-	vm.sched.nextStrandId = 1;
 	vm.yielded = false;
-	resetFutures(vm);
-	vm.sched.freeStrands.length = 0;
-	vm.sched.timers.items.length = 0;
+	if (!keepsEarlierWork) {
+		vm.sched.nextStrandId = 1;
+		resetFutures(vm);
+		vm.sched.freeStrands.length = 0;
+		vm.sched.timers.items.length = 0;
+	}
 	const ev = vm.sched.modules;
 	ev.pending.length = 0;
 	ev.strand = -1;
@@ -1375,6 +1380,45 @@ function vmFireDueTimer(vm: RaiserVM): void {
 	futureRelease(vm, timer.future);
 }
 
+// One turn of a host-driven loop: the timers already due fire, each strand they wake and the promise jobs those
+// queue run, and nothing sleeps. Returns the milliseconds until the next timer is due, or -1 when none is armed.
+export function vmRunDueTimers(vm: RaiserVM): number {
+	if (!vm.hostTurns) throw new Error("internal: vmRunDueTimers on a VM its host does not drive");
+	if (vm.suspendedRuns.length > 0 || vm.inPlaceHost >= 0) {
+		raiseFromHost("a host turn ran while a host function was still inside the guest: run due timers from the host's loop, after the call returns", true);
+		return vmNextTimerDelayMs(vm);
+	}
+	const now = performance.now();
+	let fired = false;
+	while (vm.sched.timers.items.length > 0 && vm.sched.timers.items[0].dueMs <= now) {
+		vmFireDueTimer(vm);
+		fired = true;
+	}
+	if (fired || vmHasRunnable(vm)) {
+		vm.halted = false;
+		vm.error = "";
+		vm.loopCount = 0;
+		const next = schedulePick(vm);
+		if (next >= 0) {
+			strandResume(vm, next);
+			vm.yielded = false;
+			execStrandLoop(vm);
+		}
+		const main = vm.sched.strands.items[0];
+		vm.arrayHeap = main.arrayHeap;
+		vm.objectHeap = main.objectHeap;
+		vm.globals = main.globals;
+		vm.regs = main.regs;
+	}
+	return vmNextTimerDelayMs(vm);
+}
+
+export function vmNextTimerDelayMs(vm: RaiserVM): number {
+	if (vm.sched.timers.items.length == 0) return -1;
+	const wait = vm.sched.timers.items[0].dueMs - performance.now();
+	return wait <= 0 ? 0 : Math.ceil(wait);
+}
+
 function vmWaitForTimer(vm: RaiserVM): void {
 	const wait = vm.sched.timers.items[0].dueMs - performance.now();
 	if (wait <= 0) return;
@@ -1874,6 +1918,14 @@ function vmProgramLedger(vm: RaiserVM): void {
 	vmLedger(vm, sharing, extra, names, "program");
 }
 
+// A program run waits for its timers, as msDrainUntilIdle does at exit; a host-driven call leaves them to
+// the host's next turn once its routine finished, and a run nested in a host function keeps waiting, because
+// its scheduler is dropped when it returns.
+function waitsOnTimers(vm: RaiserVM): boolean {
+	if (!vm.hostTurns || vm.suspendedRuns.length > 0) return true;
+	return vm.sched.strands.items.length > 0 && vm.sched.strands.items[0].status != RaiserStrandStatus.Done;
+}
+
 function vmHasRunnable(vm: RaiserVM): boolean {
 	for (const s of vm.sched.strands.items) {
 		if (s.status == RaiserStrandStatus.Ready) return true;
@@ -1895,7 +1947,7 @@ function vmHasBlocked(vm: RaiserVM): boolean {
 function finishProgram(vm: RaiserVM, value: RaiserValue, abrupt: boolean): void {
 	vm.exitValue = value;
 	if (abrupt) vm.auditLedger = false;
-	if (!abrupt && (vmHasRunnable(vm) || vm.sched.timers.items.length > 0)) {
+	if (!abrupt && (vmHasRunnable(vm) || (vm.sched.timers.items.length > 0 && waitsOnTimers(vm)))) {
 		vm.yielded = true;
 		return;
 	}
@@ -2480,7 +2532,7 @@ function execStrandLoop(vm: RaiserVM): void {
 		if (vm.sched.futures.counts.dead.length > 0) vmDrainFutures(vm);
 		let next = moduleHandoffPick(vm);
 		if (next < 0) next = schedulePick(vm);
-		while (next < 0 && vm.sched.timers.items.length > 0 && !vm.halted) {
+		while (next < 0 && vm.sched.timers.items.length > 0 && !vm.halted && waitsOnTimers(vm)) {
 			vmWaitForTimer(vm);
 			vmFireDueTimer(vm);
 			next = schedulePick(vm);
@@ -2491,6 +2543,10 @@ function execStrandLoop(vm: RaiserVM): void {
 			vm.sched.strands.items[0].status = RaiserStrandStatus.Ready;
 			vm.sched.readyOrder.push(0);
 			next = schedulePick(vm);
+		}
+		if (next < 0 && !waitsOnTimers(vm)) {
+			vm.halted = true;
+			return;
 		}
 		if (next < 0) {
 			// Nothing runnable — the event loop is empty and the program is
