@@ -97,7 +97,7 @@ record("fmt takes fmt from the project's build.ms in the working directory", "  
 record("fmt takes fmt from the file's project when the working directory is elsewhere", "   const a = 1;", indentAfterFmt(root, "formatted/a.ms"));
 
 function checkThroughLinkedDir(): void {
-	if (platform == "win32") return;
+	if (platform == "windows") return;
 	const dir = `${root}/linked`;
 	ensureDir(`${dir}/libreal/sub`);
 	ensureDir(`${dir}/app`);
@@ -485,8 +485,9 @@ put(`${timed}/build.ms`, [
 	"",
 ].join("\n"));
 const stuck = errorLine(run(timed, ["build", "--colors=off", "stuck"]));
-if (platform == "win32") {
-	record("a command with a timeout is refused on Windows", "timeout is not supported on Windows yet", stuck.split(": ").pop());
+if (platform == "windows") {
+	record("a command past its timeout fails the build, and on Windows only the command itself is killed", "ran past its timeout of 500 ms; it was killed, and the processes it started were not",
+		stuck.split("wait ").pop());
 } else {
 	run(timed, ["build", "--colors=off", "pause"]);
 	record("a command past its timeout fails the build and the processes it started die with it", "ran past its timeout of 500 ms; it and the processes it started were killed|late.txt absent",

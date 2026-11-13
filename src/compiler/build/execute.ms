@@ -303,7 +303,6 @@ function runCommand(x: Execution, n: GraphNode): Job | null {
 	let args = argv.slice(1, argv.length);
 	let exe = found;
 	const env = n.env.map((e: GraphEnv): string => `${e.name}=${e.path == null ? e.value : pathOf(x, e.path)}`);
-	if (n.timeout > 0 && platform == "windows") throw new Error(`${label(n)}: timeout is not supported on Windows yet`);
 	if (env.length > 0) {
 		if (platform == "windows") throw new Error(`${label(n)}: setEnvironmentVariable is not supported on Windows yet`);
 		args = env.concat([found]).concat(args);
@@ -505,7 +504,8 @@ function expire(j: Job): string {
 	if (j.out != "") console.log(j.out.trimEnd());
 	if (j.err != "") console.log(j.err.trimEnd());
 	j.abandon();
-	return `${label(j.node)}: ${j.shown} ran past its timeout of ${j.node.timeout} ms; it and the processes it started were killed`;
+	const reached = platform == "windows" ? "it was killed, and the processes it started were not" : "it and the processes it started were killed";
+	return `${label(j.node)}: ${j.shown} ran past its timeout of ${j.node.timeout} ms; ${reached}`;
 }
 
 function settle(j: Job): string {
@@ -605,7 +605,7 @@ function executePlan(x: Execution, id: int32): string {
 				}
 				j.startedAt = startedAt;
 				j.startMark = buildStartMark();
-				const child = spawn(j.exe, j.args, { cwd: j.cwd, ownProcessGroup: n.timeout > 0 });
+				const child = spawn(j.exe, j.args, { cwd: j.cwd, ownProcessGroup: n.timeout > 0 && platform != "windows" });
 				if (!child.ok) {
 					j.abandon();
 					fail(n, startedAt, `${label(n)}: cannot start ${j.shown}: ${child.error.message}`);
