@@ -249,7 +249,14 @@ own graph, `--summary` with `msc run <node>`.
 
 **Paths.** `path("x")` resolves like Node's `path.resolve` against the directory of the file that
 calls it, so a library's build function in another package names its own files. `glob("src/*.ms")`
-lists the files under that directory, sorted, never entering a dot-directory.
+lists the files under that directory, sorted, never entering a dot-directory, and entering only
+the directories its pattern can match (`globReachesInto`, `std/fs/glob.ms`): the leading literal
+segments bound the walk and a `**` opens everything below it. Measured 2026-11-13 on recompiler's
+own `build.ms` at main `4a9e3de55090` (two globs, `tools/**/*.sh` and `tools/**/*.ms`), in a
+worktree whose `out/` holds 88,764 directories, rtx at load 11, one candidate with the earlier walk
+and one with the bounded walk: `msc build --list` 14.9 s → 1.1 s, `openat` calls under `strace -c`
+180,482 → 1,438, the same listing; a no-change `msc build msc` 0.4–1.1 s at load 18. Before, each
+glob walked the whole worktree and kept visited directories in a list.
 
 **Options.** `option(name, description)` reads `-Dname=value` as text (a bare `-Dname` is
 `"true"`) and is null when the command line does not name it. `option(name, description,
