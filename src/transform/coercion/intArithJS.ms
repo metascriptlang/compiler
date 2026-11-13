@@ -26,7 +26,7 @@
 // Tests: src/test/js/intArith.ms — every decision reads a resolved type, which
 // a parse-only fixture cannot supply.
 
-import { Node, NodeKind, NodeFlag, DeclKind, createNodeAt, ForStmtData, VariableDeclData, BinaryExprData, UnaryExprData, UpdateExprData, IdentifierData, NumberLiteralData, BigIntLiteralData, SourceLocation, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, createNodeAt, ForStmtData, VariableDeclData, BinaryExprData, ConditionalExprData, UnaryExprData, UpdateExprData, IdentifierData, NumberLiteralData, BigIntLiteralData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { peelStdConv } from "../../ast/shape";
 import { TransformContext } from "../context";
 import { peelToRepr, createPrimitive } from "../../checker/types";
@@ -35,7 +35,7 @@ import { walkNode } from "../walker";
 import { makeBinary, makeCall, runtimeRef, makeMember, makeNumber, jsGlobalRef, markBoundedCounterStep } from "../util";
 import { truncateTo, isIntConvKind } from "./intConvJS";
 import { cloneIfPure } from "../place";
-import { is64Kind, isSignedKind, bitsOfKind } from "../numKinds";
+import { is64Kind, isSignedKind, bitsOfKind, isNarrowIntKind, isFloatKind } from "../numKinds";
 import { isShiftOp } from "../../ast/operators";
 
 export { cloneIfPure } from "../place";
@@ -58,6 +58,7 @@ function markForCounterStep(node: Node): Node {
 function materializeIntOp(node: Node, ctx: TransformContext): Node {
 	if (node.kind == NodeKind.UnaryExpr) return unaryAsUnsigned(node, ctx);
 	if (node.kind == NodeKind.UpdateExpr) return updateAtWidth(node, ctx);
+	if (node.kind == NodeKind.ConditionalExpr) return bitOfBoolean(node);
 	if (node.kind != NodeKind.BinaryExpr) return node;
 	const d = node.data as BinaryExprData;
 	const base = compoundBaseOf(d.operator);
@@ -69,6 +70,23 @@ function materializeIntOp(node: Node, ctx: TransformContext): Node {
 	const narrow = subIntKind(node.nodeType);
 	if (narrow != TypeKind.Unknown && wrapsAtWidth(d.operator)) return wrapTo(node, narrow, node.location);
 	return binaryAsUnsigned(node);
+}
+
+function bitOfBoolean(node: Node): Node {
+	const d = node.data as ConditionalExprData;
+	const t = peelToRepr(node.nodeType);
+	const cond = peelToRepr(d.ternaryCondition.nodeType);
+	if (t == null || cond == null || cond.kind != TypeKind.Boolean) return node;
+	if (!isNarrowIntKind(t.kind) && !isFloatKind(t.kind)) return node;
+	if (!isLiteralInt(d.ternaryConsequent, 1) || !isLiteralInt(d.ternaryAlternate, 0)) return node;
+	const bit = makeBinary(d.ternaryCondition, "|", makeNumber(0, node.location), node.location);
+	bit.nodeType = node.nodeType;
+	return bit;
+}
+
+function isLiteralInt(node: Node, value: number): boolean {
+	const lit = peelStdConv(node);
+	return lit.kind == NodeKind.NumberLiteral && (lit.data as NumberLiteralData).value == value;
 }
 
 function divideAsInteger(node: Node, d: BinaryExprData, ctx: TransformContext): Node {

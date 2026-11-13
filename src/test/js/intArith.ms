@@ -102,6 +102,24 @@ test "compound divide on a float is left alone" {
 // Signed 32- and 64-bit overflow traps on C-debug rather than producing a value;
 // uint32 wraps mod 2^32 and the 8/16-bit widths wrap at their own width.
 
+test "a boolean picked as 1 or 0 is its bit, without a branch" {
+	const result = compileToJS("function f(a: uint32, b: uint32): uint32 { return a < b ? 1 : 0; }");
+	assert result.ok;
+	assert result.value.contains("(a < b) | 0") && !result.value.contains("? 1 : 0");
+}
+
+test "a number picked as 1 or 0 keeps the branch, since its truth is not its value" {
+	const result = compileToJS("function f(a: uint32): uint32 { return a ? 1 : 0; }");
+	assert result.ok;
+	assert result.value.contains("? 1 : 0");
+}
+
+test "a 64-bit 1 or 0 keeps the branch" {
+	const result = compileToJS("function f(a: uint32, b: uint32): int64 { return a < b ? 1 : 0; }");
+	assert result.ok;
+	assert !result.value.contains("| 0)");
+}
+
 test "uint32 addition wraps" {
 	const result = compileToJS("function f(a: uint32, b: uint32): uint32 { return a + b; }");
 	assert result.ok;
