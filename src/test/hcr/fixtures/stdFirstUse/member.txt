@@ -1,0 +1,4 @@
+export function label(): string {
+	const view = new Int16Array(4).subarray(1, 3);
+	return view.byteLength == 4 ? "typed member 4" : "typed member failed";
+}

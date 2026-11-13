@@ -8,7 +8,7 @@ const corePath = `out/hcr/app.core${ext}`;
 const initialCore = readFile(corePath);
 if (!initialCore.ok) exit(1);
 console.log(`HCR-STD start ${label()}`);
-for (const edit of ["upper.txt", "error.txt", "path.txt", "hash.txt", "blake.txt", "ed25519.txt", "deflate.txt", "inflate.txt", "json.txt", "watch.txt"]) {
+for (const edit of ["upper.txt", "member.txt", "error.txt", "path.txt", "hash.txt", "blake.txt", "ed25519.txt", "deflate.txt", "inflate.txt", "json.txt", "watch.txt"]) {
 	const source = readFile(edit);
 	if (!source.ok || !writeFile("logic.ms", source.value).ok) {
 		console.log(`HCR-STD cannot apply ${edit}`);

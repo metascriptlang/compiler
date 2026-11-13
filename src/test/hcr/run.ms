@@ -1179,13 +1179,13 @@ function stdFirstUse(): void {
 	const tag = "hcrStdFirstUse";
 	const dir = freshDir(`${TMP}/stdFirstUse`);
 	ensureDir(`${dir}/watched`);
-	for (const f of ["app.ms", "logic.ms", "upper.txt", "error.txt", "path.txt", "hash.txt", "blake.txt", "ed25519.txt", "deflate.txt", "inflate.txt", "json.txt", "watch.txt"]) copy(`${FIXTURES}/stdFirstUse/${f}`, `${dir}/${f}`);
+	for (const f of ["app.ms", "logic.ms", "upper.txt", "member.txt", "error.txt", "path.txt", "hash.txt", "blake.txt", "ed25519.txt", "deflate.txt", "inflate.txt", "json.txt", "watch.txt"]) copy(`${FIXTURES}/stdFirstUse/${f}`, `${dir}/${f}`);
 	const ran = msc(dir, ["run", "--hcr", "app.ms"]);
 	const seen: string[] = [];
 	for (const line of lines(both(ran))) {
 		if (line.startsWith("HCR-STD ")) seen.push(line);
 	}
-	const want = ["HCR-STD start plain", "HCR-STD reloaded LOUD", "HCR-STD reloaded caught", "HCR-STD reloaded joined.ms", "HCR-STD reloaded 193485963", "HCR-STD reloaded 32", "HCR-STD reloaded 32 native pair", "HCR-STD reloaded deflate ready", "HCR-STD reloaded inflate roundtrip", "HCR-STD reloaded json tag 7", "HCR-STD reloaded watch closed"];
+	const want = ["HCR-STD start plain", "HCR-STD reloaded LOUD", "HCR-STD reloaded typed member 4", "HCR-STD reloaded caught", "HCR-STD reloaded joined.ms", "HCR-STD reloaded 193485963", "HCR-STD reloaded 32", "HCR-STD reloaded 32 native pair", "HCR-STD reloaded deflate ready", "HCR-STD reloaded inflate roundtrip", "HCR-STD reloaded json tag 7", "HCR-STD reloaded watch closed"];
 	if (!succeeded(ran) || seen.join("\n") != want.join("\n")) {
 		console.log(both(ran));
 		failWith(tag, "a first use of a standard-library method, class or module did not reload into the running app");
