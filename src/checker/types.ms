@@ -2257,6 +2257,7 @@ export function createReadonlyView(t: Type | null): Type {
 	const c = copyTypeShallow(t);
 	c.typeFlags = c.typeFlags.incl(TypeFlag.IsReadonly);
 	if (t.kind == TypeKind.Union) c.typeChildren = t.typeChildren.map((m) => createReadonlyView(m));
+	if (isUnownedRef(t) && t.plainType != null) c.plainType = createReadonlyView(t.plainType);
 	c.mutableView = t;
 	t.readonlyView = c;
 	return c;
