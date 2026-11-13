@@ -1808,12 +1808,19 @@ function evaluationReadsEdgeInto(w: WriteEffects, n: Node | null, owner: Type, d
 	return hit;
 }
 
-function pathTo(n: Node, target: Node, path: Node[]): boolean {
-	path.push(n);
-	if (n === target) return true;
+function pathTo(root: Node, target: Node, path: Node[]): boolean {
 	let found = false;
-	forEachChild(n, (c: Node): void => { if (!found && c != null) found = pathTo(c, target, path); });
-	if (!found) path.pop();
+	const walk = (n: Node | null): void => {
+		if (found || n == null) return;
+		path.push(n);
+		if (n === target) {
+			found = true;
+			return;
+		}
+		forEachChild(n, walk);
+		if (!found) path.pop();
+	};
+	walk(root);
 	return found;
 }
 
