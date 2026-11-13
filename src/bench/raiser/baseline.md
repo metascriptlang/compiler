@@ -156,3 +156,29 @@ run-time samples; categories by opcode arm and function):
 
 The slow-path bridge fell from 26-36% (11-04) since RcInc, RcDec and WasMoved run in the dispatch loop; allocation and
 counts now lead rowsEl, and on haro the boxed register path is what remains of the bridge.
+
+### Counted: what each app row executes against C
+
+Per run of each program on rtx, 2026-11-13. Raiser counts come from a probe build of tree `d31a173a7b37` (an opcode
+counter at the dispatch loop head and a counter in `allocBlock`, applied to a copy of the tree); C counts from
+`--passC=-DMS_DRC_STAT` with `MS_DRC_STAT=<file>`. C's DRC counters cover ref cells, not string payloads, so the
+allocation rows compare cells only on rowsEl, where strings are few.
+
+| | rowsEl raiser | rowsEl c | haro raiser | haro c |
+|---|---|---|---|---|
+| instructions | 1.67G | - | 2.44G | - |
+| RcInc + RcDec | 221M | 38M | 208M | 1.4M |
+| VM block or cell allocations | 13.9M | 2.9M | 17.5M | 0.09M |
+| Try + Finally + FinallyEnd | 44M | - | 207M | - |
+
+Before `c644004eed43`, 7.7M of rowsEl's allocations were boxes holding the address of a `Ret` that left a Try/Finally
+the analyzer puts around a local's cleanup; that commit and `a974c44d0850` (the finally run inline before the `Ret`)
+took rowsEl to 6.3M allocations and haro to 15.7M, at the same instruction count. Wall time of the two together, a
+quiet rtx window (load 2-3), five interleaved rounds of LTO candidates, control = tree `01d71ae1f5a9` with both diffs
+reversed: rowsEl 5253 → 5066 ms (-3.6%), haro 5034 → 4898 ms (-2.7%), lower in every round. So halving the
+allocations bought about 4%: the "alloc and counts" share of the profile above is mostly the count operations and the
+boxed register path, not the allocator.
+
+Left after both, by the same probe: rowsEl boxes Object values loaded into Dyn registers (`LoadSlot`, about 1M);
+haro boxes Int fields read into Dyn registers (`LoadFieldRequired` in `changes`, 0.82M) and allocates strings and
+arrays in `CallHost` (4.5M), `StrSlice` (3.7M), `NewArray` (2.4M) and `ConcatStrR` (2.3M).
