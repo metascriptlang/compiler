@@ -262,8 +262,8 @@ void     while    with
 abstract  as        asserts   async     await     yield
 constructor          declare   from      get       implements
 infer     is        keyof     namespace never     of
-private   protected public    readonly  require   set
-static    type      unknown
+private   protected public    readonly  require   satisfies
+set       static    type      unknown
 ```
 
 ### MetaScript-Specific Keywords
@@ -2029,6 +2029,36 @@ the cast. Rejected: keeping the view's type, because the view's own layout reads
 C; a copy into the view, because it loses writes through the view. Decided by the person 2026-10-05.
 Measured on C (drc, orc) and JS, tree `d125e2de`, corpus `810-objectViewCast`:
 `iface=L write=M/M class=N alias=P pair=3M named=N`. Generic views were not probed.
+
+### `satisfies`
+```typescript
+type Kind = "circle" | "square";
+interface Shape { kind: Kind; size: number }
+
+const p = { kind: "circle", size: 2 } satisfies Shape;
+const k: "circle" = p.kind;      // ok: the member keeps the literal its context asked for
+area(p);                         // ok when area(s: Readonly<Shape>)
+p.kind = "square";               // error: Type 'string' is not assignable to type '"circle"'
+mutate(p);                       // error when mutate(s: Shape): declare the parameter Readonly<Shape>
+```
+
+`e satisfies T` checks `e` against `T` and keeps `e`'s own type, as TypeScript does. An object literal
+against an interface or an object type keeps each literal member whose context is a literal: a string or
+number literal under a literal-union member, `true` or `false` under `boolean`, a member under its enum,
+nested literals too. Its type is `T`'s fields in `T`'s order with those members narrowed, so it passes
+where the narrow type is asked for and into `Readonly<T>`. TypeScript also lets it into a writable `T`;
+here that is refused, because a write through `T` would leave the narrow member holding another value
+(`NIM-REF` CK-51, fields).
+
+Wider than TypeScript, each measured: a class or value-struct target, a union, `Record` and an array keep
+`T` (an array literal against `Kind[]` is `Kind[]`; `Record<string, number>` is a `Map`, so `m.a` is
+refused); an optional member the literal leaves out stays readable as `undefined`. Refused where
+TypeScript accepts: `{ … } as const satisfies Shape` ("does not satisfy"), because an integer literal under
+`as const` is stored as `int32` and `size: number` is not.
+
+Measured on C, danger, JS, ESM and the Raiser with a candidate of `wt/ts-satisfies` (tip `499c62a`, rtx and
+d87, 2026-11-13): corpus `satisfiesKeepsLiteralMembers` prints `circle 2 6`, `circle circle`, `square 2`,
+`true lib`; the refusals above are `handoff/satisfiesKeepsLiteralMembers.ms`. Generic targets were not probed.
 
 ## MetaScript-Specific Syntax
 
