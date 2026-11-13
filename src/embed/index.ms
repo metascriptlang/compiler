@@ -8,7 +8,7 @@ import { RaiserContext } from "../raiser/context";
 import { RaiserValue, RaiserValueKind } from "../raiser/value";
 import { RaiserHostFn, RaiserHostValue, boxVoid, copyToHost, copyToVm } from "../raiser/marshal";
 import { registerHostFn, routeHostFnThroughSystem, raiseFromHost, activeHostArrayHeap, activeHostObjectHeap, setActiveHostHeaps } from "../raiser/hostRegistry";
-import { RaiserVM, RaiserInPlaceHostFn, registerInPlaceHostFn, vmCallHeld, vmDumpStack, vmReleaseRun } from "../raiser/vm";
+import { RaiserVM, RaiserInPlaceHostFn, registerInPlaceHostFn, vmCallHeld, vmDumpStack, vmReleaseRun, vmRunDueTimers, vmNextTimerDelayMs } from "../raiser/vm";
 import { liveCellBlocks } from "../raiser/memory";
 import { ledgerAudits } from "../raiser/ledger";
 import { setHostRuntimeDir, resolveRuntimeDir } from "../utils/path";
@@ -178,7 +178,7 @@ function evaluate(interp: Interpreter, path: string): Result<Evaluation, Diagnos
 	if (compiled == null) return Result.err(diagnostics);
 
 	const lines: string[] = [];
-	const ctx = runRaiser(compiled, [path], (text: string): void => { lines.push(text); });
+	const ctx = runRaiser(compiled, [path], (text: string): void => { lines.push(text); }, true, "", true);
 	if (ctx.lastError != "") return Result.err([errorAt(path, `raiser runtime error: ${ctx.lastError}`)]);
 	if (ctx.orphanFailures.length > 0) {
 		const failures: Diagnostic[] = [];
@@ -239,6 +239,34 @@ function invoke(interp: Interpreter, routine: Routine, args: RaiserHostValue[]):
 	const copied = copyToHost(vm.arrayHeap, vm.objectHeap, result);
 	vmReleaseRun(vm);
 	return Result.ok(copied);
+}
+
+// A host call returns once its routine and the promise jobs it queued ran; a timer it armed waits for the host.
+// The host's loop runs one turn per wake: the timers already due fire, with the jobs they queue, nothing sleeps,
+// and the result is the milliseconds until the next timer is due (-1 when none is armed), for the host's own wait.
+export function runDueTimers(interp: Interpreter): Result<number, string> {
+	const run = interp.run;
+	if (run == null || run.vm == null) return Result.err("no evaluated module to run timers in: no evalModule has succeeded");
+	const vm = run.vm!;
+	const outer = activeSystem();
+	setActiveSystem(interp.system);
+	try {
+		const next = vmRunDueTimers(vm);
+		if (vm.error != "") {
+			const failure = `raiser runtime error in a timer: ${vm.error}\n${vmDumpStack(vm)}`;
+			vmReleaseRun(vm);
+			return Result.err(failure);
+		}
+		vmReleaseRun(vm);
+		return Result.ok(next);
+	} finally {
+		setActiveSystem(outer);
+	}
+}
+
+export function nextTimerDelayMs(interp: Interpreter): number {
+	const run = interp.run;
+	return run == null || run.vm == null ? -1 : vmNextTimerDelayMs(run.vm!);
 }
 
 export function implementRoutine(nativeName: string, impl: RaiserHostFn): void {
@@ -483,6 +511,75 @@ test "a routine that arms a timer keeps a local array after its own earlier call
 	const count = routineOf(interp, "count");
 	assert intCall(interp, count, []) == 3;
 	assert intCall(interp, count, []) == 3;
+	removeAll(dir);
+}
+
+const TIMER_GUEST = `let fired: int32 = 0;\nlet micro: int32 = 0;\nlet pending: int32 = -1;\n`
+	+ `export function arm(ms: int32): void { const step: int32 = 2; setTimeout((): void => { fired += step; }, ms); }\n`
+	+ `export function armMicro(): void { Promise.resolve(0).then((v: int32): void => { micro += 1; }); }\n`
+	+ `export function armCancelled(): void { pending = setTimeout((): void => { fired += 100; }, 30) as int32; }\n`
+	+ `export function cancel(): void { clearTimeout(pending); }\n`
+	+ `export function firedCount(): int32 { return fired; }\n`
+	+ `export function microCount(): int32 { return micro; }\n`;
+
+function waitMs(ms: number): void {
+	const until = performance.now() + ms;
+	while (performance.now() < until) {}
+}
+
+test "a host call returns before a timer it armed is due, with its promise jobs run" {
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, TIMER_GUEST);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	const t0 = performance.now();
+	const armed = callRoutine(interp, routineOf(interp, "arm"), [hostValue(boxInt(300))]);
+	const took = performance.now() - t0;
+	if (!armed.ok) throw new Error(armed.error);
+	assert took < 150;
+	assert intCall(interp, routineOf(interp, "firedCount"), []) == 0;
+	const d = nextTimerDelayMs(interp);
+	assert d > 100 && d <= 300;
+	const m = callRoutine(interp, routineOf(interp, "armMicro"), []);
+	if (!m.ok) throw new Error(m.error);
+	assert intCall(interp, routineOf(interp, "microCount"), []) == 1;
+	removeAll(dir);
+}
+
+test "a host turn fires a due timer once, with the closure it captured, across later calls" {
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, TIMER_GUEST);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	const armed = callRoutine(interp, routineOf(interp, "arm"), [hostValue(boxInt(20))]);
+	if (!armed.ok) throw new Error(armed.error);
+	assert intCall(interp, routineOf(interp, "firedCount"), []) == 0;
+	const early = runDueTimers(interp);
+	if (!early.ok) throw new Error(early.error);
+	assert early.value >= 0;
+	assert intCall(interp, routineOf(interp, "firedCount"), []) == 0;
+	waitMs(30);
+	const turn = runDueTimers(interp);
+	if (!turn.ok) throw new Error(turn.error);
+	assert turn.value == -1;
+	assert intCall(interp, routineOf(interp, "firedCount"), []) == 2;
+	const again = runDueTimers(interp);
+	if (!again.ok) throw new Error(again.error);
+	assert intCall(interp, routineOf(interp, "firedCount"), []) == 2;
+	removeAll(dir);
+}
+
+test "a later host call cancels a pending timer an earlier call armed" {
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, TIMER_GUEST);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	const armed = callRoutine(interp, routineOf(interp, "armCancelled"), []);
+	if (!armed.ok) throw new Error(armed.error);
+	const cancelled = callRoutine(interp, routineOf(interp, "cancel"), []);
+	if (!cancelled.ok) throw new Error(cancelled.error);
+	assert nextTimerDelayMs(interp) == -1;
+	waitMs(40);
+	const turn = runDueTimers(interp);
+	if (!turn.ok) throw new Error(turn.error);
+	assert intCall(interp, routineOf(interp, "firedCount"), []) == 0;
 	removeAll(dir);
 }
 
