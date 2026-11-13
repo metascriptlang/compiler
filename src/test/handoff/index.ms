@@ -167,6 +167,7 @@ import "./raiserPackedPlaces";
 import "./raiserPackedCalls";
 import "./raiserPackedLegacy";
 import "./raiserModuleTdzEntry";
+import "./raiserConstBindingLoadedBeforeLoop";
 import "./raiserReturnLeavesTries";
 import "./raiserRequiredField";
 import "./raiserRuntimeLayout";
