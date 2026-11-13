@@ -190,6 +190,36 @@ record("a run that is missing, names nothing, never ran the subject or timed out
 		unjudged("guard.2.log timed out", runs("main", "guard", [redRun, redRun.concat(["TIMEOUT after 5s, process tree killed"]), redRun]), threeRed),
 	].join("|"));
 
+function inRepo(program: string, args: string[]): string {
+	const r = execFileCapture(program, args, `${root}/repo`);
+	return (r.ok ? r.value : `${r.error.output}${r.error.errorOutput}exit ${r.error.exitCode}`).trim().split("\n").map((l: string): string => l.trim()).join("|");
+}
+ensureDir(`${root}/repo`);
+const commit = "git -c user.name=gate -c user.email=gate@test commit -q";
+inRepo("bash", ["-c", `git init -q -b main . && ${commit} --allow-empty -m base && git checkout -q -b slice && echo x >edited.ms && git add edited.ms && ${commit} -m slice && echo y >untracked.ms`]);
+const fakeBuilder = [
+	"#!/bin/bash",
+	`printf '%s\\n' "$@" >${root}/repo.args`,
+	"mkdir -p out/reruns out/gate-main/out/reruns",
+	"for run in 1 2 3; do",
+	"  printf 'FAIL hookOrder: the ledger differs\\n\\nSECS=1\\nRC=1\\nEND\\n' | tee out/reruns/guard.$run.log >out/gate-main/out/reruns/guard.$run.log",
+	"done",
+	"",
+].join("\n");
+put(`${root}/fakeBuilder`, fakeBuilder);
+inRepo("chmod", ["+x", `${root}/fakeBuilder`]);
+put(`${root}/repo.lanes/guard.log`, log(["FAIL hookOrder: the ledger differs", "FAIL edited: x", "FAIL untracked: y"], 1));
+put(`${root}/repo.json`, "{}");
+record("with a builder the tool runs the plan on both sides, from the merge base, and judges the logs it left",
+	[
+		"gate: guard 3s · 3 red · 0 known · 2 new · 1 not the slice's|new: edited|new: untracked|not the slice's: hookOrder (red on main 3/3)|gate: RED (guard)|exit 1",
+		`build|--colors=off|-Drerun=guard=hookOrder|-DrerunBase=${inRepo("git", ["rev-parse", "main"])}|-DlaneLimit=400|-Dsubject=/the/candidate|reruns`,
+	].join(" after "),
+	[
+		inRepo(tool, [`${root}/repo.lanes`, `${root}/repo.json`, `--rerun-with=${root}/fakeBuilder`, "--subject=/the/candidate"]),
+		inRepo("cat", [`${root}/repo.args`]),
+	].join(" after "));
+
 let failures = 0;
 console.log(`root ${root}`);
 for (const r of results) {

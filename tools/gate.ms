@@ -1,5 +1,5 @@
-import { argv, cwd, exit } from "std/process";
-import { readDir, readFile } from "std/fs";
+import { argv, cwd, execFileCapture, exit } from "std/process";
+import { readDir, readFile, removeAll } from "std/fs";
 import { JsonKind } from "std/serialize/json/types";
 
 interface Lane {
@@ -197,11 +197,13 @@ function flag(name: string): string | null {
 	return given == null ? null : given.substring(name.length + 3);
 }
 const planOnly = flags.includes("--plan");
-const mainRoot = flag("main");
+let mainRoot = flag("main");
 const sliceRoot = flag("slice") ?? cwd();
-const strangers = flags.filter((f: string): boolean => f != "--plan" && !f.startsWith("--main=") && !f.startsWith("--slice="));
+const builder = flag("rerun-with");
+const valued = ["main", "slice", "rerun-with", "base", "subject", "limit"];
+const strangers = flags.filter((f: string): boolean => f != "--plan" && !valued.some((name: string): boolean => f.startsWith(`--${name}=`)));
 if (params.length < 2 || strangers.length > 0) {
-	console.error("usage: gate <directory of lane logs> <known-red.json>... [--plan | --main=<checkout of main that ran the reruns> [--slice=<this checkout>]]");
+	console.error("usage: gate <directory of lane logs> <known-red.json>... [--plan | --main=<checkout of main that ran the reruns> [--slice=<this checkout>] | --rerun-with=<msc> [--base=<ref of main>] [--subject=<candidate>] [--limit=<seconds a run may take>]]");
 	exit(2);
 }
 const dir = params[0];
@@ -250,20 +252,42 @@ function firstThree(names: string[]): string {
 	return names.slice(0, 3).join(", ");
 }
 
-const changed = linesOf(`${dir}/changed.paths`);
+function git(args: string[]): string[] {
+	const ran = execFileCapture("git", args, cwd());
+	if (!ran.ok) throw new Error(`gate: git ${args.join(" ")}: ${ran.error.errorOutput.trim()}`);
+	return ran.value.split("\n").filter((line: string): boolean => line != "");
+}
+const base = flag("base") ?? "main";
+const changed = builder == null ? linesOf(`${dir}/changed.paths`) :
+	git(["diff", "--name-only", "--no-renames", `${base}...HEAD`]).concat(git(["diff", "--name-only", "--no-renames", "HEAD"])).concat(git(["ls-files", "--others", "--exclude-standard"]));
 function freshOf(lane: Lane): string[] {
 	const listed = (known.get(lane.name) ?? []).filter(steady);
 	return lane.reds.filter(steady).filter((red: string): boolean => !listed.includes(red)).sort();
 }
-if (planOnly) {
-	if (changed == null) throw new Error(`gate: --plan needs ${dir}/changed.paths`);
+function planOf(changed: string[]): string {
 	const plan: string[] = [];
 	for (const lane of lanes) {
 		const subjects = rerunSubjects(lane.name, freshOf(lane), changed);
 		if (subjects.length > 0) plan.push(`${lane.name}=${subjects.join(",")}`);
 	}
-	console.log(plan.join(";"));
+	return plan.join(";");
+}
+if (planOnly) {
+	if (changed == null) throw new Error(`gate: --plan needs ${dir}/changed.paths`);
+	console.log(planOf(changed));
 	exit(0);
+}
+if (builder != null && changed != null && planOf(changed) != "") {
+	const build = ["build", "--colors=off", `-Drerun=${planOf(changed)}`, `-DrerunBase=${git(["merge-base", base, "HEAD"])[0]}`, `-DlaneLimit=${flag("limit") ?? "400"}`];
+	const subject = flag("subject");
+	if (subject != null) build.push(`-Dsubject=${subject}`);
+	build.push("reruns");
+	removeAll(`${cwd()}/out/reruns`);
+	const ran = execFileCapture(builder, build, cwd());
+	if (!ran.ok) console.log(`gate: ${builder} ${build.join(" ")} failed: ${(ran.error.output + ran.error.errorOutput).trim()}`);
+	const onMainLog = linesOf(`${cwd()}/out/reruns/main.log`);
+	if (onMainLog != null && trailer(onMainLog, "RC") != 0) console.log(`gate: the reruns in main's checkout did not finish, see ${cwd()}/out/reruns/main.log`);
+	mainRoot = `${cwd()}/out/gate-main`;
 }
 let anyNew = false;
 for (const lane of lanes) {
