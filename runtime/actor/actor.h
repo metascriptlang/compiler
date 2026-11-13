@@ -850,6 +850,7 @@ typedef struct msActorJob {
     msClosure cb;
     void (*drop)(void*);
     void* chain;                  /* the async env this continuation resumes */
+    msActorScope startedBy;
     struct msActorJob* liveNext;
     struct msActorJob* livePrev;
 } msActorJob;
@@ -857,6 +858,7 @@ typedef struct msActorJob {
 typedef struct msActorLend {
     void* fut;
     void* chain;
+    msActorScope lender;
     bool watched;
     bool joined;  /* the lender chain ran a step after the child settled */
 } msActorLend;
@@ -872,6 +874,8 @@ typedef struct msActorJobs {
     msActorLend* lent;
     int32_t lentLen;
     int32_t lentCap;
+    msActorScope nowRunning;
+    uint64_t startCount;
 } msActorJobs;
 
 extern void msTimerCancelId(int64_t id);  /* dispatchFull.c */
@@ -899,6 +903,13 @@ static inline void msActorJobDropEnv(msActorJobs* j, msActorJob* r) {
     msActorJobUnref(r);
 }
 
+static inline void msActorJobCall(msActorJobs* j, msActorJob* r) {
+    msActorScope outer = j->nowRunning;
+    j->nowRunning = r->startedBy;
+    ((void(*)(void*))r->cb.fn)(r->cb.env);
+    j->nowRunning = outer;
+}
+
 static inline void msActorJobRun(msActorJobs* j, msActorJob* r) {
     if (r->envDone) return;
     if (atomic_load_explicit(&r->cancelled, memory_order_acquire)) {
@@ -908,7 +919,7 @@ static inline void msActorJobRun(msActorJobs* j, msActorJob* r) {
     if (r->periodic) {
         atomic_store_explicit(&r->pending, false, memory_order_release);
         j->running = r;
-        ((void(*)(void*))r->cb.fn)(r->cb.env);
+        msActorJobCall(j, r);
         j->running = NULL;
         if (atomic_load_explicit(&r->cancelled, memory_order_acquire)) msActorJobDropEnv(j, r);
         return;
@@ -916,7 +927,7 @@ static inline void msActorJobRun(msActorJobs* j, msActorJob* r) {
     void (*drop)(void*) = r->dropAfterRun ? r->drop : NULL;
     r->drop = NULL;
     msActorJobDropEnv(j, r);
-    ((void(*)(void*))r->cb.fn)(r->cb.env);
+    msActorJobCall(j, r);
     if (drop != NULL && r->cb.env != NULL) drop(r->cb.env);
 }
 
@@ -977,11 +988,14 @@ static inline void msActorLendJoin(msActorJobs* j, void* chain) {
     }
 }
 
+/* A job runs beside a lend when the lending call, a call it started or a later call of the same
+ * method started it: the checker has held that code to the lend (ULTRALOCK V4). */
 static inline bool msActorLendAllows(msActorJobs* j, msActorJob* r) {
     if (r->completion) return true;
-    if (r->chain == NULL) return false;
+    if (r->startedBy.methodCall == 0) return false;
     for (int32_t i = 0; i < j->lentLen; i++) {
-        if (j->lent[i].chain == r->chain) return true;
+        msActorScope lender = j->lent[i].lender;
+        if (lender.methodCall == r->startedBy.methodCall && r->startedBy.startOrder >= lender.startOrder) return true;
     }
     return false;
 }
@@ -1009,7 +1023,7 @@ static inline void msActorLendNoteIn(msActor* a, void* fut, void* chain) {
         j->lentCap = cap;
     }
     msIncRef(fut);
-    j->lent[j->lentLen++] = (msActorLend){ .fut = fut, .chain = chain, .watched = false, .joined = false };
+    j->lent[j->lentLen++] = (msActorLend){ .fut = fut, .chain = chain, .lender = j->nowRunning, .watched = false, .joined = false };
 }
 
 static inline int msActorRunJobs(msActor* a, msActorJobs* j, int budget) {

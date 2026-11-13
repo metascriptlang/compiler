@@ -1524,9 +1524,11 @@ void msAsyncCb(void* raw) {
 static inline __attribute__((always_inline)) void msAsyncStepAs(msAsyncCbEnv* e, msActor* actor) {
 	msFutureEdgeAwait(e->retFut, NULL);
 	msAsyncCbEnv* outerChain = NULL;
+	msActorScope outerScope = {0};
 	if (__builtin_expect(actor != NULL, 0)) {
 		outerChain = gAsyncChain;
 		gAsyncChain = e;
+		outerScope = msActorScopeSwap(e->scope);
 	}
 
 	/* Call stepper — returns next msFutureBase* to wait on, or NULL when done.
@@ -1556,6 +1558,7 @@ static inline __attribute__((always_inline)) void msAsyncStepAs(msAsyncCbEnv* e,
 	if (__builtin_expect(actor != NULL, 0)) {
 		msActorLendStepped(e);
 		gAsyncChain = outerChain;
+		msActorScopeSwap(outerScope);
 	}
 
 	if (next == NULL) {
@@ -1616,6 +1619,7 @@ void msAsyncStart(void* retFut, msClosure stepper) {
 	msAsyncCbEnv* env = (msAsyncCbEnv*)msMemAlloc(sizeof(msAsyncCbEnv));
 	env->stepper = stepper;
 	env->retFut = retFut;
+	env->scope = msActorCurrentForJobs() != NULL ? msActorScopeNew() : (msActorScope){0};
 	if (stepper.env) msIncRef(stepper.env);
 	msAsyncCb(env);
 }

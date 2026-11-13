@@ -87,6 +87,7 @@ static msActorJob* msActorJobNew(msClosure cb, void (*drop)(void*), void* chain)
     r->cb = cb;
     r->drop = drop;
     r->chain = chain;
+    r->startedBy = j->nowRunning;
     r->liveNext = j->live;
     if (j->live != NULL) j->live->livePrev = r;
     j->live = r;
@@ -104,7 +105,24 @@ void msActorVisitResume(msActor* a) {
 }
 
 msClosure msActorStamp(msClosure cb, void (*drop)(void*), void* chain) {
-    return (msClosure){ .fn = (msClosureFn)msActorJobFire, .env = msActorJobNew(cb, drop, chain) };
+    msActorJob* r = msActorJobNew(cb, drop, chain);
+    if (chain != NULL) r->startedBy = ((msAsyncCbEnv*)chain)->scope;
+    return (msClosure){ .fn = (msClosureFn)msActorJobFire, .env = r };
+}
+
+msActorScope msActorScopeNew(void) {
+    msActorJobs* j = msActorJobsEnsure(msCurrentActor);
+    uint64_t order = ++j->startCount;
+    return (msActorScope){ .methodCall = j->nowRunning.methodCall != 0 ? j->nowRunning.methodCall : order, .startOrder = order };
+}
+
+msActorScope msActorScopeSwap(msActorScope next) {
+    msActor* a = msCurrentActor;
+    if (a == NULL) return (msActorScope){0};
+    msActorJobs* j = msActorJobsEnsure(a);
+    msActorScope outer = j->nowRunning;
+    j->nowRunning = next;
+    return outer;
 }
 
 msClosure msActorStampCollector(msClosure cb, void (*drop)(void*)) {

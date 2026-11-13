@@ -99,6 +99,9 @@ MS_ACTOR_JOB_PATH void msActorJobCancelMark(void* job);
 MS_ACTOR_JOB_PATH void msActorJobAbandon(void* job);
 MS_ACTOR_JOB_PATH void msActorClearTimerJob(int64_t id);
 MS_ACTOR_JOB_PATH void msActorLendNote(void* fut);
+typedef struct msActorScope { uint64_t methodCall; uint64_t startOrder; } msActorScope;
+MS_ACTOR_JOB_PATH msActorScope msActorScopeNew(void);
+MS_ACTOR_JOB_PATH msActorScope msActorScopeSwap(msActorScope next);
 MS_ACTOR_JOB_PATH void msActorLendStepped(void* chain);
 MS_ACTOR_JOB_PATH void msActorVisitPark(msActor* a);
 MS_ACTOR_JOB_PATH void msActorVisitResume(msActor* a);
@@ -660,6 +663,9 @@ static inline void* msFutureBoxAt(void* fp) {
 typedef struct {
 	msClosure stepper;
 	void* retFut;
+#if MS_ACTOR_JOBS
+	msActorScope scope;
+#endif
 } msAsyncCbEnv;
 
 /* Wait edges (pool.c): an input of a Promise.all / allSettled result, and the
