@@ -35,7 +35,7 @@ import { createContext as createRaiserContext, load as raiserLoad, execute as ra
 import { RaiserModule } from "../raiser/module";
 import { RaiserPrintSink } from "../raiser/marshal";
 import { RaiserValueKind } from "../raiser/value";
-import { factInlineDecls } from "../codegen/c/forward";
+import { factInlineDecls, hcrBoundKey } from "../codegen/c/forward";
 import { CModuleOutput, generatePreparedCModuleOutput, genHcrCoreDispatcher, genHcrImageDispatcher, genProjectDispatcher, prepareCModuleEmission, replayCModuleEmission } from "../codegen/c/index";
 import { isModuleGlobalVar, mangledFunctionName, mangledGlobalName, mangleModuleName, mangleProcName, mangleQualified, safeName, setModuleNameRoots, moduleDisplayPath, buildModuleNameRoots, registerModuleNames, overloadAt } from "../codegen/c/names";
 import { aliveSetHasDecl, aliveSetHasModule, aliveSetHasNamed, aliveSetImportsC, createAliveSet, AliveSet, CEmissionFacts, aliveSetFingerprint, factCoreUnit, TypeInfoKind } from "../codegen/c/context";
@@ -3059,6 +3059,7 @@ function bindHcrUnits(modules: HcrIndirectModule[], processed: ProcessedModule[]
 		for (const unit of processed) {
 			if (unit.modPath != module.modulePath) continue;
 			unit.program = lowerHcrIndirection(cloneNodeKeepSem(unit.program), module, modules, owners, aliveSet, facts, storage);
+			for (const name of module.boundNames) facts.hcrBoundNames.add(hcrBoundKey(module.modulePath, name));
 		}
 	}
 }
@@ -3080,6 +3081,7 @@ function hcrIndirectModules(abi: HcrCandidateAbi): Result<HcrIndirectModule[], s
 			typeKeys: [],
 			typeLayouts: [],
 			typeCounts: [],
+			boundNames: [],
 			imports,
 			beforeReload: [],
 			afterReload: [],

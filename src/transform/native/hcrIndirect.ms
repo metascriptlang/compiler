@@ -26,6 +26,7 @@ export struct HcrIndirectModule {
 	typeKeys: string[];
 	typeLayouts: HcrTypeLayout[];
 	typeCounts: string[];
+	boundNames: string[];
 	imports: string[];
 	beforeReload: string[];
 	afterReload: string[];
@@ -325,6 +326,7 @@ export function lowerHcrIndirection(
 						loc,
 					));
 					emitted.push(makeEmitStmt(`/*VARSECTION*/#define ${symbol} ((__typeof__(&${symbol}))${pointer}->current)`, loc));
+					own.boundNames.push(symbol);
 				}
 			}
 			if (!isVariable) return n;

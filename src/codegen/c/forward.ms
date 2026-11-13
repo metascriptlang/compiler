@@ -37,6 +37,7 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Read
 	const protoKey = "proto:" + calleeName;
 	if (nameSetHas(g.declaredProcs, protoKey)) return;
 	nameSetAdd(g.declaredProcs, protoKey);
+	refuseUnboundImageName(g, calleeName, sym);
 	const mutBits: int32 = sym != null ? sym.mutatedParams : 0;
 	addLine(sec(g, CSection.ProcHeaders), procHeader(g, calleeName, fnType, null, mutBits, false) + ";");
 }
@@ -49,7 +50,21 @@ export function declareClassInit(g: CGen, initName: string, routine: Readonly<Sy
 	const protoKey = "proto:" + initName;
 	if (nameSetHas(g.declaredProcs, protoKey)) return;
 	nameSetAdd(g.declaredProcs, protoKey);
+	refuseUnboundImageName(g, initName, routine);
 	addLine(sec(g, CSection.ProcHeaders), procHeader(g, initName, initType, null, mutBits, false) + ";");
+}
+
+export function hcrBoundKey(modulePath: string, cName: string): string {
+	return modulePath + "\n" + cName;
+}
+
+function refuseUnboundImageName(g: CGen, cName: string, routine: Readonly<Symbol | null>): void {
+	if (routine == null) return;
+	const facts = g.emissionFacts;
+	const owner = facts.genericOwners.readonlyGet(cName) ?? routine.modulePath;
+	const image = owner == g.modulePath ? null : facts.hcrModules.readonlyGet(owner);
+	if (image == null || facts.hcrBoundNames.has(hcrBoundKey(g.modulePath, cName))) return;
+	addCGenError(g, `internal: HCR module '${g.modulePath}' names '${cName}' of the reloadable image '${image}' with no binding to it`, 0, 0);
 }
 
 export function copiesInline(g: CGen, sym: Readonly<Symbol>): boolean {
@@ -99,7 +114,7 @@ import { createStruct, createFunction, createPrimitive } from "../../checker/typ
 import { makeSymbol } from "../../checker/symbol";
 import { SymbolKind } from "../../ast/node";
 import { CheckerContext } from "../../checker/context";
-import { createAliveSet, createCGen, extract } from "./context";
+import { createAliveSet, createCGen, extract, factClaimGeneric } from "./context";
 
 test "a function named like a lifecycle hook keeps the ordinary parameter ABI in its prototype" {
 	const num = createPrimitive(TypeKind.Float64);
@@ -110,4 +125,44 @@ test "a function named like a lifecycle hook keeps the ordinary parameter ABI in
 	const g = createCGen(null as unknown as CheckerContext, "", alive, facts);
 	ensureCrossModuleProto(g, "MakeCopy", createFunction([big], ["p"], num), null);
 	assert extract(sec(g, CSection.ProcHeaders)).contains("double MakeCopy(const Big*);");
+}
+
+function imageCall(bound: boolean): CGen {
+	const facts = new CEmissionFacts();
+	facts.hcrModules.set("/app/text.ms", "text");
+	facts.hcrModules.set("/app/bytes.ms", "bytes");
+	if (bound) facts.hcrBoundNames.add(hcrBoundKey("/app/text.ms", "makeBytes"));
+	const g = createCGen(null as unknown as CheckerContext, "/app/text.ms", createAliveSet(), facts);
+	const num = createPrimitive(TypeKind.Float64);
+	const fnType = createFunction([num], ["n"], num);
+	const routine = makeSymbol("makeBytes", SymbolKind.Function, fnType, false);
+	routine.modulePath = "/app/bytes.ms";
+	ensureCrossModuleProto(g, "makeBytes", fnType, routine);
+	return g;
+}
+
+test "an HCR image that names another image's routine with no binding is refused" {
+	const g = imageCall(false);
+	assert g.errors.length == 1;
+	assert g.errors[0].message == "internal: HCR module '/app/text.ms' names 'makeBytes' of the reloadable image 'bytes' with no binding to it";
+}
+
+test "an HCR image names a generic instance of another image's generic that it emits itself" {
+	const facts = new CEmissionFacts();
+	facts.hcrModules.set("/app/text.ms", "text");
+	facts.hcrModules.set("/app/bytes.ms", "bytes");
+	factClaimGeneric(facts, "box_int32_init", "/app/text.ms", false);
+	const g = createCGen(null as unknown as CheckerContext, "/app/text.ms", createAliveSet(), facts);
+	const num = createPrimitive(TypeKind.Float64);
+	const fnType = createFunction([num], ["n"], num);
+	const routine = makeSymbol("box", SymbolKind.Function, fnType, false);
+	routine.modulePath = "/app/bytes.ms";
+	declareClassInit(g, "box_int32_init", routine, fnType, 0);
+	assert g.errors.length == 0;
+}
+
+test "an HCR image declares another image's routine it holds a binding to" {
+	const g = imageCall(true);
+	assert g.errors.length == 0;
+	assert extract(sec(g, CSection.ProcHeaders)).contains("double makeBytes(double);");
 }
