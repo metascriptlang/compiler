@@ -46,7 +46,8 @@ stringCaseTables.addCopyFileToSource(tables.captureStdOut(), path("std/core/stri
 
 const subject = option("subject", "the compiler the gate lanes test; the graph's own msc when unset", "");
 const candidate: Arg = subject == "" ? msc : path(subject);
-const withTrailer = 't0=$SECONDS; "$@" 2>&1; rc=$?; printf "\\nSECS=%d\\nRC=%d\\nEND\\n" $((SECONDS - t0)) $rc';
+const laneLimit = option("laneLimit", "seconds a gate lane may run before its process tree is killed", 5400);
+const withTrailer = 'limit=$1; shift; t0=$SECONDS; set -m; "$@" 2>&1 & lane=$!; (sleep "$limit"; kill -KILL -- "-$lane") >/dev/null 2>&1 & watch=$!; set +m; wait "$lane"; rc=$?; kill -KILL -- "-$watch" 2>/dev/null || printf "\\nTIMEOUT after %ss, process tree killed\\n" "$limit"; printf "\\nSECS=%d\\nRC=%d\\nEND\\n" $((SECONDS - t0)) $rc';
 
 const selected = option("lanes", "the gate lanes to run, comma-separated; every lane when unset", "");
 export const lanes = writeFiles();
@@ -56,8 +57,8 @@ function wanted(name: string): boolean {
 }
 function laneNode(name: string, command: Arg[], env: Record<string, Arg> = {}, inputs: LazyPath[] = sources): Command {
 	const colour: Arg[] = noColourVariable.includes(name.split(".")[0]) ? ["-u", "NO_COLOR"] : ["NO_COLOR=1"];
-	const argv: Arg[] = ["bash", "-c", withTrailer, name, "env", "-u", "FORCE_COLOR"];
-	const node = systemCommand(argv.concat(colour).concat(command), { env, inputs, description: `lane ${name}` });
+	const argv: Arg[] = ["bash", "-c", withTrailer, name, `${laneLimit}`, "env", "-u", "FORCE_COLOR"];
+	const node = systemCommand(argv.concat(colour).concat(command), { env, inputs, description: `lane ${name}`, timeout: (laneLimit + 60) * 1000 });
 	lanes.addCopyFile(node.captureStdOut(), `${name}.log`);
 	return node;
 }
