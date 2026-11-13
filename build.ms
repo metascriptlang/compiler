@@ -55,10 +55,13 @@ const noColourVariable = ["suite", "tests", "fmt", "cache", "crypto", "tools"];
 function wanted(name: string): boolean {
 	return selected == "" || selected.split(",").includes(name.split(".")[0]);
 }
+function bounded(lane: string, description: string, command: Arg[], env: Record<string, Arg>, inputs: LazyPath[]): Command {
+	const colour: Arg[] = noColourVariable.includes(lane) ? ["-u", "NO_COLOR"] : ["NO_COLOR=1"];
+	const argv: Arg[] = ["bash", "-c", withTrailer, lane, `${laneLimit}`, "env", "-u", "FORCE_COLOR"];
+	return systemCommand(argv.concat(colour).concat(command), { env, inputs, description, timeout: (laneLimit + 60) * 1000 });
+}
 function laneNode(name: string, command: Arg[], env: Record<string, Arg> = {}, inputs: LazyPath[] = sources): Command {
-	const colour: Arg[] = noColourVariable.includes(name.split(".")[0]) ? ["-u", "NO_COLOR"] : ["NO_COLOR=1"];
-	const argv: Arg[] = ["bash", "-c", withTrailer, name, `${laneLimit}`, "env", "-u", "FORCE_COLOR"];
-	const node = systemCommand(argv.concat(colour).concat(command), { env, inputs, description: `lane ${name}`, timeout: (laneLimit + 60) * 1000 });
+	const node = bounded(name.split(".")[0], `lane ${name}`, command, env, inputs);
 	lanes.addCopyFile(node.captureStdOut(), `${name}.log`);
 	return node;
 }
@@ -83,6 +86,42 @@ lane("corpus", [corpusRunner], { MSC: candidate, MSCORPUS_RAISER: "1" });
 lane("san", [corpusRunner], { MSC: candidate, MSCORPUS_SAN: "1" });
 lane("tsan", [corpusRunner], { MSC: candidate, MSCORPUS_TSAN: "1" });
 lane("crypto", ["bash", "src/test/crypto/suite.sh"], under);
+
+const rerun = option("rerun", "the new reds a gate runs again, as <lane>=<subject>,<subject>;<lane>=<subject>", "");
+const rerunCount = option("rerunCount", "how many times each of them runs, one after another", 3);
+export const reruns = updateSourceFiles();
+const eachFile = 'r=0; for file in "${@:2}"; do "$1" test --time "$file" --tests-in-dir || r=1; done; exit $r';
+const eachHcrTest = 'r=0; for name in "${@:2}"; do HCR_ONLY=$name "$1" run --target=raiser src/test/hcr/run.ms || r=1; done; exit $r';
+const keepingTheSanLanesThreadedList = 'list=out/corpus/threaded.txt; [ ! -f $list ] || cp -p $list $list.lane; "$@"; r=$?; [ ! -f $list.lane ] || mv -f $list.lane $list; exit $r';
+function rerunCommand(lane: string, subjects: string[]): Arg[] {
+	const perSubject: Arg[] = ["bash", "-c", lane == "hcr" ? eachHcrTest : eachFile, lane, lane == "suite" ? mscExe() : candidate];
+	for (const subject of subjects) perSubject.push(subject);
+	if (lane == "tests" || lane == "suite" || lane == "hcr") return perSubject;
+	if (lane == "guard" || lane == "lsp") return raiser.concat([`src/test/${lane}/run.ms`]);
+	if (lane == "corpus" || lane == "tsan") return [corpusRunner];
+	if (lane == "san") return ["bash", "-c", keepingTheSanLanesThreadedList, lane, corpusRunner];
+	throw new Error(`rerun: '${lane}' is not a lane whose reds run again (corpus, san, tsan, guard, hcr, lsp, tests, suite)`);
+}
+function rerunEnv(lane: string, subjects: string[], run: number): Record<string, Arg> {
+	const env: Record<string, Arg> = { MSC: lane == "suite" ? mscExe() : candidate, GATE_RERUN: `${run}` };
+	if (lane == "guard") env.set("GUARD_ONLY", subjects.join(","));
+	if (lane != "corpus" && lane != "san" && lane != "tsan") return env;
+	env.set("MSCORPUS_ONLY", subjects.join(","));
+	env.set("MSCORPUS_CELL_TIMEOUT_MS", "120000");
+	env.set(lane == "corpus" ? "MSCORPUS_RAISER" : lane == "san" ? "MSCORPUS_SAN" : "MSCORPUS_TSAN", "1");
+	return env;
+}
+let earlierRun: LazyPath[] = [];
+for (const spec of rerun.split(";").filter((s: string): boolean => s != "")) {
+	const lane = spec.split("=")[0];
+	const subjects = spec.substring(lane.length + 1).split(",").filter((s: string): boolean => s != "");
+	if (subjects.length == 0) throw new Error(`rerun: '${spec}' names no subject after <lane>=`);
+	for (let run = 1; run <= rerunCount; run++) {
+		const node = bounded(lane, `rerun ${lane} ${run}`, rerunCommand(lane, subjects), rerunEnv(lane, subjects, run), sources.concat(earlierRun));
+		earlierRun = [node.captureStdOut()];
+		reruns.addCopyFileToSource(earlierRun[0], path(`out/reruns/${lane}.${run}.log`));
+	}
+}
 
 const namedTest = 'name=$1; shift; out=$("$@" 2>&1); rc=$?; printf "%s\\n" "$out"; [ $rc -eq 0 ] || { printf "FAIL solana %s: exit %d\\n" "$name" $rc; exit 1; }; esc=$(printf "\\033"); sed "s/$esc\\[[0-9;]*m//g" <<<"$out" | grep -Eq "^ *Test Files +[0-9]" || { printf "FAIL solana %s: no test result\\n" "$name"; exit 1; }';
 function solanaTest(entry: string, flags: string[]): void {
