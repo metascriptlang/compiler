@@ -176,12 +176,15 @@ test "a view a routine returns through an Unowned edge stays uncounted until a c
 	assert bodyOf(released, "f").contains("msIncref"), bodyOf(released, "f");
 }
 
-test "an array of T and an array of Unowned<T> never stand for each other" {
+test "an array of T and an array of Unowned<T> never stand for each other where one is written or read unchecked" {
 	const head = "class N { id: int32 = 1; }\nclass H { ups: Unowned<N>[] = []; }\nconst h = new H();\n";
 	const refused = "so one array cannot stand for the other";
 	assert emitted(head + "const xs: N[] = [new N()];\nh.ups = xs;\nconsole.log(h.ups.length);\n").contains(refused);
 	assert emitted(head + "const ys: N[] = h.ups;\nconsole.log(ys.length);\n").contains(refused);
 	assert emitted(head + "function f(a: N[]): int32 { return a.length; }\nconsole.log(f(h.ups));\n").contains(refused);
+	assert emitted(head + "function f(a: Readonly<N[]>): int32 { return a.length; }\nconsole.log(f(h.ups));\n").contains(refused);
+	assert emitted(head + "function f(a: Unowned<N>[]): int32 { return a.length; }\nconst xs: N[] = [new N()];\nconsole.log(f(xs));\n").contains(refused);
+	assert !emitted(head + "function f(a: Readonly<Unowned<N>[]>): int32 { return a.length; }\nconst xs: N[] = [new N()];\nconsole.log(f(xs));\n").contains(refused);
 }
 
 test "Unowned is a field type: a local, a parameter, a return or a static that names it is refused" {
