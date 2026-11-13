@@ -8,7 +8,10 @@ import { exists, isDir, isFile, join, readDirNames, readFileBytes } from "std/fs
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 import { derItem, tagSequence } from "../pure/asn1";
 
-import { getEnv, executablePath } from "std/process/host";
+import { getEnv } from "std/process/host";
+when (windows) {
+	import { executablePath } from "std/process/host";
+}
 
 export interface TrustAnchor {
 	der: uint8[];
