@@ -1859,8 +1859,12 @@ function rebinds(n: Node, sym: Symbol): boolean {
 	return left.kind == NodeKind.Identifier && left.resolvedSym === sym;
 }
 
-function isObjectOrArrayReference(t: Type): boolean {
-	return holderType(t.kind == TypeKind.Union ? unwrapRefNullUnion(t) : t) != null;
+function holdsObjects(t: Type): boolean {
+	if (t.kind == TypeKind.Union) return t.typeChildren.some((member: Type): boolean => member.kind != TypeKind.Null && holdsObjects(member));
+	if (holderType(t) != null) return true;
+	let cur = t;
+	while ((cur.kind == TypeKind.Alias || cur.kind == TypeKind.Distinct || cur.kind == TypeKind.Sink || cur.kind == TypeKind.Var || cur.kind == TypeKind.Lent) && cur.typeReturn != null) cur = cur.typeReturn!;
+	return cur.kind == TypeKind.Tuple || cur.kind == TypeKind.Function;
 }
 
 function isLoop(n: Node): boolean {
@@ -1877,7 +1881,7 @@ function isOtherArm(n: Node, child: Node): boolean {
 // the local's scope ends. What takes the value is no such read: it holds the value while it runs.
 export function deathSeenBeforeScopeEnd(w: WriteEffects, body: Node, use: Node, sym: Symbol, defs: LocalDefs | null): boolean {
 	const owner = sym.symbolType;
-	if (owner == null || !isObjectOrArrayReference(owner) || !deathCanBeSeen(w, owner)) return false;
+	if (owner == null || !holdsObjects(owner) || !deathCanBeSeen(w, owner)) return false;
 	const path: Node[] = [];
 	if (!pathTo(body, use, path)) return true;
 	let taker = path.length - 2;

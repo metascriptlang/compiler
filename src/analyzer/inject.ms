@@ -1986,9 +1986,15 @@ function isLastReadSafe(sym: Symbol, node: Node, idx: number, stmts: Node[], dct
 }
 
 function outlivesItsLastRead(sym: Symbol, node: Node, dctx: DrcContext): boolean {
-	const declaredOrParameter = sym.declNode != null || sym.symbolKind == SymbolKind.Parameter;
-	if (!declaredOrParameter || classifyRc(sym.symbolType, dctx).rcKind != RcKind.Ref) return false;
+	const declaredOrParameter = sym.declNode != null || sym.symbolKind == SymbolKind.Parameter || holdsCapturedLocals(sym.symbolType);
+	const kind = classifyRc(sym.symbolType, dctx).rcKind;
+	if (!declaredOrParameter || kind == RcKind.None || kind == RcKind.String) return false;
 	return deathSeenBeforeScopeEnd(dctx.writes, dctx.currentFuncBody!, node, sym, dctx.callerDefs);
+}
+
+function holdsCapturedLocals(t: Type | null): boolean {
+	const holder = holderType(t);
+	return holder != null && holder.sym != null && hasFlag(holder.sym, SymbolFlag.ClosureEnv);
 }
 
 function ownsMovableValue(sym: Symbol, dctx: DrcContext): boolean {
