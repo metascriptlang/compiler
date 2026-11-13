@@ -40,7 +40,7 @@ function bench(length: int32): void {
 	const vendorSign: number[] = [];
 	const pureVerify: number[] = [];
 	const vendorVerify: number[] = [];
-	let checks = 0;
+	let checks: number = 0;
 	for (let round = 0; round < rounds; round++) {
 		let start = performance.now();
 		for (let i = 0; i < operations; i++) {

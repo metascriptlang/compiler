@@ -1,13 +1,12 @@
 // Pure BLAKE2b against the Monocypher oracle, interleaved, median ns/byte per size.
 //   msc build src/bench/crypto/vendor/blake2bBench.ms --danger --output=out/bench && out/bench
 
-import { Buffer } from "std/core/buffer";
 import { blake2bOf } from "std/crypto/pure/blake2b";
 import { blake2bSync as vendorSync } from "../../../test/crypto/oracle/blake2bVendor";
 
 const MIN_ROUND_MS = 60.0;
 const ROUNDS = 5;
-let sink: int32 = 0;
+let sink: number = 0;
 
 function nsPerByte(op: () => void, size: int32): number {
 	let calls = 1;
@@ -26,7 +25,7 @@ function median(xs: number[]): number {
 }
 
 for (const size of [64, 1024, 65536]) {
-	const data = Buffer.alloc(size);
+	const data = new Array<uint8>(size);
 	for (let i = 0; i < size; i++) data[i] = ((i * 31 + 7) & 255) as uint8;
 	const key = new Array<uint8>(0);
 	const pure: number[] = [];

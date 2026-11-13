@@ -31,7 +31,7 @@ const ROUND_MS = 150.0;
 const ROUNDS = 3;
 const KEYGEN_RUNS = 15;
 
-let sink: int32 = 0;
+let sink: number = 0;
 
 function must<T>(result: Result<T, CryptoError>): T {
 	if (!result.ok) throw new Error(result.error.message);

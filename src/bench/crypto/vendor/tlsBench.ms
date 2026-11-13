@@ -33,7 +33,7 @@ function nativeRun(port: int32, ca: string): Sample {
 	const conn = r.value;
 	const connected = performance.now();
 	nativeWrite(conn, request);
-	let total = 0;
+	let total: number = 0;
 	while (true) {
 		const chunk = nativeRead(conn, 16384);
 		if (chunk.length == 0) break;
@@ -52,7 +52,7 @@ function vendorRun(port: int32, ca: string): Sample {
 	const conn = r.value;
 	const connected = performance.now();
 	vendorWrite(conn, request);
-	let total = 0;
+	let total: number = 0;
 	while (true) {
 		const chunk = vendorRead(conn, 16384);
 		if (chunk.length == 0) break;

@@ -15,9 +15,9 @@ const ROUND_MS = 15.0;
 let sink: number = 0;
 
 function sample(size: int32): Buffer {
-	const bytes = new Array<uint8>(size);
+	const bytes = Buffer.alloc(size);
 	for (let i = 0; i < size; i++) bytes[i] = ((i * 31 + 7) & 255) as uint8;
-	return bytes as Buffer;
+	return bytes;
 }
 
 function callsFor(op: () => void): int32 {

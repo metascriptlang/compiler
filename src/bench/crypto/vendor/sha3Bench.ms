@@ -34,7 +34,7 @@ function fixed(value: number): string {
 
 function row(bits: int32, algorithm: HashAlgorithm, size: int32): void {
 	const data = Buffer.alloc(size);
-	for (let i = 0; i < size; i++) data.set(i, (i * 31 + 7) & 255);
+	for (let i = 0; i < size; i++) data[i] = ((i * 31 + 7) & 255) as uint8;
 	const pure: number[] = [];
 	const vendor: number[] = [];
 	for (let r = 0; r < ROUNDS; r++) {

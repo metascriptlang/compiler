@@ -38,11 +38,11 @@ function must<T>(sink result: Result<T, CryptoError>): T {
 }
 
 function pattern(length: int32, salt: int32): Buffer {
-	const bytes = new Array<uint8>(length);
+	const bytes = Buffer.alloc(length);
 	for (let i: int32 = 0; i < length; i++) {
 		bytes[i] = ((i * 31 + salt) & 255) as uint8;
 	}
-	return bytes as Buffer;
+	return bytes;
 }
 
 function nsPerCall(operation: () => number): number {

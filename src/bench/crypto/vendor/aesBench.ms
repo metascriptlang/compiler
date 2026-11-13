@@ -12,7 +12,7 @@ import { AesKey, CryptoError, sealSync, openSync, cbcEncryptSync, cbcDecryptSync
 const ROUND_MS = 60.0;
 const ROUNDS = 5;
 
-let sink: int32 = 0;
+let sink: number = 0;
 
 function must<T>(result: Result<T, CryptoError>): T {
 	if (!result.ok) throw new Error(result.error.message);
@@ -60,8 +60,10 @@ function row(name: string, size: int32, pure: () => void, vendor: () => void): v
 
 const raw = patterned(32);
 const key = must(AesKey.import(raw));
-const xk = expandKey(raw);
-const xkD = expandKeyDecrypt(raw);
+const rawWords = new Array<uint8>(32);
+for (let i = 0; i < 32; i++) rawWords[i] = raw[i];
+const xk = expandKey(rawWords);
+const xkD = expandKeyDecrypt(rawWords);
 const iv = patterned(16);
 const aad = patterned(13);
 

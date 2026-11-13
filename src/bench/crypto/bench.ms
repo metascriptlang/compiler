@@ -21,7 +21,7 @@ function must<T>(result: Result<T, CryptoError>): T {
 
 function bytesOf(count: int32): Buffer {
 	const buf = Buffer.alloc(count);
-	for (let i = 0; i < count; i++) buf.set(i, (i * 31 + 7) & 255);
+	for (let i = 0; i < count; i++) buf[i] = ((i * 31 + 7) & 255) as uint8;
 	return buf;
 }
 

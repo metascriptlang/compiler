@@ -16,7 +16,7 @@ function must<T>(result: Result<T, IoError>): T {
 
 function bytesOf(count: int32): Buffer {
 	const buf = Buffer.alloc(count);
-	for (let i = 0; i < count; i++) buf.set(i, (i * 31 + 7) & 255);
+	for (let i = 0; i < count; i++) buf[i] = ((i * 31 + 7) & 255) as uint8;
 	return buf;
 }
 
@@ -26,25 +26,25 @@ const b512k = bytesOf(524288);
 const b1m = bytesOf(1048576);
 const target = Buffer.alloc(65536);
 const scan = Buffer.alloc(1048576);
-for (let i = 0; i < 16; i++) scan.set(1048560 + i, i + 1);
+for (let i = 0; i < 16; i++) scan[1048560 + i] = (i + 1) as uint8;
 const needle = scan.slice(1048560, 1048576);
 
 const text = "plain ascii text, héllo wörld — ünïcode ✓ ".repeat(24000);
 const textBuf = Buffer.fromString(text, "utf8");
-const textBytes = textBuf.byteLength();
+const textBytes = textBuf.byteLength;
 const b64Text = b1m.toBase64();
 const hexText = b1m.toHex();
 
-bench("alloc 1 KB", 0, () => { sink += Buffer.alloc(1024).byteLength(); });
-bench("alloc 1 MB", 1048576, () => { sink += Buffer.alloc(1048576).byteLength(); });
-bench("from string utf8 1 MB", textBytes, () => { sink += Buffer.fromString(text, "utf8").byteLength(); });
+bench("alloc 1 KB", 0, () => { sink += Buffer.alloc(1024).byteLength; });
+bench("alloc 1 MB", 1048576, () => { sink += Buffer.alloc(1048576).byteLength; });
+bench("from string utf8 1 MB", textBytes, () => { sink += Buffer.fromString(text, "utf8").byteLength; });
 bench("toString utf8 1 MB", textBytes, () => { sink += textBuf.toString().length; });
 bench("base64 encode 1 MB", 1048576, () => { sink += b1m.toBase64().length; });
-bench("base64 decode 1 MB", 1048576, () => { sink += Buffer.fromString(b64Text, "base64").byteLength(); });
+bench("base64 decode 1 MB", 1048576, () => { sink += Buffer.fromString(b64Text, "base64").byteLength; });
 bench("hex encode 1 MB", 1048576, () => { sink += b1m.toHex().length; });
-bench("hex decode 1 MB", 1048576, () => { sink += Buffer.fromString(hexText, "hex").byteLength(); });
-bench("concat 2x512 KB", 1048576, () => { sink += Buffer.concat(b512k, b512k).byteLength(); });
-bench("slice copy 64 KB", 65536, () => { sink += b1m.slice(4096, 4096 + 65536).byteLength(); });
+bench("hex decode 1 MB", 1048576, () => { sink += Buffer.fromString(hexText, "hex").byteLength; });
+bench("concat 2x512 KB", 1048576, () => { sink += Buffer.concat(b512k, b512k).byteLength; });
+bench("slice copy 64 KB", 65536, () => { sink += b1m.slice(4096, 4096 + 65536).byteLength; });
 bench("copyTo 64 KB", 65536, () => { sink += b64k.copyTo(target, 0, 0, 65536); });
 bench("indexOf byte 1 MB", 1048576, () => { sink += scan.indexOf(1, 0); });
 bench("indexOf 16 B needle 1 MB", 1048576, () => { sink += scan.indexOfBuffer(needle, 0); });
@@ -64,11 +64,11 @@ const line = "0123456789abcdef".repeat(4);
 
 bench("fs write+read 4 KB", 4096, () => {
 	must(writeFileBytes(small, b4k));
-	sink += must(readFileBytes(small)).byteLength();
+	sink += must(readFileBytes(small)).byteLength;
 });
 bench("fs write+read 1 MB", 1048576, () => {
 	must(writeFileBytes(large, b1m));
-	sink += must(readFileBytes(large)).byteLength();
+	sink += must(readFileBytes(large)).byteLength;
 });
 bench("fs readFile utf8 1 MB", textBytes, () => { sink += must(readFile(textFile)).length; });
 bench("fs stat size", 0, () => { sink += fileSize(large); });
