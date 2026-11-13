@@ -470,6 +470,7 @@ static inline void msUnownedIncref(void* p) {
 		MS_PLAIN_ON_IMMORTAL_CHECK(p, "msUnownedIncref");
 		msRefHeader* h = msHeader(p);
 		if ((h->rc & MS_UNOWNED_MASK) == MS_UNOWNED_EDGE_LIMIT) msRaiseUnownedOverflow(p);
+		if (__builtin_expect((h->rc & (MS_UNOWNED_MASK | MS_COLOR_MASK)) == MS_COL_DEAD, 0)) h->rc += MS_UNOWNED_INCREMENT;
 		h->rc += MS_UNOWNED_INCREMENT;
 	}
 }
@@ -518,13 +519,14 @@ static inline void msUnownedKeepHusk(msRefHeader* h, void* p) {
 	h->rc = (h->rc & ~(msRc)MS_COLOR_MASK) | MS_COL_DEAD;
 }
 
-/* The target is dead to its Unowned<T> edges from here, and holds one edge count of its own until its
- * destroy ends: without it the last edge released inside the destroy would free the memory under it. */
+/* The target is dead to its Unowned<T> edges from here, edges made during its destroy included, and while
+ * it has an edge it holds one edge count of its own until its destroy ends (msUnownedIncref adds that count
+ * for the first edge made during the destroy): without it the last edge released inside the destroy would
+ * free the memory under it. */
 static inline void msDestroyBegins(void* p) {
 	msRefHeader* h = msHeader(p);
-	if (__builtin_expect((h->rc & MS_UNOWNED_MASK) != 0, 0)) {
-		h->rc = ((h->rc & ~(msRc)MS_COLOR_MASK) | MS_COL_DEAD) + MS_UNOWNED_INCREMENT;
-	}
+	msRc dead = (h->rc & ~(msRc)MS_COLOR_MASK) | MS_COL_DEAD;
+	h->rc = __builtin_expect((h->rc & MS_UNOWNED_MASK) != 0, 0) ? dead + MS_UNOWNED_INCREMENT : dead;
 }
 
 static inline bool msDestroyLeavesHusk(msRefHeader* h, void* p) {
