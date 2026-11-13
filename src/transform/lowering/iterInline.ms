@@ -5,6 +5,7 @@ import {
 	TryCatchStmtData, BinaryExprData, UpdateExprData, ConditionalExprData, InlineFrame,
 	HiddenDerefData, OutExprData, BreakStmtData, ContinueStmtData, IdentifierData,
 	ArrayPatternData, BlockStmtData, VariableDeclData, TypeAssertionData, ArrowFunctionData, FunctionExprData,
+	NumberLiteralData, createNode,
 } from "../../ast/node";
 import { TransformContext, freshTempSym, freshOwnedSym, newLoweredSym } from "../context";
 import { walkNode, mapChildren, hasEffect } from "../walker";
@@ -16,13 +17,13 @@ import { hasFlag, symbolKey } from "../../checker/symbol";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { isStaticExtensionFlag } from "../../checker/context";
 import { bodyIsErrorBlind } from "../../checker/raises";
-import { isIterator, peelTransparentInstance, destrPositionalElemType } from "../../checker/types";
+import { isIterator, peelTransparentInstance, destrPositionalElemType, getIteratorYieldType, isFloatType } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { Spiller, lowerAssign, lowerOperandList } from "./operandOrder";
 import { sameType } from "../../checker/compat";
 import {
 	makeBlock, makeVarDecl, makeIdentResolved, makeBreak, makeSwitchWrapper, makeExprStmt,
-	extractBodyStmts, boolToDeclKind, makeNull, makeAssign,
+	extractBodyStmts, boolToDeclKind, makeNull, makeAssign, makeBinary, makeWhile, syntheticToken,
 } from "../util";
 import { parseInput, getStmts, makeCtx, makeJsCtx } from "../testUtil";
 import { checkProgram, checkProgramJs } from "../../checker/checkPass";
@@ -78,6 +79,8 @@ interface JumpPlan {
 	contUsed: boolean;
 }
 
+
+const ZIP_KEY = "std/core/array/iteratorBase.zip";
 
 class ModuleOffers {
 	generators: HashMap<string, Node> = new HashMap<string, Node>();
@@ -346,6 +349,8 @@ function inlineStmt(node: Node, st: InlineState): Node {
 	match (node.kind) {
 		NodeKind.ForOfStmt => {
 			const d = node.data as ForOfStmtData;
+			const zipped = zipSources(d, st);
+			if (zipped != null) return zipFor(node, d, zipped, st);
 			const call = matchCall(d, st);
 			if (call != null && storedRead(d.forOfIterable, st) != null) {
 				d.forOfIterable = boundSource(d.forOfIterable, call, [], st, node.location);
@@ -849,6 +854,224 @@ function forwardedSource(call: InlineCall, out: Node[], st: InlineState, loc: So
 	return makeIdentResolved(temp, loc);
 }
 
+function zipSources(d: ForOfStmtData, st: InlineState): InlineCall[] | null {
+	const it = d.forOfIterable;
+	if (patternHasDefaults(d.forOfPattern) || it.kind != NodeKind.CallExpr) return null;
+	const target = callTarget(it);
+	if (target == null || hostRoutineKey(target.sym) != ZIP_KEY) return null;
+	const args = target.args;
+	if (args.length == 0 || args.length > 2 || args[0].kind != NodeKind.ArrayLiteral) return null;
+	if (args.length == 2 && args[1].kind != NodeKind.NullLiteral) return null;
+	const calls: InlineCall[] = [];
+	let counterType: Type | null = null;
+	for (const e of (args[0].data as ArrayLiteralData).elements) {
+		const call = e.kind == NodeKind.CallExpr ? matchIterable(e, st) : null;
+		const loop = call != null && isGenerator(call.decl) ? countedLoop((call.decl.data as FunctionDeclData).fnBody) : null;
+		if (loop == null || loop.counter.symbolType == null) return null;
+		if (counterType != null && !sameType(counterType, loop.counter.symbolType)) return null;
+		counterType = loop.counter.symbolType;
+		calls.push(call!);
+	}
+	return calls.length > 0 ? calls : null;
+}
+
+function zipFor(node: Node, d: ForOfStmtData, calls: InlineCall[], st: InlineState): Node {
+	const loc = node.location;
+	const ctx = st.ctx;
+	const bindingSym = node.resolvedSym;
+	node.resolvedSym = null;
+	const out: Node[] = [];
+	const loops: CountedLoop[] = [];
+	for (const call of calls) {
+		const loop = countedLoop(inlinedBody(call, out, st, loc));
+		if (loop == null) throw new Error("internal: a zip source lost its counted loop when its body was copied");
+		loops.push(loop);
+	}
+	const first = loops[0];
+	const shared = new HashMap<Symbol, Symbol>();
+	let guard = first.guard;
+	const values: Node[] = [first.value];
+	for (let k = 1; k < loops.length; k += 1) {
+		shared.set(loops[k].counter, first.counter);
+		applyRenames(loops[k].guard, shared, new HashMap<string, string>());
+		applyRenames(loops[k].value, shared, new HashMap<string, string>());
+		guard = makeBinary(guard, "&&", loops[k].guard, loc);
+		values.push(loops[k].value);
+	}
+	const tuple = getIteratorYieldType(peelTransparentInstance(d.forOfIterable.nodeType!));
+	const yielded = createNode(NodeKind.ArrayLiteral, { elements: values } as ArrayLiteralData, syntheticToken(loc));
+	yielded.nodeType = tuple;
+	const parts = bindingSym != null && d.forOfPattern == null ? partsPattern(d, bindingSym, values.length as int32, tuple, ctx) : null;
+	if (parts != null) d.forOfPattern = parts;
+	const step = makeExprStmt(createNode(NodeKind.YieldExpr, { yieldArg: yielded, isDelegate: false } as YieldExprData, syntheticToken(loc)), loc);
+	const loop = makeWhile(guard, makeBlock([step, makeExprStmt(first.step, loc)], loc), loc);
+	const endLabel = freshLabel(ctx, "inl");
+	const plan: JumpPlan = { endLabel, contLabel: "", loopLabel: d.forOfLabel, contUsed: false };
+	const stmts = extractBodyStmts(replaceYields(makeBlock([first.start, loop], loc), d, bindingSym, plan, ctx));
+	out.push(makeSwitchWrapper(stmts, endLabel, loc));
+	return makeBlock(out, loc);
+}
+
+function partsPattern(d: ForOfStmtData, binding: Symbol, arity: int32, tuple: Type | null, ctx: TransformContext): Node | null {
+	const body = d.forOfBody;
+	if (writesTo(body, binding) || indexedReads(body, binding, arity) != readCount(body, binding)) return null;
+	const loc = d.bindingLocation;
+	const parts: Symbol[] = [];
+	const names: Node[] = [];
+	for (let k = 0; k < arity; k += 1) {
+		const part = freshOwnedSym(ctx, binding.name, destrPositionalElemType(tuple, k));
+		parts.push(part);
+		names.push(makeIdentResolved(part, loc));
+	}
+	d.forOfBody = walkNode(body, (n: Node): Node => {
+		const k = partIndex(n, binding, arity);
+		return k < 0 ? n : makeIdentResolved(parts[k], n.location);
+	});
+	return createNode(NodeKind.ArrayPattern, { patternElements: names, hasRestElement: false, patternDefaults: [] } as ArrayPatternData, syntheticToken(loc));
+}
+
+function indexedReads(node: Node, binding: Symbol, arity: int32): int32 {
+	if (partIndex(node, binding, arity) >= 0) return 1;
+	let n: int32 = 0;
+	forEachChild(node, (child: Node): void => { n += indexedReads(child, binding, arity); });
+	return n;
+}
+
+function partIndex(node: Node, binding: Symbol, arity: int32): int32 {
+	if (node.kind != NodeKind.ArrayAccess) return -1;
+	const a = node.data as ArrayAccessData;
+	const arr = derefed(a.array);
+	if (arr.kind != NodeKind.Identifier || arr.resolvedSym != binding) return -1;
+	let index = a.index;
+	while (index.kind == NodeKind.HiddenStdConv) index = (index.data as HiddenStdConvData).convExpr;
+	if (index.kind != NodeKind.NumberLiteral) return -1;
+	const lit = index.data as NumberLiteralData;
+	if (lit.isFloat || lit.intVal < 0 || lit.intVal >= (arity as int64)) return -1;
+	return lit.intVal as int32;
+}
+
+interface CountedLoop {
+	start: Node;
+	counter: Symbol;
+	guard: Node;
+	value: Node;
+	step: Node;
+}
+
+function countedLoop(body: Node): CountedLoop | null {
+	const stmts = flatStatements(body);
+	let start: Node;
+	let guard: Node;
+	let step: Node;
+	let yields: Node[];
+	if (stmts.length == 1 && stmts[0].kind == NodeKind.ForStmt) {
+		const f = stmts[0].data as ForStmtData;
+		if (f.forInit == null || f.forCondition == null || f.forUpdate == null) return null;
+		start = f.forInit;
+		guard = f.forCondition;
+		step = f.forUpdate;
+		yields = extractBodyStmts(f.forBody);
+	} else if (stmts.length == 2 && stmts[1].kind == NodeKind.WhileStmt) {
+		const w = stmts[1].data as WhileStmtData;
+		const inner = extractBodyStmts(w.whileBody);
+		if (w.whileLabel != "" || inner.length != 2 || inner[1].kind != NodeKind.ExprStmt) return null;
+		start = stmts[0];
+		guard = w.whileCondition;
+		step = (inner[1].data as ExprStmtData).expr;
+		yields = [inner[0]];
+	} else {
+		return null;
+	}
+	const counter = start.kind == NodeKind.VariableDecl ? start.resolvedSym : null;
+	if (counter == null || !isZero((start.data as VariableDeclData).initializer) || !stepsByOne(step, counter)) return null;
+	if (guard.kind != NodeKind.BinaryExpr) return null;
+	const g = guard.data as BinaryExprData;
+	if (g.operator != "<" || g.left.kind != NodeKind.Identifier || g.left.resolvedSym != counter) return null;
+	if (hasEffect(g.right) || mentions(g.right, counter)) return null;
+	if (yields.length != 1 || yields[0].kind != NodeKind.ExprStmt) return null;
+	const y = (yields[0].data as ExprStmtData).expr;
+	if (y.kind != NodeKind.YieldExpr || (y.data as YieldExprData).isDelegate) return null;
+	const value = (y.data as YieldExprData).yieldArg;
+	if (value == null || !readsUnder(value, counter, boundArray(g.right))) return null;
+	return { start, counter, guard, value, step };
+}
+
+function flatStatements(body: Node): Node[] {
+	const out: Node[] = [];
+	for (const s of extractBodyStmts(body)) {
+		if (s.kind == NodeKind.BlockStmt) {
+			for (const inner of flatStatements(s)) { out.push(inner); }
+		} else {
+			out.push(s);
+		}
+	}
+	return out;
+}
+
+function isZero(e: Node | null): boolean {
+	if (e == null) return false;
+	if (e.kind == NodeKind.HiddenStdConv) return isZero((e.data as HiddenStdConvData).convExpr);
+	if (e.kind != NodeKind.NumberLiteral) return false;
+	const lit = e.data as NumberLiteralData;
+	return !lit.isFloat && lit.intVal == 0;
+}
+
+function stepsByOne(step: Node, counter: Symbol): boolean {
+	if (step.kind == NodeKind.UpdateExpr) {
+		const u = step.data as UpdateExprData;
+		return u.updateOp == "++" && u.updateArg.kind == NodeKind.Identifier && u.updateArg.resolvedSym == counter;
+	}
+	if (step.kind != NodeKind.BinaryExpr) return false;
+	const b = step.data as BinaryExprData;
+	if (b.operator != "+=" || b.left.kind != NodeKind.Identifier || b.left.resolvedSym != counter) return false;
+	let one = b.right;
+	while (one.kind == NodeKind.HiddenStdConv) one = (one.data as HiddenStdConvData).convExpr;
+	return one.kind == NodeKind.NumberLiteral && !(one.data as NumberLiteralData).isFloat && (one.data as NumberLiteralData).intVal == 1;
+}
+
+function boundArray(bound: Node): Symbol | null {
+	let e = bound;
+	while (e.kind == NodeKind.HiddenStdConv || e.kind == NodeKind.TypeAssertion) {
+		e = e.kind == NodeKind.HiddenStdConv ? (e.data as HiddenStdConvData).convExpr : (e.data as TypeAssertionData).asExpr;
+	}
+	if (e.kind != NodeKind.MemberExpr || (e.data as MemberExprData).property != "length") return null;
+	const arr = derefed((e.data as MemberExprData).object);
+	return arr.kind == NodeKind.Identifier ? arr.resolvedSym : null;
+}
+
+function derefed(e: Node): Node {
+	return e.kind == NodeKind.HiddenDeref ? derefed((e.data as HiddenDerefData).expr) : e;
+}
+
+function readsUnder(e: Node, counter: Symbol, bounded: Symbol | null): boolean {
+	match (e.kind) {
+		NodeKind.Identifier | NodeKind.NumberLiteral | NodeKind.StringLiteral | NodeKind.BooleanLiteral | NodeKind.NullLiteral => {
+			return true;
+		},
+		NodeKind.HiddenStdConv => {
+			return readsUnder((e.data as HiddenStdConvData).convExpr, counter, bounded);
+		},
+		NodeKind.TypeAssertion => {
+			return isFloatType(e.nodeType) && readsUnder((e.data as TypeAssertionData).asExpr, counter, bounded);
+		},
+		NodeKind.ArrayLiteral => {
+			for (const el of (e.data as ArrayLiteralData).elements) {
+				if (!readsUnder(el, counter, bounded)) return false;
+			}
+			return true;
+		},
+		NodeKind.ArrayAccess => {
+			const a = e.data as ArrayAccessData;
+			const arr = derefed(a.array);
+			return bounded != null && arr.kind == NodeKind.Identifier && arr.resolvedSym == bounded
+				&& a.index.kind == NodeKind.Identifier && a.index.resolvedSym == counter;
+		},
+		_ => {
+			return false;
+		},
+	};
+}
+
 function expandConsumer(call: InlineCall, returned: Type | null, st: InlineState, loc: SourceLocation): ConsumerExpansion {
 	const ctx = st.ctx;
 	const stmts: Node[] = [];
@@ -1306,9 +1529,13 @@ function consumerFor(value: Node, d: ForOfStmtData, bindingSym: Symbol | null, o
 }
 
 function tupleParts(value: Node, pattern: Node): Node[] | null {
-	const t = value.nodeType != null ? peelTransparentInstance(value.nodeType) : null;
-	if (value.kind != NodeKind.ArrayLiteral || t == null || t.kind != TypeKind.Tuple) return null;
+	let t = value.nodeType != null ? peelTransparentInstance(value.nodeType) : null;
+	if (t != null && (t.kind == TypeKind.Ref || t.kind == TypeKind.Var) && t.typeReturn != null) t = t.typeReturn;
+	if (value.kind != NodeKind.ArrayLiteral || t == null || (t.kind != TypeKind.Tuple && t.kind != TypeKind.Array)) return null;
 	const parts = (value.data as ArrayLiteralData).elements;
+	for (const part of parts) {
+		if (part.kind == NodeKind.SpreadExpr) return null;
+	}
 	const p = pattern.data as ArrayPatternData;
 	if (p.hasRestElement || p.patternElements.length != parts.length) return null;
 	for (let i = 0; i < parts.length; i++) {
@@ -1625,6 +1852,18 @@ test "a generator consumed in place leaves no for-of and no yield in the consume
 function stillForOf(src: string): boolean {
 	const stmts = getStmts(lowered(src));
 	return stmts[stmts.length - 1].kind == NodeKind.ForOfStmt;
+}
+
+test "an array literal yielded to a destructuring for-of binds its elements without building the array" {
+	const prog = lowered("function* g(): Iterator<int32[]> { yield [1, 2]; }\nlet s = 0;\nfor (const [x, y] of g()) { s += x * y; }");
+	const stmts = getStmts(prog);
+	assert countKind(stmts[stmts.length - 1], NodeKind.ArrayLiteral) == 0;
+}
+
+test "an array literal yielded to a shorter pattern is still built and destructured" {
+	const prog = lowered("function* g(): Iterator<int32[]> { yield [1, 2, 3]; }\nlet s = 0;\nfor (const [x, y] of g()) { s += x * y; }");
+	const stmts = getStmts(prog);
+	assert countKind(stmts[stmts.length - 1], NodeKind.ArrayLiteral) == 1;
 }
 
 test "a yield read as a value keeps the closure path" {
