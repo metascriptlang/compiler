@@ -3385,7 +3385,7 @@ half would keep its own copy or the value cannot be copied:
 **Refused at compile time, with the reason and the fix in the message:**
 
 - a `view` kept past `f`;
-- a module variable used by both halves: `the module variable 'total' is used by wasm-placed
+- a module variable or a static field (not `readonly`, or holding a reference) used by both halves: `the module variable 'total' is used by wasm-placed
   function 'bump' and also by 'peek' at 9:9, which runs on the JS side: JS and wasm each keep their
   own copy of module state, so neither sees the other's changes`;
 - a type with no copy form, as a parameter or result; each message names what crosses instead:
