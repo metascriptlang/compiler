@@ -832,13 +832,16 @@ function setTypeFields(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, hand
 //
 
 // Strip checker-inserted wrappers (HiddenDeref/HiddenAddr/HiddenStdConv/
-// HiddenSubConv) so a macro sees the source-form AST, not the C-codegen
-// details (auto-deref of class pointers, implicit numeric casts).
+// HiddenSubConv, the arity adapter's thunk) so a macro sees the source-form AST,
+// not the C-codegen details (auto-deref of class pointers, implicit numeric casts).
 export function stripMacroArgWrappers(node: Node): Node {
 	let n = node;
 	while (n != null) {
 		if ((n.kind == NodeKind.HiddenDeref && !n.flags.has(NodeFlag.ExplicitDeref)) || n.kind == NodeKind.HiddenAddr) {
 			n = (n.data as HiddenDerefData).expr;
+		} else if (n.kind == NodeKind.HiddenStdConv && n.paramSyms != null && (n.data as HiddenStdConvData).convExpr.kind == NodeKind.CallExpr) {
+			// A function value adapted to a slot of another arity: the checker's thunk calls the value the author wrote.
+			n = ((n.data as HiddenStdConvData).convExpr.data as CallExprData).callee;
 		} else if (n.kind == NodeKind.HiddenStdConv || n.kind == NodeKind.HiddenSubConv) {
 			n = (n.data as HiddenStdConvData).convExpr;
 		} else {
