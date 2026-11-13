@@ -1056,7 +1056,10 @@ static inline void msActorJobsTeardown(msActorJobs* j) {
     while (j->live != NULL) {
         msActorJob* r = j->live;
         atomic_store_explicit(&r->cancelled, true, memory_order_release);
-        if (r->timerId != 0) msTimerCancelId(r->timerId);
+        if (r->timerId != 0) {
+            msTimerCancelId(r->timerId);
+            if (r->completion) atomic_store_explicit(&r->envBusy, false, memory_order_release);
+        }
         msActorJobDropEnv(j, r);
     }
     msActorJobsDrain(j);

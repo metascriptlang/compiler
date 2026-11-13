@@ -91,6 +91,7 @@ MS_ACTOR_JOB_PATH void msActorJobEnvIdle(void* job);
 MS_ACTOR_JOB_PATH void msActorJobFire(void* job);
 MS_ACTOR_JOB_PATH void* msActorStampCompletion(void* fut);
 MS_ACTOR_JOB_PATH void msActorCompletionPost(void* fut);
+MS_ACTOR_JOB_PATH void msActorCompletionTimer(void* fut, int64_t id);
 MS_ACTOR_JOB_PATH void msActorCompletionRelease(void* fut);
 MS_ACTOR_JOB_PATH void msActorJobTick(void* job);
 MS_ACTOR_JOB_PATH void msActorJobCancelMark(void* job);

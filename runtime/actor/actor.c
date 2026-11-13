@@ -151,6 +151,10 @@ void msActorCompletionPost(void* fut) {
     msActorJobFire(r);
 }
 
+void msActorCompletionTimer(void* fut, int64_t id) {
+    ((msActorJob*)((msFutureBase*)fut)->completionQueue)->timerId = id;
+}
+
 void msActorCompletionRelease(void* fut) {
     if (msCurrentActor == NULL) {
         fputs("internal: a future an actor's visit made is released off that actor (ULTRALOCK M1)\n", stderr);

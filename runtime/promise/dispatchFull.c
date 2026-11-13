@@ -963,6 +963,9 @@ static int msProcessTimersIn(msDispatcher* d, msTimerHeap* heap, bool* didWork) 
 			break;
 		}
 		msTimer t = msTimerPop(heap);
+		/* An actor's stop cancels this entry under this lock before it drops the future,
+		 * so the future is written here and never after the unlock. */
+		if (t.fut != NULL && t.actorJob && !t.cancelled) atomic_store_explicit(&((msFutureBase*)t.fut)->finished, true, memory_order_release);
 		/* Re-arm an interval BEFORE releasing the lock so a callback calling
 		 * clearInterval(id) finds the next entry in the heap and can cancel it;
 		 * the re-armed entry inherits the env reference, so no extra
@@ -980,7 +983,15 @@ static int msProcessTimersIn(msDispatcher* d, msTimerHeap* heap, bool* didWork) 
 		*didWork = true;
 		/* Everything below runs WITHOUT the lock: a timer callback may arm or
 		 * cancel timers, and the spinlock is not reentrant. */
-		if (t.fut != NULL) {
+		if (t.fut != NULL && t.actorJob) {
+			if (t.cancelled) {
+				msActorJobAbandon(t.cb.env);
+			} else {
+				msNotifyFutureComplete();
+				msActorJobEnvIdle(t.cb.env);
+				msActorJobFire(t.cb.env);
+			}
+		} else if (t.fut != NULL) {
 			msFutureCompleteVoid(t.fut);
 			msFutureDrcDestroy(t.fut);
 		} else if (t.cancelled || t.cb.fn == NULL) {
@@ -1378,6 +1389,8 @@ bool msTimerFiresHere(const void* fut) {
 	return found;
 }
 
+static _Atomic(int64_t) gTimerSeq = 0;
+
 /* Standard reference sleepAsync pattern
  * Create timer future, push to heap, return future */
 msFuture_void* msSleepAsync(int ms) {
@@ -1389,6 +1402,15 @@ msFuture_void* msSleepAsync(int ms) {
 #endif
 	int64_t finishAt = msMonoTimeMs() + ms;
 	msTimer t = { .finishAtMs = finishAt, .fut = fut };
+#if MS_ACTOR_JOBS
+	if (__builtin_expect(msActorCurrentForJobs() != NULL, 0)) {
+		msFuturePublishCrossThread(fut);
+		t.id = (int64_t)atomic_fetch_add_explicit(&gTimerSeq, 1, memory_order_relaxed) + 1;
+		t.actorJob = true;
+		t.cb.env = ((msFutureBase*)fut)->completionQueue;
+		msActorCompletionTimer(fut, t.id);
+	}
+#endif
 	msTimerArm(t);
 	return fut;
 }
@@ -1399,7 +1421,6 @@ msFuture_void* msSleepAsync(int ms) {
  * lazy: the entry stays on the heap and is skipped (and its env released) when
  * it comes due or its heap holds no live entry — cheaper than an O(n) heap
  * removal for a rare operation. Only live entries keep a loop from idling. */
-static _Atomic(int64_t) gTimerSeq = 0;
 
 MS_ACTOR_JOB_PATH static void msTimerStampActor(msTimer* t) {
 	if (msCurrentActor == NULL) return;
@@ -1430,7 +1451,7 @@ static int64_t msArmTimer(msClosure cb, double ms, int64_t periodMs) {
 
 static bool msCancelTimerIn(msTimerHeap* heap, int64_t id) {
 	for (int i = 0; i < heap->len; i += 1) {
-		if (heap->data[i].id == id && heap->data[i].fut == NULL) {
+		if (heap->data[i].id == id && (heap->data[i].fut == NULL || heap->data[i].actorJob)) {
 			if (heap->data[i].cancelled) return true;
 			heap->data[i].cancelled = true;
 			heap->data[i].periodMs = 0;
@@ -1613,11 +1634,13 @@ void msDestroyDispatcher(void) {
 	msTimerLock();
 	while (gTimers.len > 0) {
 		msTimer t = msTimerPop(&gTimers);
-		if (t.fut != NULL) {
+		if (t.actorJob) {
+			if (t.fut != NULL) msActorJobEnvIdle(t.cb.env);
+			msActorJobAbandon(t.cb.env);
+		} else if (t.fut != NULL) {
 			msFutureCancel(t.fut);
 			msFutureDrcDestroy(t.fut);
-		} else if (t.actorJob) msActorJobAbandon(t.cb.env);
-		else if (t.cb.env != NULL) msDecrefAny(t.cb.env);
+		} else if (t.cb.env != NULL) msDecrefAny(t.cb.env);
 	}
 	msMemFree(gTimers.data);
 	gTimers.data = NULL;
