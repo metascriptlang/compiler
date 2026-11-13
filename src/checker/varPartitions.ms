@@ -511,7 +511,7 @@ function externSummary(sym: Symbol): ResizeSummary {
 function valueCallSummary(call: Node): ResizeSummary {
 	const callee = peelConv((call.data as CallExprData).callee);
 	const sym = call.resolvedSym != null ? call.resolvedSym : (callee != null && callee.kind == NodeKind.Identifier ? callee.resolvedSym : null);
-	const answeredByItsMaker = sym != null && (sym.symbolKind == SymbolKind.Parameter || boundRoutine(sym) != null);
+	const answeredByItsMaker = isRoutineValue(callee) || (sym != null && (sym.symbolKind == SymbolKind.Parameter || boundRoutine(sym) != null));
 	return { unknown: true, keys: [], writes: true, leavesRunning: !answeredByItsMaker && handsOverPointer(call) };
 }
 
