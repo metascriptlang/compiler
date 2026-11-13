@@ -59,11 +59,13 @@ function readElementOf(elem: Type | null): Type | null {
 	return held != null && isReadonlyView(held) && held.mutableView != null ? held.mutableView : held;
 }
 
-// A read-only container is only read, so a Cursor or view element fits by the element it holds.
+// A read-only container is only read, so a Cursor or view element fits by the element it holds, and a strong
+// element fits where it is read as Unowned.
 function readElementsFit(source: Type, target: Type): boolean {
 	const elem = readElementOf(source.typeReturn);
 	const want = readElementOf(target.typeReturn);
-	return sameElementRepr(elem, want) && sameElement(elem, want);
+	const read = elem != null && want != null && isUnownedSlot(want) && !isUnownedSlot(elem) ? withoutUnowned(want) : want;
+	return sameElementRepr(elem, read) && sameElement(elem, read);
 }
 
 function sameElementRepr(a: Type | null, b: Type | null): boolean {
