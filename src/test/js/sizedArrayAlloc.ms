@@ -22,3 +22,10 @@ test "a sized array of structs builds one zero value per slot" {
 	assert result.ok;
 	assert result.value.contains("}, () => ({ x: 0, y: 0 }))");
 }
+
+test "a sized typed array of literal zeros allocates its length" {
+	const result = compileToJSBare("function f(): uint32[16] { const s: uint32[16] = [0, 0]; return s; }\nfunction g(): uint8[4] { return [0, 1, 0, 0]; }");
+	assert result.ok;
+	assert result.value.contains("new globalThis.Uint32Array(16)");
+	assert result.value.contains("new globalThis.Uint8Array([0, 1, 0, 0])");
+}

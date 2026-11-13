@@ -798,6 +798,10 @@ export function emitArrayLiteral(gen: JSGenerator, node: Node): void {
 	if (sized) {
 		typedName = jsTypedArrayName(t.typeReturn.kind);
 	}
+	if (typedName != "" && d.elements.every((e: Node): boolean => e.kind == NodeKind.NumberLiteral && (e.data as NumberLiteralData).value == 0)) {
+		emit(gen, `new ${typedName}(${t.typeValue as int32})`);
+		return;
+	}
 	if (typedName != "") emit(gen, "new " + typedName + "(");
 	emit(gen, "[");
 	let needComma = false;
