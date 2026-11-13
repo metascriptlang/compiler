@@ -178,10 +178,43 @@ The other debug consumers (`hello`, `threads`, `cCompanion`, `cppCompanion`, `sh
 pass as before with the protector on. Run rows ok, the two cells above included: glibc 16, musl x86_64 14, macOS
 arm64 16; musl arm64 builds all eight.
 
-Not verified: a protected Windows program (no bundle carries the new overlay; msc passes the flag there once one
-does); musl arm64 and Linux arm64 run; the cost of the guard in a debug build. Left as it is: a `--release` build
-on macOS keeps clang's own default protector (frames with a character array of 8 bytes or more), which zig turns
-off; the default bundle build measured 0.99 to 1.03 of zig's time there with it.
+### Recheck 2026-11-14 — native Windows source-runtime controls
+
+On d87, installed bundle `44950a26db3f` and engine SHA256
+`41e1f4eec3bfda4ffae2dea4f3e8208585a316af6cc20459bd9d2ff9e32d8879` still fail the protected link with both
+`unable to find library -lssp_nonshared` and `unable to find library -lssp`. The identical fixture with
+`-fno-stack-protector` prints `ssp normal frame OK`; `llvm-nm` finds both guard/fail definitions in its
+`libmingwex.a`. This is a measured link failure, not merely a missing-file precondition. Baseline log
+`out/windows-ssp-installed-control/remote.log` SHA256
+`3d6ea17dd1e29416f0bd3520491c64d7c06071d9a879bcd8de2641091de279b0`.
+
+The actual source output on rtx is `~/work/managed-runtime-src/windows-overlay-x86_64-ssp`, **not** its
+installed `3a7e411898f0` bundle. Its Windows receipt SHA256 is
+`a54befca879e0cf93d786970c3d51bff3dac30906d3e1c5c96b6f2e4d9e544f6`; it names MinGW 13.0.0 archive
+`5afe822af5c4edbf67daaf45eec61d538f49eef6b19524de64897c6b95828caf` and LLVM 23.1.4 archive
+`819ecf7351f1a66f76b2d701d8942faaf5faeb324cb90c9d5b090de142434bb2`. Both EXE/DLL variants' files and
+builtins matched the receipt before transport. The copied overlay and LLVM 23 intrinsic headers contain
+5621 files, hashed individually; tar transport is 240923648 B, SHA256
+`9c2a2db15aaffc648e54b9b1179121f4d6206d3aab213f0e020f2e11144354e8`.
+
+On source tree `2eac1aef892fadbeeba86392c057e7ad1c69e798`, a fresh **private** d87 prefix unpacked and
+verified those files and hardlinked the same pinned Windows engine. Raw clang with the source configs and
+`-fstack-protector-strong` passed **EXE/DLL × O0/O2**, four normal/corruption pairs: normal exits 0;
+corruption exits 127 as seen by the shell and prints exactly `*** stack smashing detected ***: terminated`.
+Each object references `__stack_chk_fail`; both variants use 8-byte SSP archives and the same
+`libmingwex.a` SHA256 `159dbdb44034d0e60112271a14663c2722fc3bfaab32e96ae157b5906250b1ed` as the installed
+baseline. Two independent EXE startups produced nonzero, distinct guard values: a sample, not an RNG audit.
+
+Private log `out/windows-ssp-private-control/remote.log` SHA256
+`1c87ff530b1ed759ad44024d1ab5bc714bea547881db275f2da2742f2857d110`; `inputs.json` records all six probe/
+transport hashes and the log records the actual native hashes. The global bundle stayed unchanged. This
+proves the raw source-runtime path, **not** default msc protection, LTO, C++, speed or public delivery:
+`debugStackProtector` still withholds Windows, and no deployment was done here.
+
+Still unverified: default protected Windows msc builds; musl arm64 and Linux arm64 run; the cost of the guard
+in a debug build. Left as it is: a `--release` build on macOS keeps clang's own default protector (frames with
+a character array of 8 bytes or more), which zig turns off; the historical default-bundle build measured
+0.99 to 1.03 of zig's time there with it.
 
 ## Measured 2026-11-13 — a host build compiles for this machine's CPU
 
