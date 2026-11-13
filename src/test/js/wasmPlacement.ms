@@ -118,6 +118,26 @@ test "module state that JS-side code also uses is refused, at the JS-side use" {
 	assert exportedVar.contains("which is exported");
 }
 
+test "a mutable static field is module state: wasm-placed code and JS-side code cannot share it" {
+	const fromTop = checkErrorText(
+		"class Counter { static total: int32 = 0; }\n@wasm\nexport function bump(): int32 { Counter.total += 1; return Counter.total; }\nconsole.log(`${Counter.total}`);\n",
+	);
+	assert fromTop.contains(
+		"the static field 'Counter.total' is used by wasm-placed function 'bump' and also by top-level code at 4:",
+	), fromTop;
+	const exported = checkErrorText(
+		"export class Counter { static total: int32 = 0; }\n@wasm\nexport function bump(): int32 { Counter.total += 1; return Counter.total; }\n",
+	);
+	assert exported.contains("uses the static field 'Counter.total' at 3:"), exported;
+	assert exported.contains("which is exported");
+	assert checkErrorText(
+		"class Counter { static total: int32 = 0; }\n@wasm\nexport function bump(): int32 { Counter.total += 1; return Counter.total; }\n",
+	) == "";
+	assert checkErrorText(
+		"export class Limits { static readonly MAX: int32 = 10; }\n@wasm\nexport function cap(n: int32): int32 { return n > Limits.MAX ? Limits.MAX : n; }\nconsole.log(`${Limits.MAX}`);\n",
+	) == "";
+}
+
 test "const values and unrelated module state stay usable on both sides" {
 	assert checkErrorText(
 		'const LIMIT = 10;\nconst NAME = "x";\n@wasm\nexport function cap(n: int32): int32 { return n > LIMIT ? LIMIT : n + NAME.length; }\nexport function jsCap(): int32 { return LIMIT; }\n',
