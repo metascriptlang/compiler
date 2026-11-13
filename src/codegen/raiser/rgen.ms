@@ -31,7 +31,7 @@ import {
 	resolveRoutine, RaiserCompState,
 	isScalarClass, allocBool, emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen
 } from "./context";
-import { compileStmt, compileBodyReleasingOnRaise } from "./statements";
+import { compileStmt, compileBodyReleasingOnRaise, threadConstantTests } from "./statements";
 import { bodyIsErrorBlind } from "../../checker/raises";
 import { compilePackedExpr, compileExpr, classTargetKey, emitsRoutine, classTypeOperand, compileHostForward, runtimeHostName } from "./expressions";
 import { createLegacyEntry, locationResult } from "./packedCalls";
@@ -267,6 +267,7 @@ export function compileFuncBody(funcMap: RaiserFuncMap, fnName: string, paramSym
 	}
 
 	emitImplicitReturn(s);
+	threadConstantTests(s);
 
 	const compiled = createRaiserFunction(fnName, s.code, s.constants, paramSyms.length, 0, s.regClasses.length, s.regClasses, s.inlineSites, packed != null ? packed.shape : null);
 	compiled.copyPlans = s.copyPlans;

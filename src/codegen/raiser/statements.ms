@@ -11,8 +11,8 @@ import {
 	SwitchStmtData, SwitchCaseData,
 	TryCatchStmtData, ThrowStmtData,
 } from "../../ast/node";
-import { RaiserOpcode, RaiserRegClass, RaiserRole, RaiserInstruction, raiserABC, raiserAx, immValue, branchField, opRole, opHasSite, siteArgCount, immField, FINALLY_LEAVE } from "../../raiser/bytecode";
-import { raiserNil, raiserInt, raiserConstString } from "../../raiser/value";
+import { RaiserOpcode, RaiserRegClass, RaiserRole, RaiserInstruction, raiserABC, raiserAx, immValue, branchField, branchOffset, isBranchI64, getBx, getSignedAx, opRole, opHasSite, siteArgCount, immField, FINALLY_LEAVE } from "../../raiser/bytecode";
+import { raiserNil, raiserInt, raiserConstString, RaiserValueKind } from "../../raiser/value";
 import {
 	RaiserCompState, RaiserTryInfo, emitInst, allocReg, allocBlock, allocWord, allocRef, allocDyn, classOfReg, emitLoadConst, emitRet, emitReturnNothing,
 	declareLocal, declaredSymbol, regIsFixedLocal, resetTemps, resolveLocal,
@@ -432,6 +432,51 @@ function fuseCountedStep(s: RaiserCompState, loopStart: int32, exitJumps: int32[
 	const op = test.op == RaiserOpcode.BrGeI64 ? RaiserOpcode.ForLtI64 : RaiserOpcode.ForLtI64Imm;
 	s.code[stepPc] = raiserABC(op, test.a, test.b, branchField(bodyStart - stepPc - 1));
 	return true;
+}
+
+export function threadConstantTests(s: RaiserCompState): void {
+	const code = s.code;
+	for (const inst of code) {
+		if (inst.op == RaiserOpcode.Try || inst.op == RaiserOpcode.Catch || inst.op == RaiserOpcode.Finally || inst.op == RaiserOpcode.FinallyEnd) return;
+	}
+	const landed: boolean[] = code.map((): boolean => false);
+	for (let pc = 0; pc < code.length; pc += 1) {
+		const to = jumpDestination(code[pc], pc);
+		if (to >= 0 && to < code.length) landed[to] = true;
+		if (to < 0 && landsPast(code[pc], pc as int32, (pc + 2) as int32) && pc + 1 + code[pc].c < code.length) landed[pc + 1 + code[pc].c] = true;
+	}
+	for (let pc = 0; pc < code.length; pc += 1) {
+		const test = jumpDestination(code[pc], pc);
+		if (test <= pc || test + 1 >= code.length) continue;
+		const truthy = constantTestAt(s, test, pc, landed);
+		if (truthy < 0) continue;
+		const dest = truthy == 1 ? test + 2 : jumpDestination(code[test + 1], test + 1);
+		if (dest > pc) patchJumpTo(s, pc as int32, dest as int32);
+	}
+}
+
+function jumpDestination(inst: RaiserInstruction, pc: number): number {
+	if (inst.op == RaiserOpcode.Jump) return pc + 1 + getSignedAx(inst);
+	if (isBranchI64(inst.op)) return pc + 1 + (branchOffset(inst.c) as number);
+	return -1;
+}
+
+function constantTestAt(s: RaiserCompState, test: number, from: number, landed: boolean[]): int32 {
+	const code = s.code;
+	const t = code[test];
+	if (t.op != RaiserOpcode.BTruthy || t.c != 1 || code[test + 1].op != RaiserOpcode.Jump) return -1;
+	for (let q = from - 1; q >= 0; q -= 1) {
+		if (landed[q + 1]) return -1;
+		const inst = code[q];
+		if (inst.a == t.a && inst.op == RaiserOpcode.LoadInt) return immValue(inst.b) != 0 ? 1 : 0;
+		if (inst.a == t.a && inst.op == RaiserOpcode.LoadConst) {
+			const k = s.constants[getBx(inst)];
+			if (k.kind != RaiserValueKind.Bool && k.kind != RaiserValueKind.Int) return -1;
+			return k.intVal != 0 ? 1 : 0;
+		}
+		if (namesRegister(inst, t.a) || inst.op == RaiserOpcode.Jump || inst.op == RaiserOpcode.Ret || inst.op == RaiserOpcode.RetN || inst.op == RaiserOpcode.Throw) return -1;
+	}
+	return -1;
 }
 
 function namesRegister(inst: RaiserInstruction, reg: number): boolean {
