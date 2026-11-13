@@ -3191,6 +3191,12 @@ test "an extensionless Windows output gets the target's suffix, and every other 
 	assert windowsOutputPath("out/probe", "linux", "", false) == "out/probe";
 }
 
+test "a test binary's dotted or dotless shard name resolves to the one file the Windows link writes" {
+	const dotless = windowsOutputPath("out/debug/_test_a_1c2d", "windows", "", false);
+	assert dotless == "out/debug/_test_a_1c2d.exe";
+	assert windowsOutputPath("out/debug/_test_a.test_1c2d_s1of2", "windows", "", false) == "out/debug/_test_a.test_1c2d_s1of2";
+}
+
 test "a cross build's output suffix comes from the target os, not the host" {
 	assert targetBinarySuffix("linux", "", true) == ".so";
 	assert targetBinarySuffix("linux", "", false) == "";
@@ -5205,7 +5211,7 @@ resetLiftedOps();
 	// Link and execute
 	ensureDir("out/debug");
 	const shardTag = opts.testsShards > 1 ? `_s${opts.testsShard}of${opts.testsShards}` : "";
-	const testBin = `out/debug/${testRootName(filePath)}${shardTag}`;
+	const testBin = windowsOutputPath(`out/debug/${testRootName(filePath)}${shardTag}`, opts.targetOs, opts.cpuTarget, false);
 	// Same link flags as cmdBuildC. cmdTest used to assemble its own and so
 	// silently dropped everything cliLinkFlags contributes: the per-target
 	// system libraries and --passL. On Windows that is fatal — without
@@ -5234,11 +5240,19 @@ resetLiftedOps();
 		writeBuildDepFile(opts.depFile, testBin, sources, opts.ccCompiler, opts.ccBinary);
 	}
 	if (opts.verbose) verboseLog("running tests");
+	if (!exists(testBin)) {
+		printError(`test binary not found at ${testBin}: the link reported success but wrote no such file`);
+		exit(1);
+	}
 	const fRun = flowStart();
 	const runCode = execFile(testBin);
 	flowStop("test.run", fRun);
 	flowStop("total", fTotal);
 	flowsWrite();
+	if (runCode < 0) {
+		printError(`could not start test binary ${testBin}: the operating system refused to launch it`);
+		exit(1);
+	}
 	if (platform == "windows" && runCode >= 0xC0000000) {
 		printError(`test binary terminated with status 0x${runCode.toString(16).toUpperCase()}`);
 		exit(1);
