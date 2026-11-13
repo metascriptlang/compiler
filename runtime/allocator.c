@@ -152,8 +152,8 @@ enum {
     MS_HEAP_TRUNK_BITS = 512,
     MS_HEAP_WORD_BITS = sizeof(uintptr_t) * 8,
     MS_HEAP_SMALL_CLASSES = MS_HEAP_PAGE_SIZE / MS_HEAP_ALIGN,
-    MS_HEAP_MAX_REMOTE_BIG_STEPS = 20,
     MS_HEAP_REMOTE_BATCH_BYTES = 16384,
+    MS_HEAP_OPEN_BATCHES = 8,
     MS_HEAP_DISCARD_MIN_BYTES = 65536,
     MS_HEAP_RETURN_AFTER_MS = 10000,
     MS_HEAP_RETURN_STEP_MS = 1000,
@@ -177,6 +177,7 @@ typedef struct msHeapSmall msHeapSmall;
 typedef struct msHeapCell msHeapCell;
 typedef struct msHeapTrunk msHeapTrunk;
 typedef struct msHeapSlab msHeapSlab;
+typedef struct msHeapBatch msHeapBatch;
 
 typedef struct {
     size_t prevSize;
@@ -201,14 +202,10 @@ struct msHeapBig {
 
 struct msHeapCell {
     msHeapCell* next;
-    uintptr_t run;
-#if UINTPTR_MAX == 0xffffffffu
-    msHeapCell* runTail;
-#endif
+    uintptr_t mark;
 };
 
-_Static_assert(sizeof(msHeapCell) <= MS_HEAP_ALIGN, "a remote run's header must fit the smallest cell");
-_Static_assert(MS_HEAP_REMOTE_BATCH_BYTES / MS_HEAP_ALIGN < 0x10000, "a remote run's length must fit its 16 bits");
+_Static_assert(sizeof(msHeapCell) <= MS_HEAP_ALIGN, "a free cell's link and mark must fit the smallest cell");
 
 struct msHeapSmall {
     msHeapChunk base;
@@ -223,6 +220,24 @@ struct msHeapSmall {
 };
 
 #define MS_HEAP_SMALL_ROOM (MS_HEAP_PAGE_SIZE - sizeof(msHeapSmall))
+
+/* A big chunk handed out holds MS_HEAP_BIG_IN_USE in `zeroed`, which a free chunk uses for its zero
+ * and discard flags and a release clears; a thread freeing a chunk it does not own swaps it to
+ * MS_HEAP_BIG_SENT before it sends the address, so of two frees only one gets through, whichever
+ * threads made them. The owner writes the word only atomically while the chunk is handed out. */
+enum { MS_HEAP_BIG_IN_USE = 4, MS_HEAP_BIG_SENT = 8 };
+
+/* Another thread reads a chunk header's size and owner when it frees or resizes a block of the
+ * chunk; the owner writes them atomically so that a free racing the owner's reuse of the header is
+ * refused rather than read torn. */
+static inline size_t msHeapSizeOf(msHeapChunk* base) { return __atomic_load_n(&base->size, __ATOMIC_RELAXED); }
+static inline void msHeapSetSize(msHeapChunk* base, size_t size) { __atomic_store_n(&base->size, size, __ATOMIC_RELAXED); }
+static inline void msHeapSetOwner(msHeapChunk* base, msHeapHandle* owner) { __atomic_store_n(&base->owner, owner, __ATOMIC_RELAXED); }
+
+static inline size_t msHeapBigState(msHeapBig* chunk) { return __atomic_load_n(&chunk->zeroed, __ATOMIC_RELAXED); }
+static inline void msHeapSetBigState(msHeapBig* chunk, size_t state) { __atomic_store_n(&chunk->zeroed, state, __ATOMIC_RELAXED); }
+static inline uintptr_t msHeapMarkOf(msHeapCell* cell) { return __atomic_load_n(&cell->mark, __ATOMIC_RELAXED); }
+static inline void msHeapSetMark(msHeapCell* cell, uintptr_t mark) { __atomic_store_n(&cell->mark, mark, __ATOMIC_RELAXED); }
 
 struct msHeapTrunk {
     msHeapTrunk* next;
@@ -245,7 +260,6 @@ struct msHeapRegion {
     msHeapBig* matrix[MS_HEAP_FL_COUNT][MS_HEAP_SL_COUNT];
     msHeapSlab* metadata;
     msHeapTrunk* starts[256];
-    msHeapBig* pendingBig;
     size_t occupied;
     size_t nextChunkSize;
     size_t lastSize;
@@ -254,23 +268,31 @@ struct msHeapRegion {
 #if MS_HEAP_THREADS
     int64_t returnDue;
     int64_t agedSince;
-    msHeapCell* remoteCells[MS_HEAP_SMALL_CLASSES];
+    msHeapBatch* received;
+    size_t receivedAt;
 #endif
 };
 
-typedef struct {
+/* Blocks a thread frees in memory it does not own, gathered for their owner. The freeing thread
+ * writes only the batch, never the blocks, so the owner alone decides whether each is in use. */
+struct msHeapBatch {
+    msHeapBatch* next;
+    msHeapBatch** home;
     msHeapHandle* owner;
-    msHeapCell* head;
-    msHeapCell* tail;
-    uintptr_t count;
-} msHeapRemoteRun;
+    size_t count;
+    size_t bytes;
+    void* blocks[];
+};
+
+#define MS_HEAP_BATCH_BLOCKS ((MS_HEAP_PAGE_SIZE - offsetof(msHeapBig, data) - sizeof(msHeapBatch)) / sizeof(void*))
+_Static_assert(MS_HEAP_OPEN_BATCHES == 8, "msHeapSendFree hashes an owner into 3 bits");
 
 struct msHeapHandle {
-    msHeapCell* sharedCells[MS_HEAP_SMALL_CLASSES];
-    msHeapRemoteRun runs[MS_HEAP_SMALL_CLASSES];
-    uint64_t openRuns[MS_HEAP_SMALL_CLASSES / 64];
-    size_t runBytes;
-    msHeapBig* sharedBig;
+    msHeapBatch* inbox;
+    msHeapBatch* returned;
+    msHeapBatch* idle;
+    msHeapBatch* open[MS_HEAP_OPEN_BATCHES];
+    size_t heldBytes;
     msHeapHandle* nextRetired;
     msHeapRegion region;
 };
@@ -302,14 +324,14 @@ static void* msHeapAllocPages(size_t bytes) {
 
 #if defined(_WIN32)
 #include <windows.h>
-static SRWLOCK msHeapRetiredLock = SRWLOCK_INIT;
-#define msHeapRetiredAcquire() AcquireSRWLockExclusive(&msHeapRetiredLock)
-#define msHeapRetiredReleaseLock() ReleaseSRWLockExclusive(&msHeapRetiredLock)
+static SRWLOCK msHeapSharedLock = SRWLOCK_INIT;
+#define msHeapLock() AcquireSRWLockExclusive(&msHeapSharedLock)
+#define msHeapUnlock() ReleaseSRWLockExclusive(&msHeapSharedLock)
 #else
 #include <pthread.h>
-static pthread_mutex_t msHeapRetiredLock = PTHREAD_MUTEX_INITIALIZER;
-#define msHeapRetiredAcquire() pthread_mutex_lock(&msHeapRetiredLock)
-#define msHeapRetiredReleaseLock() pthread_mutex_unlock(&msHeapRetiredLock)
+static pthread_mutex_t msHeapSharedLock = PTHREAD_MUTEX_INITIALIZER;
+#define msHeapLock() pthread_mutex_lock(&msHeapSharedLock)
+#define msHeapUnlock() pthread_mutex_unlock(&msHeapSharedLock)
 #endif
 
 static msHeapHandle* msHeapRetired;
@@ -318,10 +340,10 @@ static _Thread_local msHeapHandle* msHeapCurrent;
 extern void msThreadAttach(void);
 
 static msHeapHandle* msHeapAcquire(void) {
-    msHeapRetiredAcquire();
+    msHeapLock();
     msHeapHandle* handle = msHeapRetired;
     if (handle) msHeapRetired = handle->nextRetired;
-    msHeapRetiredReleaseLock();
+    msHeapUnlock();
     if (!handle) {
         handle = msHeapAllocPages(msHeapRound(sizeof(msHeapHandle), MS_HEAP_PAGE_SIZE));
         msHeapZero(handle, sizeof(*handle));
@@ -338,10 +360,10 @@ static inline msHeapRegion* msHeapHere(void) {
     return MS_HEAP_REGION(handle);
 }
 
-static void msHeapCloseRuns(msHeapHandle* here);
+static void msHeapPostBatches(msHeapHandle* here);
 
 void msHeapThreadFlush(void) {
-    if (msHeapCurrent) msHeapCloseRuns(msHeapCurrent);
+    if (msHeapCurrent) msHeapPostBatches(msHeapCurrent);
 }
 
 void msHeapThreadRelease(void) {
@@ -349,82 +371,164 @@ void msHeapThreadRelease(void) {
     if (!handle) return;
     msHeapReturnIdle();
     msHeapCurrent = NULL;
-    msHeapRetiredAcquire();
+    msHeapLock();
     handle->nextRetired = msHeapRetired;
     msHeapRetired = handle;
-    msHeapRetiredReleaseLock();
+    msHeapUnlock();
 }
 
-static void msHeapMarkRun(msHeapCell* head, msHeapCell* tail, uintptr_t count) {
-#if UINTPTR_MAX == 0xffffffffu
-    head->run = count;
-    head->runTail = tail;
-#else
-    intptr_t span = (intptr_t)tail - (intptr_t)head;
-    head->run = ((uintptr_t)span << 16) | count;
-    if (((intptr_t)head->run >> 16) != span) {
-        msErrorf("msHeapFree: a remote run spans %p..%p, beyond the 48-bit distance its header holds\n",
-                 (void*)head, (void*)tail);
-        abort();
-    }
-#endif
-}
-
-static uintptr_t msHeapRunLength(msHeapCell* head) { return head->run & 0xffff; }
-
-static msHeapCell* msHeapRunTail(msHeapCell* head) {
-#if UINTPTR_MAX == 0xffffffffu
-    return head->runTail;
-#else
-    return (msHeapCell*)((intptr_t)head + ((intptr_t)head->run >> 16));
-#endif
-}
-
-static void msHeapPushRemoteRun(msHeapHandle* owner, size_t slot, msHeapCell* head, msHeapCell* tail, uintptr_t count) {
-    msHeapMarkRun(head, tail, count);
-    msHeapCell* shared = __atomic_load_n(&owner->sharedCells[slot], __ATOMIC_RELAXED);
+static void msHeapPushBatch(msHeapBatch** stack, msHeapBatch* batch) {
+    msHeapBatch* head = __atomic_load_n(stack, __ATOMIC_RELAXED);
     do {
-        tail->next = shared;
-    } while (!__atomic_compare_exchange_n(&owner->sharedCells[slot], &shared, head, 1,
-                                          __ATOMIC_RELEASE, __ATOMIC_RELAXED));
+        batch->next = head;
+    } while (!__atomic_compare_exchange_n(stack, &head, batch, 1, __ATOMIC_RELEASE, __ATOMIC_RELAXED));
 }
 
-static void msHeapCloseRun(msHeapHandle* here, size_t slot) {
-    msHeapRemoteRun* run = &here->runs[slot];
-    msHeapPushRemoteRun(run->owner, slot, run->head, run->tail, run->count);
-    *run = (msHeapRemoteRun){0};
+static msHeapBatch* msHeapTakeBatches(msHeapBatch** stack) {
+    if (!__atomic_load_n(stack, __ATOMIC_RELAXED)) return NULL;
+    return __atomic_exchange_n(stack, NULL, __ATOMIC_ACQUIRE);
 }
 
-static void msHeapCloseRuns(msHeapHandle* here) {
-    for (size_t word = 0; word < MS_HEAP_SMALL_CLASSES / 64; ++word) {
-        for (uint64_t open = here->openRuns[word]; open; open &= open - 1)
-            msHeapCloseRun(here, word * 64 + (size_t)__builtin_ctzll(open));
-        here->openRuns[word] = 0;
+static size_t msHeapOpenSlot(msHeapHandle* owner) {
+    return (size_t)(((uint64_t)(uintptr_t)owner / MS_HEAP_PAGE_SIZE * 0x9e3779b97f4a7c15u) >> 61);
+}
+
+static msHeapBatch* msHeapReuseBatch(msHeapBatch** idle, msHeapBatch** returned) {
+    if (!*idle) *idle = msHeapTakeBatches(returned);
+    msHeapBatch* batch = *idle;
+    if (batch) *idle = batch->next;
+    return batch;
+}
+
+static msHeapBatch* msHeapOpenBatch(msHeapBatch* batch, msHeapBatch** home, msHeapHandle* owner) {
+    batch->home = home;
+    batch->owner = owner;
+    batch->count = 0;
+    batch->bytes = 0;
+    return batch;
+}
+
+static void msHeapPostBatch(msHeapHandle* here, msHeapBatch** open) {
+    msHeapBatch* batch = *open;
+    *open = NULL;
+    here->heldBytes -= batch->bytes;
+    msHeapPushBatch(&batch->owner->inbox, batch);
+}
+
+static void msHeapPostBatches(msHeapHandle* here) {
+    for (size_t i = 0; i < MS_HEAP_OPEN_BATCHES; ++i)
+        if (here->open[i]) msHeapPostBatch(here, &here->open[i]);
+}
+
+/* Threads without a region share one set of open batches under the shared lock; any owner about
+ * to receive posts them, since no such thread has a moment of its own to flush. */
+static msHeapBatch* msHeapAloneOpen[MS_HEAP_OPEN_BATCHES];
+static msHeapBatch* msHeapAloneIdle;
+static msHeapBatch* msHeapAloneReturned;
+static size_t msHeapAloneHeld;
+
+static void msHeapPostAloneLocked(msHeapBatch** open) {
+    __atomic_store_n(&msHeapAloneHeld, msHeapAloneHeld - (*open)->count, __ATOMIC_RELAXED);
+    msHeapPushBatch(&(*open)->owner->inbox, *open);
+    *open = NULL;
+}
+
+static void msHeapPostAlone(void) {
+    if (!__atomic_load_n(&msHeapAloneHeld, __ATOMIC_RELAXED)) return;
+    msHeapLock();
+    for (size_t i = 0; i < MS_HEAP_OPEN_BATCHES; ++i)
+        if (msHeapAloneOpen[i]) msHeapPostAloneLocked(&msHeapAloneOpen[i]);
+    msHeapUnlock();
+}
+
+static void msHeapSendAlone(msHeapHandle* owner, void* p, size_t bytes) {
+    msHeapBatch** open = &msHeapAloneOpen[msHeapOpenSlot(owner)];
+    msHeapBatch* spare = NULL;
+    msHeapLock();
+    for (;;) {
+        if (*open && (*open)->owner != owner) msHeapPostAloneLocked(open);
+        if (*open) break;
+        msHeapBatch* batch = spare ? spare : msHeapReuseBatch(&msHeapAloneIdle, &msHeapAloneReturned);
+        if (batch) {
+            *open = msHeapOpenBatch(batch, &msHeapAloneReturned, owner);
+            break;
+        }
+        msHeapUnlock();
+        spare = msHeapAllocPages(MS_HEAP_PAGE_SIZE);
+        msHeapLock();
     }
-    here->runBytes = 0;
-}
-
-static void msHeapAddToRun(msHeapHandle* here, msHeapHandle* owner, size_t slot, size_t size, msHeapCell* cell) {
-    msHeapRemoteRun* run = &here->runs[slot];
-    if (run->head && run->owner != owner) msHeapCloseRun(here, slot);
-    if (!run->head) {
-        run->owner = owner;
-        run->tail = cell;
-        here->openRuns[slot / 64] |= (uint64_t)1 << (slot % 64);
+    if (spare && *open != spare) {
+        spare->next = msHeapAloneIdle;
+        msHeapAloneIdle = spare;
     }
-    cell->next = run->head;
-    run->head = cell;
-    ++run->count;
-    here->runBytes += size;
-    if (here->runBytes >= MS_HEAP_REMOTE_BATCH_BYTES) msHeapCloseRuns(here);
+    (*open)->blocks[(*open)->count++] = p;
+    (*open)->bytes += bytes;
+    __atomic_store_n(&msHeapAloneHeld, msHeapAloneHeld + 1, __ATOMIC_RELAXED);
+    if ((*open)->count == MS_HEAP_BATCH_BLOCKS || (*open)->bytes >= MS_HEAP_REMOTE_BATCH_BYTES) msHeapPostAloneLocked(open);
+    msHeapUnlock();
 }
 
-static void msHeapPushRemoteBig(msHeapHandle* owner, msHeapBig* chunk) {
-    msHeapBig* head = __atomic_load_n(&owner->sharedBig, __ATOMIC_RELAXED);
-    do {
-        chunk->next = head;
-    } while (!__atomic_compare_exchange_n(&owner->sharedBig, &head, chunk, 1,
-                                          __ATOMIC_RELEASE, __ATOMIC_RELAXED));
+#ifndef MS_HEAP_KEPT_FIRST_PAGES
+#define MS_HEAP_KEPT_FIRST_PAGES 1024
+#endif
+
+static void* msHeapKept[MS_HEAP_KEPT_FIRST_PAGES];
+static size_t msHeapKeptBytes[MS_HEAP_KEPT_FIRST_PAGES];
+static size_t msHeapKeptNext;
+
+/* A freed huge chunk keeps its first page, reading as zeros, so a second free of it finds no chunk
+ * header instead of whatever the OS maps there next; the oldest kept page goes once a later free
+ * would keep one more, since every kept page costs the process one mapping. */
+static void msHeapReleaseHuge(void* p, size_t bytes) {
+    msHeapKeepFirstPage(p, bytes);
+    msHeapLock();
+    size_t at = msHeapKeptNext++ % MS_HEAP_KEPT_FIRST_PAGES;
+    void* oldest = msHeapKept[at];
+    size_t oldestBytes = msHeapKeptBytes[at];
+    msHeapKept[at] = p;
+    msHeapKeptBytes[at] = bytes;
+    msHeapUnlock();
+    if (oldest) msHeapDropFirstPage(oldest, oldestBytes);
+}
+
+static msHeapBig* msHeapGetBig(msHeapRegion* a, size_t size);
+static void msHeapReleaseBig(msHeapRegion* a, msHeapBig* chunk);
+
+static msHeapBatch* msHeapNewBatch(msHeapHandle* here) {
+    return (msHeapBatch*)msHeapGetBig(MS_HEAP_REGION(here), MS_HEAP_PAGE_SIZE)->data;
+}
+
+/* Batches back from their owners stay for reuse up to one per open slot; the rest go back to the
+ * region they came from, whose return gives their pages to the OS like any unused big chunk. */
+static void msHeapDropBatches(msHeapHandle* here, size_t keep) {
+    msHeapBatch* kept = NULL;
+    for (msHeapBatch* batch; (batch = msHeapReuseBatch(&here->idle, &here->returned));) {
+        if (keep) {
+            --keep;
+            batch->next = kept;
+            kept = batch;
+        } else msHeapReleaseBig(MS_HEAP_REGION(here), (msHeapBig*)((unsigned char*)batch - offsetof(msHeapBig, data)));
+    }
+    here->idle = kept;
+}
+
+static __attribute__((noinline)) void msHeapSendFree(msHeapHandle* here, msHeapHandle* owner, void* p, size_t bytes) {
+    if (!here) {
+        msHeapSendAlone(owner, p, bytes);
+        return;
+    }
+    msHeapBatch** open = &here->open[msHeapOpenSlot(owner)];
+    if (*open && (*open)->owner != owner) msHeapPostBatch(here, open);
+    if (!*open) {
+        msHeapBatch* batch = msHeapReuseBatch(&here->idle, &here->returned);
+        *open = msHeapOpenBatch(batch ? batch : msHeapNewBatch(here), &here->returned, owner);
+    }
+    msHeapBatch* batch = *open;
+    batch->blocks[batch->count++] = p;
+    batch->bytes += bytes;
+    here->heldBytes += bytes;
+    if (batch->count == MS_HEAP_BATCH_BLOCKS) msHeapPostBatch(here, open);
+    if (here->heldBytes >= MS_HEAP_REMOTE_BATCH_BYTES) msHeapPostBatches(here);
 }
 
 #else
@@ -558,12 +662,12 @@ static void msHeapUpdateNext(msHeapRegion* a, msHeapBig* chunk) {
 
 static msHeapBig* msHeapSplit(msHeapRegion* a, msHeapBig* chunk, size_t size) {
     msHeapBig* rest = (msHeapBig*)((unsigned char*)chunk + size);
-    rest->base.size = chunk->base.size - size;
+    msHeapSetSize(&rest->base, chunk->base.size - size);
     rest->base.prevSize = size;
-    rest->base.owner = msHeapOwnerOf(a);
+    msHeapSetOwner(&rest->base, msHeapOwnerOf(a));
     rest->next = rest->prev = NULL;
     rest->zeroed = chunk->zeroed;
-    chunk->base.size = size;
+    msHeapSetSize(&chunk->base, size);
     msHeapInclude(a, (uintptr_t)rest);
     msHeapUpdateNext(a, rest);
     return rest;
@@ -657,8 +761,8 @@ static msHeapBig* msHeapRequest(msHeapRegion* a, size_t size) {
             a->blockChunkGrowth = 1;
         }
     }
-    chunk->base.size = size;
-    chunk->base.owner = msHeapOwnerOf(a);
+    msHeapSetSize(&chunk->base, size);
+    msHeapSetOwner(&chunk->base, msHeapOwnerOf(a));
     chunk->base.prevSize = 0;
     chunk->next = chunk->prev = NULL;
     chunk->zeroed = MS_HEAP_FRESH_PAGES_ZERO ? MS_HEAP_ZEROED : 0;
@@ -715,10 +819,14 @@ static msHeapBig* msHeapGetBig(msHeapRegion* a, size_t size) {
 static void msHeapReleaseBigSince(msHeapRegion* a, msHeapBig* chunk, int64_t since) {
     (void)since;
     chunk->base.prevSize &= ~(size_t)1;
-    chunk->zeroed = 0;
+    msHeapSetBigState(chunk, 0);
     if (chunk->base.size > MS_HEAP_MAX_BIG) {
         msHeapExclude(a, (uintptr_t)chunk);
+#if MS_HEAP_THREADS
+        msHeapReleaseHuge(chunk, chunk->base.size);
+#else
         msHeapDeallocPages(chunk, chunk->base.size);
+#endif
         return;
     }
     size_t prevSize = chunk->base.prevSize;
@@ -730,7 +838,7 @@ static void msHeapReleaseBigSince(msHeapRegion* a, msHeapBig* chunk, int64_t sin
                 left->base.size < MS_HEAP_MAX_BIG) {
                 msHeapRemoveBig(a, left);
                 since = msHeapJoinedSince(left, chunk->base.size, since);
-                left->base.size += chunk->base.size;
+                msHeapSetSize(&left->base, left->base.size + chunk->base.size);
                 msHeapExclude(a, (uintptr_t)chunk);
                 chunk = left;
                 chunk->zeroed = 0;
@@ -748,7 +856,7 @@ static void msHeapReleaseBigSince(msHeapRegion* a, msHeapBig* chunk, int64_t sin
         if (!(right->base.prevSize & 1) && !(right->zeroed & MS_HEAP_DISCARDED) && chunk->base.size < MS_HEAP_MAX_BIG) {
             msHeapRemoveBig(a, right);
             since = msHeapJoinedSince(right, chunk->base.size, since);
-            chunk->base.size += right->base.size;
+            msHeapSetSize(&chunk->base, chunk->base.size + right->base.size);
             msHeapExclude(a, address);
             if (chunk->base.size > MS_HEAP_MAX_BIG)
                 msHeapInsertUnused(a, msHeapSplit(a, chunk, MS_HEAP_MAX_BIG), since);
@@ -763,7 +871,7 @@ static void msHeapReleaseBig(msHeapRegion* a, msHeapBig* chunk) {
 }
 
 static __attribute__((noinline)) void msHeapDeallocBig(msHeapRegion* a, msHeapBig* chunk) {
-    if (!(chunk->base.prevSize & 1)) msHeapFreedTwice(chunk->data);
+    if (!(chunk->base.prevSize & 1) || msHeapBigState(chunk) != MS_HEAP_BIG_IN_USE) msHeapFreedTwice(chunk->data);
     a->occupied -= chunk->base.size;
     msHeapReleaseBig(a, chunk);
 }
@@ -804,17 +912,24 @@ static uintptr_t msHeapHomeMark(msHeapSmall* chunk) {
     return (uintptr_t)chunk ^ (uintptr_t)0x9e3779b97f4a7c15u;
 }
 
-static __attribute__((noinline, cold)) int msHeapIsHome(msHeapSmall* chunk, msHeapCell* cell) {
-    for (msHeapCell* home = chunk->freeList; home; home = home->next)
-        if (home == cell) return 1;
-    return 0;
+static size_t msHeapCellOffset(msHeapSmall* chunk, msHeapCell* cell) {
+    return (uintptr_t)cell - (uintptr_t)chunk->data;
 }
 
-static inline __attribute__((always_inline)) void msHeapPutHome(msHeapRegion* a, msHeapSmall* chunk, msHeapCell* cell, size_t size, size_t occupied) {
-    uintptr_t mark = msHeapHomeMark(chunk);
-    if (__builtin_expect(cell->run == mark, 0) && msHeapIsHome(chunk, cell)) msHeapFreedTwice(cell);
-    a->occupied -= occupied;
-    cell->run = mark;
+static inline uintptr_t msHeapSentMark(msHeapSmall* chunk) { return ~msHeapHomeMark(chunk); }
+
+/* A cell carrying its chunk's home mark is free if it lies past the cells the chunk handed out
+ * since it last opened (it was freed in the chunk's earlier life) or is on the chunk's free list;
+ * bytes of a live cell that happen to equal the mark pass both. */
+static __attribute__((noinline, cold)) void msHeapCheckFree(msHeapSmall* chunk, msHeapCell* cell) {
+    if (msHeapCellOffset(chunk, cell) >= chunk->acc) msHeapFreedTwice(cell);
+    for (msHeapCell* home = chunk->freeList; home; home = home->next)
+        if (home == cell) msHeapFreedTwice(cell);
+}
+
+static inline __attribute__((always_inline)) void msHeapLinkHome(msHeapRegion* a, msHeapSmall* chunk, msHeapCell* cell, size_t size) {
+    a->occupied -= size;
+    msHeapSetMark(cell, msHeapHomeMark(chunk));
     cell->next = chunk->freeList;
     chunk->freeList = cell;
     uint32_t before = chunk->free;
@@ -823,7 +938,65 @@ static inline __attribute__((always_inline)) void msHeapPutHome(msHeapRegion* a,
     else if (chunk->free == MS_HEAP_SMALL_ROOM && chunk != a->small[size / MS_HEAP_ALIGN]) msHeapShelveSmall(a, chunk);
 }
 
+/* The owner's own free. A cell another thread already sent passes here and goes home; its address
+ * then reaches the owner without the sent mark, and the receive refuses it. */
+static inline __attribute__((always_inline)) void msHeapPutHome(msHeapRegion* a, msHeapSmall* chunk, msHeapCell* cell, size_t size) {
+    if (__builtin_expect(msHeapMarkOf(cell) == msHeapHomeMark(chunk), 0)) msHeapCheckFree(chunk, cell);
+    msHeapLinkHome(a, chunk, cell, size);
+}
+
+#if MS_HEAP_THREADS
+/* Frees a block another thread sent: only one that still carries the claim its sender made. A
+ * second free whose first went home or whose block was handed out again finds no claim. */
+static void msHeapFreeOwned(msHeapRegion* a, void* p) {
+    msHeapChunk* base = msHeapPage(p);
+    if (base->size <= MS_HEAP_SMALL_ROOM) {
+        msHeapSmall* chunk = (msHeapSmall*)base;
+        if (!base->size || base->size % MS_HEAP_ALIGN || msHeapMarkOf(p) != msHeapSentMark(chunk) ||
+            msHeapCellOffset(chunk, p) >= chunk->acc)
+            msHeapFreedTwice(p);
+        msHeapLinkHome(a, chunk, p, base->size);
+    } else {
+        msHeapBig* chunk = (msHeapBig*)base;
+        if (msHeapBigState(chunk) != MS_HEAP_BIG_SENT) msHeapFreedTwice(chunk->data);
+        msHeapSetBigState(chunk, MS_HEAP_BIG_IN_USE);
+        msHeapDeallocBig(a, chunk);
+    }
+}
+
+/* Frees the blocks other threads sent, at most `most`; answers whether any are left. */
+static int msHeapReceive(msHeapRegion* a, size_t most) {
+    msHeapHandle* here = msHeapOwnerOf(a);
+    msHeapPostAlone();
+    for (;;) {
+        msHeapBatch* batch = a->received;
+        if (!batch) {
+            if (!(batch = a->received = msHeapTakeBatches(&here->inbox))) return 0;
+            a->receivedAt = 0;
+        }
+        while (a->receivedAt < batch->count) {
+            if (!most--) return 1;
+            msHeapFreeOwned(a, batch->blocks[a->receivedAt++]);
+        }
+        a->received = batch->next;
+        a->receivedAt = 0;
+        msHeapPushBatch(batch->home, batch);
+    }
+}
+
+static inline void msHeapReceiveBeforeBig(msHeapRegion* a) {
+    if (a->received || __atomic_load_n(&msHeapOwnerOf(a)->inbox, __ATOMIC_RELAXED) || __atomic_load_n(&msHeapAloneHeld, __ATOMIC_RELAXED))
+        msHeapReceive(a, MS_HEAP_BATCH_BLOCKS);
+}
+#else
+#define msHeapReceive(a, most) ((void)0)
+#define msHeapReceiveBeforeBig(a) ((void)0)
+#endif
+
 static __attribute__((noinline)) msHeapSmall* msHeapOpenSmall(msHeapRegion* a, size_t cellSize) {
+    size_t slot = cellSize / MS_HEAP_ALIGN;
+    msHeapReceive(a, MS_HEAP_BATCH_BLOCKS);
+    if (a->small[slot]) return a->small[slot];
     msHeapSmall** list = a->empties ? &a->empties : &a->agedEmpties;
     msHeapSmall* chunk = *list;
     uint16_t zeroed = 0;
@@ -833,7 +1006,7 @@ static __attribute__((noinline)) msHeapSmall* msHeapOpenSmall(msHeapRegion* a, s
         zeroed = (page->zeroed & MS_HEAP_ZEROED) != 0;
         chunk = (msHeapSmall*)page;
     }
-    chunk->base.size = cellSize;
+    msHeapSetSize(&chunk->base, cellSize);
     chunk->freeList = NULL;
     chunk->alignOffset = 0;
     chunk->acc = 0;
@@ -843,70 +1016,19 @@ static __attribute__((noinline)) msHeapSmall* msHeapOpenSmall(msHeapRegion* a, s
     return chunk;
 }
 
-#if MS_HEAP_THREADS
-static msHeapCell* msHeapFetchRemoteCells(msHeapRegion* a, size_t slot) {
-    msHeapCell** head = &msHeapOwnerOf(a)->sharedCells[slot];
-    if (!__atomic_load_n(head, __ATOMIC_RELAXED)) return NULL;
-    msHeapCell* cells = __atomic_exchange_n(head, NULL, __ATOMIC_ACQUIRE);
-    size_t count = 0;
-    for (msHeapCell* run = cells; run; run = msHeapRunTail(run)->next) count += msHeapRunLength(run);
-    a->occupied -= count * slot * MS_HEAP_ALIGN;
-    return cells;
-}
-
-static inline msHeapCell* msHeapTakeRemoteCell(msHeapRegion* a, size_t slot) {
-    msHeapCell* cell = a->remoteCells[slot];
-    if (!cell && !(cell = msHeapFetchRemoteCells(a, slot))) return NULL;
-    a->remoteCells[slot] = cell->next;
-    return cell;
-}
-
-static int msHeapRouteRemoteCells(msHeapRegion* a, size_t most) {
-    for (size_t slot = 1; slot < MS_HEAP_SMALL_CLASSES; ++slot) {
-        msHeapCell* cell;
-        while ((cell = msHeapTakeRemoteCell(a, slot))) {
-            if (!most--) {
-                a->remoteCells[slot] = cell;
-                return 1;
-            }
-            msHeapPutHome(a, (msHeapSmall*)msHeapPage(cell), cell, slot * MS_HEAP_ALIGN, 0);
-        }
-    }
-    return 0;
-}
-
-static void msHeapDrainRemoteBig(msHeapRegion* a) {
-    for (int step = 0; step <= MS_HEAP_MAX_REMOTE_BIG_STEPS; ++step) {
-        if (!a->pendingBig) {
-            msHeapBig** head = &msHeapOwnerOf(a)->sharedBig;
-            if (!__atomic_load_n(head, __ATOMIC_RELAXED)) return;
-            a->pendingBig = __atomic_exchange_n(head, NULL, __ATOMIC_ACQUIRE);
-        }
-        msHeapBig* chunk = a->pendingBig;
-        a->pendingBig = chunk->next;
-        chunk->next = NULL;
-        msHeapDeallocBig(a, chunk);
-    }
-}
-#else
-#define msHeapTakeRemoteCell(a, slot) NULL
-#define msHeapRouteRemoteCells(a, most) 0
-#define msHeapDrainRemoteBig(a) ((void)0)
-#endif
-
 static int msHeapReleaseSmalls(msHeapRegion* a, msHeapSmall** list, int64_t since, size_t most) {
     int released = *list != NULL;
     while (*list && most--) {
         msHeapSmall* chunk = *list;
         *list = chunk->next;
-        chunk->base.size = MS_HEAP_PAGE_SIZE;
+        msHeapSetSize(&chunk->base, MS_HEAP_PAGE_SIZE);
         msHeapReleaseBigSince(a, (msHeapBig*)chunk, since);
     }
     return released;
 }
 
 static int msHeapReleaseEmpty(msHeapRegion* a) {
-    msHeapRouteRemoteCells(a, SIZE_MAX);
+    msHeapReceive(a, SIZE_MAX);
     for (size_t slot = 1; slot < MS_HEAP_SMALL_CLASSES; ++slot) {
         msHeapSmall* head = a->small[slot];
         if (!head || head->free != MS_HEAP_SMALL_ROOM) continue;
@@ -936,7 +1058,7 @@ static void msHeapAgeEmpties(msHeapRegion* a, int64_t now) {
 }
 
 static int msHeapReleaseAged(msHeapRegion* a, int64_t now) {
-    int cellsLeft = msHeapRouteRemoteCells(a, MS_HEAP_TURN_CELLS);
+    int cellsLeft = msHeapReceive(a, MS_HEAP_TURN_CELLS);
     if (a->agedEmpties && now >= msHeapAgedDue(a)) msHeapReleaseSmalls(a, &a->agedEmpties, a->agedSince, MS_HEAP_TURN_PAGES);
     msHeapAgeEmpties(a, now);
     return cellsLeft;
@@ -950,15 +1072,7 @@ static inline __attribute__((always_inline)) void* msHeapTake(size_t size, int* 
         size_t slot = cellSize / MS_HEAP_ALIGN;
         msHeapSmall* chunk = a->small[slot];
         void* result;
-        if (!chunk) {
-            result = msHeapTakeRemoteCell(a, slot);
-            if (result) {
-                *zeroed = 0;
-                a->occupied += cellSize;
-                return result;
-            }
-            chunk = msHeapOpenSmall(a, cellSize);
-        }
+        if (!chunk) chunk = msHeapOpenSmall(a, cellSize);
         if (chunk->freeList) {
             result = chunk->freeList;
             chunk->freeList = chunk->freeList->next;
@@ -968,27 +1082,28 @@ static inline __attribute__((always_inline)) void* msHeapTake(size_t size, int* 
             *zeroed = chunk->bumpZeroed;
             chunk->acc += (uint32_t)cellSize;
         }
-        if (!*zeroed) ((msHeapCell*)result)->run = 0;
+        if (!*zeroed) msHeapSetMark(result, 0);
         chunk->free -= (uint32_t)cellSize;
         if (chunk->free < cellSize) msHeapRemoveSmall(a, chunk);
         a->occupied += cellSize;
         return result;
     }
-    msHeapDrainRemoteBig(a);
+    msHeapReceiveBeforeBig(a);
     if (size > SIZE_MAX - sizeof(msHeapBig)) msHeapOutOfMemory();
     size_t bytes = msHeapRound(size + sizeof(msHeapBig), MS_HEAP_PAGE_SIZE);
     msHeapBig* chunk;
     if (bytes > MS_HEAP_MAX_BIG) {
         chunk = msHeapAllocPages(bytes);
-        chunk->base.size = bytes;
+        msHeapSetSize(&chunk->base, bytes);
         chunk->base.prevSize = 1;
-        chunk->base.owner = msHeapOwnerOf(a);
+        msHeapSetOwner(&chunk->base, msHeapOwnerOf(a));
         chunk->next = chunk->prev = NULL;
         chunk->zeroed = MS_HEAP_FRESH_PAGES_ZERO ? MS_HEAP_ZEROED : 0;
         msHeapInclude(a, (uintptr_t)chunk);
     } else chunk = msHeapGetBig(a, bytes);
     a->occupied += chunk->base.size;
     *zeroed = (chunk->zeroed & MS_HEAP_ZEROED) != 0;
+    msHeapSetBigState(chunk, MS_HEAP_BIG_IN_USE);
     size_t slots = (chunk->base.size - offsetof(msHeapBig, data) - size) / MS_HEAP_SPREAD_STEP + 1;
     if (slots > MS_HEAP_SPREAD_SLOTS) slots = MS_HEAP_SPREAD_SLOTS;
     return chunk->data + (size_t)(a->spreadSeq++ * MS_HEAP_SPREAD_STRIDE % slots) * MS_HEAP_SPREAD_STEP;
@@ -1014,29 +1129,34 @@ void* msHeapCalloc(size_t count, size_t size) {
 void msHeapFree(void* p) {
     if (!p) return;
     msHeapChunk* base = msHeapPage(p);
-    msHeapHandle* owner = base->owner;
+    msHeapHandle* owner = __atomic_load_n(&base->owner, __ATOMIC_RELAXED);
+    size_t size = msHeapSizeOf(base);
 #if MS_HEAP_THREADS
     msHeapHandle* here = msHeapCurrent;
 #else
     msHeapHandle* here = &msHeapOnly;
     (void)owner;
 #endif
-    if (base->size <= MS_HEAP_SMALL_ROOM) {
-        size_t size = base->size;
+    if (size <= MS_HEAP_SMALL_ROOM) {
         if (!size || size % MS_HEAP_ALIGN) msHeapFreedTwice(p);
 #if MS_HEAP_THREADS
         if (owner != here) {
-            if (here) msHeapAddToRun(here, owner, size / MS_HEAP_ALIGN, size, p);
-            else msHeapPushRemoteRun(owner, size / MS_HEAP_ALIGN, p, p, 1);
+            uintptr_t home = msHeapHomeMark((msHeapSmall*)base), seen = msHeapMarkOf(p);
+            if (seen == home || seen == ~home ||
+                !__atomic_compare_exchange_n(&((msHeapCell*)p)->mark, &seen, ~home, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+                msHeapFreedTwice(p);
+            msHeapSendFree(here, owner, p, size);
             return;
         }
 #endif
-        msHeapRegion* a = MS_HEAP_REGION(here);
-        msHeapPutHome(a, (msHeapSmall*)base, p, size, size);
+        msHeapPutHome(MS_HEAP_REGION(here), (msHeapSmall*)base, p, size);
     } else {
 #if MS_HEAP_THREADS
         if (owner != here) {
-            msHeapPushRemoteBig(owner, (msHeapBig*)base);
+            size_t inUse = MS_HEAP_BIG_IN_USE;
+            if (!__atomic_compare_exchange_n(&((msHeapBig*)base)->zeroed, &inUse, MS_HEAP_BIG_SENT, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+                msHeapFreedTwice(p);
+            msHeapSendFree(here, owner, p, size);
             return;
         }
 #endif
@@ -1098,7 +1218,7 @@ static void msHeapJoinDiscarded(msHeapRegion* a) {
                 msHeapRemoveBig(a, right);
                 msHeapRemoveBig(a, chunk);
                 msHeapExclude(a, address);
-                chunk->base.size += right->base.size;
+                msHeapSetSize(&chunk->base, chunk->base.size + right->base.size);
                 msHeapUpdateNext(a, chunk);
                 msHeapInsertBig(a, chunk);
                 chunk = a->matrix[fl][sl];
@@ -1108,9 +1228,8 @@ static void msHeapJoinDiscarded(msHeapRegion* a) {
 }
 
 static void msHeapReturn(msHeapRegion* a, int64_t now) {
-    msHeapHandle* here = msHeapOwnerOf(a);
-    msHeapCloseRuns(here);
-    while (a->pendingBig || __atomic_load_n(&here->sharedBig, __ATOMIC_RELAXED)) msHeapDrainRemoteBig(a);
+    msHeapPostBatches(msHeapOwnerOf(a));
+    msHeapDropBatches(msHeapOwnerOf(a), now == INT64_MAX ? 0 : MS_HEAP_OPEN_BATCHES);
     int cellsLeft = 0;
     size_t pagesLeft = MS_HEAP_TURN_PAGES;
     if (now == INT64_MAX) {
@@ -1156,16 +1275,17 @@ int msHeapIdleWaitMs(int waitMs) {
 
 static size_t msHeapUsable(void* p) {
     msHeapChunk* base = msHeapPage(p);
-    if (base->size <= MS_HEAP_SMALL_ROOM) return base->size;
-    return (uintptr_t)base + base->size - (uintptr_t)p;
+    size_t size = msHeapSizeOf(base);
+    if (size <= MS_HEAP_SMALL_ROOM) return size;
+    return (uintptr_t)base + size - (uintptr_t)p;
 }
 
 static int msHeapGrowInPlace(void* p, size_t newSize, size_t* zeroFrom) {
     msHeapChunk* base = msHeapPage(p);
-    if (base->size <= MS_HEAP_SMALL_ROOM || base->size > MS_HEAP_MAX_BIG) return 0;
 #if MS_HEAP_THREADS
-    if (base->owner != msHeapCurrent) return 0;
+    if (__atomic_load_n(&base->owner, __ATOMIC_RELAXED) != msHeapCurrent) return 0;
 #endif
+    if (base->size <= MS_HEAP_SMALL_ROOM || base->size > MS_HEAP_MAX_BIG) return 0;
     size_t lead = (uintptr_t)p - (uintptr_t)base;
     if (newSize > MS_HEAP_MAX_BIG - lead) return 0;
     size_t bytes = msHeapRound(newSize + lead, MS_HEAP_PAGE_SIZE);
@@ -1180,7 +1300,7 @@ static int msHeapGrowInPlace(void* p, size_t newSize, size_t* zeroFrom) {
     msHeapRearm(a, right, bytes - oldBytes);
     size_t rightZeroed = right->zeroed & MS_HEAP_ZEROED;
     msHeapExclude(a, address);
-    chunk->base.size = oldBytes + right->base.size;
+    msHeapSetSize(&chunk->base, oldBytes + right->base.size);
     if (chunk->base.size >= bytes + MS_HEAP_PAGE_SIZE) {
         msHeapBig* rest = msHeapSplit(a, chunk, bytes);
         rest->zeroed = rightZeroed;
