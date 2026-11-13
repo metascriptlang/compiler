@@ -1061,11 +1061,21 @@ function trav(w: WriteEffects, p: Partitions, node: Node | null): void {
 			const leavesGraph = callLeavesGraphAlone(w, p, node, keptRoots);
 			if (leavesGraph) keepAliveToCall(p, keptRoots);
 
+			const formals = callFormals(node);
 			// Method call (obj.method(...)) → obj is potentially mutated
 			if (!leavesGraph && d.callee != null && d.callee.kind == NodeKind.MemberExpr && !callsFieldValue(d.callee)) {
-				const objRoots: Symbol[] = [];
-				allRoots(p, (d.callee.data as MemberExprData).object, objRoots);
-				for (const r of objRoots) { potentialMutation(p, r); }
+				const obj = (d.callee.data as MemberExprData).object;
+				const receiverIsFirstArgument = node.flags.has(NodeFlag.ExtCall) && !node.flags.has(NodeFlag.ExtStatic);
+				if (receiverIsFirstArgument) {
+					if (formals != null && formals.length > 0 && formals[0].kind == TypeKind.Var) {
+						throw new Error(`internal: '.${(d.callee.data as MemberExprData).property}' takes its receiver by var but reached cursor inference as a member call, where no address marks the receiver written`);
+					}
+					if (!readOnlyFormal(formals, 0) && !sinkFormal(formals, 0) && !isViewArg(obj)) potentialMutationViaArg(p, obj);
+				} else {
+					const objRoots: Symbol[] = [];
+					allRoots(p, obj, objRoots);
+					for (const r of objRoots) { potentialMutation(p, r); }
+				}
 			}
 
 			// HiddenAddr arguments → callee receives mutable pointer (var param)
@@ -1083,7 +1093,6 @@ function trav(w: WriteEffects, p: Partitions, node: Node | null): void {
 					}
 				}
 			}
-			const formals = callFormals(node);
 			const receiverFormals = node.flags.has(NodeFlag.ExtCall) ? 1 : 0;
 			for (let ai = 0; ai < d.arguments.length; ai += 1) {
 				const fi = ai + receiverFormals;
@@ -1611,6 +1620,11 @@ test "passing the borrow through an overload whose implementation takes Readonly
 test "passing the owner through an overload whose implementation mutates it ends the cursor" {
 	const body = inferredNamed(BOXES + "function grab(h: Holder): void;\nfunction grab(h: Holder): void { replaceChild(h); }\nfunction f(h: Holder): void { const c = h.child; grab(h); show(c.v); }", "f");
 	assert !isCursorNamed(body, "c");
+}
+
+test "a string method called on the borrow keeps it a cursor" {
+	const body = inferredNamed("function f(names: string[], text: string): int32 { let i = 0; let n = 0; while (i < names.length) { const s = names[i]; i = i + 1; if (s.charCodeAt(0) == text.charCodeAt(0)) n = n + 1; } return n; }", "f");
+	assert isCursorNamed(body, "s");
 }
 
 test "pushing the borrow into the array it came from ends the cursor" {
