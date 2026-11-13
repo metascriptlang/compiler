@@ -3940,8 +3940,9 @@ count pair: on the scene-graph benchmark of `udrcp/step6bench` (200 000 leaf-to-
 round), +8.0% instructions and +3.5% time against an unchecked read (rtx, 2026-11-09). Design the teardown order of
 a structure so that a back edge is not read after its target goes.
 
-A local keeps its object while an edge to it can still be read. A local or parameter of a class or interface type,
-or one that is an array, that is handed over at its last use (stored into a holder, passed to a `sink` parameter or
+A local keeps its object while an edge to it can still be read. A local or parameter that refers to an object (an
+instance of a class, generic or not, or a record typed by an interface, a `type` alias or its literal alone), or one
+that is an array, that is handed over at its last use (stored into a holder, passed to a `sink` parameter or
 to a constructor that takes it) moves into that receiver only when nothing that runs later in the local's scope can
 read an `Unowned` edge reaching the object, an element of the array, or an object they own. When something can (a read of such an edge, a call that may run one, where an
 unknown callee or a function value counts, or a destroy hook that does), the hand-over is a copy and the local holds
@@ -3973,11 +3974,16 @@ parameter only read, a constructor's object that dies, the read in a callee, a n
 an array of objects that own the target, a `sink` array parameter) prints on C, danger, JS, ESM, the Raiser and
 under SAN and stops on the control's C, danger, Raiser and SAN. The kept copy is one count pair on the array and
 copies no element: emitting the compiler's own C runs 0.005% more `rc.inc` (1,395,208,410 to 1,395,281,989, and
-1,395,233,904 to 1,395,307,510 in the runs that allocate 12,000 more), allocations within 300 of 405 million. A
-`Map` or a `Set` local handed over the same way printed on the control too (C and the Raiser; why was not traced).
+1,395,233,904 to 1,395,307,510 in the runs that allocate 12,000 more), allocations within 300 of 405 million. An
+instance of a generic class and a record typed by a `type` alias or by its literal were first missed, because the
+rule asked for the symbol of a class or an interface: corpus `objectLocalKeepsItsObjectWhateverDeclaresItsType` (a
+generic class with one and with two parameters, a subclass of one, a record typed by an alias, a generic alias, a
+generic interface, its literal) stops on that control's C, danger, Raiser and SAN and prints on the candidate's C,
+danger, JS, ESM, Raiser and SAN, with `rc.inc` of the compiler's own emit within 2,000 of 1,398 million. A `Map` or
+a `Set` local handed over the same way printed before either change and is clean under SAN (why was not traced).
 Not reached: a tuple local holding the object
-(`const t: [P, int32] = [new P("a"), 1]`, handed to a holder that dies) still stops on C and the Raiser; an edge
-read after every binding and owner is gone is the stop of the table above; a destroy hook of the object's own class is not a
+(`const t: [P, int32] = [new P("a"), 1]`, handed to a holder that dies) and an object held only by a closure local
+that is handed over (`const f = () => p.name`) still stop on C and the Raiser; an edge read after every binding and owner is gone is the stop of the table above; a destroy hook of the object's own class is not a
 reader, so with no edge read left in the scope the object still dies at its last receiver. A watch or HCR session
 and the Raiser do not see the whole program and keep the local wherever a call they cannot read follows. Not
 measured: wall time and instructions (the host was loaded and has no counters), threads.
