@@ -1131,6 +1131,26 @@ void* msHeapCalloc(size_t count, size_t size) {
     return p;
 }
 
+#if MS_HEAP_THREADS
+/* A free of a block whose chunk another thread owns claims the block before it sends the address:
+ * a small cell's second word goes to its chunk's sent mark, a big chunk's state word from in use to
+ * sent. A block already freed or sent is refused here, on the freeing thread. */
+static __attribute__((noinline)) void msHeapFreeRemote(msHeapHandle* here, msHeapHandle* owner, void* p, size_t size) {
+    msHeapChunk* base = msHeapPage(p);
+    if (size <= MS_HEAP_SMALL_ROOM) {
+        uintptr_t home = msHeapHomeMark((msHeapSmall*)base), seen = msHeapMarkOf(p);
+        if (seen == home || seen == ~home ||
+            !__atomic_compare_exchange_n(&((msHeapCell*)p)->mark, &seen, ~home, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+            msHeapFreedTwice(p);
+    } else {
+        size_t inUse = MS_HEAP_BIG_IN_USE;
+        if (!__atomic_compare_exchange_n(&((msHeapBig*)base)->zeroed, &inUse, MS_HEAP_BIG_SENT, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+            msHeapFreedTwice(p);
+    }
+    msHeapSendFree(here, owner, p, size);
+}
+#endif
+
 void msHeapFree(void* p) {
     if (!p) return;
     msHeapChunk* base = msHeapPage(p);
@@ -1146,11 +1166,7 @@ void msHeapFree(void* p) {
         if (!size || size % MS_HEAP_ALIGN) msHeapFreedTwice(p);
 #if MS_HEAP_THREADS
         if (owner != here) {
-            uintptr_t home = msHeapHomeMark((msHeapSmall*)base), seen = msHeapMarkOf(p);
-            if (seen == home || seen == ~home ||
-                !__atomic_compare_exchange_n(&((msHeapCell*)p)->mark, &seen, ~home, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
-                msHeapFreedTwice(p);
-            msHeapSendFree(here, owner, p, size);
+            msHeapFreeRemote(here, owner, p, size);
             return;
         }
 #endif
@@ -1158,10 +1174,7 @@ void msHeapFree(void* p) {
     } else {
 #if MS_HEAP_THREADS
         if (owner != here) {
-            size_t inUse = MS_HEAP_BIG_IN_USE;
-            if (!__atomic_compare_exchange_n(&((msHeapBig*)base)->zeroed, &inUse, MS_HEAP_BIG_SENT, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
-                msHeapFreedTwice(p);
-            msHeapSendFree(here, owner, p, size);
+            msHeapFreeRemote(here, owner, p, size);
             return;
         }
 #endif
