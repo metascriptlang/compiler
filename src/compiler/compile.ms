@@ -2029,7 +2029,7 @@ function placeWasmModules(
 	opts: CliOptions,
 	wrapperCalledIn: (file: string, wrapper: string) => void = (file: string, wrapper: string): void => {},
 ): JsBindings {
-	const errors = placedModuleErrors(placed.paths, entryPath, dynamicPlan.lazy);
+	const errors = placedModuleErrors(placed.paths, dynamicPlan.lazy);
 	const exportsOf = (path: string): ExportedSymInfo[] => {
 		const found = findModuleExports(graphRegistry, path);
 		return found == null ? [] : found.symbols;

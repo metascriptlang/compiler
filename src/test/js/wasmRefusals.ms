@@ -65,17 +65,11 @@ test "a string parameter and a string result cross without a manifest error" {
 	assert m.functions.length == 3;
 }
 
-test "the entry module and a lazily imported module cannot be placed" {
+test "a lazily imported module cannot be placed, the entry module can" {
 	const lazy = new HashSet<string>();
-	assert placedModuleErrors(["/p/calc.ms"], "/p/app.ms", lazy).length == 0;
-	const entry = placedModuleErrors(["/p/app.ms"], "/p/app.ms", lazy);
-	assert entry.length == 1;
-	assert entry[0].message.includes("'/p/app.ms' is the entry module");
-	assert entry[0].code == "entry-module" &&
-		entry[0].file == "/p/app.ms" &&
-		entry[0].line == 0;
+	assert placedModuleErrors(["/p/calc.ms", "/p/app.ms"], lazy).length == 0;
 	lazy.add("/p/calc.ms");
-	const lazyErrors = placedModuleErrors(["/p/calc.ms"], "/p/app.ms", lazy);
+	const lazyErrors = placedModuleErrors(["/p/calc.ms"], lazy);
 	assert lazyErrors.length == 1;
 	assert lazyErrors[0].message.includes(
 		"'/p/calc.ms' has @wasm functions but is loaded lazily",
