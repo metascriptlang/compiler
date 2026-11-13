@@ -153,6 +153,8 @@ enum {
     MS_HEAP_WORD_BITS = sizeof(uintptr_t) * 8,
     MS_HEAP_SMALL_CLASSES = MS_HEAP_PAGE_SIZE / MS_HEAP_ALIGN,
     MS_HEAP_REMOTE_BATCH_BYTES = 16384,
+    MS_HEAP_BATCH_CELL = 512,
+    MS_HEAP_RECEIVE_BLOCKS = 512,
     MS_HEAP_OPEN_BATCHES = 8,
     MS_HEAP_DISCARD_MIN_BYTES = 65536,
     MS_HEAP_RETURN_AFTER_MS = 10000,
@@ -284,7 +286,10 @@ struct msHeapBatch {
     void* blocks[];
 };
 
-#define MS_HEAP_BATCH_BLOCKS ((MS_HEAP_PAGE_SIZE - offsetof(msHeapBig, data) - sizeof(msHeapBatch)) / sizeof(void*))
+/* A batch is one small cell of its sender's region, as Scudo's batches are blocks of a size class
+ * of their own (SC1): a thread freeing for many owners in turn posts many part-filled batches, and a
+ * page each would cost the process a page per few addresses. */
+#define MS_HEAP_BATCH_BLOCKS ((MS_HEAP_BATCH_CELL - sizeof(msHeapBatch)) / sizeof(void*))
 _Static_assert(MS_HEAP_OPEN_BATCHES == 8, "msHeapSendFree hashes an owner into 3 bits");
 
 struct msHeapHandle {
@@ -491,15 +496,15 @@ static void msHeapReleaseHuge(void* p, size_t bytes) {
     if (oldest) msHeapDropFirstPage(oldest, oldestBytes);
 }
 
-static msHeapBig* msHeapGetBig(msHeapRegion* a, size_t size);
-static void msHeapReleaseBig(msHeapRegion* a, msHeapBig* chunk);
+static void* msHeapTakeTracked(size_t size, int* zeroed);
 
-static msHeapBatch* msHeapNewBatch(msHeapHandle* here) {
-    return (msHeapBatch*)msHeapGetBig(MS_HEAP_REGION(here), MS_HEAP_PAGE_SIZE)->data;
+static msHeapBatch* msHeapNewBatch(void) {
+    int zeroed;
+    return msHeapTakeTracked(MS_HEAP_BATCH_CELL, &zeroed);
 }
 
-/* Batches back from their owners stay for reuse up to one per open slot; the rest go back to the
- * region they came from, whose return gives their pages to the OS like any unused big chunk. */
+/* Batches back from their owners stay for reuse up to one per open slot; the rest are freed into
+ * the region they came from. */
 static void msHeapDropBatches(msHeapHandle* here, size_t keep) {
     msHeapBatch* kept = NULL;
     for (msHeapBatch* batch; (batch = msHeapReuseBatch(&here->idle, &here->returned));) {
@@ -507,7 +512,7 @@ static void msHeapDropBatches(msHeapHandle* here, size_t keep) {
             --keep;
             batch->next = kept;
             kept = batch;
-        } else msHeapReleaseBig(MS_HEAP_REGION(here), (msHeapBig*)((unsigned char*)batch - offsetof(msHeapBig, data)));
+        } else msHeapFree(batch);
     }
     here->idle = kept;
 }
@@ -521,7 +526,7 @@ static __attribute__((noinline)) void msHeapSendFree(msHeapHandle* here, msHeapH
     if (*open && (*open)->owner != owner) msHeapPostBatch(here, open);
     if (!*open) {
         msHeapBatch* batch = msHeapReuseBatch(&here->idle, &here->returned);
-        *open = msHeapOpenBatch(batch ? batch : msHeapNewBatch(here), &here->returned, owner);
+        *open = msHeapOpenBatch(batch ? batch : msHeapNewBatch(), &here->returned, owner);
     }
     msHeapBatch* batch = *open;
     batch->blocks[batch->count++] = p;
@@ -986,7 +991,7 @@ static int msHeapReceive(msHeapRegion* a, size_t most) {
 
 static inline void msHeapReceiveBeforeBig(msHeapRegion* a) {
     if (a->received || __atomic_load_n(&msHeapOwnerOf(a)->inbox, __ATOMIC_RELAXED) || __atomic_load_n(&msHeapAloneHeld, __ATOMIC_RELAXED))
-        msHeapReceive(a, MS_HEAP_BATCH_BLOCKS);
+        msHeapReceive(a, MS_HEAP_RECEIVE_BLOCKS);
 }
 #else
 #define msHeapReceive(a, most) ((void)0)
@@ -995,7 +1000,7 @@ static inline void msHeapReceiveBeforeBig(msHeapRegion* a) {
 
 static __attribute__((noinline)) msHeapSmall* msHeapOpenSmall(msHeapRegion* a, size_t cellSize) {
     size_t slot = cellSize / MS_HEAP_ALIGN;
-    msHeapReceive(a, MS_HEAP_BATCH_BLOCKS);
+    msHeapReceive(a, MS_HEAP_RECEIVE_BLOCKS);
     if (a->small[slot]) return a->small[slot];
     msHeapSmall** list = a->empties ? &a->empties : &a->agedEmpties;
     msHeapSmall* chunk = *list;
