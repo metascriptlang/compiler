@@ -86,15 +86,20 @@ export function reverse<T>(this arr: T[]): Borrow<T[]> {
 }
 
 function reverseInPlace<T>(this arr: T[]): void {
+	const n = arr.length as int64;
+	if (n < 2) return;
+	const scratch = n;
+	arr.push(arr[0]);
 	let lo: int64 = 0;
-	let hi = (arr.length as int64) - 1;
+	let hi = n - 1;
 	while (lo < hi) {
-		const tmp = arr[lo];
+		arr[scratch] = arr[lo];
 		arr[lo] = arr[hi];
-		arr[hi] = tmp;
+		arr[hi] = arr[scratch];
 		lo = lo + 1;
 		hi = hi - 1;
 	}
+	arr.setLength(n as number);
 }
 
 function mergeRuns<T>(a: T[], b: T[], lo: int64, m: int64, hi: int64, cmp: (a: T, b: T) => number): void {
