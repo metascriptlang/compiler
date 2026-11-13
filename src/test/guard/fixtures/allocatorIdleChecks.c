@@ -176,6 +176,7 @@ static int adjacentPair(size_t leftSize, size_t rightSize, unsigned char** left,
     l->base.prevSize |= 1;
     r->base.prevSize |= 1;
     behind->base.prevSize |= 1;
+    l->zeroed = r->zeroed = behind->zeroed = MS_HEAP_BIG_IN_USE;
     memset(l->data, 0, leftSize);
     memset(r->data, 0, rightSize);
     *left = l->data;
@@ -276,7 +277,7 @@ static void remoteFreesRaceIdleReturns(void) {
     }
     probeJoin(t);
     msHeapReturnIdle();
-    CHECK(MS_HEAP_REGION(msHeapCurrent)->pendingBig == NULL && __atomic_load_n(&msHeapCurrent->sharedBig, __ATOMIC_ACQUIRE) == NULL);
+    CHECK(MS_HEAP_REGION(msHeapCurrent)->received == NULL && __atomic_load_n(&msHeapCurrent->inbox, __ATOMIC_ACQUIRE) == NULL);
     checkZeroWritable(msHeapCalloc(1, 2 * MIB), 2 * MIB);
 }
 
@@ -395,6 +396,7 @@ static msHeapBig* takeFront(msHeapBig* chunk, size_t size) {
     msHeapRemoveBig(a, chunk);
     msHeapInsertUnused(a, msHeapSplit(a, chunk, size), *msHeapUnusedSince(chunk));
     chunk->base.prevSize |= 1;
+    chunk->zeroed = MS_HEAP_BIG_IN_USE;
     return chunk;
 }
 
@@ -533,7 +535,7 @@ static void emptiedSmallChunksGoBack(void) {
 static void* awayCell;
 static int awayStep;
 static void awaitStep(int step) { while (__atomic_load_n(&awayStep, __ATOMIC_ACQUIRE) != step) {} }
-static void holdInRun(void* arg) {
+static void holdInBatch(void* arg) {
     (void)arg;
     msHeapFree(msHeapAlloc(16));
     msHeapFree(awayCell);
@@ -545,8 +547,8 @@ static void holdInRun(void* arg) {
     msHeapThreadRelease();
 }
 
-static void chunkWaitsForACellInAnotherThreadsRun(void) {
-    phase = "a small chunk whose last cell sits in another thread's run stays, and joins the big chunks once the cell is home";
+static void chunkWaitsForACellInAnotherThreadsBatch(void) {
+    phase = "a small chunk whose last cell sits in another thread's open batch stays, and joins the big chunks once the cell is home";
     enum { CELL = 2016 };
     unsigned char* kept = msHeapAlloc(CELL);
     unsigned char* mate = msHeapAlloc(CELL);
@@ -555,7 +557,7 @@ static void chunkWaitsForACellInAnotherThreadsRun(void) {
     CHECK((msHeapSmall*)msHeapPage(mate) == home && (msHeapSmall*)msHeapPage(other) != home);
     awayCell = kept;
     __atomic_store_n(&awayStep, 0, __ATOMIC_RELEASE);
-    probeThread t = probeSpawn(holdInRun, NULL);
+    probeThread t = probeSpawn(holdInBatch, NULL);
     awaitStep(1);
     msHeapFree(mate);
     msHeapReturnIdle();
@@ -570,27 +572,44 @@ static void chunkWaitsForACellInAnotherThreadsRun(void) {
     msHeapFree(other);
 }
 
-static void* awayPair[2];
-static void freeAwayPair(void* arg) {
+/* M10: the owner receives at most a batch's worth of blocks at a class's slow path. A chunk with a
+ * cell still waiting in the owner's inbox is not empty, and the next return receives the rest and
+ * releases the chunk. */
+enum { WAIT_PER_PAGE = MS_HEAP_SMALL_ROOM / 16, WAIT_CELLS = 3 * WAIT_PER_PAGE };
+_Static_assert(WAIT_CELLS > MS_HEAP_BATCH_BLOCKS && WAIT_CELLS < 2 * MS_HEAP_BATCH_BLOCKS &&
+               MS_HEAP_REMOTE_BATCH_BYTES / 16 > MS_HEAP_BATCH_BLOCKS,
+               "the waiting-cell phase needs one full batch and a second one");
+static void* waitCells[WAIT_CELLS];
+static void freeWaitCells(void* arg) {
     (void)arg;
-    msHeapFree(awayPair[0]);
-    msHeapFree(awayPair[1]);
+    msHeapFree(msHeapAlloc(16));
+    for (int i = 0; i < WAIT_CELLS; ++i) msHeapFree(waitCells[i]);
+    msHeapThreadRelease();
 }
 
-static void chunkWaitsForACellInItsOwnersCache(void) {
-    phase = "a small chunk with a cell in its owner's remote cache stays until a return routes the cell home";
-    enum { CELL = 2000, SLOT = CELL / MS_HEAP_ALIGN };
-    awayPair[0] = msHeapAlloc(CELL);
-    awayPair[1] = msHeapAlloc(CELL);
-    msHeapSmall* home = (msHeapSmall*)msHeapPage(awayPair[0]);
-    CHECK((msHeapSmall*)msHeapPage(awayPair[1]) == home && region()->small[SLOT] == NULL);
-    probeJoin(probeSpawn(freeAwayPair, NULL));
-    unsigned char* again = msHeapAlloc(CELL);
-    CHECK(again == awayPair[1] && region()->remoteCells[SLOT] == (msHeapCell*)awayPair[0] && home->free == MS_HEAP_SMALL_ROOM - 2 * CELL);
-    msHeapFree(again);
-    CHECK(home->free == MS_HEAP_SMALL_ROOM - CELL && region()->small[SLOT] == home);
+static void chunkWaitsForACellItsOwnerHasNotReceived(void) {
+    phase = "a small chunk with a cell its owner has not received yet stays until a return receives it";
     msHeapReturnIdle();
-    CHECK(region()->remoteCells[SLOT] == NULL && !(chunkHolding(awayPair[0])->base.prevSize & 1));
+    for (int i = 0; i < WAIT_CELLS; ++i) waitCells[i] = msHeapAlloc(16);
+    void* extra[WAIT_PER_PAGE];
+    int extras = 0;
+    while (region()->small[1]) {
+        CHECK(extras < WAIT_PER_PAGE);
+        extra[extras++] = msHeapAlloc(16);
+    }
+    probeJoin(probeSpawn(freeWaitCells, NULL));
+    unsigned char* again = msHeapAlloc(16);
+    msHeapBatch* left = region()->received;
+    CHECK(left && region()->receivedAt + (WAIT_CELLS - MS_HEAP_BATCH_BLOCKS) == left->count);
+    void* waiting = left->blocks[region()->receivedAt];
+    msHeapSmall* home = (msHeapSmall*)msHeapPage(waiting);
+    CHECK(isSmallChunkOf(waiting, 16) && home->free < MS_HEAP_SMALL_ROOM);
+    for (msHeapCell* cell = home->freeList; cell; cell = cell->next) CHECK(cell != waiting);
+    msHeapFree(again);
+    for (int i = 0; i < extras; ++i) msHeapFree(extra[i]);
+    msHeapReturnIdle();
+    CHECK(region()->received == NULL && __atomic_load_n(&msHeapCurrent->inbox, __ATOMIC_ACQUIRE) == NULL);
+    CHECK(!(chunkHolding(waiting)->base.prevSize & 1));
 }
 
 enum { TURN_CHUNKS = MS_HEAP_TURN_PAGES + 64 };
@@ -704,20 +723,25 @@ static void freeAwayCells(void* arg) {
     for (int i = 0; i < AWAY_CELLS; ++i) msHeapFree(awayCells[i]);
 }
 
+static size_t blocksNotFreed(void) {
+    msHeapBatch* batch = region()->received;
+    size_t left = batch ? batch->count - region()->receivedAt : 0;
+    if (batch) for (batch = batch->next; batch; batch = batch->next) left += batch->count;
+    return left;
+}
+
 static void remoteCellsGoHomeATurnsShareAtATime(void) {
-    phase = "a timed return routes home one turn's share of remote cells and the next turn takes the rest";
+    phase = "a timed return frees one turn's share of blocks other threads sent and the next turn the rest";
     msHeapReturnIdle();
     for (int i = 0; i < AWAY_CELLS; ++i) awayCells[i] = msHeapAlloc(MS_HEAP_ALIGN);
     probeJoin(probeSpawn(freeAwayCells, NULL));
-    CHECK(region()->remoteCells[1] == NULL);
+    CHECK(region()->received == NULL);
     msHeapReturn(region(), probeNowMs);
-    int cached = 0;
-    for (msHeapCell* cell = region()->remoteCells[1]; cell; cell = cell->next) ++cached;
-    CHECK(cached == AWAY_CELLS - MS_HEAP_TURN_CELLS);
+    CHECK(blocksNotFreed() == AWAY_CELLS - MS_HEAP_TURN_CELLS);
     CHECK(msHeapIdleWaitMs(-1) == 1);
     probeNowMs += 1;
     msHeapReturnUnused();
-    CHECK(region()->remoteCells[1] == NULL);
+    CHECK(region()->received == NULL);
     msHeapReturnIdle();
     CHECK(region()->returnDue == 0);
 }
@@ -755,9 +779,9 @@ int32_t msAllocatorIdleChecks(void) {
     freeChunksReadable();
     emptiedSmallChunksGoBack();
     freeChunksReadable();
-    chunkWaitsForACellInAnotherThreadsRun();
+    chunkWaitsForACellInAnotherThreadsBatch();
     freeChunksReadable();
-    chunkWaitsForACellInItsOwnersCache();
+    chunkWaitsForACellItsOwnerHasNotReceived();
     freeChunksReadable();
     agedChunksLeaveATurnsShareAtATime();
     freeChunksReadable();

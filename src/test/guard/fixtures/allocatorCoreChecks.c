@@ -343,13 +343,33 @@ int32_t msAllocatorCoreChecks(void) {
 	CHECK(again == twice[1]);
 
 	phase = "a live cell whose bytes hold the home mark is freed once, then refused";
-	((msHeapCell*)again)->run = msHeapHomeMark(cellsHome);
+	((msHeapCell*)again)->mark = msHeapHomeMark(cellsHome);
 	msHeapFree(again);
 	CHECK(cellsHome->free == 2 * CELL);
 	freeIsRefused(again);
 	checkBytes(twice[2], CELL, 0x4c);
 	msHeapFree(twice[2]);
 	msHeapFree(twice[3]);
+
+	phase = "a free of a cell its reopened chunk has not handed out again is refused";
+	enum { THIRD = 1344 };
+	unsigned char* thirds[3];
+	for (unsigned i = 0; i < 3; ++i) thirds[i] = msHeapAlloc(THIRD);
+	unsigned char* left[2] = { msHeapAlloc(THIRD), msHeapAlloc(THIRD) };
+	msHeapSmall* reopened = (msHeapSmall*)msHeapPage(left[0]);
+	CHECK((msHeapSmall*)msHeapPage(left[1]) == reopened && (msHeapSmall*)msHeapPage(thirds[0]) != reopened);
+	msHeapFree(thirds[0]);
+	msHeapFree(left[0]);
+	msHeapFree(left[1]);
+	CHECK(region->empties == reopened);
+	unsigned char* newcomer = msHeapAlloc(80);
+	CHECK(newcomer == reopened->data && reopened->base.size == 80);
+	occupiedBefore = region->occupied;
+	freeIsRefused(left[1]);
+	CHECK(region->occupied == occupiedBefore && reopened->acc == 80 && reopened->freeList == NULL);
+	msHeapFree(newcomer);
+	msHeapFree(thirds[1]);
+	msHeapFree(thirds[2]);
 
 	phase = "a second free of a big chunk is refused";
 	unsigned char* big = msHeapAlloc(3 * 4096);
