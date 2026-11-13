@@ -8,7 +8,7 @@ import { RaiserContext } from "../raiser/context";
 import { RaiserValue, RaiserValueKind } from "../raiser/value";
 import { RaiserHostFn, RaiserHostValue, boxVoid, copyToHost, copyToVm } from "../raiser/marshal";
 import { registerHostFn, routeHostFnThroughSystem, raiseFromHost, activeHostArrayHeap, activeHostObjectHeap, setActiveHostHeaps } from "../raiser/hostRegistry";
-import { RaiserVM, RaiserInPlaceHostFn, registerInPlaceHostFn, vmCallHeld, vmDumpStack, vmReleaseRun, vmRunDueTimers, vmNextTimerDelayMs } from "../raiser/vm";
+import { RaiserVM, RaiserInPlaceHostFn, registerInPlaceHostFn, vmCallHeld, vmDumpStack, vmReleaseRun, vmRunDueTimers, vmNextTimerDelayMs, vmDropPendingWork } from "../raiser/vm";
 import { liveCellBlocks } from "../raiser/memory";
 import { ledgerAudits } from "../raiser/ledger";
 import { setHostRuntimeDir, resolveRuntimeDir } from "../utils/path";
@@ -262,6 +262,14 @@ export function runDueTimers(interp: Interpreter): Result<number, string> {
 	} finally {
 		setActiveSystem(outer);
 	}
+}
+
+// A remount in place: the timers and strands earlier calls left pending never run against the new mount.
+// A new evalModule needs no call, because it replaces the whole program and its event loop.
+export function dropPendingWork(interp: Interpreter): void {
+	const run = interp.run;
+	if (run == null || run.vm == null) return;
+	vmDropPendingWork(run.vm!);
 }
 
 export function nextTimerDelayMs(interp: Interpreter): number {
@@ -519,6 +527,7 @@ const TIMER_GUEST = `let fired: int32 = 0;\nlet micro: int32 = 0;\nlet pending: 
 	+ `export function armMicro(): void { Promise.resolve(0).then((v: int32): void => { micro += 1; }); }\n`
 	+ `export function armCancelled(): void { pending = setTimeout((): void => { fired += 100; }, 30) as int32; }\n`
 	+ `export function cancel(): void { clearTimeout(pending); }\n`
+	+ `export function armFailing(ms: int32): void { setTimeout((): void => { throw new Error("tick failed"); }, ms); }\n`
 	+ `export function firedCount(): int32 { return fired; }\n`
 	+ `export function microCount(): int32 { return micro; }\n`;
 
@@ -577,6 +586,62 @@ test "a later host call cancels a pending timer an earlier call armed" {
 	if (!cancelled.ok) throw new Error(cancelled.error);
 	assert nextTimerDelayMs(interp) == -1;
 	waitMs(40);
+	const turn = runDueTimers(interp);
+	if (!turn.ok) throw new Error(turn.error);
+	assert intCall(interp, routineOf(interp, "firedCount"), []) == 0;
+	removeAll(dir);
+}
+
+test "a timer that throws ends its turn with the error and the timers still due run on the next turn" {
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, TIMER_GUEST);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	const failing = callRoutine(interp, routineOf(interp, "armFailing"), [hostValue(boxInt(5))]);
+	if (!failing.ok) throw new Error(failing.error);
+	const armed = callRoutine(interp, routineOf(interp, "arm"), [hostValue(boxInt(10))]);
+	if (!armed.ok) throw new Error(armed.error);
+	waitMs(20);
+	const first = runDueTimers(interp);
+	assert !first.ok && first.error.indexOf("tick failed") >= 0;
+	assert intCall(interp, routineOf(interp, "firedCount"), []) == 0;
+	const second = runDueTimers(interp);
+	if (!second.ok) throw new Error(second.error);
+	assert second.value == -1;
+	assert intCall(interp, routineOf(interp, "firedCount"), []) == 2;
+	removeAll(dir);
+}
+
+test "dropping pending work leaves no timer of an earlier mount to run" {
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, TIMER_GUEST);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	const armed = callRoutine(interp, routineOf(interp, "arm"), [hostValue(boxInt(5))]);
+	if (!armed.ok) throw new Error(armed.error);
+	dropPendingWork(interp);
+	assert nextTimerDelayMs(interp) == -1;
+	waitMs(10);
+	const turn = runDueTimers(interp);
+	if (!turn.ok) throw new Error(turn.error);
+	assert intCall(interp, routineOf(interp, "firedCount"), []) == 0;
+	const rearmed = callRoutine(interp, routineOf(interp, "arm"), [hostValue(boxInt(5))]);
+	if (!rearmed.ok) throw new Error(rearmed.error);
+	waitMs(10);
+	const after = runDueTimers(interp);
+	if (!after.ok) throw new Error(after.error);
+	assert intCall(interp, routineOf(interp, "firedCount"), []) == 2;
+	removeAll(dir);
+}
+
+test "a new evalModule leaves no timer of the program it replaces" {
+	const dir = scratchDir();
+	writeFile(`${dir}/main.ms`, TIMER_GUEST);
+	const interp = evaluatedInterpreter(`${dir}/main.ms`);
+	const armed = callRoutine(interp, routineOf(interp, "arm"), [hostValue(boxInt(5))]);
+	if (!armed.ok) throw new Error(armed.error);
+	const again = evalModule(interp, `${dir}/main.ms`);
+	if (!again.ok) throw new Error(again.error[0].message);
+	assert nextTimerDelayMs(interp) == -1;
+	waitMs(10);
 	const turn = runDueTimers(interp);
 	if (!turn.ok) throw new Error(turn.error);
 	assert intCall(interp, routineOf(interp, "firedCount"), []) == 0;
