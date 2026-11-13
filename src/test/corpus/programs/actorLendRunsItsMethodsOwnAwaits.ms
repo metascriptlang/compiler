@@ -1,5 +1,4 @@
 // @stdout: helper 12 nested 13 then 12 race 2 all 5 tick 1
-// @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
 // note: while a spawn reads a field its actor lent, the lending method awaits an async function, a
 // function that awaits another, a .then callback, a race, an all over the spawn itself and a timer.
 // Each is work that method started, so it runs beside the lend; only the actor's other work waits for

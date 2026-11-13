@@ -1,5 +1,4 @@
 // @stdout: all 5 stored 5 mixed 14 fns 24 race 2 any 6 settled 7 again 5
-// @xfail(raiser): the Raiser VM has no actors: stdout empty, exit 1
 // note: an actor method awaits Promise.all, race, any and allSettled over calls into another actor and
 // over async functions it started. The combinator's work on each input runs as the awaiting actor's job,
 // where the inputs' counts live (ULTRALOCK A4, M1); the race's losing input settles after its method ended.
