@@ -1380,37 +1380,72 @@ function vmFireDueTimer(vm: RaiserVM): void {
 	futureRelease(vm, timer.future);
 }
 
-// One turn of a host-driven loop: the timers already due fire, each strand they wake and the promise jobs those
-// queue run, and nothing sleeps. Returns the milliseconds until the next timer is due, or -1 when none is armed.
+// One turn of a host-driven loop: each timer already due fires as its own task, followed by the promise jobs it
+// queued, and nothing sleeps. A timer whose callback throws ends the turn with the error and drops only its
+// own strand, so the timers still due run on the next turn. Returns the milliseconds until the next timer is
+// due, or -1 when none is armed.
 export function vmRunDueTimers(vm: RaiserVM): number {
 	if (!vm.hostTurns) throw new Error("internal: vmRunDueTimers on a VM its host does not drive");
 	if (vm.suspendedRuns.length > 0 || vm.inPlaceHost >= 0) {
 		raiseFromHost("a host turn ran while a host function was still inside the guest: run due timers from the host's loop, after the call returns", true);
 		return vmNextTimerDelayMs(vm);
 	}
+	vm.error = "";
+	vm.halted = false;
+	runReadyStrands(vm);
 	const now = performance.now();
-	let fired = false;
-	while (vm.sched.timers.items.length > 0 && vm.sched.timers.items[0].dueMs <= now) {
+	while (vm.error == "" && vm.sched.timers.items.length > 0 && vm.sched.timers.items[0].dueMs <= now) {
 		vmFireDueTimer(vm);
-		fired = true;
+		runReadyStrands(vm);
 	}
-	if (fired || vmHasRunnable(vm)) {
-		vm.halted = false;
-		vm.error = "";
-		vm.loopCount = 0;
-		const next = schedulePick(vm);
-		if (next >= 0) {
-			strandResume(vm, next);
-			vm.yielded = false;
-			execStrandLoop(vm);
-		}
-		const main = vm.sched.strands.items[0];
-		vm.arrayHeap = main.arrayHeap;
-		vm.objectHeap = main.objectHeap;
-		vm.globals = main.globals;
-		vm.regs = main.regs;
-	}
+	const main = vm.sched.strands.items[0];
+	vm.arrayHeap = main.arrayHeap;
+	vm.objectHeap = main.objectHeap;
+	vm.globals = main.globals;
+	vm.regs = main.regs;
 	return vmNextTimerDelayMs(vm);
+}
+
+function runReadyStrands(vm: RaiserVM): void {
+	if (vm.error != "" || !vmHasRunnable(vm)) return;
+	vm.halted = false;
+	vm.loopCount = 0;
+	const next = schedulePick(vm);
+	if (next < 0) return;
+	strandResume(vm, next);
+	vm.yielded = false;
+	execStrandLoop(vm);
+	if (vm.error != "" && vm.current != 0) dropFailedStrand(vm);
+}
+
+function dropFailedStrand(vm: RaiserVM): void {
+	const s = vm.sched.strands.items[vm.current];
+	vmReleaseHeld(vm, vm.arrayHeap, vm.objectHeap, vm.currentException);
+	clearException(vm);
+	releaseSpawnEnv(vm, s);
+	s.status = RaiserStrandStatus.Done;
+	retireStrand(vm, vm.current);
+}
+
+// The host restarts its guest's program in place (a remount): every timer and every strand an earlier call left
+// pending is dropped, as replacing the event loop's dispatcher drops what it held.
+export function vmDropPendingWork(vm: RaiserVM): void {
+	if (vm.suspendedRuns.length > 0 || vm.inPlaceHost >= 0) {
+		raiseFromHost("pending guest work was dropped while a host function was still inside the guest: drop it from the host's loop, after the call returns", true);
+		return;
+	}
+	for (const timer of vm.sched.timers.items) {
+		if (timer.task < 0 && timer.future >= 0) futureRelease(vm, timer.future);
+	}
+	vm.sched.timers.items.length = 0;
+	vm.sched.readyOrder.length = 0;
+	const items = vm.sched.strands.items;
+	for (let i = 1; i < items.length; i += 1) {
+		if (items[i].status == RaiserStrandStatus.Done) continue;
+		releaseSpawnEnv(vm, items[i]);
+		items[i].status = RaiserStrandStatus.Done;
+		retireStrand(vm, i);
+	}
 }
 
 export function vmNextTimerDelayMs(vm: RaiserVM): number {
