@@ -3817,15 +3817,9 @@ function declaredInThisModule(ctx: CheckerContext, t: Type | null): boolean {
 // would otherwise be reported as unused.
 function markMacroUsedSymbols(ctx: CheckerContext, node: Node): void {
 	const d = node.data as MacroDeclData;
-	// Mark param type names as used (e.g. `x: Node` → mark Node)
-	const typeNames: string[] = [d.macroDeclReturnType];
-	for (const paramType of d.macroDeclParamTypes) typeNames.push(paramType);
-	for (const typeName of typeNames) {
-		if (typeName != "") {
-			const sym = lookupSymbol(ctx.table, typeName);
-			if (sym != null) markUsedIn(ctx, sym);
-		}
-	}
+	markTypeNamesUsed(ctx, d.macroDeclReturnType);
+	markTypeNamesUsed(ctx, d.macroDeclTypeParams);
+	for (const paramType of d.macroDeclParamTypes) markTypeNamesUsed(ctx, paramType);
 	markNamesUsed(ctx, d.macroDeclBody);
 }
 
