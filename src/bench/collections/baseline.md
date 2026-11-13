@@ -324,3 +324,45 @@ its chunk empties).
 Not measured: the two benches on x86-64, and the churn probe there at low load (a quiet window on rtx was asked for
 at 15:30 and had not opened by 22:00); the remote-free probe on this tree; the cost of the mark in a program
 that frees cold buffers.
+
+## The free path's shape — quiet rtx, 2026-11-13
+
+A quiet window on rtx (load 1-6, no other job placed there, bench pinned to one core), six runs per arm,
+`main` the three allocator files of main `75dcf5ff94f9`. Before the change below (tree `a5627fecf703`) the
+tree was under main by 13% on `template literal 1k` (best 18.79 against 21.51 us), 9-10% on `number
+toString 1k` and `split 1k fields`, 7-9% on `parse small object` and `parse numbers 64 KB`. Two probe arms,
+each the tree with one part taken out, both came back to main's speed (`template literal 1k` 18.29 and 18.25
+us): the empty-chunk shelving and the second-free mark do not cost that time themselves. The compiled
+`msHeapFree` does (clang -O2, arm64): main saves one register pair at entry and calls nothing on the small
+path; the tree called `msHeapPutHome` out of line and inlined the big-chunk free with its clock read, saving
+three pairs on every free. With the cold paths out of line (`msHeapDeallocBig`, `msHeapShelveSmall`,
+`msHeapRelistSmall`, `msHeapIsHome` noinline, `msHeapPutHome` always inline, the region's count taken after
+the refusal check), `msHeapFree` saves one pair again. Best of six, ratio the tree's speed over main's:
+
+| row | main | tree | ratio |
+|---|---|---|---|
+| template literal 1k, us/op | 18.96 | 19.58 | 0.969 |
+| number toString 1k, us/op | 9.313 | 8.883 | 1.048 |
+| split 1k fields, us/op | 7.566 | 7.951 | 0.952 |
+| array push 10k, us/op | 5.216 | 4.822 | 1.082 |
+| sort 10k numbers, us/op | 644.4 | 674 | 0.956 |
+| parse small object, us/op | 0.593 | 0.613 | 0.967 |
+| parse numbers 64 KB, MB/s | 581.4 | 568.9 | 0.979 |
+| parse large 1 MB, MB/s | 281.8 | 294.9 | 1.047 |
+| encode typed medium 64 KB, MB/s | 400.9 | 444.5 | 1.109 |
+
+The other 21 rows lie within 0.979 (`parse medium 64 KB`) and 1.049 (`decode typed medium 64 KB`). Between runs of identical code `array push 10k` moved from 0.94
+to 1.08, so a row inside about 5% of main is not separated from that spread. The allocator probe (`churn.c`)
+in the same window, ns per operation, best of five:
+
+| pattern | main | tree |
+|---|---|---|
+| one cell taken and freed in turn, 32 B | 3.44 | 2.39 |
+| 200k taken, freed in random order, 32 B | 13.36 | 5.81 |
+| 200k taken, freed in random order, 256 B | 91.15 | 28.36 |
+| 200k live, a random half freed and retaken, 256 B | 66.42 | 39.21 |
+| 200k taken, freed in random order, 1024 B | 127.71 | 70.06 |
+| two 3000 B cells taken and freed in turn | 3.54 | 5.02 |
+
+The last row stays slower: a 3000 B cell fills its chunk, so each free empties a chunk that is not its class's
+head and shelves it, and the next take opens it again. Not measured yet: the tree with the change on m1m.
