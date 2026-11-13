@@ -55,10 +55,10 @@ const noColourVariable = ["suite", "tests", "fmt", "cache", "crypto", "tools"];
 function wanted(name: string): boolean {
 	return selected == "" || selected.split(",").includes(name.split(".")[0]);
 }
-function bounded(lane: string, description: string, command: Arg[], env: Record<string, Arg>, inputs: LazyPath[]): Command {
+function bounded(lane: string, description: string, command: Arg[], env: Record<string, Arg>, inputs: LazyPath[], limit: number = laneLimit): Command {
 	const colour: Arg[] = noColourVariable.includes(lane) ? ["-u", "NO_COLOR"] : ["NO_COLOR=1"];
-	const argv: Arg[] = ["bash", "-c", withTrailer, lane, `${laneLimit}`, "env", "-u", "FORCE_COLOR"];
-	return systemCommand(argv.concat(colour).concat(command), { env, inputs, description, timeout: (laneLimit + 60) * 1000 });
+	const argv: Arg[] = ["bash", "-c", withTrailer, lane, `${limit}`, "env", "-u", "FORCE_COLOR"];
+	return systemCommand(argv.concat(colour).concat(command), { env, inputs, description, timeout: (limit + 60) * 1000 });
 }
 function laneNode(name: string, command: Arg[], env: Record<string, Arg> = {}, inputs: LazyPath[] = sources): Command {
 	const node = bounded(name.split(".")[0], `lane ${name}`, command, env, inputs);
@@ -111,8 +111,17 @@ function rerunEnv(lane: string, subjects: string[], run: number): Record<string,
 	env.set(lane == "corpus" ? "MSCORPUS_RAISER" : lane == "san" ? "MSCORPUS_SAN" : "MSCORPUS_TSAN", "1");
 	return env;
 }
+const rerunBase = option("rerunBase", "the commit of main that runs the same reruns, in a checkout of it at out/gate-main", "");
+const inMainsCheckout = 'base=$1; builder=$2; shift 2; d=out/gate-main; if [ ! -e $d/.git ] || [ "$(git -C $d rev-parse HEAD)" != "$base" ]; then git worktree remove --force $d 2>/dev/null; rm -rf $d; git worktree prune; git worktree add -q -f --detach $d "$base" && mkdir -p $d/vendor && (cd vendor && tar cf - --exclude=.git .) | (cd $d/vendor && tar xf -) || exit 1; fi; cp -p "$builder" "$d/${builder##*/}" && rm -rf $d/out/reruns && cd $d && exec "./${builder##*/}" build "$@" reruns';
+const rerunSpecs = rerun.split(";").filter((s: string): boolean => s != "");
+if (rerunSpecs.length > 0 && rerunBase != "") {
+	const sameReruns: Arg[] = ["bash", "-c", inMainsCheckout, "main", rerunBase, mscExe(), "--colors=off", `-Drerun=${rerun}`, `-DrerunCount=${rerunCount}`, `-DlaneLimit=${laneLimit}`];
+	const main = bounded("main", "rerun on main", sameReruns, {}, [], 1800 + laneLimit * rerunCount * rerunSpecs.length);
+	main.hasSideEffects = true;
+	reruns.addCopyFileToSource(main.captureStdOut(), path("out/reruns/main.log"));
+}
 let earlierRun: LazyPath[] = [];
-for (const spec of rerun.split(";").filter((s: string): boolean => s != "")) {
+for (const spec of rerunSpecs) {
 	const lane = spec.split("=")[0];
 	const subjects = spec.substring(lane.length + 1).split(",").filter((s: string): boolean => s != "");
 	if (subjects.length == 0) throw new Error(`rerun: '${spec}' names no subject after <lane>=`);
