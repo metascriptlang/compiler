@@ -731,10 +731,13 @@ function routineName(r: Node): string {
 		: (r.data as FunctionDeclData).fnName;
 }
 
+function isStaticField(sym: Symbol): boolean {
+	return sym.symbolKind == SymbolKind.Variable && hasFlag(sym, SymbolFlag.Static);
+}
+
 function sharesModuleState(sym: Symbol): boolean {
-	if (sym.symbolKind != SymbolKind.Variable || !hasFlag(sym, SymbolFlag.Global)) {
-		return false;
-	}
+	const global = sym.symbolKind == SymbolKind.Variable && hasFlag(sym, SymbolFlag.Global);
+	if (!global && !isStaticField(sym)) return false;
 	if (hasFlag(sym, SymbolFlag.Mutable)) return true;
 	const t = sym.symbolType;
 	return (
@@ -745,11 +748,18 @@ function sharesModuleState(sym: Symbol): boolean {
 }
 
 function sharedStateRead(node: Node): boolean {
-	return (
-		node.kind == NodeKind.Identifier &&
-		node.resolvedSym != null &&
-		sharesModuleState(node.resolvedSym!)
-	);
+	const named = node.kind == NodeKind.Identifier || node.kind == NodeKind.MemberExpr;
+	return named && node.resolvedSym != null && sharesModuleState(node.resolvedSym!);
+}
+
+function staticOwnerOf(site: Node): Symbol | null {
+	if (site.kind != NodeKind.MemberExpr || !isStaticField(site.resolvedSym!)) return null;
+	return (site.data as MemberExprData).object.resolvedSym;
+}
+
+function stateLabel(site: Node): string {
+	const sym = site.resolvedSym!;
+	return isStaticField(sym) ? `the static field '${sym.name}'` : `the module variable '${sym.name}'`;
 }
 
 function calleeRoutine(ctx: CheckerContext, node: Node): Node | null {
@@ -819,14 +829,15 @@ function throughOf(use: StateUse): string {
 
 function refuseExposedStateUse(ctx: CheckerContext, uses: StateUse[]): boolean {
 	for (const use of uses) {
-		const exported = hasFlag(use.sym, SymbolFlag.Exported);
-		if (!exported && use.sym.modulePath == ctx.modulePath) continue;
+		const holder = staticOwnerOf(use.site) ?? use.sym;
+		const exported = hasFlag(holder, SymbolFlag.Exported);
+		if (!exported && holder.modulePath == ctx.modulePath) continue;
 		const line = use.site.location.line;
 		const column = use.site.location.column;
 		const owner = exported ? "is exported" : "belongs to another module";
 		addError(
 			ctx,
-			`wasm-placed function '${routineName(use.root)}' uses the module variable '${use.sym.name}'${throughOf(use)} at ${line}:${column}, which ${owner}, so JS-side code can reach it too, but JS and wasm each keep their own copy of module state\n` +
+			`wasm-placed function '${routineName(use.root)}' uses ${stateLabel(use.site)}${throughOf(use)} at ${line}:${column}, which ${owner}, so JS-side code can reach it too, but JS and wasm each keep their own copy of module state\n` +
 				"keep it unexported beside the @wasm functions that use it, or pass it in as a parameter and return what changed",
 			line,
 			column,
@@ -923,7 +934,7 @@ function refuseJsSideHit(
 		}
 		addError(
 			ctx,
-			`the module variable '${use.sym.name}' is used by wasm-placed function '${routineName(use.root)}'${throughOf(use)} and also by ${where} at ${at}, which runs on the JS side: JS and wasm each keep their own copy of module state, so neither sees the other's changes\n` +
+			`${stateLabel(site)} is used by wasm-placed function '${routineName(use.root)}'${throughOf(use)} and also by ${where} at ${at}, which runs on the JS side: JS and wasm each keep their own copy of module state, so neither sees the other's changes\n` +
 				"reach it only through @wasm functions, or pass the value across as a parameter and return what changed",
 			site.location.line,
 			site.location.column,
