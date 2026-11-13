@@ -101,3 +101,12 @@ test "writableViewInvariant: a nullable literal union is copied into its wider n
 		"console.log(show(v));";
 	assert strictErrorCount(source) == 0;
 }
+
+test "writableViewInvariant: a fresh literal array takes the span's element type, and a read-only span reads literal elements as their union" {
+	const prelude = "type Step = \"vertex\" | \"instance\";\n" +
+		"function count(steps: Readonly<Span<Step>>): int32 { return steps.length as int32; }\n" +
+		"function fill(steps: Span<Step>): void { steps[0] = \"instance\"; }\n";
+	assert strictErrorCount(prelude + "console.log(count([\"vertex\"]), count([\"vertex\", \"instance\"]));\nfill([\"vertex\"]);") == 0;
+	assert strictErrorCount(prelude + "const only: \"vertex\"[] = [\"vertex\"];\nconst ro: Readonly<Step[]> = only;\nconsole.log(count(only), ro.length);") == 0;
+	assert hasError(prelude + "const only: \"vertex\"[] = [\"vertex\"];\nfill(only);", "Argument type mismatch in 'fill'");
+}
