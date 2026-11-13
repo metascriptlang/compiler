@@ -671,7 +671,20 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 		callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "jsonValueToStructE" },
 		arguments: [jv, { kind: NodeKind.MemberExpr, line: jv.line, column: jv.column, object: witness, property: "base", nodeType: base, isOptional: false }, errs, pfx],
 	});
-	const unionHoldsNull = (u: Node): boolean => {		for (const m of u.typExprMembers) {			if (m.kind == NodeKind.Identifier && m.name == "null") return true;		}		return false;	};	const allObjects = (members: Node[]): boolean => {		for (const m of members) {			const impl = getTypeImpl(m);			if (m.kind != NodeKind.TypeObject && (impl == null || impl.kind != NodeKind.TypeObject)) return false;		}		return true;	};
+	const unionHoldsNull = (u: Node): boolean => {
+		for (const m of u.typExprMembers) {
+			if (m.kind == NodeKind.Identifier && m.name == "null") return true;
+		}
+		return false;
+	};
+	const allObjects = (members: Node[]): boolean => {
+		for (const m of members) {
+			const impl = getTypeImpl(m);
+			if (m.kind != NodeKind.TypeObject && (impl == null || impl.kind != NodeKind.TypeObject)) return false;
+		}
+		return true;
+	};
+	const isTaggedStruct = (u: Node): boolean => u.kind == NodeKind.TypeUnion && !unionHoldsNull(u) && allObjects(u.typExprMembers);
 	let tt = implementationOf(witness);
 	if (tt.kind == NodeKind.TypeUnion) {
 		let nonNullCount: int32 = 0;
@@ -1142,7 +1155,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 			} else if (ec.kind == NodeKind.Identifier) {
 				en = ec.name;
 				elemIsStruct = namesStruct(ec);
-			} else if (ec.kind == NodeKind.TypeObject || (ec.kind == NodeKind.TypeUnion && !unionHoldsNull(ec))) {
+			} else if (ec.kind == NodeKind.TypeObject || (isTaggedStruct(ec))) {
 				elemIsStruct = true;
 			} else if (distinctBase(ec) != null) {
 				elemIsDistinct = true;
@@ -1284,7 +1297,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 		// Nested struct — recurse through the macro itself. The witness is a
 		// MemberExpr carrying the field's type-AST; it is consumed by the
 		// re-expansion and never evaluated at runtime.
-		if (fcore.kind == NodeKind.TypeObject || fcore.kind == NodeKind.TypeUnion) {
+		if (fcore.kind == NodeKind.TypeObject || isTaggedStruct(fcore)) {
 			const reqObjCall: Node = {
 				kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
 				callee: {
@@ -1368,7 +1381,9 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 		}
 		if (fcore.kind != NodeKind.Identifier) {
 			let extra: string = "";
-			if (fcore.kind == NodeKind.TypeGeneric) {
+			if (fcore.kind == NodeKind.TypeUnion) {
+				extra = " (a union that is not a tagged struct of struct variants)";
+			} else if (fcore.kind == NodeKind.TypeGeneric) {
 				const b: Node = fcore.typExprBase;
 				extra = b.kind == NodeKind.Identifier
 					? " (generic base '" + b.name + "', argc=" + fcore.typExprArgs.length + ")"
