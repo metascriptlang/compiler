@@ -151,17 +151,24 @@ static inline int64_t msBlockEndOf(int64_t b, int64_t len, int64_t size) {
 
 #define msStickyOp_(T, op, a, b, bad) ({ T __r; (bad) |= op((T)(a), (T)(b), &__r); __r; })
 #define msStickyWide_(T, op, a, b, bad) ({ int64_t __w = (int64_t)(T)(a) op (int64_t)(T)(b); (bad) |= __w != (int64_t)(T)__w; (T)__w; })
+/* Keep add, sub and a mul by a constant in 32-bit lanes: the int64 widen of msStickyWide_ measured 3-6x slower
+   than these in a vectorized store loop on x86-64 SSE2 under clang 21 (rtx, 2026-11-13). */
+#define msStickyAddX32_(a, b, bad) ({ int32_t __x = (int32_t)(a), __y = (int32_t)(b); \
+	int32_t __r = (int32_t)((uint32_t)__x + (uint32_t)__y); (bad) |= (int)((uint32_t)((__r ^ __x) & (__r ^ __y)) >> 31); __r; })
+#define msStickySubX32_(a, b, bad) ({ int32_t __x = (int32_t)(a), __y = (int32_t)(b); \
+	int32_t __r = (int32_t)((uint32_t)__x - (uint32_t)__y); (bad) |= (int)((uint32_t)((__r ^ __x) & (__x ^ __y)) >> 31); __r; })
 #define msStickyAddI8(a, b, bad) msStickyWide_(int8_t, +, a, b, bad)
 #define msStickyAddI16(a, b, bad) msStickyWide_(int16_t, +, a, b, bad)
-#define msStickyAddI32(a, b, bad) msStickyWide_(int32_t, +, a, b, bad)
+#define msStickyAddI32(a, b, bad) msStickyAddX32_(a, b, bad)
 #define msStickyAddI64(a, b, bad) msStickyOp_(int64_t, __builtin_add_overflow, a, b, bad)
 #define msStickySubI8(a, b, bad) msStickyWide_(int8_t, -, a, b, bad)
 #define msStickySubI16(a, b, bad) msStickyWide_(int16_t, -, a, b, bad)
-#define msStickySubI32(a, b, bad) msStickyWide_(int32_t, -, a, b, bad)
+#define msStickySubI32(a, b, bad) msStickySubX32_(a, b, bad)
 #define msStickySubI64(a, b, bad) msStickyOp_(int64_t, __builtin_sub_overflow, a, b, bad)
 #define msStickyMulI8(a, b, bad) msStickyWide_(int8_t, *, a, b, bad)
 #define msStickyMulI16(a, b, bad) msStickyWide_(int16_t, *, a, b, bad)
-#define msStickyMulI32(a, b, bad) msStickyWide_(int32_t, *, a, b, bad)
+#define msStickyMulI32(a, b, bad) ((__builtin_constant_p(a) || __builtin_constant_p(b)) \
+	? msStickyOp_(int32_t, __builtin_mul_overflow, a, b, bad) : msStickyWide_(int32_t, *, a, b, bad))
 #define msStickyMulI64(a, b, bad) msStickyOp_(int64_t, __builtin_mul_overflow, a, b, bad)
 #define msStickyNegI8(a, bad) msStickyWide_(int8_t, -, 0, a, bad)
 #define msStickyNegI16(a, bad) msStickyWide_(int16_t, -, 0, a, bad)
