@@ -9,7 +9,7 @@ function writeIndex(values: readonly string[]): void {
 function append(values: readonly string[]): void {
 	values.push("changed"); // GUARD-REFUSED
 }
-function appendNested(values: readonly string[][]): void {
-	values[0].push("changed"); // GUARD-REFUSED
+function clear(values: readonly string[]): void {
+	values.length = 0; // GUARD-REFUSED
 }
 function notAnArray(value: readonly string): void {} // GUARD-REFUSED

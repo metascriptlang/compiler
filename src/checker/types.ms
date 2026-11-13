@@ -2263,6 +2263,19 @@ export function createReadonlyView(t: Type | null): Type {
 	return c;
 }
 
+export function createReadonlyArray(t: Type): Type {
+	if (isReadonlyView(t) || isReadonlyArray(t)) return t;
+	const c = copyTypeShallow(t);
+	c.typeFlags = c.typeFlags.incl(TypeFlag.ReadonlyArray);
+	return c;
+}
+
+export const READONLY_ARRAY_WRITE = " — a readonly array's slots and length are not written through it; copy it with [...x] to get an array you can write";
+
+export function isReadonlyArray(t: Readonly<Type | null>): boolean {
+	return t != null && t.kind == TypeKind.Ref && t.typeFlags.has(TypeFlag.ReadonlyArray) && !t.typeFlags.has(TypeFlag.IsReadonly);
+}
+
 export function withoutReadonlyView(t: Type | null): Type {
 	if (t == null) return null as unknown as Type;
 	if (!isReadonlyView(t)) return t;
@@ -5456,7 +5469,7 @@ function substituteAllParamsWalk(t: Type, params: Type[], concretes: Type[], act
 			TypeKind.Mapped => substitutedMapped(t, params, concretes, active),
 			_ => t,
 		};
-	return isReadonlyView(t) ? createReadonlyView(result) : result;
+	return isReadonlyView(t) ? createReadonlyView(result) : isReadonlyArray(t) ? createReadonlyArray(result) : result;
 }
 
 function lendOwnedToBareParams(fn: Type, generic: Type, params: Type[]): void {
@@ -6393,7 +6406,7 @@ function typeDisplayNameInner(t: Readonly<Type | null>, shown: BitSet<TypeFlag>,
 	}
 	if (t.kind == TypeKind.Ref && t.typeReturn != null && t.typeReturn.kind == TypeKind.Array) {
 		const refElem = t.typeReturn.typeReturn;
-		if (refElem != null) return typeDisplayNameInner(refElem, 0 as BitSet<TypeFlag>, open, shapes) + "[]";
+		if (refElem != null) return (isReadonlyArray(t) ? "readonly " : "") + typeDisplayNameInner(refElem, 0 as BitSet<TypeFlag>, open, shapes) + "[]";
 	}
 	if (t.kind == TypeKind.Tuple && t.typeChildren.length > 0) {
 		const parts: string[] = [];

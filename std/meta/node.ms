@@ -93,6 +93,7 @@ export enum TypeFlag {
 	IsSendable,           // Sendable<F>: a function value admitted only from a source whose captures may cross a thread
 	IsOwned,              // Owned<T> on a class Ref: an owning edge; a cycle made only of owning edges does not keep its class under the collector
 	IsUnowned,            // Unowned<T> on a class Ref: a stored edge counted on the target's second count; it never keeps the target alive and its target cannot die while it exists
+	ReadonlyArray,        // `readonly T[]` on an array Ref: the checker refuses writes into the array, its elements read as T; not a view, so every later phase sees a plain array
 }
 
 // ===== Attached Lifecycle Ops =====

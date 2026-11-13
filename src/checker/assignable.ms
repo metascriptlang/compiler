@@ -10,7 +10,7 @@
 
 import { Node, NodeKind, IdentifierData, MemberExprData, ArrayAccessData, BinaryExprData, HiddenDerefData, HiddenStdConvData, OutExprData, TypeAssertionData, Type, TypeKind, TypeFlag, Symbol, SymbolKind } from "../ast/node";
 import { SymbolFlag, hasFlag } from "./symbol";
-import { isReadonlyView, isAtomicRef, isStringLike, isNumeric, isSendableFunction, isMaybeType } from "./types";
+import { isReadonlyView, isReadonlyArray, isAtomicRef, isStringLike, isNumeric, isSendableFunction, isMaybeType } from "./types";
 import { isValueAggregateParam } from "./paramMutationAnalysis";
 import { nonNullMemberOfNullable } from "./compat";
 
@@ -235,13 +235,18 @@ export function writeThroughArc(target: Node): boolean {
 
 export function readonlyPrefixType(target: Node): Type | null {
 	let cur: Node | null = target;
+	let throughElementRef = false;
 	while (cur != null) {
 		let base: Node | null = null;
 		if (cur.kind == NodeKind.MemberExpr) base = (cur.data as MemberExprData).object;
 		else if (cur.kind == NodeKind.ArrayAccess) base = (cur.data as ArrayAccessData).array;
 		else if (cur.kind == NodeKind.HiddenDeref) base = (cur.data as HiddenDerefData).expr;
 		else break;
-		if (base != null && base.nodeType != null && isReadonlyView(base.nodeType)) return base.nodeType;
+		if (base != null && base.nodeType != null) {
+			if (isReadonlyView(base.nodeType)) return base.nodeType;
+			if (isReadonlyArray(base.nodeType) && !throughElementRef) return base.nodeType;
+			if (base.nodeType.kind == TypeKind.Ref) throughElementRef = true;
+		}
 		cur = base;
 	}
 	return null;

@@ -3,7 +3,7 @@
 import { membersOf } from "./unitsInCheck";
 import { Type, TypeKind, TypeFlag, SymbolKind, CallingConvention, Node, NodeKind, NodeFlag, MethodDeclData, DecoratedDeclData } from "../ast/node";
 import { makeSymbol, classDeclNodeOf } from "./symbol";
-import { noteHeldBeyond, classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, isVarargs, unwrapVarargs, UnifyBindings, instantiatedUnionBehind, createUnifyBindings, sameDeclaredSym, isOwnedRef, isUnownedSlot, withoutUnowned, isOutParam, isStringLike, isArrayType, typedArrayElement } from "./types";
+import { isReadonlyArray, createReadonlyArray, noteHeldBeyond, classDistance, isNumeric, createPromise, neverType, isIntegerType, isFloatType, integerRank, skipModifier, numberType, stringType, booleanType, voidType, nullType, inferredType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createCursor, createDistinct, createGenericParam, createSizedArray, createSpan, createEnumLiteral, getMinArity, isAtomicRef, isReadonlyView, createReadonlyView, propagateReadonlyView, isAllStringLiteralUnion, isBrandDistinct, distinctWidenBody, unwrapRefBase, isMaybeType, unwrapRef, isTagCarriedUnion, isPrimitiveUnionMember, primitiveMemberIndexInUnion, peelToStruct, peelTransparentInstance, hasGenericParams, unwrapRefNullUnion, createBitSet, isUnresolvedType, isUnknownType, unknownType, isNonPrimitiveType, unknownRefusal, UnknownRefusal, substituteParams, typeDisplayName, isValuePointee, classAncestorInstance, isAwaitable, variantKeyMember, literalUnionBase, numberLiteralBase, matchUnionBehindInstance, storesNothing, createBooleanLiteral, int32Type, classBodyOf, derivesFromClass, peelToStructOrUnion, isVarargs, unwrapVarargs, UnifyBindings, instantiatedUnionBehind, createUnifyBindings, sameDeclaredSym, isOwnedRef, isUnownedSlot, withoutUnowned, isOutParam, isStringLike, isArrayType, typedArrayElement } from "./types";
 import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
 
@@ -510,7 +510,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 					&& (sameNominal(source.typeReturn, target.typeReturn) || isOwnGenericBase(source.typeReturn, target.typeReturn))) {
 					return true;
 				}
-				if (isReadonlyView(target) && source.typeReturn != null && target.typeReturn != null
+				if ((isReadonlyView(target) || isReadonlyArray(target)) && source.typeReturn != null && target.typeReturn != null
 					&& (target.typeReturn.kind == TypeKind.Array || target.typeReturn.kind == TypeKind.Span)
 					&& source.typeReturn.kind == target.typeReturn.kind) return readElementsFit(source.typeReturn, target.typeReturn);
 				if (isReadonlyView(target) && source.typeReturn != null && target.typeReturn != null
@@ -1466,8 +1466,12 @@ export function explainStructuralPrefix(source: Type | null, target: Type | null
 	const param = paramRefusal(skipModifier(source), skipModifier(target));
 	if (param != "") return param;
 	if (dropsReadonlyView(source, target)) {
-		return " — a read-only view never converts back to the mutable type: declare the parameter "
-			+ typeDisplayName(createReadonlyView(target)) + ", or copy it with [...x]";
+		const fromArray = source != null && isReadonlyArray(nonNullMemberOfNullable(source) ?? source);
+		return fromArray
+			? " — a readonly array never converts back to the mutable type: declare the parameter "
+				+ typeDisplayName(target != null && target.kind == TypeKind.Ref ? createReadonlyArray(target) : target) + ", or copy it with [...x]"
+			: " — a read-only view never converts back to the mutable type: declare the parameter "
+				+ typeDisplayName(createReadonlyView(target)) + ", or copy it with [...x]";
 	}
 	const writable = writableFieldHint(source, target);
 	if (writable != "") return writable;
@@ -1613,13 +1617,16 @@ export function dropsReadonlyView(source: Type | null, target: Type | null): boo
 	if (dstInner != null) dst = dstInner;
 	src = maybeInnerKeepingView(src);
 	dst = maybeInnerKeepingView(dst);
-	if (!isReadonlyView(src) || isReadonlyView(dst)) return false;
+	const roArray = isReadonlyArray(src);
+	if (!(isReadonlyView(src) || roArray) || isReadonlyView(dst) || (roArray && isReadonlyArray(dst))) return false;
 	if (src.kind == TypeKind.Union && dst.kind != TypeKind.Union) return false;
 	if (src.kind != TypeKind.Union && dst.kind == TypeKind.Union) {
 		for (const member of dst.typeChildren) {
 			if (isAssignable(src, member)) return false;
 		}
 	}
+	if (roArray) return dst.kind == TypeKind.Ref || dst.kind == TypeKind.Span || dst.kind == TypeKind.Ptr
+		|| dst.kind == TypeKind.Union || dst.kind == TypeKind.Unknown;
 	return dst.kind == TypeKind.Ref || dst.kind == TypeKind.Array || dst.kind == TypeKind.Span
 		|| dst.kind == TypeKind.Ptr || dst.kind == TypeKind.Struct || dst.kind == TypeKind.Union || dst.kind == TypeKind.GenericInstance
 		|| dst.kind == TypeKind.Unknown;
