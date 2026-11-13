@@ -134,6 +134,17 @@ record("reruns with no list of the slice's changed paths are refused",
 	"true",
 	`${verdict("{}", [["hcr", log(["FAIL hcrRun: exit 1"], 1)]], "{}", [["hcr.reruns.main", ""], ["hcr.reruns.slice", ""]]).includes("hcr has reruns and")}`);
 
+record("a lane's line ends with its passed and total cases, and names its xpass count",
+	"gate: corpus 3s · 0 red · 0 known · 0 new · 2 xpass · 7/9 case|gate: crypto 3s · 0 red · 0 known · 0 new · 40/41 case|gate: fmt 3s · 0 red · 0 known · 0 new|gate: suite 3s · 0 red · 0 known · 0 new · 5/5 case|gate: tests 3s · 0 red · 0 known · 0 new · 82/85 case|gate: GREEN (corpus, crypto, fmt, suite, tests)",
+	verdict("{}", [
+		["corpus", log(["1 pass · 0 fail · 0 xfail · 0 xpass", "  9 pass · 9 fail · 0 xfail · 5 xpass", "\x1b[32m7 pass · 2 fail · 4 xfail · 2 xpass"], 0)],
+		["crypto", log(["suite: 3/3 cells green, 40/41 tests passed"], 0)],
+		["fmt", log(["12 pass · 0 fail", " Tests  3 passed (3)"], 0)],
+		["suite", log([" Test Files  1 passed (1)", "      Tests  5 passed (5)"], 0)],
+		["tests.c0", log(["      Tests  80 passed (80)"], 0)],
+		["tests.c1", log(["      Tests  3 failed | 2 passed (5)", "      Tests  none"], 0)],
+	]));
+
 let failures = 0;
 console.log(`root ${root}`);
 for (const r of results) {

@@ -6,6 +6,10 @@ interface Lane {
 	name: string;
 	reds: string[];
 	secs: number;
+	passed: number;
+	cases: number;
+	counted: boolean;
+	xpass: number;
 }
 
 function plain(text: string): string {
@@ -99,6 +103,52 @@ function notTheSlices(red: string, onMain: string[], onSlice: string[]): string 
 	return slice < 2 ? `red ${slice}/${rerunCount} on this candidate, 0/${rerunCount} on main` : null;
 }
 
+function digits(text: string): boolean {
+	if (text == "") return false;
+	for (let i = 0; i < text.length; i++) if (text[i] < "0" || text[i] > "9") return false;
+	return true;
+}
+
+function casesOf(lane: string, lines: string[]): number[] {
+	let passed: number = 0;
+	let cases: number = 0;
+	let counted = false;
+	for (const line of lines) {
+		const words = line.split(" ").filter((word: string): boolean => word != "");
+		if (lane == "corpus" || lane == "san" || lane == "tsan") {
+			if (words.length > 4 && !line.startsWith(" ") && digits(words[0]) && words[1] == "pass" && words[2] == "·" && digits(words[3]) && words[4].startsWith("fail")) {
+				passed = Number(words[0]);
+				cases = passed + Number(words[3]);
+				counted = true;
+			}
+		} else if (lane == "crypto") {
+			const tally = line.startsWith("suite: ") && line.endsWith(" tests passed") ? line.substring(line.lastIndexOf(" cells green, ") + 14, line.length - 13).split("/") : [];
+			if (line.includes(" cells green, ") && tally.length == 2 && digits(tally[0]) && digits(tally[1])) {
+				passed = Number(tally[0]);
+				cases = Number(tally[1]);
+				counted = true;
+			}
+		} else if (lane == "suite" || lane == "tests") {
+			if (words.length > 1 && words[0] == "Tests" && digits(words[1].substring(0, 1))) {
+				for (let i = 2; i < words.length; i++) if (words[i] == "passed" && digits(words[i - 1])) passed += Number(words[i - 1]);
+				const total = line.endsWith(")") ? line.substring(line.lastIndexOf("(") + 1, line.length - 1) : "";
+				if (digits(total)) cases += Number(total);
+				counted = cases > 0;
+			}
+		}
+	}
+	return counted ? [passed, cases] : [];
+}
+
+function xpassOf(lines: string[]): number {
+	let count: number = 0;
+	for (const line of lines) {
+		const words = line.split(" ");
+		if (words.length > 2 && words[words.length - 1] == "xpass" && digits(words[words.length - 2])) count = Number(words[words.length - 2]);
+	}
+	return count;
+}
+
 function readKnown(known: Map<string, string[]>, path: string): void {
 	const text = readFile(path);
 	if (!text.ok) throw new Error(`gate: cannot read ${path}`);
@@ -128,13 +178,20 @@ for (const entry of readDir(dir).sort()) {
 	const lines = plain(text.value).split("\n");
 	let lane = lanes.find((l: Lane): boolean => l.name == name);
 	if (lane == null) {
-		lane = { name, reds: [], secs: 0 };
+		lane = { name, reds: [], secs: 0, passed: 0, cases: 0, counted: false, xpass: 0 };
 		lanes.push(lane);
 	}
 	const rc = trailer(lines, "RC");
 	const secs = trailer(lines, "SECS");
 	const part = entry.substring(0, entry.length - 4);
 	const reds = redsOf(name, lines);
+	const tally = casesOf(name, lines);
+	if (tally.length == 2) {
+		lane.passed += tally[0];
+		lane.cases += tally[1];
+		lane.counted = true;
+	}
+	lane.xpass += xpassOf(text.value.split("\n"));
 	if (lines.some((line: string): boolean => line.startsWith("TIMEOUT after "))) reds.push("timed out");
 	if (rc == null || secs == null) {
 		reds.push(`${part}: the log has no RC and SECS trailer`);
@@ -180,7 +237,9 @@ for (const lane of lanes) {
 	let line = `gate: ${lane.name} ${lane.secs}s · ${reds.length} red · ${reds.length - fresh.length} known · ${owed.length} new`;
 	if (others.length > 0) line += ` · ${others.length} not the slice's`;
 	if (fixed.length > 0) line += ` · ${fixed.length} known-now-green (${firstThree(fixed)})`;
+	if (lane.xpass > 0) line += ` · ${lane.xpass} xpass`;
 	if (flakes.length > 0) line += ` · ${flakes.length} flaky (${firstThree(flakes)})`;
+	if (lane.counted) line += ` · ${lane.passed}/${lane.cases} case`;
 	console.log(line);
 	for (const red of owed) console.log(`  new: ${red}`);
 	for (const other of others) console.log(`  not the slice's: ${other}`);
