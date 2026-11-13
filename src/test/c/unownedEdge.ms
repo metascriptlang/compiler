@@ -210,6 +210,17 @@ test "emptying an array of Unowned elements gives each one up on the second coun
 	assert readonly.contains("msUnownedRoRefArraySetLen("), unownedLines(readonly);
 }
 
+test "cutting an array of Unowned elements gives the evicted edges up on the second count, unread" {
+	const tail = "const t = new T();\nconst h = new H();\nh.ups.push(t);\nf(h);\nconsole.log(h.ups.length);\n";
+	const plain = "class T { id: int32 = 4; }\nclass H { ups: Unowned<T>[] = []; }\n";
+	const spliced = builtModuleC("unownedEdge", "cutsplice", plain + "function f(h: H): void { h.ups.splice(0, 1); }\n" + tail, []);
+	assert spliced.contains("msUnownedRefArraySetLen("), unownedLines(spliced);
+	const shrunk = builtModuleC("unownedEdge", "cutshrink", plain + "function f(h: H): void { h.ups.shrink(0); }\n" + tail, []);
+	assert shrunk.contains("msUnownedRefArraySetLen("), unownedLines(shrunk);
+	const readonly = builtModuleC("unownedEdge", "cutreadonly", "class T { id: int32 = 4; }\nclass H { ups: Unowned<Readonly<T>>[] = []; }\nfunction f(h: H): void { h.ups.splice(0, 1); }\n" + tail, []);
+	assert readonly.contains("msUnownedRoRefArraySetLen("), unownedLines(readonly);
+}
+
 test "an Unowned edge in a union member, a tuple or a type argument is refused, naming the struct that holds one" {
 	const head = "class N { id: int32 = 1; }\n";
 	const refused = "so a union member, a tuple, a function type or a type argument cannot hold one — store the back edge in a struct field and hold the struct, as in 'struct Up { at: Unowned<N> }' and 'Map<string, Up>'";
