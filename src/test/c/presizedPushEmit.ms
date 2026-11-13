@@ -20,17 +20,29 @@ function builtC(name: string, body: string, danger: boolean): string {
 }
 
 const SET_LEN = "msGenericArraySetLen(";
+const SET_LEN_UNINIT = "msGenericArraySetLenUninit(";
+
+function presizedForOverwrite(c: string): boolean {
+	return c.split(SET_LEN_UNINIT).length == 2 && c.split(SET_LEN).length == 2;
+}
 
 test "presized push: a mapped toArray sizes its result and cuts it on shrink" {
 	const c = builtC("maptoarray", "return a.values().map((x) => x * 2).toArray();", true);
 	assert !c.startsWith("error:"), c.slice(0, 400);
-	assert c.split(SET_LEN).length == 3, "expected the presize and the cut";
+	assert presizedForOverwrite(c), "expected the presize and the cut";
 }
 
 test "presized push: a for-of push loop onto a fresh array is presized" {
 	const c = emitted("const out: int32[] = []; for (const x of a) out.push(x * 3); return out;", true);
 	assert !c.startsWith("error:"), c.slice(0, 400);
-	assert c.split(SET_LEN).length == 3, "expected the presize and the cut";
+	assert presizedForOverwrite(c), "expected the presize and the cut";
+}
+
+test "presized push: elements that hold a reference are presized zeroed" {
+	const c = emitted("const out: string[] = []; for (const x of a) out.push(`${x}`); console.log(out.join(\",\")); return a;", true);
+	assert !c.startsWith("error:"), c.slice(0, 400);
+	assert !c.includes(SET_LEN_UNINIT), "a string array grew without zeroing its slots";
+	assert c.includes("ArraySetLen("), "the string push loop was not presized";
 }
 
 test "presized push: a filter keeps the push loop" {
@@ -50,7 +62,7 @@ const TWO_STEPS = "const out: int32[] = []; let i: int64 = 0; while (i < a.lengt
 test "presized push: a while loop stepping its counter through a checked increment is presized" {
 	const c = emitted("const out: int32[] = []; let i: int64 = 0; while (i < a.length) { out.push(a[i]); i++; } return out;", false);
 	assert !c.startsWith("error:"), c.slice(0, 400);
-	assert c.split(SET_LEN).length == 3, "expected the presize and the cut";
+	assert presizedForOverwrite(c), "expected the presize and the cut";
 }
 
 test "presized push: a counter stepped twice keeps the push loop" {
@@ -74,5 +86,5 @@ test "presized push: a loop inside a try keeps the push loop" {
 test "presized push: a checked build presizes too" {
 	const c = builtC("checkedtoarray", "return a.values().map((x) => x * 2).toArray();", false);
 	assert !c.startsWith("error:"), c.slice(0, 400);
-	assert c.split(SET_LEN).length == 3, "a checked build kept the push loop";
+	assert presizedForOverwrite(c), "a checked build kept the push loop";
 }

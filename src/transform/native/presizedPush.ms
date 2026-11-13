@@ -6,11 +6,11 @@ import { Node, NodeKind, DeclKind, Symbol, SourceLocation, Type, SymbolKind, Typ
 import { isRoutineNode } from "../../ast/shape";
 import { isAssignOp } from "../../ast/operators";
 import { forEachChild } from "../../ast/visitor";
-import { peelTransparentInstance } from "../../checker/types";
+import { peelTransparentInstance, isPlainDataType } from "../../checker/types";
 import { declaresUserHook } from "../../checker/instantiate";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 import { TransformContext, freshTemp, newLoweredSym } from "../context";
-import { makeVarDecl, makeIdentResolved, makeBinary, makeAssign, makeArrayAccess, makeMember, makeExprStmt, makeIf, makeWhile, makeBlock, makeHiddenDeref, makeNumber, isRuntimeProcCall } from "../util";
+import { makeVarDecl, makeIdentResolved, makeBinary, makeAssign, makeArrayAccess, makeMember, makeExprStmt, makeIf, makeWhile, makeBlock, makeHiddenDeref, makeNumber, isRuntimeProcCall, makeCall, makeHiddenAddr, runtimeRef } from "../util";
 import { cloneFresh } from "../lowering/iterInline";
 import { lowerLengthAssign } from "./builtinLower";
 import { checkedScalarTarget } from "./intCheckInject";
@@ -324,7 +324,7 @@ function presize(b: Build, ctx: TransformContext): void {
 	const body = cloneFresh((loop.data as WhileStmtData).whileBody, new HashMap<Symbol, Symbol>(), ctx, true);
 	if (!storeInstead(body, b, [b.out])) throw new Error("internal: a presized push loop lost its push when its body was copied");
 	const cut = makeIf(below(b, n, cond, loc), makeBlock([setLength(b, counterRead(b, loop), ctx, loc)], loc), null, loc);
-	const before = [nDecl, setLength(b, makeIdentResolved(n, loc), ctx, loc), makeWhile(fastCond, body, loc), cut];
+	const before = [nDecl, growForOverwrite(b, makeIdentResolved(n, loc), ctx, loc), makeWhile(fastCond, body, loc), cut];
 	for (let k: int32 = 0; k < before.length; k++) b.list.splice(b.at + k, 0, before[k]);
 }
 
@@ -340,6 +340,13 @@ function counterRead(b: Build, at: Node): Node {
 	const r = makeIdentResolved(b.counter, at.location);
 	r.nodeType = b.counter.symbolType;
 	return r;
+}
+
+function growForOverwrite(b: Build, len: Node, ctx: TransformContext, loc: SourceLocation): Node {
+	if (!isPlainDataType(arrayType(b.out.symbolType)!.typeReturn, declaresUserHook)) return setLength(b, len, ctx, loc);
+	const call = makeCall(runtimeRef("msGenericArraySetLenUninit", loc), [makeHiddenAddr(arrayRead(b, loc), loc), len], loc);
+	call.nodeType = len.nodeType;
+	return makeExprStmt(call, loc);
 }
 
 function setLength(b: Build, len: Node, ctx: TransformContext, loc: SourceLocation): Node {
