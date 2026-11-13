@@ -28,7 +28,7 @@ import {
 	isValueLayoutType, makeHiddenAddr, makeHiddenDeref, makeHiddenStdConv, makeTryFinally, runtimeRef,
 	makeFnDecl, makeLocalDecl, addGeneratedFn, generatedFnCount, makeMoveExpr,
 } from "../util";
-import { voidType, noneType, createFunction, createPromise, createRef, createStruct, createPtr, createPrimitive, copyTypeShallow, unwrapRefNullUnion, getSysType, isStructType, isAtomicRef, instantiateGenericBody, typeDisplayName } from "../../checker/types";
+import { voidType, noneType, createFunction, createPromise, createSink, createRef, createStruct, createPtr, createPrimitive, copyTypeShallow, unwrapRefNullUnion, getSysType, isStructType, isAtomicRef, instantiateGenericBody, typeDisplayName } from "../../checker/types";
 import { genericParamsOf, literalBase, setRepr } from "../../checker/types";
 import { ctorRoutineFor } from "../../checker/ctorRoutine";
 import { peelHidden } from "../../checker/sendable";
@@ -173,8 +173,9 @@ function packArgsIntoMsg(stmts: Node[], msgSym: Symbol, params: Symbol[], paramT
 		let valueArg: Node;
 		let setter: string;
 		if (mk == "array" || mk == "struct") {
-			const paramIdent = makeTypedIdentResolved(params[ai], paramTypes[ai], loc);
-			const boxCall = makeCall(runtimeRef("msSinkBoxStruct", loc), [paramIdent], loc);
+			const handedOver = makeMoveExpr(makeTypedIdentResolved(params[ai], paramTypes[ai], loc), loc);
+			handedOver.nodeType = paramTypes[ai];
+			const boxCall = makeCall(runtimeRef("msSinkBoxStruct", loc), [handedOver], loc);
 			boxCall.nodeType = VOID_PTR;
 			valueArg = boxCall;
 			setter = "msMsgSetPtr";
@@ -627,7 +628,12 @@ function emitActorMethods(d: ActorDeclData, name: string, methods: Node[], lower
 			const proxyBody = isVoid
 				? buildSendProxy(messageKind(methods, m), proxySyms, methodParamTypes, lowered.drop, ctx, loc)
 				: buildCallProxy(messageKind(methods, m), proxySyms, methodParamTypes, methodRetType, lowered.drop, ctx, loc);
-			const proxyParamTypes = m.nodeType != null ? m.nodeType.typeChildren : [];
+			const proxyParamTypes: Type[] = [];
+			for (let pi = 0; pi < methodParamTypes.length; pi += 1) {
+				const mk = pi >= 1 ? paramMsgKind(methodParamTypes, pi) : "ptr";
+				const boxedIntoMsg = (mk == "array" || mk == "struct") && methodParamTypes[pi].kind != TypeKind.Sink;
+				proxyParamTypes.push(boxedIntoMsg ? createSink(methodParamTypes[pi]) : methodParamTypes[pi]);
+			}
 			// Proxy returns the reply Promise<T>, not T directly. The user-visible
 			// type at the call site MUST be Promise<T> so:
 			//   1. await can unwrap correctly (looks for awaitable)
