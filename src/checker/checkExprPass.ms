@@ -2870,11 +2870,14 @@ function constNumberType(node: Node, negated: boolean): Type | null {
 	return name == "" ? null : numberLiteralTypeOf(name);
 }
 
-function checkConstAssertion(ctx: CheckerContext, node: Node, d: TypeAssertionData): void {
+function checkConstAssertion(ctx: CheckerContext, node: Node, d: TypeAssertionData, expectedType: Type | null): void {
 	const operand = d.asExpr;
 	const literal = constLiteralType(operand);
-	if (operand.kind == NodeKind.ObjectLiteral) ctx.constContext.add(operand);
-	checkExpr(ctx, operand, literal);
+	const frozen = operand.kind == NodeKind.ObjectLiteral ? frozenObjectAgainst(ctx, operand, expectedType) : null;
+	if (frozen == null) {
+		if (operand.kind == NodeKind.ObjectLiteral) ctx.constContext.add(operand);
+		checkExpr(ctx, operand, literal);
+	}
 	if (operand.kind == NodeKind.ArrayLiteral) {
 		refuseConstArray(ctx, operand);
 	} else if (literal == null && operand.kind != NodeKind.ObjectLiteral && enumMemberLiteralOf(operand) == null) {
@@ -2889,7 +2892,35 @@ function checkConstAssertion(ctx: CheckerContext, node: Node, d: TypeAssertionDa
 	node.variantSlot = operand.variantSlot;
 	node.typeArg = operand.typeArg;
 	node.flowNode = operand.flowNode;
-	node.nodeType = member != null ? member : literal != null ? literal : operand.nodeType;
+	node.nodeType = member != null ? member : literal != null ? literal : frozen != null ? frozen : operand.nodeType;
+}
+
+function frozenObjectAgainst(ctx: CheckerContext, operand: Node, expectedType: Type | null): Type | null {
+	const target = structuralObjectContext(expectedType);
+	if (target == null) return null;
+	const mark = ctx.errors.length;
+	checkExpr(ctx, operand, target);
+	const shape = reportedErrorSince(ctx, mark) || isUnionObjectContext(target) ? null : ownLiteralShape(operand, true);
+	if (shape != null) {
+		clearCheckerState(operand);
+		checkExpr(ctx, operand, shape);
+	}
+	return operand.nodeType != null ? createReadonlyView(operand.nodeType) : null;
+}
+
+function isUnionObjectContext(t: Type): boolean {
+	return (unwrapRefNullUnion(t) ?? t).kind == TypeKind.Union;
+}
+
+function structuralObjectContext(expectedType: Type | null): Type | null {
+	const t = skipModifier(expectedType);
+	if (t == null) return null;
+	const bare = unwrapRefNullUnion(t) ?? t;
+	const members = bare.kind == TypeKind.Union ? bare.typeChildren : [bare];
+	for (const m of members) {
+		if (m == null || m.kind != TypeKind.Ref || isAtomicRef(m) || m.typeReturn == null || m.typeReturn.kind != TypeKind.Struct || classBodyOf(m) != null) return null;
+	}
+	return t;
 }
 
 // The node takes every field of its operand, so the operand's own node never outlives the check.
@@ -2916,7 +2947,7 @@ function becomeOperand(node: Node, operand: Node): void {
 // An object literal checked against a structural type keeps each literal member its context
 // asked for (`kind: "circle"` against `kind: Kind`), in the target's fields and order, so it
 // stays a field prefix of the target. Null when no member keeps more than the target says.
-function ownLiteralShape(node: Node): Type | null {
+function ownLiteralShape(node: Node, everyLiteral: boolean): Type | null {
 	if (node.kind != NodeKind.ObjectLiteral) return null;
 	const stamped = node.nodeType;
 	if (stamped == null || stamped.kind != TypeKind.Ref || classBodyOf(stamped) != null) return null;
@@ -2929,8 +2960,10 @@ function ownLiteralShape(node: Node): Type | null {
 	for (let i = 0; i < shape.typeNames.length && i < types.length; i += 1) {
 		const at = d.keys.indexOf(shape.typeNames[i]);
 		if (at < 0 || d.properties[at] == null) continue;
-		const nested = ownLiteralShape(d.properties[at]);
-		const own = nested ?? literalOfUnionContext(d.properties[at], types[i]) ?? d.properties[at].nodeType;
+		const value = d.properties[at];
+		const nested = ownLiteralShape(value, everyLiteral);
+		const literal = everyLiteral ? constLiteralType(value) : null;
+		const own = nested ?? literal ?? literalOfUnionContext(value, types[i]) ?? value.nodeType;
 		if (own == null || sameType(own, types[i]) || fieldReprMismatch(own, types[i])) continue;
 		if (nested == null && !isLiteralKindType(own)) continue;
 		types[i] = own;
@@ -2966,7 +2999,7 @@ function checkSatisfiesExpr(ctx: CheckerContext, node: Node): void {
 	const resolved = !isUnresolvedType(target) && target.kind != TypeKind.Error;
 	const operandMark = ctx.errors.length;
 	checkExpr(ctx, node, resolved ? target : null);
-	const literalShape = resolved && !reportedErrorSince(ctx, operandMark) ? ownLiteralShape(node) : null;
+	const literalShape = resolved && !reportedErrorSince(ctx, operandMark) ? ownLiteralShape(node, false) : null;
 	if (literalShape != null) {
 		clearCheckerState(node);
 		checkExpr(ctx, node, literalShape);
@@ -2995,7 +3028,7 @@ function checkTypeAssertion(ctx: CheckerContext, node: Node, expectedType: Type 
 		node.flags = node.flags.incl(NodeFlag.Sem);
 		return;
 	}
-	if (d.asType == "const") { checkConstAssertion(ctx, node, d); return; }
+	if (d.asType == "const") { checkConstAssertion(ctx, node, d, expectedType); return; }
 	const asLoc = node.typeExpr != null ? node.typeExpr.location : node.location;
 			const targetType = (d.asType != "") ? annotatedType(d.asType, node.typeExpr, ctx, asLoc.line, asLoc.column) : inferredType();
 	// TS parity: `expr as T` propagates T as contextual type to expr.
