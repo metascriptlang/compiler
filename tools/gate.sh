@@ -3056,7 +3056,9 @@ shadow_verdict() {
     n=$((n + 1))
     sh="$(grep -c . "$OUT/$lane.red" | tr -d ' ') red · $(grep -c . "$OUT/$lane.new" | tr -d ' ') new · $(grep -c . "$OUT/$lane.notyours" | tr -d ' ') not the slice's"
     ms=$(sed -n "s/^gate: $lane [0-9]*s · \\([0-9]* red\\) · [0-9]* known · \\([0-9]* new\\).*$/\\1 · \\2/p" "$d/verdict.txt")
+    sh="$sh · $(totals_of "$lane" "$OUT/$lane.log" | grep . || echo no) case"
     ms="$ms · $(sed -n "s/^gate: $lane [0-9]*s · .* · \\([0-9]*\\) not the slice's.*$/\\1/p" "$d/verdict.txt" | grep . || echo 0) not the slice's"
+    ms="$ms · $(sed -n "s/^gate: $lane [0-9]*s · .* · \\([0-9]*\\/[0-9]*\\) case$/\\1/p" "$d/verdict.txt" | grep . || echo no) case"
     [ "$sh" = "$ms" ] || differs="$differs $lane (gate.sh $sh; gate.ms ${ms:-no line})"
   done
   if [ -z "$differs" ]; then say "gate: shadow verdict: tools/gate.ms counts the same reds in $n lane(s)"
