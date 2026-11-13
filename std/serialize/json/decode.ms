@@ -671,6 +671,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 		callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "jsonValueToStructE" },
 		arguments: [jv, { kind: NodeKind.MemberExpr, line: jv.line, column: jv.column, object: witness, property: "base", nodeType: base, isOptional: false }, errs, pfx],
 	});
+	const unionHoldsNull = (u: Node): boolean => {		for (const m of u.typExprMembers) {			if (m.kind == NodeKind.Identifier && m.name == "null") return true;		}		return false;	};	const allObjects = (members: Node[]): boolean => {		for (const m of members) {			const impl = getTypeImpl(m);			if (m.kind != NodeKind.TypeObject && (impl == null || impl.kind != NodeKind.TypeObject)) return false;		}		return true;	};
 	let tt = implementationOf(witness);
 	if (tt.kind == NodeKind.TypeUnion) {
 		let nonNullCount: int32 = 0;
@@ -899,7 +900,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 		// to the surface union). Missing/null decodes to null; a present
 		// value takes the strict X read, so a wrong kind is still an error.
 		// X is atomic, a struct or an array; an array X takes the required-array read.
-		if (fcore.kind == NodeKind.TypeUnion) {
+		if (fcore.kind == NodeKind.TypeUnion && unionHoldsNull(fcore)) {
 			let optCount: int32 = 0;
 			let optMember: Node | null = null;
 			let optSawNull: boolean = false;
@@ -929,7 +930,15 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 				continue;
 			}
 			const optImpl: Node | null = optSawNull && optCount == 1 && optMember != null ? getTypeImpl(optMember) : null;
-			if (optImpl != null && optImpl.kind == NodeKind.TypeObject) {
+			const optVariants: Node[] = [];
+			if (optSawNull && optCount > 1) {
+				for (const m of fcore.typExprMembers) {
+					if (m.kind == NodeKind.Identifier && m.name == "null") continue;
+					optVariants.push(m);
+				}
+			}
+			const flatVariants: boolean = optVariants.length > 1 && allObjects(optVariants);
+			if (flatVariants || (optImpl != null && (optImpl.kind == NodeKind.TypeObject || optImpl.kind == NodeKind.TypeUnion))) {
 				const optObj: Node = {
 					kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
 					callee: {
@@ -961,7 +970,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 						callee: { kind: NodeKind.Identifier, line: jv.line, column: jv.column, name: "jsonValueToStructE" },
 						arguments: [
 							optObj,
-							{ kind: NodeKind.MemberExpr, line: jv.line, column: jv.column, object: witness, property: fname, nodeType: ftype, isOptional: false },
+							{ kind: NodeKind.MemberExpr, line: jv.line, column: jv.column, object: witness, property: fname, nodeType: flatVariants ? { kind: NodeKind.TypeUnion, line: jv.line, column: jv.column, typExprMembers: optVariants } : ftype, isOptional: false },
 							errs,
 							{ kind: NodeKind.BinaryExpr, line: jv.line, column: jv.column, operator: "+", left: pfx, right: { kind: NodeKind.StringLiteral, line: jv.line, column: jv.column, value: fname + "." } },
 						],
@@ -1133,7 +1142,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 			} else if (ec.kind == NodeKind.Identifier) {
 				en = ec.name;
 				elemIsStruct = namesStruct(ec);
-			} else if (ec.kind == NodeKind.TypeObject) {
+			} else if (ec.kind == NodeKind.TypeObject || (ec.kind == NodeKind.TypeUnion && !unionHoldsNull(ec))) {
 				elemIsStruct = true;
 			} else if (distinctBase(ec) != null) {
 				elemIsDistinct = true;
@@ -1275,7 +1284,7 @@ export macro jsonValueToStructE(jv: Node, witness: Node, errs: Node, pfx: Node):
 		// Nested struct — recurse through the macro itself. The witness is a
 		// MemberExpr carrying the field's type-AST; it is consumed by the
 		// re-expansion and never evaluated at runtime.
-		if (fcore.kind == NodeKind.TypeObject) {
+		if (fcore.kind == NodeKind.TypeObject || fcore.kind == NodeKind.TypeUnion) {
 			const reqObjCall: Node = {
 				kind: NodeKind.CallExpr, line: jv.line, column: jv.column,
 				callee: {
