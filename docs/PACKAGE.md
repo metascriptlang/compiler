@@ -384,8 +384,12 @@ merging by shape gives that result without intercepting calls (`keepOne`,
   Limits: `addArgs` and the `args` of `runArtifact` take `string[]` only, because array elements
   are invariant ([LANG.md](LANG.md) "Elements are invariant"); `systemCommand` accepts a
   `string[]` variable as well as a mixed list. A command with `env` fails on Windows
-  (`setEnvironmentVariable is not supported on Windows yet`, read in `runCommand`, not run). Not
-  verified: macOS.
+  (`error: moded: setEnvironmentVariable is not supported on Windows yet`, d87, 2026-11-14): the
+  builder sets it through `/usr/bin/env`, and passing it through `spawn` needs `envPairs` of
+  `std/process` in the std of the compiler that builds the builder. A command past its `timeout`
+  on Windows has only itself killed, as a Node `subprocess.kill()` does there (`ran past its
+  timeout of 500 ms; it was killed, and the processes it started were not`, d87, the same day);
+  elsewhere its process group dies with it. Not verified: macOS.
 - A command with no output file, no captured stdout and no check runs every time, streams its
   output and gets no stdin; `hasSideEffects = true` makes any command run every time.
 - `expectExitCode(n)` makes the command a check: it is reused only after it passed, and a failure
@@ -458,8 +462,14 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
 
 - **A lane node never fails; its log ends `SECS= RC= END`.** A node that fails stores no output, so
   a red lane would leave the verdict nothing to read. The time limit therefore lives in the lane's
-  wrapper, which kills the process group and writes `TIMEOUT after Ns, process tree killed`; the
-  node's own `timeout` is a backstop 60 s later.
+  wrapper, which polls as `tools/gate.sh` `bounded` does, kills the process group (on Windows
+  each of its process trees first, `taskkill //T //F`, as `kill_group`) and writes `TIMEOUT after
+  Ns, process tree killed`; the node's own `timeout` is a backstop 60 s later. `-Dlanes=lsp
+  -DlaneLimit=3`, 2026-11-14: on rtx `TIMEOUT after 3s, process tree killed`, `SECS=3`, `RC=137`,
+  no compiler process left; on d87 the same three lines, run by a builder that passes a node's
+  environment on Windows, which main does not have yet. Without the limit the lane ran 55 s on
+  rtx (`RC=0`) and 110 s and 134 s on d87 (69 of 69, then 68 with `a module the second build.ms
+  global import reaches sees the first one only` timing out after 10 s).
 - **The reruns are a second build, not work inside the verdict tool**, because `std/process` refuses
   `ownProcessGroup` on Windows and a rerun made by the tool could not kill a hung process tree there.
   `tools/gate.ms --rerun-with=<msc>` reads the changed paths from git, plans, runs
