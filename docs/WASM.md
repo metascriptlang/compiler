@@ -120,9 +120,27 @@ three handle checks and drop the site.
   touching state that wasm-placed code uses (`refuseJsSideHit`), so dropping it changes no wasm
   result. Pin `wasmmix/programs/topLevelOnce`: on main's compiler mixed printed `helper ready`,
   `unread initialized`, `placed ready` twice; with the fix all four columns print each once, and
-  the full `check.sh` reads `wasmmix: 103/103 pass` (m1m, 2026-11-13). Still twice: a constant that
-  wasm-placed code reads, initialized by a call with an effect, runs that initializer on both halves
-  (probe: `init read` and `init seed` twice, `init unread` once, the all-C program each once).
+  the full `check.sh` reads `wasmmix: 103/103 pass` (m1m, 2026-11-13). An initializer that
+  wasm-placed code reads still ran on both halves then; the next bullet closes that.
+- **An initializer wasm-placed code reads runs once, in wasm, where its declaration stands**
+  (2026-11-13). Calling a module's whole `__Init000` from its JS body would still run `helper base`
+  before `helper a` when top-level statements and initializers interleave, so the unit is the
+  declaration: a module variable, a static field or a destructuring whose initializer calls,
+  constructs or reads a variable (`initOnce.ms` `runsCode`). The JS build reaches from the `@wasm`
+  functions and the handle classes through names, `new` and the initializers it reaches
+  (`planInitThunks`); each declaration reached gets a thunk `msbInit<n>`, an ordinary `@wasm`
+  function the wasm half appends to the module's source (`--wasm-half=<plan>`), checks and wraps,
+  with the initializer moved into its body after checking. The JS initializer becomes a call to the
+  thunk's wrapper, so it runs at its place in the JS init order, which is the all-C order; it
+  returns the value when JS-side code reads it too, through the result forms every `@wasm` function
+  has (a getter per name for a destructuring). The wasm half drops every other initializer that
+  runs code, and the alive-set check still stops the build if wasm-placed code reaches one. An
+  initializer of literals stays in both halves. Pin `wasmmix/programs/initOnce` (interleaved
+  prints, a static field, a destructuring, a block, `Math.random()`): red on the previous
+  compiler (mixed printed `helper base` first), green on the candidate, and the full `check.sh`
+  reads `wasmmix: 104/104 pass` (m1m, 2026-11-13); the probe of a random constant prints
+  `same true`, where it printed `same false`. Not measured: the startup cost of one boundary call
+  per moved initializer.
 - **Copies by default; zero copy only through a view.** A writable Span copied back measured
   2680 ns for 1000 floats where a view measured 1090 (table below), so views exist; a view is
   only safe because nothing can grow memory while it is open, which is enforced at runtime by the

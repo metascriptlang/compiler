@@ -3365,11 +3365,22 @@ called during a call with a `ref` or `out` parameter it throws `a kept callback 
 'bump' holds a copy of its ref parameter 'total', so JS would see the variable as it was before the
 call and a write to it would be lost`, for the same reason.
 
-**Top-level code runs once, on the JS side.** A module with `@wasm` functions, and every module of the
-program it imports, runs its top-level statements and the initializers of variables that no wasm-placed code
-names only on the JS side, so a `console.log` there prints once, as in the all-C program. A
-constant that wasm-placed code reads is initialized in both halves, so an initializer with an
-effect (`const k = loadK()` that prints) runs twice.
+**Top-level code and initializers run once, in the all-C order.** A module's top-level statements
+run on the JS side. An initializer of a module variable, a static field or a destructuring
+declaration that calls, constructs or reads a variable runs once, where the declaration stands:
+in wasm when wasm-placed code reads what it declares (directly or through another initializer),
+in JS otherwise. When JS-side code reads the same value, JS gets a copy, so
+`export const stamp = Math.random()` is one value on both sides. An initializer of literals is
+computed by both halves, which gives the same value and has no effect. Refused, because each
+half would keep its own copy or the value cannot be copied:
+
+- a value both halves read that is mutable (`let`, a static field that is not `readonly`): `'total'
+  in 'k.ms' cannot cross the JS/wasm boundary: its value, which JS-side code reads while
+  wasm-placed code reads it too, so its initializer runs once in wasm and JS gets a copy, is
+  mutable, …; reach it only through @wasm functions, or make it a const`;
+- a value both halves read whose type has no copy form (the result types below);
+- a destructuring with a default value or a rest property whose names wasm-placed code reads:
+  `declare the value as one variable and read its parts`.
 
 **Refused at compile time, with the reason and the fix in the message:**
 
