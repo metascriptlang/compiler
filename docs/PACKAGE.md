@@ -448,6 +448,73 @@ Each of these is pinned in `src/test/projectConfigCommands.ms` (59 tests, candid
 `test -- src/utils/color.ms --tests-in-dir` reran after an edit to `color.ms` and was reused after
 the revert. Not verified: Windows and macOS, a check over a whole suite.
 
+### Recompiler's gate lanes as nodes
+
+Recompiler's root `build.ms` declares one log-producing node per land-gate lane (`lanes`, selected
+by `-Dlanes=`, tested compiler `-Dsubject=`, time limit `-DlaneLimit=`), the reruns of a new red
+(`reruns`, `-Drerun=`, `-DrerunBase=`) and the verdict (`gate`, `tools/gate.ms`). `tools/gate.sh`
+still gates every land; these nodes run beside it. What the code cannot say, measured on rtx,
+2026-11-13, builder `fca3f0a80cc6`:
+
+- **A lane node never fails; its log ends `SECS= RC= END`.** A node that fails stores no output, so
+  a red lane would leave the verdict nothing to read. The time limit therefore lives in the lane's
+  wrapper, which kills the process group and writes `TIMEOUT after Ns, process tree killed`; the
+  node's own `timeout` is a backstop 60 s later.
+- **The reruns are a second build, not work inside the verdict tool**, because `std/process` refuses
+  `ownProcessGroup` on Windows and a rerun made by the tool could not kill a hung process tree there.
+  `tools/gate.ms --rerun-with=<msc>` reads the changed paths from git, plans, runs
+  `msc build -Drerun=… -DrerunBase=<merge base> reruns` and judges both sides' logs. Tree
+  `a5471a26e199` with a bug seeded in `src/lexer/chars.ms`, load 26 to 52: 94 s including main's
+  candidate, `tests · 8 red · 7 new · 1 not the slice's`. Not run for real: the corpus, san, tsan,
+  guard, hcr, lsp and suite rerun commands.
+- **Main's side is built in `out/gate-main` of the gating checkout**, a worktree of the merge base
+  that runs the same `reruns` build. Rejected: one candidate of main shared by every gate on the host
+  under a lock, as `gate.sh` keeps in `~/.metascript/gate-main/<tree>`, because `std/fs` has no file
+  lock; the cost is one build of main's candidate per gate that reruns anything.
+- **The tsan lane takes the san lane's log as an input**, because it reads the `out/corpus/threaded.txt`
+  that san run wrote for the same compiler and selection. A checkout of `a5471a26e199` with this
+  `build.ms`, `MSCORPUS_ONLY=400-actorHeapStr,401-actorSharedActorField msc build -Dlanes=san,tsan lanes`:
+  with the edge, san `2 pass`, then tsan `2 pass`; without it they start together and tsan ends
+  `✗ TSan lane: no out/corpus/threaded.txt`, `RC=1`. No other order is declared: `gate.sh` runs its
+  lanes in phases (`PHASES`) and stops later phases on a new red, which is the driver's policy.
+  Rejected: chaining the phases through their logs, because a log differs on every run and one
+  edited shell script would then rerun the corpus.
+- **The bundler-plugin check runs against bundlers a node installs into its output directory**
+  (`npm ci` on a staged copy of `tools/bundler-plugin/harness`), where `gate.sh` installs into the
+  checkout. A checkout of `a5471a26e199` with these nodes: the install `added 88 packages in 539ms`,
+  the check 33 s at load 6 (45 to 100 s at load 39), native `188` of `188`; a second run reuses all
+  three nodes in under 1 s; an edit of `vite.d.ts` reruns the self-test and the check and reuses
+  the install. The consumer cells gave 6 of 7 on rtx, `rollup-watch-established` being red with
+  `gate.sh`'s own layout too (8 of 8 runs). The check still links `tools/bundler-plugin/node_modules`
+  (ignored) to that directory, because the adapters resolve bare imports from their own directory.
+  It runs after `test.test.mjs`, whose self-test executes `gate.sh`'s `run_tools_lane` in the
+  checkout and rewrites that link: run together, the check failed once with
+  `Cannot find package 'magic-string'`.
+- **The suite and tier nodes declare `maxRss`** (8e9 and 6e9), which admits them by RAM in place of
+  `gate.sh`'s `TEST_JOB_KB` estimate of 3.5 GB. Tree `9d23d79b32ed`, 16 cores,
+  `msc build --summary=all -Dlanes=suite,tests lanes`, 687 s, every `RC=0`:
+
+  ```
+  +- lane suite success 8m MaxRSS:5G
+  +- lane tests.js success 3m MaxRSS:3G
+  +- lane tests.handoff success 10m MaxRSS:4G
+  +- lane tests.lang success 3m MaxRSS:4G
+  +- lane tests.fmt success 21s MaxRSS:700M
+  +- lane tests.c0 success 7m MaxRSS:4G
+  ```
+
+  (`checker3pass` and `helpers` 3G, `c1` and `c2` 4G, `crypto` none.) The summary rounds a peak down
+  to the gigabyte, so the bounds leave at least 20 percent over the real peak; a tier that grows past
+  its bound fails as `peaked at …, above its declared maxRss`, and the bound is then measured again.
+  `-Dlanes=tests --maxrss=5G` stops before anything runs: `lane tests.js: declares maxRss 5722 MiB,
+  above the 4768 MiB this build may use`. The bound covers a node's largest process (`ru_maxrss`),
+  so it says nothing for a lane that runs many compilers at once (corpus, san, guard), and the cap
+  is the host's total RAM, not what other gates on the host leave free, which is what `gate.sh`
+  reads from `MemAvailable`.
+
+Not verified: every lane in one build on one host, macOS and Windows, and a real land gated by
+these nodes.
+
 ## Packages
 
 A package is a directory with a `build.ms` carrying a `package` block. `name` and `version` are
