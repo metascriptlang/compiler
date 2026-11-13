@@ -282,3 +282,4 @@ import "./genericDefaultValidation";
 import "./genericDefaultClone";
 import "./genericDefaultMacro";
 import "./ptrEscapeCall";
+import "./classUnionMethod";
