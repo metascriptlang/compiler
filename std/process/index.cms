@@ -38,6 +38,7 @@ extern function msProcSpawnGetUnsupported(): int32;
 extern function msProcessGetEnv(name: string): string;
 extern function msProcessSetEnv(name: string, value: string): number;
 extern function msProcessUnsetEnv(name: string): number;
+extern function msProcessEnvAt(index: number): string;
 extern function msProcessPlatform(): string;
 extern function msProcessArch(): string;
 extern function msProcessExecPath(): string;
@@ -231,6 +232,17 @@ export class env {
 	static delete(name: string): boolean {
 		return msProcessUnsetEnv(name) != 0.0;
 	}
+}
+
+export function envPairs(): Map<string, string> {
+	const variables = new Map<string, string>();
+	for (let i = 0; true; i++) {
+		const entry = msProcessEnvAt(i);
+		if (entry == "") break;
+		const equals = entry.indexOf("=", 1);
+		if (equals > 0 && !entry.startsWith("=")) variables.set(entry.slice(0, equals), entry.slice(equals + 1));
+	}
+	return variables;
 }
 
 // Time primitives moved to std/core/date (Date.now() — wall-clock) and

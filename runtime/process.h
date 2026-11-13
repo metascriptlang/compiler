@@ -2108,6 +2108,33 @@ static inline double msProcessUnsetEnv(msString name) {
 #endif
 }
 
+static inline msString msProcessEnvAt(double index) {
+#if defined(_WIN32)
+	LPWCH block = GetEnvironmentStringsW();
+	if (!block) return MS_EMPTY_STRING;
+	const WCHAR* at = block;
+	for (double i = 0; *at != 0 && i < index; i += 1) at += wcslen(at) + 1;
+	msString entry = MS_EMPTY_STRING;
+	if (*at != 0) {
+		int needed = WideCharToMultiByte(CP_UTF8, 0, at, -1, NULL, 0, NULL, NULL);
+		char* utf8 = needed > 0 ? (char*)malloc((size_t)needed) : NULL;
+		if (utf8 && WideCharToMultiByte(CP_UTF8, 0, at, -1, utf8, needed, NULL, NULL) > 0) entry = msStringFromCStr(utf8);
+		free(utf8);
+	}
+	FreeEnvironmentStringsW(block);
+	return entry;
+#elif defined(__APPLE__)
+	char** at = *_NSGetEnviron();
+	for (double i = 0; at && *at && i < index; i += 1) at++;
+	return (at && *at) ? msStringFromCStr(*at) : MS_EMPTY_STRING;
+#else
+	extern char **environ;
+	char** at = environ;
+	for (double i = 0; at && *at && i < index; i += 1) at++;
+	return (at && *at) ? msStringFromCStr(*at) : MS_EMPTY_STRING;
+#endif
+}
+
 // Time primitives (wall-clock, monotonic) live in runtime/core/datetime.h,
 // surfaced via std/core/date (Date.now()) and std/core/time (time.monotonicMs()) preludes.
 
