@@ -72,7 +72,8 @@ test "the split ESM tree loads in node with an aliased extern" {
 	const dir = sandbox("split", second);
 	const built = msc(dir, ["build", "--target=js", "--split", `--output=${dir}/tree`, "main.ms"]);
 	assert !built.startsWith("FAILED"), built;
-	const r = execFileCapture("node", [`${dir}/tree/main.js`]);
+	const entry = "const t = process.argv[1], m = require(t + '/_manifest.json').modules.find((x) => x.source.endsWith('/main.ms')); import(t + '/' + m.out);";
+	const r = execFileCapture("node", ["-e", entry, `${dir}/tree`]);
 	assert r.ok && r.value.trim() == "second true", r.ok ? r.value : r.error.errorOutput;
 }
 
