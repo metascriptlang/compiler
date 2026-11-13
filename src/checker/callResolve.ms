@@ -31,7 +31,7 @@ import { forEachChild } from "../ast/visitor";
 import { ScopeKind, openScope, closeScope, SymbolFlag, findOverloadImpl, hasFlag, hasOverloads, isTypeSymbol, lookupSymbol, makeSymbol, makeSymbolState, markConsumed, setFlag, symbolCarried, parentClassSymOf, enumMemberName, RoutineFlag, routineFlagSet, classDeclNodeOf, builtinKindName } from "./symbol";
 import { isBuiltinDirective } from "./decoratorHelpers";
 import { expandTemplate, isTemplateSym, gensymSplicePrefix, referencedParams, substituteParams } from "./template";
-import { unwrapCursor, boxedCountedReference, boxedReferenceRefusal, boundParamName, enterSpeculation, leaveSpeculation, TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, isPlainFunctionPointer, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, createBooleanLiteral, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase, holdsInferred, createBorrow, typedArrayElement, withoutUnowned } from "./types";
+import { unwrapCursor, boxedCountedReference, boxedReferenceRefusal, boundParamName, enterSpeculation, leaveSpeculation, TypeVisitSet, typeVisitAdd, isOutParam, widenNumberLiteralType, unionHasMemberOfKind, isArrayType, nonPrimitiveType, isPlainDataType, needsValueCopy, peelTransparentInstance, skipModifier, peelSink, isPlainFunctionPointer, symGenericParams, builtinGenericParams, genericParamsOf, genericParamNamesOf, distinctCallTarget, distinctBody, borrowedDotBase, createVar, UnifyBindings, booleanType, collectStringDiscriminantValues, createArc, isReadonlyView, withoutReadonlyView, createReadonlyView, createArray, createEnumLiteral, createFunction, createGenericInstance, createLocked, createPrimitive, createPromise, createRef, createSpawnHandle, createUnifyBindings, detectUnionDiscriminant, duFieldRequiresNarrowing, duSharedFieldOffsetDiffers, errorType, findFieldInVariant, enumMemberLiteralOf, findVariantByFieldName, float64Type, getDiscriminantName, getElementType, getMinArity, getProperty, getResultOkType, getReturnType, hasGenericParams, inferredType, instantiateGenericBody, int32Type, isAffineAwaitable, isAtomicRef, isAwaitable, isBrandDistinct, isDiscriminatedUnion, isIntegerType, isLockedRef, isMaybeType, isNumeric, lockedPayloadType, unknownRefusal, unknownRefusalText, UnknownRefusal, isResult, isStringLike, isUnknownType, isUnresolvedType, mergeUnifyBindings, nullType, peelToStructOrUnion, positionalFieldsOf, setMinArity, stringType, typeDisplayName, typeNameOf, unifyType, unionVariantHasProperty, createUnion, unwrapRef, unwrapRefBase, unwrapRefNullUnion, unwrapVarargs, voidType, findVariantByBooleanDiscriminant, booleanLiteralValue, createBooleanLiteral, peelThrough, PEEL_ALL, duSharedFieldSlotDiffers, awaitedType, getResultErrType, isPrimitiveKindName, isTypeofTag, createStringLiteral, callMinArity, functionSlotOf, duVariantIndexOfType, derivesFromClass, matchUnionBehindInstance, isIterator, PEEL_ALIAS, isStdCollection, isPlainObjectType, bindParam, bindAt, boundSlot, substituteBound, substituteParams as substituteTypeParams, declaredTypeParams, declaredParamsOf, isArrayShaped, createTuple, createTypeRef, numberType, PEEL_MAX_DEPTH, isPrimitiveKind, instantiatedUnionBehind, createSink, mappedIsGeneric, primitiveThroughMapped, literalBase, mappedModifiers, MappedModifier, literalUnionBase, holdsInferred, createBorrow, typedArrayElement, withoutUnowned } from "./types";
 import { receiverOf } from "./effects";
 import { locBefore, checkActorArgSendable, checkArcPointeeSendable, checkLockedPayloadSendable, checkMoveSoleOwner, checkSpawnCaptures, hasNonisolatedField, refuseUnownedCrossing, isCurrentActorRef, refuseSuspendingLockCallback, refuseKeptView } from "./sendable";
 import { callThroughProxy, checkNewProxy, proxyPartsOf, readThroughProxy } from "./proxy";
@@ -2456,7 +2456,11 @@ function checkCallExprInner(ctx: CheckerContext, node: Node, expectedType: Type 
 		const methodSym = node.resolvedSym;
 		const methodOrigin = methodSym != null && methodSym.instantiatedFrom != null ? methodSym.instantiatedFrom : methodSym;
 		const methodEntry = methodOrigin != null && soleMethodCandidate(ctx, methodOrigin, d.callee.data as MemberExprData) ? dispatchEntryFor(ctx.dispatchRegistry, methodOrigin) : null;
-		if (methodEntry != null && methodSym != null && methodSym.symbolType != null) {
+		if (methodSym != null && hasFlag(methodSym, SymbolFlag.UnionMethod)) {
+			node.flags = node.flags.incl(NodeFlag.ExtCall);
+			extPreResolved = true;
+			extRecvFormal = methodSym.symbolType.typeChildren[0];
+		} else if (methodEntry != null && methodSym != null && methodSym.symbolType != null) {
 			node.flags = node.flags.incl(NodeFlag.ExtCall);
 			extPreResolved = true;
 			extRecvFormal = methodSym.symbolType.typeChildren.length > 0 ? methodSym.symbolType.typeChildren[0] : null;
@@ -6216,6 +6220,79 @@ function hasThisParam(sym: Symbol): boolean {
 		&& sym.symbolType.typeNames.length > 0 && sym.symbolType.typeNames[0] == "this";
 }
 
+function classOfUnionMember(m: Type): Symbol | null {
+	return m.kind == TypeKind.Ref && m.typeReturn != null && m.typeReturn.kind == TypeKind.Struct && m.sym != null && m.sym.symbolKind == SymbolKind.Class ? m.sym : null;
+}
+
+// A method every class of a union declares is a method of the union when each member has one
+// signature taking the same parameters; the call's result is the union of the members' results.
+// Returns null when the union holds a non-class member or no member declares the name, so the
+// ordinary missing-member error stays.
+function unionClassMethod(ctx: CheckerContext, node: Node, d: MemberExprData, ut: Type): Type | null {
+	if (ut.typeChildren.length < 2) return null;
+	const methods: Symbol[] = [];
+	let missingIn = "";
+	for (const m of ut.typeChildren) {
+		const cls = classOfUnionMember(m);
+		if (cls == null) return null;
+		const entry = dispatchMethodOf(ctx.dispatchRegistry, cls, d.property);
+		if (entry == null || entry.sym.symbolKind != SymbolKind.Function || !hasThisParam(entry.sym)) {
+			if (missingIn == "") missingIn = cls.name;
+			continue;
+		}
+		methods.push(entry.sym);
+	}
+	if (methods.length == 0) return null;
+	const at = node.location;
+	const unionText = typeDisplayName(ut);
+	if (missingIn != "") {
+		addError(ctx, `Property '${d.property}' does not exist on type '${unionText}': '${missingIn}' has no method '${d.property}'`, at.line, at.column);
+		return errorType();
+	}
+	const first = methods[0];
+	ensureShaped(first, ctx);
+	const firstType = first.symbolType;
+	const returns: Type[] = [];
+	for (let mi = 0; mi < methods.length; mi += 1) {
+		const meth = methods[mi];
+		ensureShaped(meth, ctx);
+		const mt = meth.symbolType;
+		const owner = ut.typeChildren[mi].sym!.name;
+		if (meth.overloads.length > 0 || hasGenericParams(mt)) {
+			addError(ctx, `the method '${d.property}' of '${owner}' is ${meth.overloads.length > 0 ? "overloaded" : "generic"}, so a call on '${unionText}' has no single signature: narrow the value to one class first`, at.line, at.column);
+			return errorType();
+		}
+		let same = mt.typeChildren.length == firstType.typeChildren.length && getMinArity(mt) == mt.typeChildren.length;
+		for (let pi = 1; same && pi < mt.typeChildren.length; pi += 1) {
+			if (!sameType(mt.typeChildren[pi], firstType.typeChildren[pi])) same = false;
+		}
+		if (!same) {
+			addError(ctx, `the method '${d.property}' takes different parameters in '${ut.typeChildren[0].sym!.name}' and '${owner}', so a call on '${unionText}' has no single signature: narrow the value to one class first`, at.line, at.column);
+			return errorType();
+		}
+		const ret = mt.typeReturn ?? voidType();
+		let seen = false;
+		for (const r of returns) {
+			if (sameType(r, ret)) seen = true;
+		}
+		if (!seen) returns.push(ret);
+	}
+	const params: Type[] = [ut];
+	const names: string[] = ["this"];
+	for (let pi = 1; pi < firstType.typeChildren.length; pi += 1) {
+		params.push(firstType.typeChildren[pi]);
+		names.push(firstType.typeNames[pi]);
+	}
+	const result = returns.length == 1 ? returns[0] : createUnion(returns);
+	const sym = makeSymbol(d.property, SymbolKind.Function, createFunction(params, names, result), false);
+	sym.state = SymbolState.Shaped;
+	sym.modulePath = ctx.modulePath;
+	setFlag(sym, SymbolFlag.UnionMethod);
+	node.resolvedSym = sym;
+	sgRecordSym(ctx, at.line, at.column + 1, at.column + 1 + d.property.length, first, firstType, SymbolKind.Method, d.property, unionText, false);
+	return createFunction(params.slice(1, params.length), names.slice(1, names.length), result);
+}
+
 // A timed spawn's deadline is taken at the await written around it: the spawn is
 // that await's operand, or an element of the array literal of the Promise.all it
 // awaits, which the group lowering waits on with the deadline.
@@ -6807,6 +6884,10 @@ export function checkMemberExpr(ctx: CheckerContext, node: Node, expectedType: T
 	// No hardcoded dispatch: Map and Set classes declare @builtin methods in std/core/structure.
 
 	if (isUnresolvedType(propType) && ctx.inGenericContext > 0 && resolvedObjType.kind == TypeKind.GenericParam) return propType;
+	if (isUnresolvedType(propType) && resolvedObjType.kind == TypeKind.Union) {
+		const shared = unionClassMethod(ctx, node, d, resolvedObjType);
+		if (shared != null) return shared;
+	}
 	// Class method lookup: the method the class Symbol declares under this name.
 	// Filters by static/instance: static access (SymbolKind.Class) only matches static methods,
 	// instance access only matches instance methods. Checks overloads if primary doesn't match.

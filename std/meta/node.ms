@@ -262,6 +262,7 @@ export enum SymbolFlag {
 	OwnedCycle, // the trace of a class that stays under the collector only because this build checks owned cycles: a dead set holding one stops the program
 	JsHost, // @jsHost class, and each of its members: on the JS backend the host's class of the same name is the value and its members
 	WholeArrayView, // a span the loop-span cache reads a whole array through from its first element: two of them share storage only when they view the same array
+	UnionMethod, // a method called on a union of classes: the checker's signature shared by every member's method; C and Raiser call it through a dispatcher on the union's tag
 }
 
 // The compiler-intercepted operation a symbol stands for: `@builtin("Name")` in the standard
