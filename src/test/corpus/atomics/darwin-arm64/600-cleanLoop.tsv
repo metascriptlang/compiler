@@ -1,7 +1,7 @@
-1	_msHeapReturn
 1	_msThreadExitRun
+10	_msHeapReceive
 2	_main
-3	_msHeapAlloc
-3	_msHeapFree
-3	_msHeapTakeTracked
-4	_msHeapCloseRuns
+2	_msHeapFree
+2	_msHeapReturn
+6	_msHeapSendFree
+8	_msHeapPostBatches

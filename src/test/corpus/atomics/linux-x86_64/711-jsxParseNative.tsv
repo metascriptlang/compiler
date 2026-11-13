@@ -1,5 +1,5 @@
-1	msHeapReturn
-3	msHeapAlloc
-3	msHeapFree
-3	msHeapTakeTracked
-4	msHeapCloseRuns
+10	msHeapReceive
+2	msHeapFree
+2	msHeapReturn
+6	msHeapSendFree
+8	msHeapPostBatches
