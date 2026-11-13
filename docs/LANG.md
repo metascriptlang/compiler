@@ -1946,8 +1946,9 @@ type Box<T> = { value: T };
 ```ms
 Partial<T>           // Every property optional: `{ [P in keyof T]?: T[P] }`
 Required<T>          // Every property required: `{ [P in keyof T]-?: T[P] }`
-Readonly<T>          // Read-only view of T — deep, never converts back to T; `readonly T[]` for arrays.
-                     // See Spawn.
+Readonly<T>          // Read-only view of T — deep, never converts back to T. See Spawn.
+ReadonlyArray<T>     // `readonly T[]`, as in TypeScript: no write reaches the array's slots or length
+                     // through it, and its elements stay T. T[] converts to it, it never converts back.
 Record<K, V>         // Literal keys K give an object type; `string` or `number` keys give Map<K, V>
 Pick<T, K>           // The properties of T named by K; K must be a subset of keyof T
 Omit<T, K>           // The properties of T not named by K
