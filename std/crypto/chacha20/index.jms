@@ -9,11 +9,16 @@
 
 import { Buffer } from "std/core/buffer";
 import { ByteInput } from "std/core/buffer/bytes";
-import { bytesOf, outputArray, outputBuffer } from "../pure/bytes";
-import { keyWords, xchachaSealInto, xchachaOpenInto } from "../pure/chacha";
+import { bytesOf } from "../pure/bytes";
+import { keyWords } from "../pure/chacha";
 import { randomBytesSync } from "../index";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 export { CryptoError, CryptoErrorKind } from "../errors";
+
+when (!nodejs) {
+	import { outputArray, outputBuffer } from "../pure/bytes";
+	import { xchachaSealInto, xchachaOpenInto } from "../pure/chacha";
+}
 
 when (nodejs) {
 	import { NodeInput, nodeInput, nodeInputLength, nodeInputHead, bufferOver } from "../pure/nodeCrypto";
@@ -123,58 +128,38 @@ export function sealSync<P extends ByteInput, A extends ByteInput>(key: ChaChaKe
 	when (nodejs) {
 		return sealNode(key, nodeInput(plainText), nodeInput(aad));
 	} else {
-		return sealSyncOwned(key, bytesOf(plainText), bytesOf(aad));
+		const nonce = randomBytesSync(24);
+		if (!nonce.ok) {
+			return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "seal", "the platform random source failed"));
+		}
+		const text = typeof plainText == "string" ? plainText.asBytes() : plainText;
+		const sealed = outputArray(24 + text.length + 16);
+		for (let i = 0; i < 24; i++) sealed[i] = nonce.value[i];
+		xchachaSealInto(key._words, typeof aad == "string" ? aad.asBytes() : aad, text, sealed);
+		return Result.ok(outputBuffer(sealed));
 	}
-}
-
-function sealSyncOwned(key: ChaChaKey, plainText: uint8[], aad: uint8[]): Result<Buffer, CryptoError> {
-	const nonce = randomBytesSync(24);
-	if (!nonce.ok) {
-		return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "seal", "the platform random source failed"));
-	}
-	const text = plainText;
-	const sealed = outputArray(24 + text.length + 16);
-	for (let i = 0; i < 24; i++) sealed[i] = nonce.value[i];
-	xchachaSealInto(key._words, aad, text, sealed);
-	return Result.ok(outputBuffer(sealed));
 }
 
 export function seal<P extends ByteInput, A extends ByteInput>(key: ChaChaKey, plainText: P, aad: A = ""): Promise<Result<Buffer, CryptoError>> {
-	when (nodejs) {
-		return Promise.resolve(sealNode(key, nodeInput(plainText), nodeInput(aad)));
-	} else {
-		return sealOwned(key, bytesOf(plainText), bytesOf(aad));
-	}
+	return Promise.resolve(sealSync(key, plainText, aad));
 }
-
-async function sealOwned(key: ChaChaKey, plainText: uint8[], aad: uint8[]): Promise<Result<Buffer, CryptoError>> { return sealSyncOwned(key, plainText, aad); }
 
 export function openSync<S extends ByteInput, A extends ByteInput>(key: ChaChaKey, sealedBytes: S, aad: A = ""): Result<Buffer, CryptoError> {
 	when (nodejs) {
 		return openNode(key, nodeInput(sealedBytes), nodeInput(aad));
 	} else {
-		return openSyncOwned(key, bytesOf(sealedBytes), bytesOf(aad));
+		const sealed = typeof sealedBytes == "string" ? sealedBytes.asBytes() : sealedBytes;
+		if (sealed.length < 40) {
+			return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "open", "sealed data too short (need nonce+mac)"));
+		}
+		const plain = outputArray(sealed.length - 40);
+		if (!xchachaOpenInto(key._words, typeof aad == "string" ? aad.asBytes() : aad, sealed, plain)) {
+			return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "open", "authentication tag mismatch"));
+		}
+		return Result.ok(outputBuffer(plain));
 	}
-}
-
-function openSyncOwned(key: ChaChaKey, sealedBytes: uint8[], aad: uint8[]): Result<Buffer, CryptoError> {
-	const sealed = sealedBytes;
-	if (sealed.length < 40) {
-		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "open", "sealed data too short (need nonce+mac)"));
-	}
-	const plain = outputArray(sealed.length - 40);
-	if (!xchachaOpenInto(key._words, aad, sealed, plain)) {
-		return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "open", "authentication tag mismatch"));
-	}
-	return Result.ok(outputBuffer(plain));
 }
 
 export function open<S extends ByteInput, A extends ByteInput>(key: ChaChaKey, sealedBytes: S, aad: A = ""): Promise<Result<Buffer, CryptoError>> {
-	when (nodejs) {
-		return Promise.resolve(openNode(key, nodeInput(sealedBytes), nodeInput(aad)));
-	} else {
-		return openOwned(key, bytesOf(sealedBytes), bytesOf(aad));
-	}
+	return Promise.resolve(openSync(key, sealedBytes, aad));
 }
-
-async function openOwned(key: ChaChaKey, sealedBytes: uint8[], aad: uint8[]): Promise<Result<Buffer, CryptoError>> { return openSyncOwned(key, sealedBytes, aad); }
