@@ -177,8 +177,9 @@ with msc `1b493b622aca` and bundle `3a7e411898f0` (load average 75):
   instruction sequence with other registers, `%rsp` in place of `%rbp` offsets and different padding before it.
   Both call `memcpy` and `memset` in libc through the PLT.
 
-That leaves how the same loop runs on this CPU (alignment of the loop or of the two arrays it reads and writes).
-Not measured: hardware counters, because `perf` is closed to users on rtx (`perf_event_paranoid` 4).
+The quiet follow-up below isolates instruction placement with a padding-only counterfactual. These earlier
+flag and syscall controls, taken under load, do not independently establish its cause. Hardware counters remain
+unmeasured: `perf` is closed to users on rtx (`perf_event_paranoid` 4), and that restriction was not changed.
 
 The m1m and d87 tables of this run are not usable. m1m gave `--release` 1.18 and `--danger` 0.99 while two jobs of
 the measuring session shared its cores; with `--passC=-mcpu=native`, which compiles the same code, it was 0.99 the
@@ -218,6 +219,71 @@ test binaries it left, `_test_toolchain_*.exe` and `_test_options_*.exe`, exit 0
 Not verified: a quiet host for any speed row; `-mcpu=native` on the M3 Max in a benchmark (it reads `apple-m3`
 there); a cache restored on another machine; a host build on Linux aarch64 or Windows arm64; `--cc=zig`, which
 detects the CPU itself and carries no marker.
+
+## Measured 2026-11-13 — the old toArray gap depends on instruction placement
+
+On rtx (Ryzen 9 9950X), tree `fbae860ba8d2b44510ce5face8ac28b0dcaf2275` of this slice before the checked-store
+block transform, bundle `3a7e411898f0`, a HEAD-matched candidate built by `260e884307c5` compiled
+`src/bench/iter/bench.ms` through each driver. Each arm had its own working directory and `MSC_CACHE_DIR`,
+with `MSC_NO_GLOBAL_CACHE=1`. All 20 emitted C files were byte-identical within each zig/bundle pair.
+Three rounds in a `run-remote.sh --host rtx --quiet 8` window reversed arm order in the middle round:
+
+| map toArray, us/op | zig | bundle |
+|---|---|---|
+| release, median of three process medians | 17.083 | 27.163 |
+| danger, same method | 4.130 | 4.248 |
+
+The release closure's scalar map/store loop has the same instruction sequence in both binaries: 34 bytes,
+including the overflow branch and backedge. Its start is at offset 0 modulo 64 in zig's binary and offset 32
+in the bundle's. A counterfactual moves only that loop into the seven bytes of NOP padding immediately before
+it. It preserves every instruction and call, fixes the overflow branch's relative displacement, retains the
+backedge target, and fills the vacated bytes with NOPs. No function, data, symbol or subsequent instruction
+moves. Two rounds in reverse order, in a separate quiet window:
+
+| release binary | loop start modulo 64 | median us/op |
+|---|---|---|
+| original bundle | 32 | 27.048 |
+| same placement, rewritten NOPs | 32 | 27.053 |
+| moved 1 byte earlier | 31 | 27.348 |
+| moved 2 bytes earlier | 30 | 20.214 |
+| moved 4 bytes earlier | 28 | 16.844 |
+| original zig | 0 | 16.814 |
+
+Thus instruction placement alone recovers the old gap on this program and CPU. This does not identify a
+particular cache or front-end counter event; none was measured. The patched binaries are experimental controls,
+not a compiler fix. No debug information, alignment flag or binary patch was added to the shipped build path.
+Local evidence: `out/toArray-{quiet,layout-quiet}.remote.log`, `out/toArray-trace-quiet-evidence/` (C and assembly),
+and `.probe/toArrayLayout.py` (asserts the changed byte range and both branch targets).
+
+The alignment mechanism is **SAME**, not a semantic divergence to record in NIM-REF. The bundle's LLVM 23.1.4
+sets preferred x86 loop alignment to 16 (`llvm/lib/Target/X86/X86ISelLowering.cpp`, `setPrefLoopAlignment`, line
+2870); `getPrefLoopAlignment` at 64731 only overrides innermost loops for an explicit experiment.
+`llvm/lib/CodeGen/MachineBlockPlacement.cpp:3033-3109` applies that preference to hot loop blocks. The observed
+zig binary also aligns this loop to 16; its placement within 64 bytes is not a stronger loop-alignment contract.
+Zig source read: `16d31ceed5de91b469e010b4a8d515236ad6bf14`, `src/Compilation.zig` `addCCArgs`, including its
+frame-pointer choice at 6707. The drivers' frame-pointer/debug-info and libc-target differences remain real;
+the padding-only control holds those differences fixed rather than attributing the gap to one of them.
+
+After rebasing onto main `8260059f7778`, tree `5dbe85359e153c0967caf2b09f7d2265e68561be` includes the existing
+checked-store block transform (`3b06018ad364`). A fresh candidate through the same bundle, without extra
+compiler flags, gives the following in another quiet window (09:23:26-09:27:48Z, cap 8 minutes), three rounds
+with reversed arm order in the middle round:
+
+| map toArray, us/op | zig | bundle |
+|---|---|---|
+| release | 7.484 | 6.218 |
+| danger | 4.078 | 4.065 |
+
+All 20 emitted C files are still identical within each driver pair. Candidate owner tests: `cc.ms` 216/216,
+`toolchain.ms` 152/152; `check src/index.ms` exits 0. Local evidence: `out/toArray-postM2-quiet.remote.log`,
+`out/toArray-trace-postM2quiet-evidence/`. The original gap is absent on this native-CPU tree; a global alignment
+change is not justified by the old loop. No single main commit is isolated as the cause of that improvement.
+
+This is not a full parity verdict: across all 16 rows the bundle/zig geometric means are 0.927 in release and
+0.965 in danger, but release `keys()` is 1.510/1.331 us (bundle/zig), release `zip product` 1190.053/1059.012,
+and danger `eager map filter reduce` 66.332/63.119. Those remain audit rows, not accepted regressions; a good
+mean does not close them. Not verified here: post-transform baseline x86-64, other CPUs/hosts, or a general
+alignment policy.
 
 ## Measured 2026-11-12 — the source-built engine against the installed engines
 
