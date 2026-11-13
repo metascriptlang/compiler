@@ -3944,7 +3944,7 @@ a structure so that a back edge is not read after its target goes.
 
 A local keeps its object while an edge to it can still be read. A local or parameter that refers to an object (an
 instance of a class, generic or not, or a record typed by an interface, a `type` alias or its literal alone), or one
-that is an array, that is handed over at its last use (stored into a holder, passed to a `sink` parameter or
+that is an array, a tuple, a value struct or a closure, that is handed over at its last use (stored into a holder, passed to a `sink` parameter or
 to a constructor that takes it) moves into that receiver only when nothing that runs later in the local's scope can
 read an `Unowned` edge reaching the object, an element of the array, or an object they own. When something can (a read of such an edge, a call that may run one, where an
 unknown callee or a function value counts, or a destroy hook that does), the hand-over is a copy and the local holds
@@ -3983,9 +3983,17 @@ generic class with one and with two parameters, a subclass of one, a record type
 generic interface, its literal) stops on that control's C, danger, Raiser and SAN and prints on the candidate's C,
 danger, JS, ESM, Raiser and SAN, with `rc.inc` of the compiler's own emit within 2,000 of 1,398 million. A `Map` or
 a `Set` local handed over the same way printed before either change and is clean under SAN (why was not traced).
-Not reached: a tuple local holding the object
-(`const t: [P, int32] = [new P("a"), 1]`, handed to a holder that dies) and an object held only by a closure local
-that is handed over (`const f = () => p.name`) still stop on C and the Raiser; an edge read after every binding and owner is gone is the stop of the table above; a destroy hook of the object's own class is not a
+A tuple, a value struct and a closure local were added later the same day (rtx, a candidate of main
+`4a9e3de55090` with the change against one without it): corpus `tupleStructOrClosureLocalKeepsItsObject` (a tuple
+handed to a holder that dies and to a `sink` parameter, a nested tuple, a value struct handed to a holder and to a
+`sink` parameter, a struct holding an array, a closure capturing the object handed to a holder and to a `sink`
+parameter, a closure that is the object's only owner, a closure capturing two objects) stops on C, danger and the
+Raiser without the change and prints on C, danger, JS, ESM, the Raiser and SAN with it. A closure keeps its
+captured objects through the environment the compiler builds for them, which is kept as the locals it holds.
+The kept copy costs nothing measurable in the compiled program (the compiler's own emitted C differs by 29 bytes of
+176.5 MB); the analysis costs the compile 0.50% more allocations and 2.4% more cyclic count increments when the
+compiler emits its own C (`MS_DRC_STAT`, rtx, two and three runs of each compiler), measured with two analysis speedups landed with
+it that cut allocations 0.79% and 1.39% on their own with identical output. Not reached: an edge read after every binding and owner is gone is the stop of the table above; a destroy hook of the object's own class is not a
 reader, so with no edge read left in the scope the object still dies at its last receiver. A watch or HCR session
 and the Raiser do not see the whole program and keep the local wherever a call they cannot read follows. Not
 measured: wall time and instructions (the host was loaded and has no counters), threads.
