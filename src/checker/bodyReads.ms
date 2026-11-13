@@ -34,7 +34,7 @@ const SITES: ReaderSite[] = [
 	{ file: "checker/callResolve.ms", readers: 3, records: 0 },
 	{ file: "checker/ctorRoutine.ms", readers: 1, records: 0 },
 	{ file: "checker/ctorDecl.ms", readers: 2, records: 0 },
-	{ file: "checker/varPartitions.ms", readers: 6, records: 3 },
+	{ file: "checker/varPartitions.ms", readers: 10, records: 5 },
 	{ file: "checker/places.ms", readers: 8, records: 0 },
 	{ file: "checker/effects.ms", readers: 11, records: 8 },
 	{ file: "checker/sendable.ms", readers: 13, records: 1 },

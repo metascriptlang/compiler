@@ -517,9 +517,9 @@ function valueCallSummary(call: Node): ResizeSummary {
 
 function dispatchedSummary(dispatchRegistry: DispatchRegistry, sym: Symbol): ResizeSummary {
 	const entry = dispatchEntryFor(dispatchRegistry, sym)!;
-	let leavesRunning = routineBody(sym.declNode) != null && summaryOf(dispatchRegistry, sym).leavesRunning;
+	let leavesRunning = leftRunningBy(dispatchRegistry, sym);
 	for (const o of dispatchOverridesFor(dispatchRegistry, entry.classSym, entry.methodName)) {
-		if (routineBody(o.sym.declNode) != null && summaryOf(dispatchRegistry, o.sym).leavesRunning) leavesRunning = true;
+		if (leftRunningBy(dispatchRegistry, o.sym)) leavesRunning = true;
 	}
 	return { unknown: true, keys: [], writes: true, leavesRunning };
 }
@@ -606,6 +606,18 @@ function isRoutineValue(node: Node | null): boolean {
 	return node != null && (node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr);
 }
 
+function madeRoutine(value: Node | null): Node | null {
+	if (isRoutineValue(value)) return value;
+	if (value == null || value.kind != NodeKind.Identifier) return null;
+	const made = boundRoutine(value.resolvedSym);
+	if (made != null) recordBodyRead(value.resolvedSym!.modulePath);
+	return made;
+}
+
+function leftRunningBy(dispatchRegistry: DispatchRegistry, sym: Symbol): boolean {
+	return routineBody(sym.declNode) != null && summaryOf(dispatchRegistry, sym).leavesRunning;
+}
+
 function mentions(node: Node | null, sym: Symbol): boolean {
 	if (node == null) return false;
 	if (node.kind == NodeKind.Identifier) return node.resolvedSym == sym;
@@ -633,6 +645,7 @@ function keepsRoutine(dispatchRegistry: DispatchRegistry, call: Node): boolean {
 	if (!args.some((a: Node): boolean => a.nodeType != null && a.nodeType.kind == TypeKind.Function)) return false;
 	const sym = call.resolvedSym;
 	if (sym == null || sym.declNode == null || !runsVisibleBody(call) || isDispatched(dispatchRegistry, sym)) return true;
+	recordBodyRead(sym.modulePath);
 	const body = routineBody(sym.declNode);
 	for (const p of sym.declNode.paramSyms ?? []) {
 		if (p.symbolType != null && p.symbolType.kind == TypeKind.Function && !onlyCalls(body, p)) return true;
@@ -688,7 +701,7 @@ function writesOutside(dispatchRegistry: DispatchRegistry, node: Node | null, ow
 }
 
 function writesWhatItCaptures(dispatchRegistry: DispatchRegistry, value: Node | null): boolean {
-	const made = isRoutineValue(value) ? value : (value != null && value.kind == NodeKind.Identifier ? boundRoutine(value.resolvedSym) : null);
+	const made = madeRoutine(value);
 	if (made == null) return false;
 	const own: Symbol[] = [];
 	declaredIn(made, own);
@@ -699,13 +712,13 @@ function handsOverLeaver(dispatchRegistry: DispatchRegistry, call: Node): boolea
 	for (const a of (call.data as CallExprData).arguments) {
 		if (a.nodeType == null || a.nodeType.kind != TypeKind.Function) continue;
 		const value = peelConv(a)!;
-		const made = isRoutineValue(value) ? value : (value.kind == NodeKind.Identifier ? boundRoutine(value.resolvedSym) : null);
+		const made = madeRoutine(value);
 		if (made != null) {
 			const s = noResize();
 			scanResizes(dispatchRegistry, routineBody(made), s, []);
 			if (s.leavesRunning) return true;
 		} else if (value.kind == NodeKind.Identifier && value.resolvedSym != null && value.resolvedSym.symbolKind == SymbolKind.Function
-			&& routineBody(value.resolvedSym.declNode) != null && summaryOf(dispatchRegistry, value.resolvedSym).leavesRunning) {
+			&& leftRunningBy(dispatchRegistry, value.resolvedSym)) {
 			return true;
 		}
 	}
@@ -1930,8 +1943,7 @@ function noteKeptRoutines(u: BorrowUnit, call: Node): void {
 	const roots: Symbol[] = [];
 	for (const a of (call.data as CallExprData).arguments) {
 		if (a.nodeType == null || a.nodeType.kind != TypeKind.Function) continue;
-		const value = peelConv(a)!;
-		const made = isRoutineValue(value) ? value : (value.kind == NodeKind.Identifier ? boundRoutine(value.resolvedSym) : null);
+		const made = madeRoutine(peelConv(a));
 		const at = made != null ? u.closures.indexOf(made) : -1;
 		const written = made == null ? u.writers : (at >= 0 ? u.closureWrites[at] : []);
 		for (const w of written) { if (!roots.includes(w)) roots.push(w); }
@@ -2676,8 +2688,7 @@ function collectLeavers(node: Node | null, out: Node[]): void {
 	if (node == null) return;
 	forEachChild(node, (child: Node): void => {
 		if (leavesItsMaker(node, child)) {
-			const value = peelConv(child)!;
-			const made = isRoutineValue(value) ? value : (value.kind == NodeKind.Identifier ? boundRoutine(value.resolvedSym) : null);
+			const made = madeRoutine(peelConv(child));
 			if (made != null) out.push(made);
 		}
 		if (!isNestedRoutineNode(child)) collectLeavers(child, out);
