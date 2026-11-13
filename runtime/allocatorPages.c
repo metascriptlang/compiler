@@ -53,6 +53,16 @@ int msHeapReusePages(void* p, size_t bytes) {
 	return 1;
 }
 
+/* A reservation goes back only whole, so the decommitted rest stays reserved with the first page. */
+void msHeapKeepFirstPage(void* p, size_t bytes) {
+	if (!VirtualFree(p, bytes, MEM_DECOMMIT) || !VirtualAlloc(p, MS_HEAP_PAGE_SIZE, MEM_COMMIT, PAGE_READONLY))
+		msHeapDeallocPages(p, bytes);
+}
+
+void msHeapDropFirstPage(void* p, size_t bytes) {
+	msHeapDeallocPages(p, bytes);
+}
+
 void msHeapResetPages(void) {}
 
 #elif MS_HEAP_THREADS
@@ -70,13 +80,29 @@ void msHeapDeallocPages(void* p, size_t bytes) {
 
 #include <unistd.h>
 
+static uintptr_t msHeapOsPage(void) {
+	static uintptr_t cached;
+	uintptr_t osPage = __atomic_load_n(&cached, __ATOMIC_RELAXED);
+	if (!osPage) __atomic_store_n(&cached, osPage = (uintptr_t)sysconf(_SC_PAGESIZE), __ATOMIC_RELAXED);
+	return osPage;
+}
+
+void msHeapKeepFirstPage(void* p, size_t bytes) {
+	size_t first = msHeapOsPage();
+	if (bytes > first) msHeapDeallocPages((unsigned char*)p + first, bytes - first);
+	if (mmap(p, first, PROT_READ, MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) __builtin_trap();
+}
+
+void msHeapDropFirstPage(void* p, size_t bytes) {
+	(void)bytes;
+	msHeapDeallocPages(p, msHeapOsPage());
+}
+
 /* The OS page can be larger than the heap's (16 KiB on Apple silicon), and madvise and mprotect
  * refuse a range that is not aligned to it, so a discard covers only the whole OS pages inside,
  * and a reuse every OS page the range touches: one a discard could not cover was never discarded. */
 static int msHeapOsPages(void** p, size_t* bytes, int touched) {
-	static uintptr_t cached;
-	uintptr_t osPage = __atomic_load_n(&cached, __ATOMIC_RELAXED);
-	if (!osPage) __atomic_store_n(&cached, osPage = (uintptr_t)sysconf(_SC_PAGESIZE), __ATOMIC_RELAXED);
+	uintptr_t osPage = msHeapOsPage();
 	if (!*bytes) return 0;
 	uintptr_t grow = touched ? osPage - 1 : 0;
 	uintptr_t start = ((uintptr_t)*p + osPage - 1 - grow) & ~(osPage - 1);

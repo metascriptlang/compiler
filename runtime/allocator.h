@@ -76,6 +76,10 @@ MS_HEAP_API void msHeapReturnUnused(void);
 MS_HEAP_API int msHeapIdleWaitMs(int waitMs);
 MS_HEAP_API void msHeapDiscardPages(void* p, size_t bytes);
 MS_HEAP_API int msHeapReusePages(void* p, size_t bytes);
+/* Gives back the pages of a mapping from msHeapTryAllocPages but its first, which then reads as
+ * zeros, until msHeapDropFirstPage gives that back too. */
+MS_HEAP_API void msHeapKeepFirstPage(void* p, size_t bytes);
+MS_HEAP_API void msHeapDropFirstPage(void* p, size_t bytes);
 #endif
 MS_HEAP_API void msHeapResetPages(void);
 MS_HEAP_API _Noreturn void msHeapOutOfMemory(void);
