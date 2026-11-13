@@ -273,7 +273,7 @@ export function lowerHcrIndirection(
 			if (n.kind != NodeKind.Identifier && n.kind != NodeKind.MemberExpr && n.kind != NodeKind.NewExpr) return n;
 			const constructed = n.kind == NodeKind.NewExpr ? (n.data as NewExprData).newCallee.resolvedSym : null;
 			const winner = overloadCallees.get(n);
-			const sym = winner != null ? winner : n.kind == NodeKind.NewExpr ? constructorInitOf(constructed) : n.resolvedSym;
+			const sym = winner != null ? winner : n.kind == NodeKind.NewExpr ? constructorRoutineOfNew(n, constructed) : n.resolvedSym;
 			if (sym == null) return n;
 			const isVariable = constructed == null && readsModuleState(n, sym);
 			if (n.kind == NodeKind.MemberExpr && !isVariable) {
@@ -347,6 +347,15 @@ export function lowerHcrIndirection(
 	for (const stmt of registrations) emitted.push(stmt);
 	pd.programStmts = emitted;
 	return program;
+}
+
+// Codegen calls the routine the checker picked for the `new` (a constructor variant has its own
+// C name); only a `new` the checker left without one runs the class's implementation.
+function constructorRoutineOfNew(n: Node, classSym: Symbol | null): Symbol | null {
+	const picked = n.resolvedSym;
+	if (picked == null) return constructorInitOf(classSym);
+	if (picked.symbolKind != SymbolKind.Function) throw new Error(`internal: the 'new' at ${n.location.line}:${n.location.column} resolved to a ${picked.symbolKind}, not a constructor routine`);
+	return picked;
 }
 
 function constructorInitOf(classSym: Symbol | null): Symbol | null {
