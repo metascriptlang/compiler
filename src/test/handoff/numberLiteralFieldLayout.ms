@@ -7,6 +7,6 @@ test "a number-literal field is not read as a field of another numeric width" {
 }
 
 test "a number-literal field is read as the field of the width that stores it" {
-	assert strictErrorCount("const a: { n: 1; v: string } = { n: 1, v: \"x\" };\nconst b: { n: int32; v: string } = a;") == 0;
-	assert strictErrorCount("const a: { n: 1.5; v: string } = { n: 1.5, v: \"x\" };\nconst b: { n: number; v: string } = a;") == 0;
+	assert strictErrorCount("const a: { n: 1; v: string } = { n: 1, v: \"x\" };\nconst b: Readonly<{ n: int32; v: string }> = a;") == 0;
+	assert strictErrorCount("const a: { n: 1.5; v: string } = { n: 1.5, v: \"x\" };\nconst b: Readonly<{ n: number; v: string }> = a;") == 0;
 }

@@ -66,6 +66,7 @@ test "writableViewInvariant: a literal field read as its wider type through a wr
 		{ name: "literal union", narrow: "\"circle\" | \"square\"", wide: "\"circle\" | \"square\" | \"tri\"", value: "\"circle\"", write: "\"tri\"", prelude: "" },
 		{ name: "boolean literal", narrow: "true", wide: "boolean", value: "true", write: "false", prelude: "" },
 		{ name: "enum member", narrow: "E.A", wide: "E", value: "E.A", write: "E.B", prelude: "enum E { A, B }\n" },
+		{ name: "number literal", narrow: "1", wide: "int32", value: "1", write: "2", prelude: "" },
 	];
 	for (const row of rows) {
 		const source = row.prelude +
