@@ -182,3 +182,20 @@ boxed register path, not the allocator.
 Left after both, by the same probe: rowsEl boxes Object values loaded into Dyn registers (`LoadSlot`, about 1M);
 haro boxes Int fields read into Dyn registers (`LoadFieldRequired` in `changes`, 0.82M) and allocates strings and
 arrays in `CallHost` (4.5M), `StrSlice` (3.7M), `NewArray` (2.4M) and `ConcatStrR` (2.3M).
+
+haro's gap was one function: in `schemeAt`, `for (const scheme of SCHEMES)` reads each element borrowed on C and
+owned on the Raiser, with a count, a `WasMoved` and a Try/Finally per element. The Raiser keeps `scheme.charCodeAt(0)`
+as a member call for its opcode, and cursor inference marked the receiver of any member call written, where C sees
+the same call as `charCodeAt(scheme, 0)` and judges `scheme` as an argument. Since `642e2092cf78` the receiver of an
+extension called in member form is judged as that argument. Same probe, rtx, tree `642e2092cf78`, checksums equal
+to C:
+
+| | rowsEl raiser | haro raiser |
+|---|---|---|
+| instructions | 1.66G (1.67G) | 1.57G (2.44G) |
+| RcInc + RcDec | 221M (221M) | 9.0M (208M) |
+| Try + Finally + FinallyEnd | 44M (44M) | 8.4M (207M) |
+| VM block or cell allocations | 6.3M (6.3M) | 15.7M (15.7M) |
+
+`schemeAt` went from 54 instructions to 37. rowsEl does not take this path, so its counts stand. Wall time not yet
+measured in a quiet window.
