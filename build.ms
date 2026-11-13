@@ -71,7 +71,7 @@ function lane(name: string, command: Arg[], env: Record<string, Arg> = {}, input
 
 const raiser: Arg[] = [candidate, "run", "--target=raiser"];
 const under: Record<string, Arg> = { MSC: candidate };
-lane("suite", [candidate, "test", "--time", "src/index.ms"], under);
+lane("suite", [mscExe(), "test", "--time", "src/index.ms"], { MSC: mscExe() });
 for (const name of ["js", "handoff", "checker3pass", "lang", "fmt", "crypto"]) lane(`tests.${name}`, [candidate, "test", "--time", `src/test/${name}/index.ms`, "--tests-in-dir"], under);
 lane("tests.helpers", [candidate, "test", "--time", "src/test/helpers.ms", "--tests-in-dir"], under);
 for (let i = 0; i < 3; i++) lane(`tests.c${i}`, [candidate, "test", "--time", "src/test/c/index.ms", "--tests-in-dir", `--tests-shard=${i}/3`], under);
