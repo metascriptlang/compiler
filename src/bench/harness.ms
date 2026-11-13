@@ -45,12 +45,14 @@ function report(name: string, perCallBytes: number, msPerCall: number[]): void {
 }
 
 export function bench(name: string, perCallBytes: number, op: () => void): void {
+	round(op);
 	const times: number[] = [];
 	for (let r = 0; r < ROUNDS; r++) times.push(round(op));
 	report(name, perCallBytes, times);
 }
 
 export async function benchAsync(name: string, perCallBytes: number, op: () => Promise<void>): Promise<void> {
+	await roundAsync(op);
 	const times: number[] = [];
 	for (let r = 0; r < ROUNDS; r++) times.push(await roundAsync(op));
 	report(name, perCallBytes, times);

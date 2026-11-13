@@ -43,12 +43,14 @@ function report(name, perCallBytes, msPerCall) {
 
 export function bench(name, perCallBytes, op) {
 	const times = [];
+	round(op);
 	for (let r = 0; r < ROUNDS; r++) times.push(round(op));
 	report(name, perCallBytes, times);
 }
 
 export async function benchAsync(name, perCallBytes, op) {
 	const times = [];
+	await roundAsync(op);
 	for (let r = 0; r < ROUNDS; r++) times.push(await roundAsync(op));
 	report(name, perCallBytes, times);
 }

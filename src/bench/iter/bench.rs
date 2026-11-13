@@ -29,6 +29,7 @@ fn fixed(value: f64, digits: i32) -> f64 {
 }
 
 fn bench(name: &str, mut op: impl FnMut()) {
+    round(&mut op);
     let mut rates: Vec<f64> = (0..3).map(|_| round(&mut op) * 1000.0).collect();
     rates.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let median = rates[1];
