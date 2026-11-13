@@ -622,6 +622,7 @@ export interface RaiserArrayHeap {
 	futures: RaiserFutureCounts | null;
 	unowned: HashMap<int64, int32>;  // per object: the Unowned<T> edges that point at it; an object with none has no entry
 	husks: HashMap<int64, boolean>;  // destroyed objects kept until the last Unowned<T> edge to them goes
+	dying: HashMap<int64, boolean>;  // objects whose last strong reference went and whose cell is not freed yet
 }
 
 // The counts of the VM's future table, which every heap of that VM shares, so a future held in a register, a
@@ -687,7 +688,7 @@ export const OWNED_BY_RECEIVER_RC: int32 = 1;
 
 export function createArrayHeap(): RaiserArrayHeap {
 	const orcRoots: int64[] = [];
-	return { mem: createVmMemory(), stringBytes: new HashMap<int64, int64>(), seqViews: new HashMap<int64, int64[]>(), orcRoots, orcThreshold: ORC_DEFAULT_THRESHOLD, futures: null, unowned: new HashMap<int64, int32>(), husks: new HashMap<int64, boolean>() };
+	return { mem: createVmMemory(), stringBytes: new HashMap<int64, int64>(), seqViews: new HashMap<int64, int64[]>(), orcRoots, orcThreshold: ORC_DEFAULT_THRESHOLD, futures: null, unowned: new HashMap<int64, int32>(), husks: new HashMap<int64, boolean>(), dying: new HashMap<int64, boolean>() };
 }
 
 @inline
@@ -806,6 +807,12 @@ export function heapKeepsHusk(heap: RaiserArrayHeap, handle: int64): boolean {
 
 export function heapIsHusk(heap: RaiserArrayHeap, handle: int64): boolean {
 	return heap.husks.size > 0 && heap.husks.has(handle);
+}
+
+// An object is dead to its Unowned<T> edges from the moment its last strong reference goes until its cell is
+// freed, and as a husk after that.
+export function heapIsDeadToEdges(heap: RaiserArrayHeap, handle: int64): boolean {
+	return (heap.dying.size > 0 && heap.dying.has(handle)) || heapIsHusk(heap, handle);
 }
 
 // A new empty array in `dst` of the element class, width and flags of the array `source` (or the one it stands on) in `src`.

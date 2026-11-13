@@ -11,7 +11,7 @@ import {
 import {
 	RaiserValue, RaiserValueKind, RaiserHeapKind, kindFitsClass, readDyn, heapAllocBox, heapBoxValue, heapBoxRc, heapBoxSetRc, heapBoxSetValue, makeHandle, handleIndex, handleHeapKind, handleTag, handleKind, handleValue, bothInternedConstants, rcDecUnlessLast,
 	heapAllocViewAs, raiserNil, raiserInt, raiserFloat, raiserBool, raiserConstString, raiserArray, raiserToString,
-	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, arrayHeldRemove, arrayHeldStore, arrayHeldInsert, arrayHeldReverse, arrayHeldSort, heapAllocView, heapArrayIsView, isSeqHandle, seqCellOf, heapArrayClass, heapArrayCyclic, heapArrayUncounted, heapArrayUnowned, heapUnownedRc, heapUnownedElements, heapKeepsHusk, heapIsHusk, heapArraySetFlags, heapAllocArrayLike, heapArrayRc, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
+	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapAllocArrayOf, arrayRefusal, arrayHoldsHandles, arrayHeldCount, arrayHeldAt, arrayHeldRemove, arrayHeldStore, arrayHeldInsert, arrayHeldReverse, arrayHeldSort, heapAllocView, heapArrayIsView, isSeqHandle, seqCellOf, heapArrayClass, heapArrayCyclic, heapArrayUncounted, heapArrayUnowned, heapUnownedRc, heapUnownedElements, heapKeepsHusk, heapIsDeadToEdges, heapArraySetFlags, heapAllocArrayLike, heapArrayRc, heapArrayGet, heapArraySet, heapArrayPush, heapArraySetLen, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectData, RaiserClassType, createClassType, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, fieldNameAt, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS, heapSeqHandles, heapObjectCellHandles,
 	heapNewObjectCell, objectCellHandle, objectCellFieldValue, objectCellStoreField, OWNED_BY_RECEIVER_RC, isObjectCell, objectCellClass, heapObjectClass, heapObjectFieldIndex, heapObjectFieldValueAt, heapObjectFieldNameAt, heapObjectFieldCount, heapObjectFieldRefusal, heapObjectStoreFieldAt, heapObjectAppendField, heapObjectSetRc, heapObjectLaidCount,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, stringHandleRc, heapBoxLive,
@@ -4457,13 +4457,14 @@ function vmRcKeptCheck(vm: RaiserVM, ia: int32, ib: int32): void {
 // Every cell is freed here, so a collector that tracks cells has one place to forget them. A cell that
 // Unowned<T> edges still point at stays as a husk until the last of them goes.
 function vmFreeCell(vm: RaiserVM, handle: int64): void {
+	if (vm.arrayHeap.dying.size > 0) vm.arrayHeap.dying.delete(handle);
 	orcUnregister(vm.arrayHeap, vm.objectHeap, handle);
 	if (heapKeepsHusk(vm.arrayHeap, handle)) return;
 	rcFreeHandle(vm.arrayHeap, vm.objectHeap, handle);
 }
 
 function vmUnownedLive(vm: RaiserVM, handle: int64): void {
-	if (handle == 0 || !heapIsHusk(vm.arrayHeap, handle)) return;
+	if (handle == 0 || !heapIsDeadToEdges(vm.arrayHeap, handle)) return;
 	const name = objectCellClass(handle).name;
 	vmError(vm, `an Unowned<${name}> edge was read after its ${name} was destroyed`);
 }
@@ -4473,7 +4474,10 @@ function vmOwnedCycle(vm: RaiserVM, names: string): void {
 }
 
 function vmCondemnCycles(vm: RaiserVM): void {
-	orcCollect(vm.arrayHeap, vm.objectHeap, (h: int64): void => { vm.dropped.push(h); }, (names: string): void => { vmOwnedCycle(vm, names); });
+	orcCollect(vm.arrayHeap, vm.objectHeap, (h: int64): void => {
+		vmBeginsDying(vm, h);
+		vm.dropped.push(h);
+	}, (names: string): void => { vmOwnedCycle(vm, names); });
 }
 
 function vmDestroyFn(vm: RaiserVM, handle: int64): int32 {
@@ -4482,6 +4486,7 @@ function vmDestroyFn(vm: RaiserVM, handle: int64): int32 {
 }
 
 function vmDestroyTop(vm: RaiserVM, handle: int64): void {
+	vmBeginsDying(vm, handle);
 	const inFlight = vm.disposing.length + vm.dropNest;
 	if (inFlight > 0 && (inFlight >= DROP_NEST_LIMIT || vm.callStack.depth + 2 >= MAX_CALL_DEPTH)) {
 		vm.dropped.push(handle);
@@ -4492,7 +4497,16 @@ function vmDestroyTop(vm: RaiserVM, handle: int64): void {
 	else vmDestroyWalk(vm, handle);
 }
 
+// The object is dead to its Unowned<T> edges from here, as on C (msDestroyBegins), even while its destroy
+// waits in `dropped`. Only an edge it has now, or one its own destroy routine makes from `this`, can reach it
+// before its cell is freed, so an object with neither is not recorded.
+function vmBeginsDying(vm: RaiserVM, handle: int64): void {
+	const heap = vm.arrayHeap;
+	if ((heap.unowned.size > 0 && heap.unowned.has(handle)) || vmDestroyFn(vm, handle) >= 0) heap.dying.set(handle, true);
+}
+
 function vmDestroyChild(vm: RaiserVM, handle: int64): void {
+	vmBeginsDying(vm, handle);
 	if (vmDestroyFn(vm, handle) >= 0 || vm.dropNest >= DROP_NEST_LIMIT) vm.dropped.push(handle);
 	else vmDestroyWalk(vm, handle);
 }
