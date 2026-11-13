@@ -1,5 +1,6 @@
 // Language tests: an object with a one-value field is aliased by reference, so it stores that
-// field; only a by-value union arm leaves its discriminator to the union tag.
+// field; only a by-value union arm leaves its discriminator to the union tag. A wide view that
+// could write the field back is refused (handoff/writableViewInvariant), so these read through Readonly.
 
 enum K { A, B }
 
@@ -14,8 +15,7 @@ struct Pair = match (ok: boolean) { true => { value: string }, false => { error:
 struct Shape = match (kind: K) { K.A => { r: string }, K.B => { n: int32 } };
 struct Key = match (kind: K) { K.A => { id: int32 }, K.B => { name: string } };
 
-function setV(x: Wide): void { x.v = "p"; }
-function showWide(x: Wide): string { return `${x.ok}:${x.v}`; }
+function showWide(x: Readonly<Wide>): string { return `${x.ok}:${x.v}`; }
 function mkTagged(good: boolean): Tagged {
 	return good ? { ok: true, v: "lib" } : { ok: false, e: "no" };
 }
@@ -24,29 +24,22 @@ function shapeIsA(x: Shape): boolean { return x.kind == K.A; }
 
 test "an object read as the wide type shows its one-value field" {
 	const a: Narrow = { ok: true, v: "lib" };
-	const b: Wide = a;
+	const b: Readonly<Wide> = a;
 	assert b.ok;
 	assert b.v == "lib";
 }
 
-test "a write through the wide view is read back through the narrow one" {
+test "a write through the narrow object is read back through the wide view" {
 	const a: Narrow = { ok: true, v: "lib" };
-	const b: Wide = a;
-	b.v = "z";
-	b.ok = false;
-	assert a.v == "z";
-	assert !a.ok;
-}
-
-test "a parameter of the wide type writes the narrow object" {
-	const a: Narrow = { ok: true, v: "lib" };
-	setV(a);
-	assert a.v == "p";
+	const b: Readonly<Wide> = a;
+	a.v = "z";
+	assert b.v == "z";
+	assert b.ok;
 }
 
 test "a nested one-value field is aliased" {
 	const a: { inner: Narrow } = { inner: { ok: true, v: "lib" } };
-	const b: { inner: Wide } = a;
+	const b: Readonly<{ inner: Readonly<Wide> }> = a;
 	assert b.inner.ok;
 	assert b.inner.v == "lib";
 }
@@ -59,7 +52,7 @@ test "a TS-written union narrowed by its discriminant passes as the wide type" {
 
 test "an array of the wide type takes the narrow object" {
 	const a: Narrow = { ok: true, v: "lib" };
-	const xs: Wide[] = [];
+	const xs: Readonly<Wide>[] = [];
 	xs.push(a);
 	assert xs.length == 1;
 	assert xs[0].ok;
@@ -68,16 +61,15 @@ test "an array of the wide type takes the narrow object" {
 
 test "a false field is stored too" {
 	const a: NarrowNo = { ok: false, e: "no" };
-	const b: WideNo = a;
+	const b: Readonly<WideNo> = a;
 	assert !b.ok;
 	assert b.e == "no";
 }
 
 test "an enum-literal field is aliased" {
 	const a: NarrowEnum = { kind: K.A, r: "lib" };
-	const b: WideEnum = a;
-	b.kind = K.B;
-	assert a.kind == K.B;
+	const b: Readonly<WideEnum> = a;
+	assert b.kind == K.A;
 	assert b.r == "lib";
 }
 

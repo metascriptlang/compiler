@@ -59,3 +59,44 @@ test "writableViewInvariant: a Readonly view and an identical-type view still pa
 		"w(s);";
 	assert strictErrorCount(identical) == 0;
 }
+
+test "writableViewInvariant: a literal field read as its wider type through a writable view is refused" {
+	const rows = [
+		{ name: "string literal", narrow: "\"circle\"", wide: "string", value: "\"circle\"", write: "\"square\"", prelude: "" },
+		{ name: "literal union", narrow: "\"circle\" | \"square\"", wide: "\"circle\" | \"square\" | \"tri\"", value: "\"circle\"", write: "\"tri\"", prelude: "" },
+		{ name: "boolean literal", narrow: "true", wide: "boolean", value: "true", write: "false", prelude: "" },
+		{ name: "enum member", narrow: "E.A", wide: "E", value: "E.A", write: "E.B", prelude: "enum E { A, B }\n" },
+	];
+	for (const row of rows) {
+		const source = row.prelude +
+			"type S = { k: " + row.narrow + "; z: int32 };\n" +
+			"type T = { k: " + row.wide + " };\n" +
+			"function w(t: T): void { t.k = " + row.write + "; }\n" +
+			"const s: S = { k: " + row.value + ", z: 2 };\n" +
+			"w(s);";
+		assert hasError(source, "declare the parameter Readonly<"), row.name;
+		const readOnly = row.prelude +
+			"type S = { k: " + row.narrow + "; z: int32 };\n" +
+			"type T = { k: " + row.wide + " };\n" +
+			"function r(t: Readonly<T>): void { console.log(t.k); }\n" +
+			"const s: S = { k: " + row.value + ", z: 2 };\n" +
+			"r(s);";
+		assert strictErrorCount(readOnly) == 0, row.name;
+	}
+}
+
+test "writableViewInvariant: an array of one literal is not an array of its wider union" {
+	const source = "type Kind = \"a\" | \"b\";\n" +
+		"function push(xs: Kind[]): void { xs.push(\"b\"); }\n" +
+		"const only: \"a\"[] = [\"a\"];\n" +
+		"push(only);";
+	assert hasError(source, "Argument type mismatch in 'push'");
+}
+
+test "writableViewInvariant: a nullable literal union is copied into its wider nullable, not aliased" {
+	const source = "function show(s: string | null): string { return s ?? \"none\"; }\n" +
+		"function pick(): \"a\" | \"b\" | null { return \"a\"; }\n" +
+		"const v: \"a\" | \"b\" | null = pick();\n" +
+		"console.log(show(v));";
+	assert strictErrorCount(source) == 0;
+}

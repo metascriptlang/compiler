@@ -11,8 +11,7 @@ import { join } from "std/fs/path";
 function isOpenElement(t: Type): boolean {
 	return match (t.kind) {
 		TypeKind.Unknown | TypeKind.None | TypeKind.Inferred | TypeKind.Never | TypeKind.Null
-			| TypeKind.GenericParam | TypeKind.TypeReference
-			| TypeKind.StringLiteral | TypeKind.BooleanLiteral | TypeKind.NumberLiteral | TypeKind.EnumLiteral => true,
+			| TypeKind.GenericParam | TypeKind.TypeReference => true,
 		_ => hasGenericParams(t),
 	};
 }
@@ -40,6 +39,15 @@ function sameElement(a: Type | null, b: Type | null): boolean {
 function sameInstanceArg(a: Type | null, b: Type | null): boolean {
 	if (a != null && b != null && (isLiteralKind(a) || isLiteralKind(b))) return sameType(a, b);
 	return sameElement(a, b);
+}
+
+function holdsOnlyLiterals(t: Type): boolean {
+	if (t.kind != TypeKind.Union) return isLiteralKind(t);
+	if (t.typeChildren.length == 0) return false;
+	for (const member of t.typeChildren) {
+		if (member == null || !isLiteralKind(member)) return false;
+	}
+	return true;
 }
 
 function isLiteralKind(t: Type): boolean {
@@ -503,6 +511,9 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 				if (isReadonlyView(target) && source.typeReturn != null && target.typeReturn != null
 					&& (target.typeReturn.kind == TypeKind.Array || target.typeReturn.kind == TypeKind.Span)
 					&& source.typeReturn.kind == target.typeReturn.kind) return readElementsFit(source.typeReturn, target.typeReturn);
+				if (isReadonlyView(target) && source.typeReturn != null && target.typeReturn != null
+					&& source.typeReturn.kind == TypeKind.Struct && target.typeReturn.kind == TypeKind.Struct
+					&& !isReadonlyView(createReadonlyView(target.typeReturn))) return readOnlyObjectFits(source.typeReturn, target.typeReturn);
 				return isAssignable(source.typeReturn, isReadonlyView(target) ? createReadonlyView(target.typeReturn) : target.typeReturn);
 			},
 			TypeKind.Function => isFunctionAssignable(source, target),
@@ -1229,13 +1240,21 @@ export function valueStructBaseDepth(source: Type, target: Type): int32 {
 	return 0;
 }
 
+// A struct without references has no read-only view of its own, so a read-only reference
+// to it carries the promise that nothing writes the fields back.
+function readOnlyObjectFits(source: Type, target: Type): boolean {
+	if (classOutsideLineage(source, target) || missingRoutine(source, target) != "") return false;
+	if (source == target || sameNominal(source, target)) return true;
+	return heldLayoutFits(source, target, true);
+}
+
 // Object assignability: nominal first, then structural (source has all target properties)
 function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 	// Identity: same object → trivially assignable
 	if (source == target) return true;
 	if (source == null || target == null) return false;
 	if (sameNominal(source, target)) return true;
-	return heldLayoutFits(source, target, isReadonlyView(target));
+	return heldLayoutFits(source, target, isReadonlyView(target) || isMaybeType(target));
 }
 
 // A writable target field aliases the source's slot, so it must hold the same type
@@ -1247,13 +1266,14 @@ function invariantFieldFits(sField: Type | null, tField: Type | null, readonlyTa
 
 // A write of any value the target admits fits the source slot: strings, booleans, enum
 // members and numbers of one representation (fieldReprMismatch refuses the widths that
-// differ), and objects whose every field is such a slot.
+// differ), and objects whose every field is such a slot. A literal slot admits only itself.
 function isUnnamedShape(t: Type): boolean {
 	return t.typeName == "" || isAnonLiteralName(t.typeName);
 }
 
 function slotWritesFit(a: Type, b: Type): boolean {
 	if (sameType(a, b)) return true;
+	if (holdsOnlyLiterals(a) || holdsOnlyLiterals(b)) return false;
 	if (isStringRepr(a) && isStringRepr(b)) return true;
 	const aBool = a.kind == TypeKind.Boolean || a.kind == TypeKind.BooleanLiteral;
 	const bBool = b.kind == TypeKind.Boolean || b.kind == TypeKind.BooleanLiteral;
