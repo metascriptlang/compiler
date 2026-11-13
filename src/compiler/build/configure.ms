@@ -81,6 +81,7 @@ export interface GraphNode {
 	artifact: int32;
 	files: GraphFile[];
 	maxRss: number;
+	timeout: number;
 	hasMake: boolean;
 }
 
@@ -115,7 +116,7 @@ interface GlobListing {
 	listing: string;
 }
 
-const CONFIGURE_FORMAT = "cfg7";
+const CONFIGURE_FORMAT = "cfg8";
 
 export interface GraphOption {
 	name: string;
@@ -244,7 +245,7 @@ function pathShape(p: GraphPath | null, self: int32): string {
 
 // Everything a node does, without its id: two nodes with one shape do the same work.
 function shapeOf(n: GraphNode): string {
-	let s = `${n.kind}|${n.description}|${n.deps.join(",")}|${pathShape(n.entry, n.id)}|${pathShape(n.from, n.id)}|${n.os}|${n.cpu}|${n.abi}|${n.optimize}|${n.linkage}|${n.link.join(",")}|${n.lto}|${n.compiler}|${n.maxRss}`;
+	let s = `${n.kind}|${n.description}|${n.deps.join(",")}|${pathShape(n.entry, n.id)}|${pathShape(n.from, n.id)}|${n.os}|${n.cpu}|${n.abi}|${n.optimize}|${n.linkage}|${n.link.join(",")}|${n.lto}|${n.compiler}|${n.maxRss}|${n.timeout}`;
 	for (const a of n.argv) s = `${s}|${a.kind}:${a.text}:${pathShape(a.path, n.id)}`;
 	s = `${s}|${pathShape(n.cwd, n.id)}`;
 	for (const p of n.inputs) s = `${s}|in:${pathShape(p, n.id)}`;
@@ -299,7 +300,7 @@ function readNode(r: Reader, v: RaiserHostValue): int32 {
 		id, kind: v.field("kind").text(), name: "", description: v.field("description").text(), deps: [],
 		entry: null, from: null, os: "", cpu: "", abi: "", optimize: 0, linkage: 0, link: [], lto: -1, compiler: -1,
 		argv: [], cwd: null, inputs: [], env: [], stdout: false, sideEffects: false, expectExit: -1, checks: [], artifact: -1, files: [],
-		maxRss: unboxFloat(v.field("maxRss").root), hasMake: false,
+		maxRss: unboxFloat(v.field("maxRss").root), timeout: 0, hasMake: false,
 	};
 	r.nodes.push(node);
 	if (node.kind == "step" && !isNil(v.field("make"))) {
@@ -351,6 +352,7 @@ function readNode(r: Reader, v: RaiserHostValue): int32 {
 		}
 		node.stdout = v.field("stdout").root.intVal != 0;
 		node.sideEffects = v.field("hasSideEffects").root.intVal != 0;
+		node.timeout = unboxFloat(v.field("timeout").root);
 		const expectedExit = optionalField(v, "expectedExit");
 		if (expectedExit != null) node.expectExit = intOf(expectedExit);
 		const checks = v.field("checks");

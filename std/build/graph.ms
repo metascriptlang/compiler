@@ -152,6 +152,7 @@ export class Command extends BuildNode {
 	hasSideEffects: boolean;
 	expectedExit: int32 | null;
 	checks: OutputCheck[];
+	timeout: number;
 	constructor() {
 		super("command", "");
 		this.argv = [];
@@ -162,6 +163,7 @@ export class Command extends BuildNode {
 		this.hasSideEffects = false;
 		this.expectedExit = null;
 		this.checks = [];
+		this.timeout = 0;
 	}
 }
 
@@ -284,6 +286,7 @@ export interface RunOptions {
 	expectExitCode?: int32;
 	description?: string;
 	maxRss?: number;
+	timeout?: number;
 }
 
 function withOptions(c: Command, o: RunOptions): Command {
@@ -296,6 +299,8 @@ function withOptions(c: Command, o: RunOptions): Command {
 	if (o.expectExitCode != null) c.expectExitCode(o.expectExitCode);
 	if (o.description != null) c.describe(o.description);
 	c.maxRss = o.maxRss ?? 0;
+	c.timeout = o.timeout ?? 0;
+	if (c.timeout < 0 || Number.isNaN(c.timeout)) throw new Error(`timeout: ${c.timeout} is not a number of milliseconds`);
 	return c;
 }
 

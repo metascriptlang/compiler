@@ -476,6 +476,23 @@ put(`${prefixed}/build.ms`, "import { systemCommand } from \"std/build\";\nexpor
 record("an output file argument with no name stops configure", "an output file argument needs a file name",
 	errorLine(run(prefixed, ["build", "--colors=off", "writer"])).split("unhandled exception: ").pop().split("\n")[0]);
 
+const timed = `${root}/timed`;
+ensureDir(timed);
+put(`${timed}/build.ms`, [
+	"import { systemCommand } from \"std/build\";",
+	"export const stuck = systemCommand([\"sh\", \"-c\", \"(sleep 2; echo late > late.txt) & echo started; wait\"], { timeout: 500 });",
+	"export const pause = systemCommand([\"sh\", \"-c\", \"sleep 3\"], { timeout: 30000, expectExitCode: 0 });",
+	"",
+].join("\n"));
+const stuck = errorLine(run(timed, ["build", "--colors=off", "stuck"]));
+if (platform == "win32") {
+	record("a command with a timeout is refused on Windows", "timeout is not supported on Windows yet", stuck.split(": ").pop());
+} else {
+	run(timed, ["build", "--colors=off", "pause"]);
+	record("a command past its timeout fails the build and the processes it started die with it", "ran past its timeout of 500 ms; it and the processes it started were killed|late.txt absent",
+		`${stuck.split("wait ").pop()}|late.txt ${exists(`${timed}/late.txt`) ? "written" : "absent"}`);
+}
+
 const tested = `${root}/tested`;
 
 ensureDir(`${tested}/src`);

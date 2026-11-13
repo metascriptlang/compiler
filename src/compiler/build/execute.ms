@@ -303,6 +303,7 @@ function runCommand(x: Execution, n: GraphNode): Job | null {
 	let args = argv.slice(1, argv.length);
 	let exe = found;
 	const env = n.env.map((e: GraphEnv): string => `${e.name}=${e.path == null ? e.value : pathOf(x, e.path)}`);
+	if (n.timeout > 0 && platform == "windows") throw new Error(`${label(n)}: timeout is not supported on Windows yet`);
 	if (env.length > 0) {
 		if (platform == "windows") throw new Error(`${label(n)}: setEnvironmentVariable is not supported on Windows yet`);
 		args = env.concat([found]).concat(args);
@@ -498,6 +499,15 @@ function pump(j: Job, timeoutMs: int32): boolean {
 	return j.outEnded && j.errEnded;
 }
 
+function expire(j: Job): string {
+	j.child!.kill();
+	j.child!.close();
+	if (j.out != "") console.log(j.out.trimEnd());
+	if (j.err != "") console.log(j.err.trimEnd());
+	j.abandon();
+	return `${label(j.node)}: ${j.shown} ran past its timeout of ${j.node.timeout} ms; it and the processes it started were killed`;
+}
+
 function settle(j: Job): string {
 	const status = j.child!.wait(60000);
 	j.child!.close();
@@ -595,7 +605,7 @@ function executePlan(x: Execution, id: int32): string {
 				}
 				j.startedAt = startedAt;
 				j.startMark = buildStartMark();
-				const child = spawn(j.exe, j.args, { cwd: j.cwd });
+				const child = spawn(j.exe, j.args, { cwd: j.cwd, ownProcessGroup: n.timeout > 0 });
 				if (!child.ok) {
 					j.abandon();
 					fail(n, startedAt, `${label(n)}: cannot start ${j.shown}: ${child.error.message}`);
@@ -611,10 +621,11 @@ function executePlan(x: Execution, id: int32): string {
 		}
 		for (let i = running.length - 1; i >= 0; i -= 1) {
 			const j = running[i];
-			if (!pump(j, 0)) continue;
+			const expired = j.node.timeout > 0 && performance.now() - j.startedAt > j.node.timeout;
+			if (!pump(j, 0) && !expired) continue;
 			running.splice(i, 1);
 			x.claimedRss -= j.node.maxRss;
-			const problem = settle(j);
+			const problem = expired ? expire(j) : settle(j);
 			if (problem != "") fail(j.node, j.startedAt, problem);
 			else conclude(j.node, NodeState.Success, j.startedAt, j.peakRss);
 			moved = true;
