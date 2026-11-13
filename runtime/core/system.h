@@ -432,11 +432,7 @@ static inline void* msUnownedTakeRo(void* p) {
 	msUnownedIncrefRo(p);
 	return p;
 }
-#define msUnownedPeekRo(p) ({ \
-	__typeof__(p) __msPeekP = (p); \
-	if (__msPeekP != NULL && !msIsImmortal((void*)__msPeekP)) msUnownedCheckLive((void*)__msPeekP); \
-	__msPeekP; \
-})
+#define msUnownedPeekRo(p) msUnownedPeek(p)
 static inline void* msUnownedGiveRo(void* p) {
 	if (p != NULL && !msIsImmortal(p)) msUnownedCheckLive(p);
 	msIncrefRo(p);
