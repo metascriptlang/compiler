@@ -2,7 +2,8 @@
 // @skip-js: binds the C fixture guardFuzz.c, which drives the runtime's block-reduction helpers
 // note: a fixed-seed differential fuzz of the block guard: per block, msSumTry, msDotFits and the plain sum, and the
 // sticky block's msBlockMagnitude and msBlockRangeFits, against the checked loop, every width and += / -=; equal value
-// when nothing overflows, the same stop element when something does.
+// when nothing overflows, the same stop element when something does; and each width's msSticky add, sub and mul,
+// with variable and constant operands, against the overflow builtin.
 
 @compile("./guardFuzz.c");
 

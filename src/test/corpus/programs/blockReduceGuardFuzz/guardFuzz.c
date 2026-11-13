@@ -184,8 +184,49 @@ GF_DOT(I16, int16_t, 16)
 GF_DOT(I32, int32_t, 32)
 GF_DOT(I64, int64_t, 64)
 
+static uint64_t gaState = 2463534242ull;
+
+static int64_t gaPick(int bits) {
+	gaState ^= gaState << 13;
+	gaState ^= gaState >> 7;
+	gaState ^= gaState << 17;
+	int64_t max = bits == 64 ? INT64_MAX : ((int64_t)1 << (bits - 1)) - 1;
+	int64_t edges[] = {max, -max - 1, max - 1, -max, 0, 1, -1, 2, -2, max / 2, -max / 2 - 1, max / 2 + 1};
+	switch (gaState % 4) {
+	case 0: return edges[(gaState >> 8) % 12];
+	case 1: return (int64_t)((gaState >> 8) % 41) - 20;
+	default: return bits == 64 ? (int64_t)gaState : (int64_t)((gaState >> 8) % ((uint64_t)max * 2 + 2)) - max - 1;
+	}
+}
+
+#define GA_CASE(T, a, b, stickyOp, builtin) do { \
+	T want; int wantBad = builtin((T)(a), (T)(b), &want); \
+	int bad = 0; T got = stickyOp(a, b, bad); \
+	if (bad != wantBad || (!wantBad && got != want)) mismatches++; \
+} while (0)
+#define GA_WIDTH(W, T, BITS) \
+static int64_t gaFuzz##W(int64_t cases) { \
+	int64_t mismatches = 0; \
+	for (int64_t t = 0; t < cases * 8; t++) { \
+		T a = (T)gaPick(BITS), b = (T)gaPick(BITS); \
+		GA_CASE(T, a, b, msStickyAdd##W, __builtin_add_overflow); \
+		GA_CASE(T, a, b, msStickySub##W, __builtin_sub_overflow); \
+		GA_CASE(T, a, b, msStickyMul##W, __builtin_mul_overflow); \
+		GA_CASE(T, a, 2, msStickyMul##W, __builtin_mul_overflow); \
+		GA_CASE(T, -3, a, msStickyMul##W, __builtin_mul_overflow); \
+		GA_CASE(T, a, 1, msStickyAdd##W, __builtin_add_overflow); \
+		GA_CASE(T, a, -1, msStickySub##W, __builtin_sub_overflow); \
+		GA_CASE(T, 0, a, msStickySub##W, __builtin_sub_overflow); \
+	} \
+	return mismatches; \
+}
+GA_WIDTH(I8, int8_t, 8)
+GA_WIDTH(I16, int16_t, 16)
+GA_WIDTH(I32, int32_t, 32)
+GA_WIDTH(I64, int64_t, 64)
+
 int64_t msTestBlockReduceMismatches(int64_t cases) {
-	return gfFuzzI8I8(cases, gfBlkI8I8) + gfFuzzI16I8(cases, gfBlkI16I8) + gfFuzzI16I16(cases, gfBlkI16I16)
+	return gaFuzzI8(cases) + gaFuzzI16(cases) + gaFuzzI32(cases) + gaFuzzI64(cases) + gfFuzzI8I8(cases, gfBlkI8I8) + gfFuzzI16I8(cases, gfBlkI16I8) + gfFuzzI16I16(cases, gfBlkI16I16)
 		+ gfFuzzI32I8(cases, gfBlkI32I8) + gfFuzzI32I16(cases, gfBlkI32I16) + gfFuzzI32I32(cases, gfBlkI32I32)
 		+ gfFuzzI64I8(cases, gfBlkI64I8) + gfFuzzI64I16(cases, gfBlkI64I16) + gfFuzzI64I32(cases, gfBlkI64I32)
 		+ gfFuzzI64I64(cases, gfBlkI64I64)
