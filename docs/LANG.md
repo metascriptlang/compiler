@@ -3928,6 +3928,8 @@ as a plain `T`; nullability stays explicit.
 | the last strong reference to the target goes while edges remain | the target is destroyed then (`onDestroy` runs); its memory stays until the last edge goes |
 | a read of an edge whose target was destroyed | the program stops: `Error: an Unowned<N> edge was read after its N was destroyed` |
 | `a.at = b.at`, `a.ups.push(b.ups[0])` | a copy of the edge, no read: nothing stops |
+| `h.ups.splice(i, k)`, `h.ups.shrink(n)`, `h.ups.reverse()`, `h.ups.length = 0` | the edges are dropped or moved, no read: nothing stops |
+| `h.ups.pop()`, `h.ups.shift()` | the element comes out as a strong `T`: a checked read, also when the result is not used |
 | `const xs: Unowned<N>[]`, a parameter, a return, `Unowned<N>[] \| null`, `Unowned<N>[][]`, `filter`/`slice`/`sort`/`concat` | accepted: an array of Unowned elements counts its own elements wherever it is held |
 | `const p: Unowned<N> = n`, a parameter or return `Unowned<N>` | error `Unowned<T> is the type of a class or struct field` |
 | `h.ups = xs` with `xs: N[]`, or `f(h.ups)` with `f(a: N[])` | error `an array of N holds its elements strongly and an array of Unowned<N> on their Unowned count, so one array cannot stand for the other` |
@@ -3996,6 +3998,13 @@ Measured on candidates of `wt/unified-drc` (rtx, 2026-11-09, C, danger and Raise
 free disabled); `src/test/c/unownedEdge.ms` (18 tests, the refusals and the struct that holds an edge in a `Map`
 included); guard `bareWasmUnownedEdges` (wasm32: the dead read traps, 16 384 husks fit 1 MiB). Not measured: threads,
 HCR.
+
+Dropping or moving edges whose targets were destroyed, measured on a candidate of `wt/unified-drc` over main
+`a52e4018016b` (rtx, 2026-11-13): corpus `unownedArrayCutOrReversedLeavesDeadEdgesUnread` (`splice` at the head, in
+the middle and at the tail, `shrink(n)`, `reverse` of an odd and an even count, and the same three on live targets)
+prints on C, danger, JS, ESM, Raiser and SAN; on the installed compiler `260e884307c5` it stops on C and danger at the
+first `splice` and on the Raiser at the first `reverse`. A `pop()` or `shift()` whose result is not used still stops
+on a destroyed target, on C, danger, Raiser and SAN alike (two probe programs of that run, no corpus program).
 
 ### 5b. Owned edges (`Owned<T>`)
 
