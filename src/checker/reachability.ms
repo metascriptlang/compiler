@@ -491,11 +491,20 @@ function markRootDecl(dispatchRegistry: DispatchRegistry, decl: Node, modulePath
 }
 
 // A complete HCR core keeps what an image may demand on its first use: a class's TypeInfo and
-// hooks otherwise appear only with an allocation site.
-function markCompleteClassHooks(dispatchRegistry: DispatchRegistry, decl: Node, modulePath: string): void {
-	if (_sourceDependenciesOnly || decl.kind != NodeKind.ClassDecl || decl.resolvedSym == null) return;
-	if (decl.nodeType != null && hasGenericParams(decl.nodeType)) return;
+// hooks otherwise appear only with an allocation site, and every member and constructor variant
+// of an exported class, because a use by an image is recorded only in that image. Returns the
+// class whose lifted members follow, or null.
+function markCompleteClass(dispatchRegistry: DispatchRegistry, decl: Node, modulePath: string): Node | null {
+	if (_sourceDependenciesOnly || decl.kind != NodeKind.ClassDecl || decl.resolvedSym == null) return null;
+	if (decl.nodeType != null && hasGenericParams(decl.nodeType)) return null;
 	markObjectTypeInfo(dispatchRegistry, decl.resolvedSym.symbolType, modulePath);
+	return decl;
+}
+
+// methodToFunction appends a class's lifted members right after it, each named `<Class>_<member>`.
+function isLiftedMemberOf(owner: Node, decl: Node): boolean {
+	if (decl.kind != NodeKind.FunctionDecl || decl.resolvedSym == null) return false;
+	return (decl.data as FunctionDeclData).fnName.startsWith((owner.data as ClassDeclData).className + "_");
 }
 
 function walkDecl(dispatchRegistry: DispatchRegistry, di: int32): void {
@@ -718,6 +727,7 @@ export function computeAliveSet(
 		}
 		const d = program.data as ProgramData;
 
+		let completeClass: Node | null = null;
 		for (const stmt of d.programStmts) {
 			if (stmt == null) continue;
 
@@ -727,6 +737,14 @@ export function computeAliveSet(
 			if (bare.kind == NodeKind.DecoratedDecl) {
 				const ddw = bare.data as DecoratedDeclData;
 				if (ddw.decoratedNode != null) bare = ddw.decoratedNode;
+			}
+
+			if (completeClass != null) {
+				if (isLiftedMemberOf(completeClass, bare)) {
+					markRootDecl(graph.dispatchRegistry, bare, modulePath);
+					continue;
+				}
+				completeClass = null;
 			}
 
 			if (bare.kind == NodeKind.FunctionDecl) {
@@ -771,7 +789,7 @@ export function computeAliveSet(
 				if (decl != null && decl.resolvedSym != null && hasFlag(decl.resolvedSym, SymbolFlag.CompileTime)) continue;
 				if (decl != null) {
 					markRootDecl(graph.dispatchRegistry, decl, modulePath);
-					if (modulePath != entryPath && !_imageModules.has(modulePath)) markCompleteClassHooks(graph.dispatchRegistry, decl, modulePath);
+					if (modulePath != entryPath && !_imageModules.has(modulePath)) completeClass = markCompleteClass(graph.dispatchRegistry, decl, modulePath);
 				} else {
 					const name = getDeclName(bare);
 					if (name != "") walkNamedDecls(graph.dispatchRegistry, modulePath, name);
