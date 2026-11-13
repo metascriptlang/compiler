@@ -86,9 +86,10 @@ import { expandMacros } from "./meta/expand";
 import { ensureHostTableLoaded, closeHostChildren } from "./meta/hostTable";
 import { CliOptions, Target, MODE_DANGER, MODE_RELEASE, MODE_DEBUG } from "./options";
 import { emitDeclarations, DeclarationModule } from "./declarations";
-import { callsWasmWrapper, wasmFunctionNames, withoutJsSideCode, withoutUnreadInitializers, withoutWasmFunctions } from "./wasmBoundary/placement";
+import { callsWasmWrapper, wasmFunctionNames, wasmFunctionOf, withoutJsSideCode, withoutWasmFunctions } from "./wasmBoundary/placement";
+import { ThunkLine, applyInitThunks, callInitThunks, decodeThunks, encodeThunks, getterName, lineOf, movesToWasm, planInitThunks, thunkSource } from "./wasmBoundary/initOnce";
 import { buildWasmHalf } from "./wasmBoundary/placementBuild";
-import { manifestFor, memberFunctions, BoundaryFunction, BoundaryRefusal, MemberAccess, MemberUse } from "./wasmBoundary/manifest";
+import { manifestFor, memberFunctions, initFunctions, BoundaryFunction, BoundaryRefusal, InitCopy, MemberAccess, MemberUse } from "./wasmBoundary/manifest";
 import { wasmEntrySource } from "./wasmBoundary/wasmSide";
 import { jsBindings, JsBindings } from "./wasmBoundary/jsSide";
 import { placedModuleErrors, placedImportErrors, placedMemberUses } from "./wasmBoundary/refusals";
@@ -516,6 +517,32 @@ function moduleNameProjectRoot(entryPath: string, projectRoot: string): string {
 	return dirname(entry);
 }
 
+function readInitThunks(opts: CliOptions): ThunkLine[] {
+	if (opts.wasmInits == "") return [];
+	const text = readFile(opts.wasmInits);
+	if (!text.ok) {
+		printError(`internal: cannot read ${opts.wasmInits}: ${text.error.message}`);
+		throw new Error(BUILD_STOPPED);
+	}
+	const lines = decodeThunks(text.value);
+	if (!lines.ok) {
+		printError(lines.error);
+		throw new Error(BUILD_STOPPED);
+	}
+	return lines.value;
+}
+
+function appendInitThunks(provider: SourceProvider, lines: ThunkLine[]): void {
+	for (const line of lines) {
+		const source = provideSource(provider, line.modulePath);
+		if (!source.ok) {
+			printError(`internal: the wasm half cannot read '${line.modulePath}': ${source.error}`);
+			throw new Error(BUILD_STOPPED);
+		}
+		provider.sources.set(line.modulePath, source.value + thunkSource(line));
+	}
+}
+
 function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliOptions, targetInfo: TargetInfo = hostTargetInfo(), gcMode: GcMode = GcMode.Drc, session: CheckSession | null = null, testBuild: boolean = false): ModuleGraph {
 	if (opts.verbose) verboseLog(`loading module graph from ${entryPath}`);
 	setOwnedCycleCheck(opts.mode == MODE_DEBUG);
@@ -527,6 +554,7 @@ function loadAndCheckGraph(entryPath: string, config: ResolverConfig, opts: CliO
 		uniqueNames: new HashMap<string, string>(),
 	});
 	const provider = createFileSystemProvider();
+	if (opts.wasmHalf) appendInitThunks(provider, readInitThunks(opts));
 
 	// Load preludes FIRST so they end up at the start of graph.loadOrder.
 	// loadOrder is the init order (see genProjectDispatcher in codegen/c/index.ms);
@@ -1914,6 +1942,81 @@ function wrapperArgs(u: MemberUse): Node[] {
 	};
 }
 
+function moveInitializersToWasm(
+	placed: PlacedModules,
+	importerPaths: string[],
+	handles: Symbol[],
+	entryPath: string,
+	errors: BoundaryRefusal[],
+	functions: BoundaryFunction[],
+	wrapperCalledIn: (file: string, wrapper: string) => void,
+): ThunkLine[] {
+	const programs: Node[] = [];
+	const paths: string[] = [];
+	for (const path of importerPaths) {
+		const program = lookupModuleProgram(path);
+		const ctx = lookupModuleCtx(path);
+		if (program == null || ctx == null || !isOutsideResolvedStd(ctx, path)) continue;
+		programs.push(program);
+		paths.push(path);
+	}
+	const roots: Node[] = [];
+	for (const path of placed.paths) {
+		const program = lookupModuleProgram(path);
+		if (program == null) continue;
+		for (const stmt of (program.data as ProgramData).programStmts) {
+			const fn = wasmFunctionOf(stmt);
+			if (fn != null) roots.push(fn);
+		}
+	}
+	for (const cls of handles) {
+		if (cls.declNode != null) roots.push(cls.declNode);
+	}
+	const thunks = planInitThunks(programs, paths, roots);
+	for (let i = 0; i < programs.length; i += 1) {
+		const own = thunks.filter((t) => t.unit.modulePath == paths[i]);
+		if (own.length == 0) continue;
+		const copies: InitCopy[] = [];
+		let movable = true;
+		for (const t of own) {
+			const u = t.unit;
+			if (!movesToWasm(u)) {
+				const at = u.decl.location;
+				const names = u.syms.map((s) => s.name).join("', '");
+				const message = `wasm-placed code reads '${names}', declared by destructuring whose `
+					+ "initializer runs code, so the initializer runs once in wasm, where a default value "
+					+ "or a rest property cannot be assigned: declare the value as one variable and read its parts";
+				errors.push({ file: paths[i], code: "init-destructuring", message, line: at.line, column: at.column, endLine: at.endLine, endColumn: at.endColumn });
+				movable = false;
+				continue;
+			}
+			const targets = lineOf(t).targets;
+			const copy = (name: string, at: int32, returns: boolean): InitCopy => ({
+				name,
+				target: targets[at],
+				type: returns ? u.syms[at].symbolType : null,
+				mutable: hasFlag(u.syms[at], SymbolFlag.Mutable),
+				at: u.decl.location,
+			});
+			copies.push(copy(t.name, 0, t.returns));
+			for (const g of t.getters) copies.push(copy(getterName(u, g), g, true));
+		}
+		const made = initFunctions(paths[i], entryPath, copies);
+		for (const e of made.errors) errors.push(e);
+		if (!movable || made.errors.length > 0) continue;
+		for (const f of made.functions) {
+			f.initializes = true;
+			functions.push(f);
+		}
+		callInitThunks(programs[i], own, (site: Node, name: string): void => {
+			const f = made.functions.find((m) => m.name == name)!;
+			callsWasmWrapper(site, `${f.exportSymbol}(@)`, []);
+			wrapperCalledIn(paths[i], f.exportSymbol);
+		});
+	}
+	return thunks.map(lineOf);
+}
+
 function placeWasmModules(
 	placed: PlacedModules,
 	graph: ModuleGraph,
@@ -1979,12 +2082,13 @@ function placeWasmModules(
 			break;
 		}
 	}
+	const thunks = moveInitializersToWasm(placed, importerPaths, handles, entryPath, errors, functions, wrapperCalledIn);
 	if (errors.length > 0) {
 		for (const e of errors) printBoundaryRefusal(graph, e);
 		stopBuild();
 	}
 	const entry = wasmEntrySource(functions, (path: string): string => path.replaceAll("\\", "/"));
-	const built = buildWasmHalf(entry.source, entry.exportedFunctions, entry.runtimeMethods, entry.jsLibrary, outStem, opts);
+	const built = buildWasmHalf(entry.source, entry.exportedFunctions, entry.runtimeMethods, entry.jsLibrary, encodeThunks(thunks), outStem, opts);
 	if (!built.ok) {
 		printError(built.error);
 		stopBuild();
@@ -1995,7 +2099,7 @@ function placeWasmModules(
 		}
 		throw new Error(`internal: boundary function '${f.name}' has no export in '${f.modulePath}'`);
 	};
-	return jsBindings({ functions, errors: [], handles: [] }, `./${basename(outStem)}.wasm.mjs`, (f: BoundaryFunction): string => f.member != null ? f.exportSymbol : nameOf(f, symOf(f)), { checked: (bundleName: string): boolean => opts.mode != MODE_DANGER && reachableFromForeignJs(bundleName), dev: opts.mode == MODE_DEBUG });
+	return jsBindings({ functions, errors: [], handles: [] }, `./${basename(outStem)}.wasm.mjs`, (f: BoundaryFunction): string => f.member != null || f.initializes == true ? f.exportSymbol : nameOf(f, symOf(f)), { checked: (bundleName: string): boolean => opts.mode != MODE_DANGER && reachableFromForeignJs(bundleName), dev: opts.mode == MODE_DEBUG });
 }
 
 interface BundledModule {
@@ -2178,12 +2282,10 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const mod = findModule(graph, modPath);
 		if (mod == null) continue;
 		let bound = "";
-		if (placed.paths.includes(modPath)) {
-			for (const m of wasmBindings.modules) {
-				if (m.modulePath == modPath) bound = m.code;
-			}
-			withoutWasmFunctions(unitPrograms[ui]);
+		for (const m of wasmBindings.modules) {
+			if (m.modulePath == modPath) bound = m.code;
 		}
+		if (placed.paths.includes(modPath)) withoutWasmFunctions(unitPrograms[ui]);
 		if (!(config.stdPath != "" && modPath.startsWith(config.stdPath))) {
 			refuseSyncAwaitOnJs(unitCtxs[ui], unitPrograms[ui]);
 			exitOnCheckerErrors(unitCtxs[ui], modPath, mod.rawSource);
@@ -4022,19 +4124,18 @@ resetLiftedOps();
 		checkedMods.push({ program: checked.program, ctx: checked.ctx, modPath, source: mod.rawSource });
 		programByPath.set(modPath, checked.program);
 	}
-	let uninitialized: Symbol[] = [];
+	const uninitialized: Symbol[] = [];
 	if (opts.wasmHalf) {
-		const owners: Node[] = [];
-		const readers: Node[] = [];
+		const lines = readInitThunks(opts);
 		for (const cm of checkedMods) {
-			if (cm.modPath == entryPath) {
-				readers.push(cm.program);
-			} else if (isOutsideResolvedStd(cm.ctx, cm.modPath)) {
-				owners.push(withoutJsSideCode(cm.program));
-				readers.push(cm.program);
+			if (cm.modPath == entryPath || !isOutsideResolvedStd(cm.ctx, cm.modPath)) continue;
+			const applied = applyInitThunks(withoutJsSideCode(cm.program), cm.modPath, lines);
+			if (!applied.ok) {
+				printError(applied.error);
+				throw new Error(BUILD_STOPPED);
 			}
+			for (const sym of applied.value) uninitialized.push(sym);
 		}
-		uninitialized = withoutUnreadInitializers(owners, readers);
 	}
 
 	const reloadable: string[] = opts.isHcr ? hcrModulePaths : [];

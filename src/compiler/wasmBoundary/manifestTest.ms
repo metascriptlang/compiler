@@ -3,7 +3,8 @@ import { CheckerContext } from "../../checker/context";
 import { lookupSymbol } from "../../checker/symbol";
 import { checkSource } from "../../test/handoff/helpers";
 import { BoundaryKind } from "./boundaryKinds";
-import { BoundaryMode, BoundaryRefusal, manifestFor, moduleKeyOf } from "./manifest";
+import { BoundaryMode, BoundaryRefusal, InitCopy, initFunctions, manifestFor, moduleKeyOf } from "./manifest";
+import { makeLoc } from "../../ast/node";
 
 const ENTRY = "/proj/app/main.ms";
 const MODULE = "/proj/app/calc/core.ms";
@@ -626,4 +627,32 @@ test "manifest: a mode with no boundary form, a callback's own mode and a ref be
 	assert errorFor(m.errors, "cbParamSink").includes("parameter 1 of parameter 'cb' is 'sink string', and a callback crossing the boundary takes its parameters as copies, so it has nothing to take ownership of: drop 'sink'");
 	assert errorFor(m.errors, "refAndCb").includes("it takes the ref parameter 'n' and a callback, and the callback runs JS while wasm holds the copy of 'n'");
 	for (const e of m.errors) assert !e.message.includes("which has no JS/wasm boundary form"), e.message;
+}
+
+test "manifest: a value JS copies from a wasm initializer is a const with a boundary form" {
+	const src = `
+export const scale: int32 = 2;
+export let total: int32 = 0;
+export const pair: [int32, int32] = [1, 2];
+`;
+	const info = exportsOf(src, ["scale", "total", "pair"]);
+	const at = makeLoc(3, 1);
+	const copy = (name: string, i: int32, mutable: boolean): InitCopy => ({
+		name,
+		target: info[i].name,
+		type: info[i].sym.symbolType,
+		mutable,
+		at,
+	});
+	const m = initFunctions(MODULE, ENTRY, [
+		copy("msbInit0", 0, false),
+		{ name: "msbInit1", target: "seen", type: null, mutable: true, at },
+		copy("msbInit2", 1, true),
+		copy("msbInit3", 2, false),
+	]);
+	assert m.functions.map((f) => `${f.exportSymbol}:${f.result}`).join(",")
+		== `msb_calc_score_msbInit0:${BoundaryKind.I32},msb_calc_score_msbInit1:${BoundaryKind.Void}`;
+	assert m.errors.length == 2, m.errors.map((e) => e.message).join("; ");
+	assert m.errors[0].message.includes("'total'") && m.errors[0].message.includes("is mutable");
+	assert m.errors[1].message.includes("'pair'") && m.errors[1].message.includes("has type");
 }

@@ -128,6 +128,7 @@ export interface BoundaryFunction {
 	resultClass: string;
 	resultEnum: BoundaryEnum | null;
 	member?: BoundaryMember | null;
+	initializes?: boolean;
 }
 
 export interface BoundaryRefusal {
@@ -1046,7 +1047,11 @@ function plainShape(kind: BoundaryKind, nullable: boolean): ValueShape {
 	return { kind, nullable, leaves: [], element, handle: null, className: "", enumOf: null };
 }
 
-function resultOf(c: Collector, type: Type | null): ValueShape | null {
+function resultOf(
+	c: Collector,
+	type: Type | null,
+	what: string = "the result",
+): ValueShape | null {
 	if (isVoidType(type)) return plainShape(BoundaryKind.Void, false);
 	const declared = peeled(type!);
 	const nullable = isMaybeType(declared);
@@ -1057,7 +1062,7 @@ function resultOf(c: Collector, type: Type | null): ValueShape | null {
 		return plainShape(BoundaryKind.String, nullable);
 	}
 	if (t.kind == TypeKind.Enum) {
-		const e = enumOf(c, "the result", t);
+		const e = enumOf(c, what, t);
 		if (e == null) return null;
 		const shape = plainShape(enumStorage(t), nullable);
 		shape.enumOf = e;
@@ -1067,7 +1072,7 @@ function resultOf(c: Collector, type: Type | null): ValueShape | null {
 		refuse(
 			c,
 			"span-result",
-			"the result",
+			what,
 			declared,
 			"and a Span borrows its memory only for the call, so it cannot outlive "
 				+ "it: return a Vec",
@@ -1075,7 +1080,7 @@ function resultOf(c: Collector, type: Type | null): ValueShape | null {
 		return null;
 	}
 	if (isHandleType(t)) {
-		const target = checkHandle(c, "the result", t, nullable);
+		const target = checkHandle(c, what, t, nullable);
 		if (target == null) return null;
 		const shape = plainShape(BoundaryKind.Handle, false);
 		shape.handle = target;
@@ -1094,14 +1099,14 @@ function resultOf(c: Collector, type: Type | null): ValueShape | null {
 		return shape;
 	}
 	const errorsBefore = c.errors.length;
-	const shape = valueShape(c, "the result", t, nullable);
+	const shape = valueShape(c, what, t, nullable);
 	if (shape != null) return shape;
 	if (c.errors.length == errorsBefore) {
 		const why = noFormWhy(t, NoFormAt.Result)
 			?? "which has no JS/wasm boundary form: return void, bool, an integer, "
 				+ "a float, a string, a struct of those, a Vec of numbers or a TS "
 				+ "typed array, each also nullable";
-		refuse(c, "no-form", "the result", declared, why);
+		refuse(c, "no-form", what, declared, why);
 	}
 	return null;
 }
@@ -1579,6 +1584,56 @@ export function memberFunctions(
 			access: use.access,
 		};
 		functions.push(f);
+	}
+	return { functions, errors: c.errors, handles: c.handles };
+}
+
+export interface InitCopy {
+	name: string;
+	target: string;
+	type: Type | null;
+	mutable: boolean;
+	at: SourceLocation;
+}
+
+export function initFunctions(
+	modulePath: string,
+	entryPath: string,
+	copies: InitCopy[],
+): Manifest {
+	const key = moduleKeyOf(modulePath, entryPath);
+	const c: Collector = {
+		errors: [],
+		fnName: "",
+		modulePath,
+		entryPath,
+		at: makeLoc(0, 0),
+		exports: [],
+		handles: [],
+	};
+	const what = "its value, which JS-side code reads while wasm-placed code "
+		+ "reads it too, so its initializer runs once in wasm and JS gets a copy,";
+	const functions: BoundaryFunction[] = [];
+	for (const copy of copies) {
+		c.fnName = copy.target;
+		c.at = copy.at;
+		if (copy.type != null && copy.mutable) {
+			cannotCross(
+				c,
+				"mutable-copy",
+				`${what} is mutable, so JS and wasm would each keep their own `
+					+ "copy and neither would see the other's changes; reach it only "
+					+ "through @wasm functions, or make it a const",
+			);
+			continue;
+		}
+		const result = copy.type == null
+			? plainShape(BoundaryKind.Void, false)
+			: resultOf(c, copy.type, what);
+		if (result == null) continue;
+		const exportSymbol = `msb_${key}_${copy.name}`;
+		const f = assembled(c, key, copy.name, 0, exportSymbol, [], result!, copy.at);
+		if (f != null) functions.push(f!);
 	}
 	return { functions, errors: c.errors, handles: c.handles };
 }

@@ -96,6 +96,7 @@ export interface CliOptions {
 	appMode: string;           // --app=console|lib|staticlib: executable vs shared/static library
 	wasmPlacement: boolean;    // --wasm-placement=on|off: a js build sends `@wasm` functions to wasm; off builds them as js
 	wasmHalf: boolean;         // --wasm-half: the child build of a placed program's wasm half, whose user modules' top-level code runs on the JS side
+	wasmInits: string;         // --wasm-half=<file>: the initializers the JS build moved into wasm thunks, one line each
 	strictNullChecks: boolean; // --strict-nil: warn on unguarded class deref
 	testsInDir: boolean;       // --tests-in-dir: test runs only modules under the entry's directory
 	testsShard: int32;         // --tests-shard=<i>/<n>: test runs the tested modules whose position mod n is i
@@ -230,6 +231,7 @@ export function newCliOptions(): CliOptions {
 		appMode: "console",
 		wasmPlacement: true,
 		wasmHalf: false,
+		wasmInits: "",
 		strictNullChecks: false,
 		testsInDir: false,
 		testsShard: 0,
@@ -561,8 +563,9 @@ export function applyArgs(opts: CliOptions, args: string[], argStart: int32): Re
 				return Result.err(`unknown --wasm-placement value: "${placement}"; valid values: on, off`);
 			}
 			opts.wasmPlacement = placement == "on";
-		} else if (arg == "--wasm-half") {
+		} else if (arg == "--wasm-half" || arg.startsWith("--wasm-half=")) {
 			opts.wasmHalf = true;
+			opts.wasmInits = arg.slice("--wasm-half".length + 1);
 		} else if (arg == "--strict-nil") {
 			opts.strictNullChecks = true;
 		} else if (arg == "--tests-in-dir") {

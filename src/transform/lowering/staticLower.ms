@@ -24,7 +24,7 @@ function isInlinedReadonlyScalar(member: Node, reloadable: string[]): boolean {
 	return literalTakesType(d.propInitializer, member.nodeType);
 }
 
-function staticFieldAssignment(declNode: Node, ownerName: string, member: Node): Node {
+export function staticFieldAssignment(declNode: Node, ownerName: string, member: Node): Node {
 	const pd = member.data as PropertyDeclData;
 	if (pd.propInitializer.nodeType == null && member.nodeType != null) {
 		pd.propInitializer.nodeType = member.nodeType;

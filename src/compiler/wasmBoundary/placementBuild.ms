@@ -115,6 +115,7 @@ export function buildWasmHalf(
 	exportedBase: string[],
 	runtimeMethods: string[],
 	jsLibrary: string,
+	initThunks: string,
 	outStem: string,
 	opts: CliOptions,
 ): Result<void, string> {
@@ -135,6 +136,7 @@ export function buildWasmHalf(
 	const stage = `${stem}.wasmbuild`;
 	const entry = `${stage}/${base}.ms`;
 	const library = `${stage}/${base}.lib.js`;
+	const inits = `${stage}/${base}.inits`;
 	const mjs = `${stage}/${base}.mjs`;
 	const ensured = ensureDir(stage);
 	if (!ensured.ok) {
@@ -143,6 +145,10 @@ export function buildWasmHalf(
 	const wroteEntry = writeFile(entry, entrySource);
 	if (!wroteEntry.ok) {
 		return Result.err(`cannot write ${entry}: ${wroteEntry.error.message}`);
+	}
+	const wroteInits = writeFile(inits, initThunks);
+	if (!wroteInits.ok) {
+		return Result.err(`cannot write ${inits}: ${wroteInits.error.message}`);
 	}
 	const wroteLibrary = writeFile(library, jsLibrary);
 	if (!wroteLibrary.ok) {
@@ -167,7 +173,7 @@ export function buildWasmHalf(
 		"--target=c",
 		"--os=emcc",
 		"--app=lib",
-		"--wasm-half",
+		`--wasm-half=${inits}`,
 		`--output=${mjs}`,
 		`--passL=${linkFlags}`,
 	];
