@@ -1290,7 +1290,7 @@ function isStdBuiltinWritingNothing(sym: Symbol): boolean {
 const GENERIC_ARRAY_BYTE_MOVERS = [
 	"msGenericArrayPush", "msGenericArrayPop", "msGenericArrayCapacity", "msGenericArrayCheckedIndex",
 	"msGenericArrayReserve", "msGenericArrayReserveMore", "msGenericArrayAppendBlock", "msGenericArraySetLen",
-	"msGenericArrayRotate", "msGenericArraySwap", "msGenericArraySwapWith",
+	"msGenericArrayRotate", "msGenericArraySwap", "msGenericArraySwapWith", "msGenericArrayGiveUpEdges",
 ];
 
 function isGenericArrayByteMover(sym: Symbol): boolean {
