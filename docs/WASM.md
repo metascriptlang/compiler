@@ -233,6 +233,16 @@ three handle checks and drop the site.
   both the open views and the dead instance; and the member entry counting its receiver up and
   down. The entry now reads the receiver as a `Cursor<C>`: the JS handle's own count spans the
   call, because either no JS runs during it or a release is deferred to its end (RT-48).
+- **The trap guard stays** (2026-11-13). Without the `try` that ends the instance on a trap, a JS
+  caller that catches a trap thrown in the middle of an update and calls again reads a wrong total
+  that nothing reports (probe: 90 for 100); the all-C program dies at the trap. Measured on m1m
+  with the bench bundle of main 27db20347291's compiler hand-edited, 5 Node and 3 Chrome rounds
+  interleaved, medians in ns for the guard / a call counter instead / no guard: `add x1000` 2.84 /
+  5.52 / 2.75 on Node and 3.16 / 5.45 / 2.98 in Chrome; `mid x1000` 5.23 / 10.03 / 9.51 and 5.62 /
+  9.52 / 8.96; `method x1000` 3.14 / 5.57 / 3.16 on Node; the other rows equal. The guard costs at
+  most 0.2 ns a call. Why the bundle without the `try` is slower on `mid` is not explained. The
+  host was not quiet (load 9.75 at the start, 2.8 at the end), so the rows compare with each other,
+  not with other tables.
 - **A struct result of scalar leaves is read from a slot, not handed to an import.** The wrapper
   takes `8 * leaves` bytes from the glue's scratch arena, passes the address first, the entry stores
   each leaf in its 8-byte slot (`msbPut_<letters>`) and the wrapper reads them from the Emscripten
