@@ -55,10 +55,13 @@ const noColourVariable = ["suite", "tests", "fmt", "cache", "crypto", "tools"];
 function wanted(name: string): boolean {
 	return selected == "" || selected.split(",").includes(name.split(".")[0]);
 }
+function roomOverTheMeasuredPeak(lane: string): number {
+	return lane == "suite" ? 8e9 : lane == "tests" ? 6e9 : 0;
+}
 function bounded(lane: string, description: string, command: Arg[], env: Record<string, Arg>, inputs: LazyPath[], limit: number = laneLimit): Command {
 	const colour: Arg[] = noColourVariable.includes(lane) ? ["-u", "NO_COLOR"] : ["NO_COLOR=1"];
 	const argv: Arg[] = ["bash", "-c", withTrailer, lane, `${limit}`, "env", "-u", "FORCE_COLOR"];
-	return systemCommand(argv.concat(colour).concat(command), { env, inputs, description, timeout: (limit + 60) * 1000 });
+	return systemCommand(argv.concat(colour).concat(command), { env, inputs, description, timeout: (limit + 60) * 1000, maxRss: roomOverTheMeasuredPeak(lane) });
 }
 function laneNode(name: string, command: Arg[], env: Record<string, Arg> = {}, inputs: LazyPath[] = sources): Command {
 	const node = bounded(name.split(".")[0], `lane ${name}`, command, env, inputs);
