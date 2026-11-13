@@ -383,10 +383,13 @@ merging by shape gives that result without intercepting calls (`keepOne`,
   all four in 1 s; `msc build lsp` (`env: { MSC: msc }`) ran its 69 scenarios green in 56 s.
   Limits: `addArgs` and the `args` of `runArtifact` take `string[]` only, because array elements
   are invariant ([LANG.md](LANG.md) "Elements are invariant"); `systemCommand` accepts a
-  `string[]` variable as well as a mixed list. A command with `env` fails on Windows
-  (`error: moded: setEnvironmentVariable is not supported on Windows yet`, d87, 2026-11-14): the
-  builder sets it through `/usr/bin/env`, and passing it through `spawn` needs `envPairs` of
-  `std/process` in the std of the compiler that builds the builder. A command past its `timeout`
+  `string[]` variable as well as a mixed list. On Windows a command's `env` is
+  the builder's own environment (`envPairs` of `std/process`) with the node's variables set over
+  it, an inherited variable of the same name in another case replaced, passed through `spawn`;
+  elsewhere it is set through `/usr/bin/env`. On d87, 2026-11-14, the `env` pins of
+  `src/test/projectConfigCommands.ms` pass (`Build Summary: 3/3 steps succeeded`, `--dry-run`
+  ends `MODE=x true)`), where the builder before answered `error: moded: setEnvironmentVariable
+  is not supported on Windows yet`. A command past its `timeout`
   on Windows has only itself killed, as a Node `subprocess.kill()` does there (`ran past its
   timeout of 500 ms; it was killed, and the processes it started were not`, d87, the same day);
   elsewhere its process group dies with it. Not verified: macOS.
@@ -466,8 +469,7 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   each of its process trees first, `taskkill //T //F`, as `kill_group`) and writes `TIMEOUT after
   Ns, process tree killed`; the node's own `timeout` is a backstop 60 s later. `-Dlanes=lsp
   -DlaneLimit=3`, 2026-11-14: on rtx `TIMEOUT after 3s, process tree killed`, `SECS=3`, `RC=137`,
-  no compiler process left; on d87 the same three lines, run by a builder that passes a node's
-  environment on Windows, which main does not have yet. Without the limit the lane ran 55 s on
+  no compiler process left; on d87 the same three lines. Without the limit the lane ran 55 s on
   rtx (`RC=0`) and 110 s and 134 s on d87 (69 of 69, then 68 with `a module the second build.ms
   global import reaches sees the first one only` timing out after 10 s).
 - **The reruns are a second build, not work inside the verdict tool**, because `std/process` refuses
@@ -522,7 +524,7 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   is the host's total RAM, not what other gates on the host leave free, which is what `gate.sh`
   reads from `MemAvailable`.
 
-Not verified: every lane in one build on one host, macOS and Windows, and a real land gated by
+Not verified: every lane in one build on one host, macOS, any lane but lsp on Windows, and a real land gated by
 these nodes.
 
 ## Packages
