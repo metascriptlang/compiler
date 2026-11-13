@@ -17,6 +17,7 @@ import "./intArithRun";
 import "./asConversion";
 import "./downConversion";
 import "./genericClassInstance";
+import "./classLiteral";
 import "./genericInstanceSpelling";
 import "./aliasNarrowingCast";
 import "./structFieldDecorators";

@@ -24,6 +24,8 @@ import { unwrapRefNullUnion, isMaybeType, isStringLike, numberLiteralSet, isTagC
 import { DYNAMIC_IMPORT } from "../../checker/importCall";
 import { isAssignOp, isLogicalAssignOp } from "../../ast/operators";
 import { enumMemberLiteral } from "../../checker/constFold";
+import { anyDescendant, Visit } from "../../ast/visitor";
+import { isScopeBoundary } from "../../ast/shape";
 
 // ===== Literal Emitters =====
 
@@ -671,6 +673,20 @@ export function emitObjectLiteral(gen: JSGenerator, node: Node): void {
 		}
 	}
 	const cls = node.nodeType != null && jsMemberKind(node.nodeType) == "class" && node.nodeType.typeReturn.kind != TypeKind.GenericInstance ? runtimeClassSym(node.nodeType.typeReturn) : null;
+	if (cls != null && storesFieldByField(d)) {
+		const self = literalSelfName(d);
+		emit(gen, `((${self}) => (`);
+		for (let i = 0; i < d.keys.length; i += 1) {
+			emit(gen, `${self}${jsPropertyAccess(d.keys[i])} = `);
+			emitCopyOnRead(gen, d.properties[i]);
+			emit(gen, ", ");
+		}
+		for (const field of omittedFields(node, d)) emit(gen, `${self}${jsPropertyAccess(field.name)} = ${field.zero}, `);
+		emit(gen, `${self}))(globalThis.Object.create(`);
+		emitNode(gen, classReference(cls, node.location));
+		emit(gen, ".prototype))");
+		return;
+	}
 	if (cls != null) {
 		emit(gen, "globalThis.Object.assign(globalThis.Object.create(");
 		emitNode(gen, classReference(cls, node.location));
@@ -680,6 +696,34 @@ export function emitObjectLiteral(gen: JSGenerator, node: Node): void {
 		return;
 	}
 	emitPlainObjectLiteral(gen, node, d);
+}
+
+/**
+ * Whether a class-typed literal can be built by storing each field into the new instance inside an arrow:
+ * no spread, no `__proto__` key, and no `await` or `yield` of the enclosing routine, which an arrow cannot hold.
+ */
+function storesFieldByField(d: ObjectLiteralData): boolean {
+	if (d.keys.length != d.properties.length) return false;
+	for (let i = 0; i < d.keys.length; i += 1) {
+		if (d.keys[i] == "..." || d.keys[i] == "__proto__") return false;
+		const suspends = anyDescendant(d.properties[i], (n: Node): Visit => {
+			if (n.kind == NodeKind.AwaitExpr || n.kind == NodeKind.YieldExpr) return Visit.Hit;
+			return isScopeBoundary(n) ? Visit.Skip : Visit.Descend;
+		});
+		if (suspends) return false;
+	}
+	return true;
+}
+
+/** A parameter name for the instance that no identifier inside the literal's values spells. */
+function literalSelfName(d: ObjectLiteralData): string {
+	let name = "$o";
+	let n = 0;
+	while (d.properties.some((p: Node): boolean => anyDescendant(p, (x: Node): Visit => x.kind == NodeKind.Identifier && (x.data as IdentifierData).name == name ? Visit.Hit : Visit.Descend))) {
+		n += 1;
+		name = `$o${n}`;
+	}
+	return name;
 }
 
 function emitPlainObjectLiteral(gen: JSGenerator, node: Node, d: ObjectLiteralData): void {
@@ -710,7 +754,13 @@ function emitPlainObjectLiteral(gen: JSGenerator, node: Node, d: ObjectLiteralDa
 }
 
 function omittedFieldZeros(node: Node, d: ObjectLiteralData): string[] {
-	const out: string[] = [];
+	return omittedFields(node, d).map((f: OmittedField): string => `${jsPropertyKey(f.name)}: ${f.zero}`);
+}
+
+type OmittedField = { name: string, zero: string };
+
+function omittedFields(node: Node, d: ObjectLiteralData): OmittedField[] {
+	const out: OmittedField[] = [];
 	if (node.nodeType == null || d.keys.length != d.properties.length) return out;
 	const peeled = peelThrough(unwrapRef(node.nodeType), PEEL_ALL);
 	const base = peeled == null ? unwrapRef(node.nodeType) : peeled;
@@ -720,7 +770,7 @@ function omittedFieldZeros(node: Node, d: ObjectLiteralData): string[] {
 		const name = t.typeNames[i];
 		if (d.keys.includes(name) || spreadMayProvide(d, name)) continue;
 		const zero = jsDefaultValue(t.typeChildren[i]);
-		if (zero != "") out.push(`${jsPropertyKey(name)}: ${zero}`);
+		if (zero != "") out.push({ name, zero });
 	}
 	return out;
 }
