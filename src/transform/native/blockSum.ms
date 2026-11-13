@@ -27,7 +27,7 @@ import { cloneNodeKeepSem } from "../../monomorphize/clone";
 
 type SumLoop = { acc: Node, sub: boolean, index: Node, bounds: Node[], guard: Node[], decls: Node[], term: Node };
 type Guard = { cond: Node, length: int32 };
-type Fast = { bad: Symbol, counters: HashSet<Symbol>, guarded: Node[], ranges: HashMap<Symbol, Range>, counterChecks: Range[], loc: SourceLocation };
+type Fast = { bad: Symbol, counters: HashSet<Symbol>, guarded: Node[], ranges: HashMap<Symbol, Range>, counterChecks: Range[], products: Symbol[] | null, ctx: TransformContext, loc: SourceLocation };
 type StoreLoop = { index: Node, bounds: Node[], body: Node[], states: Symbol[], views: Symbol[] };
 type Range = { lo: int64, hi: int64 };
 type Wrapped = { op: string, a: Symbol, b: Symbol | null, overflow: Symbol };
@@ -251,6 +251,7 @@ function sticky(n: Node, f: Fast): Node {
 		const args: Node[] = [];
 		for (const a of (n.data as CallExprData).arguments) args.push(sticky(a, f));
 		if (safe) return unchecked(n, args, loc);
+		if (name == "msStickyMulI32" && f.products != null && !isConstant(args[0]) && !isConstant(args[1])) return magnitudeProduct(n, args, f);
 		args.push(makeIdentResolved(f.bad, loc));
 		const call = makeCall(runtimeRef(name, loc), args, loc);
 		call.nodeType = n.nodeType;
@@ -275,6 +276,25 @@ function sticky(n: Node, f: Fast): Node {
 	forEachChild(n, (c: Node): void => { kids.push(c); });
 	for (const k of kids) replaceChild(n, k, sticky(k, f));
 	return n;
+}
+
+function magnitudeProduct(n: Node, args: Node[], f: Fast): Node {
+	const u32 = getSysType(TypeKind.Uint32);
+	const ma = freshTempSym(f.ctx, "ma", u32);
+	const mb = freshTempSym(f.ctx, "mb", u32);
+	f.products!.push(ma);
+	f.products!.push(mb);
+	const call = makeCall(runtimeRef("msStickyMulMagI32", f.loc), [args[0], args[1], makeIdentResolved(ma, f.loc), makeIdentResolved(mb, f.loc)], f.loc);
+	call.nodeType = n.nodeType;
+	return call;
+}
+
+function isConstant(n: Node): boolean {
+	let e = n;
+	while (e.kind == NodeKind.HiddenStdConv || e.kind == NodeKind.TypeAssertion) {
+		e = e.kind == NodeKind.HiddenStdConv ? (e.data as HiddenStdConvData).convExpr : (e.data as TypeAssertionData).asExpr;
+	}
+	return e.kind == NodeKind.NumberLiteral;
 }
 
 function counterOf(n: Node, counters: HashSet<Symbol>): Symbol | null {
@@ -498,7 +518,7 @@ function sumLoop(s: SumLoop, loop: Node, ctx: TransformContext): Node {
 
 	const renames = new HashMap<Symbol, Symbol>();
 	renames.set(s.index.resolvedSym!, j);
-	const f: Fast = { bad, counters: new HashSet<Symbol>(), guarded: [], ranges: new HashMap<Symbol, Range>(), counterChecks: [], loc };
+	const f: Fast = { bad, counters: new HashSet<Symbol>(), guarded: [], ranges: new HashMap<Symbol, Range>(), counterChecks: [], products: [], ctx, loc };
 	f.counters.add(j);
 	const fast: Node[] = [];
 	for (const d of s.decls) {
@@ -543,7 +563,18 @@ function sumLoop(s: SumLoop, loop: Node, ctx: TransformContext): Node {
 		head.push(markBad(bad, typed(makeBinary(below, "||", above, loc), booleanType()), loc));
 	}
 	const fastLoop = makeWhile(typed(makeBinary(wide(makeIdentResolved(j, loc), loc), "<", makeIdentResolved(end, loc), loc), booleanType()), makeBlock(fast, loc), loc);
+	const u32 = getSysType(TypeKind.Uint32);
+	for (const m of f.products!) {
+		const decl = makeVarDecl(m.name, zero(u32, loc), DeclKind.Let, loc);
+		decl.resolvedSym = m;
+		decl.nodeType = u32;
+		head.push(decl);
+	}
 	head.push(makeIf(typed(makeUnaryNot(makeIdentResolved(bad, loc), loc), booleanType()), makeBlock([fastLoop], loc), null, loc));
+	for (let k = 0; k + 1 < f.products!.length; k += 2) {
+		const fits = typed(makeCall(runtimeRef("msBlockProductFits", loc), [makeIdentResolved(f.products![k], loc), makeIdentResolved(f.products![k + 1], loc)], loc), booleanType());
+		head.push(markBad(bad, typed(makeUnaryNot(fits, loc), booleanType()), loc));
+	}
 	const hi = magnitude == null ? null : declareLocal(head, ctx, "hi", i64, typed(makeCall(runtimeRef("msBlockMagnitude", loc), [makeIdentResolved(magnitude, loc)], loc), i64), DeclKind.Const, loc);
 	if (wrapped != null) {
 		head.push(markBad(bad, typed(makeBinary(makeIdentResolved(wrapped.overflow, loc), "<", zero(i32, loc), loc), booleanType()), loc));
@@ -695,7 +726,7 @@ function storeLoop(s: StoreLoop, loop: Node, ctx: TransformContext): Node {
 		renames.set(v, copy);
 		copies.push(copy);
 	}
-	const f: Fast = { bad, counters: new HashSet<Symbol>(), guarded: [], ranges: new HashMap<Symbol, Range>(), counterChecks: [], loc };
+	const f: Fast = { bad, counters: new HashSet<Symbol>(), guarded: [], ranges: new HashMap<Symbol, Range>(), counterChecks: [], products: null, ctx, loc };
 	f.counters.add(j);
 	const fast: Node[] = [];
 	const stored: Symbol[] = [];
