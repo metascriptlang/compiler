@@ -27,7 +27,7 @@ build() { # <arm> <msc> <output>
 		jsonly) "$2" build "$HERE/bench.ms" --target=js --danger --wasm-placement=off --output="$OUT/$3.mjs" >/dev/null ;;
 		mixed-chrome) "$2" build "$HERE/bench.ms" --target=js --danger --output="$OUT/$3.mjs" >/dev/null ;;
 		neon)
-			cargo build -q --release --manifest-path "$HERE/neon/Cargo.toml" --target-dir "$OUT/neon-target"
+			RUSTFLAGS="-C target-cpu=native" cargo build -q --release --manifest-path "$HERE/neon/Cargo.toml" --target-dir "$OUT/neon-target"
 			for lib in libneonbench.dylib libneonbench.so neonbench.dll; do
 				[ -f "$OUT/neon-target/release/$lib" ] && cp "$OUT/neon-target/release/$lib" "$OUT/neon.node"
 			done
@@ -38,7 +38,7 @@ build() { # <arm> <msc> <output>
 		wasmbindgen-chrome)
 			cargo build -q --release --target wasm32-unknown-unknown --manifest-path "$HERE/wasmbindgen/Cargo.toml" --target-dir "$OUT/wb-target"
 			wasm-bindgen --target web --out-dir "$OUT/wbweb" "$OUT/wb-target/wasm32-unknown-unknown/release/wbbench.wasm" ;;
-		rust) rustc -C opt-level=3 "$HERE/bench.rs" -o "$OUT/rust" ;;
+		rust) rustc -C opt-level=3 -C target-cpu=native "$HERE/bench.rs" -o "$OUT/rust" ;;
 		nim) nim c -d:danger --hints:off --nimcache:"$OUT/nimcache" -o:"$PWD/$OUT/nim" "$HERE/bench.nim" >/dev/null ;;
 		yyjson-mut) cc -O3 -I"$MSBENCH_YYJSON/src" "$HERE/bench.yyjson.c" "$MSBENCH_YYJSON/src/yyjson.c" -lm -o "$OUT/yyjson-mut" ;;
 	esac
@@ -85,7 +85,7 @@ for arm in "${wanted[@]}"; do
 		# MSBENCH_RUST or MSBENCH_NIM names a twin binary built elsewhere, for a host that lacks that toolchain.
 		rust)
 			if [ -n "${MSBENCH_RUST:-}" ]; then cp "$MSBENCH_RUST" "$OUT/rust"; versions+=" · rust prebuilt $MSBENCH_RUST"
-			else build rust; versions+=" · $(rustc --version) -C opt-level=3"; fi ;;
+			else build rust; versions+=" · $(rustc --version) -C opt-level=3 -C target-cpu=native"; fi ;;
 		nim)
 			if [ -n "${MSBENCH_NIM:-}" ]; then cp "$MSBENCH_NIM" "$OUT/nim"; versions+=" · nim prebuilt $MSBENCH_NIM"
 			else build nim; versions+=" · nim $(nim --version | head -1 | awk '{ print $4 }') -d:danger"; fi ;;

@@ -21,7 +21,7 @@ An area that compares against something other than node lists its arms in `arms`
 `bench.noble.mjs` on the noble libraries that `run.sh` installs into `out/bench/noble`, `node` runs
 `bench.node.mjs`, and `luajit-joff`, `luajit-jon` and `lua54` run the Lua twin `bench.lua` under LuaJIT 2.1 and Lua
 5.4, which `src/bench/buildLua.sh` builds from pinned sources into `out/bench/lua/` on first use. `rust` and `nim` build the
-twins `rustc -C opt-level=3` and `nim c -d:danger`, or take prebuilt binaries from `MSBENCH_RUST` and `MSBENCH_NIM` on
+twins `rustc -C opt-level=3 -C target-cpu=native` (as the C build targets this machine's CPU) and `nim c -d:danger`, or take prebuilt binaries from `MSBENCH_RUST` and `MSBENCH_NIM` on
 a host that lacks the toolchain.
 
 `src/bench/run.sh <area> [rounds]` builds `bench.ms` with `MSC` (and, with `MSBENCH_BASE`, the area's first arm again
