@@ -556,7 +556,7 @@ function isAssignableInner(source: Type | null, target: Type | null): boolean {
 		if (ancestor != null) return isAssignable(ancestor, target);
 		const sBody = structBodyOf(source);
 		const tBody = structBodyOf(target);
-		if (sBody != null && tBody != null) return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && heldLayoutFits(unwrapRefBase(sBody), unwrapRefBase(tBody), isReadonlyView(target));
+		if (sBody != null && tBody != null) return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && heldLayoutFits(unwrapRefBase(sBody), unwrapRefBase(tBody), isReadonlyView(target), isReadonlyView(target));
 	}
 
 	if (target.kind == TypeKind.GenericInstance && source.kind != TypeKind.GenericInstance && source.kind != TypeKind.Union) {
@@ -1252,7 +1252,7 @@ export function valueStructBaseDepth(source: Type, target: Type): int32 {
 function readOnlyObjectFits(source: Type, target: Type): boolean {
 	if (classOutsideLineage(source, target) || missingRoutine(source, target) != "") return false;
 	if (source == target || sameNominal(source, target)) return true;
-	return heldLayoutFits(source, target, true);
+	return heldLayoutFits(source, target, true, true);
 }
 
 // Object assignability: nominal first, then structural (source has all target properties)
@@ -1261,7 +1261,7 @@ function isObjectAssignable(source: Type | null, target: Type | null): boolean {
 	if (source == target) return true;
 	if (source == null || target == null) return false;
 	if (sameNominal(source, target)) return true;
-	return heldLayoutFits(source, target, isReadonlyView(target) || isMaybeType(target));
+	return heldLayoutFits(source, target, isReadonlyView(target) || isMaybeType(target), isReadonlyView(target));
 }
 
 // A writable target field aliases the source's slot, so it must hold the same type
@@ -1317,7 +1317,7 @@ function writableFieldHint(source: Type | null, target: Type | null): string {
 	return "";
 }
 
-function objectLayoutFits(source: Type, target: Type, readonlyTarget: boolean): boolean {
+function objectLayoutFits(source: Type, target: Type, readonlyTarget: boolean, readThroughView: boolean): boolean {
 	// Exact-field anon→named pairs are assignable; fitNode materializes the
 	// member-wise re-construction. Every other anon→named pair stays rejected:
 	// no lowering exists, so C emits two distinct types (clang error) while js
@@ -1345,7 +1345,7 @@ function objectLayoutFits(source: Type, target: Type, readonlyTarget: boolean): 
 	for (const targetProp of tNames) {
 		if (sNames[idx] != targetProp) return false;
 		if (idx < sChildren.length && idx < tChildren.length) {
-			if (!isAssignable(sChildren[idx], tChildren[idx])) return false;
+			if (!isAssignable(sChildren[idx], readThroughView ? createReadonlyView(tChildren[idx]) : tChildren[idx])) return false;
 			if (!invariantFieldFits(sChildren[idx], tChildren[idx], readonlyTarget)) return false;
 			// Shared fields whose union/numeric repr differs would reinterpret
 			// (mirror of the sameElementRepr gate on Array/Span/Ptr elements above).
@@ -1714,11 +1714,11 @@ function differentGenericsFit(source: Type, target: Type): boolean {
 	const s = unwrapRefBase(sBody);
 	const t = unwrapRefBase(tBody);
 	if (s.kind != TypeKind.Struct || t.kind != TypeKind.Struct) return isAssignable(sBody, tBody);
-	return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && heldLayoutFits(s, t, isReadonlyView(target));
+	return (sBody.kind == TypeKind.Ref) == (tBody.kind == TypeKind.Ref) && heldLayoutFits(s, t, isReadonlyView(target), isReadonlyView(target));
 }
 
-function heldLayoutFits(source: Type, target: Type, readonlyTarget: boolean): boolean {
-	if (!objectLayoutFits(source, target, readonlyTarget)) return false;
+function heldLayoutFits(source: Type, target: Type, readonlyTarget: boolean, readThroughView: boolean): boolean {
+	if (!objectLayoutFits(source, target, readonlyTarget, readThroughView)) return false;
 	noteHeldBeyond(target, source);
 	return true;
 }
