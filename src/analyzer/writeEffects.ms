@@ -97,6 +97,7 @@ export interface WriteSummaries {
 	freesNothingGlobals: HashSet<string>;
 	globalSlotTypes: HashMap<string, Type>;
 	ownMemo: HashMap<Type, HashMap<Type, int32>>;
+	deathSeenMemo: HashMap<Type, int32>;
 	heldMemo: HashMap<Type, Type[]>;
 	unitClosures: HashMap<string, HashSet<string>>;
 	stack: WriteSummary[];
@@ -118,7 +119,7 @@ export function createWriteSummaries(routineDecls: RoutineDecls, reloadableUnits
 		routineSummaries: new HashMap<Symbol, WriteSummary>(), closureSummaries: new HashMap<Node, WriteSummary>(), retainedParams: new HashMap<Symbol, int32>(), constructionSummaries: new HashMap<Symbol, WriteSummary>(),
 		hookSummaries: new HashMap<Type, WriteSummary>(), hookless: new HashSet<Type>(), ownerHookCache: new HashMap<Symbol, Symbol[]>(),
 		viewReturns: new HashMap<Symbol, string[]>(), viewReturnsUnknown: new HashSet<Symbol>(), viewReturnsOpen: [], viewReturnsReach: 0,
-		slotHolders: [], slotHolderIds: new HashMap<Type, int32>(), freesNothingGlobals: new HashSet<string>(), globalSlotTypes: new HashMap<string, Type>(), ownMemo: new HashMap<Type, HashMap<Type, int32>>(), heldMemo: new HashMap<Type, Type[]>(), unitClosures: new HashMap<string, HashSet<string>>(), stack: [], nextIndex: 0,
+		slotHolders: [], slotHolderIds: new HashMap<Type, int32>(), freesNothingGlobals: new HashSet<string>(), globalSlotTypes: new HashMap<string, Type>(), ownMemo: new HashMap<Type, HashMap<Type, int32>>(), deathSeenMemo: new HashMap<Type, int32>(), heldMemo: new HashMap<Type, Type[]>(), unitClosures: new HashMap<string, HashSet<string>>(), stack: [], nextIndex: 0,
 		contracts: new HashMap<Symbol, CallbackContract>(), cloneContracts: new HashMap<Symbol, CallbackContract>(), unitContracts: [],
 		reusedClones: new HashMap<Symbol, Symbol>(), lending: { callbacks: [], contract: null, held: null }, valueCells: false,
 		envStores: new HashMap<string, HashMap<Type, HashMap<string, Node[]>>>(), unloweredWritesAnything: false, programEdgeReads: null,
@@ -1762,15 +1763,23 @@ export function noteProgramEdgeReads(tables: WriteSummaries, trees: Node[]): voi
 	};
 	for (const tree of trees) step(tree);
 	tables.programEdgeReads = reads;
+	tables.deathSeenMemo.clear();
 }
 
 function deathCanBeSeen(w: WriteEffects, owner: Type): boolean {
 	const reads = w.tables.programEdgeReads;
 	if (reads == null) return true;
+	const known = w.tables.deathSeenMemo.get(owner);
+	if (known != null) return known == 1;
+	let seen = false;
 	for (const t of reads) {
-		if (canOwn(w, t, owner)) return true;
+		if (canOwn(w, t, owner)) {
+			seen = true;
+			break;
+		}
 	}
-	return false;
+	w.tables.deathSeenMemo.set(owner, seen ? 1 : 0);
+	return seen;
 }
 
 function partsReadEdgeInto(w: WriteEffects, parts: WriteSummary[], owner: Type): boolean {
