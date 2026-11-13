@@ -13,7 +13,7 @@ import { ensureHostTableLoaded } from "../meta/hostTable";
 import { MODE_RELEASE, MODE_DANGER } from "../options";
 import { resolve, join, dirname, basename } from "std/fs/path";
 import { exists, readFile, readDir, realpath } from "std/fs";
-import { compileGlob, globMatch, Glob } from "std/fs/glob";
+import { compileGlob, globMatch, globReachesInto, Glob } from "std/fs/glob";
 import { execPath } from "std/process";
 import { raiseFromHost } from "../../raiser/hostRegistry";
 import { parseJson, jsonStringify, jsonValueOf, jsonValueToStruct } from "std/serialize/json";
@@ -127,14 +127,15 @@ let givenOptions = new HashMap<string, string>();
 let declaredOptions: GraphOption[] = [];
 let globsListed: GlobListing[] = [];
 
-function walkGlob(dir: string, rel: string, g: Glob, visited: string[], found: string[]): void {
+function walkGlob(dir: string, rel: string, g: Glob, visited: HashSet<string>, found: string[]): void {
 	const real = realpath(dir);
-	if (visited.includes(real)) return;
-	visited.push(real);
+	if (visited.has(real)) return;
+	visited.add(real);
 	for (const e of readDir(dir)) {
 		if (e.endsWith("/")) {
 			const name = e.slice(0, e.length - 1);
-			if (!name.startsWith(".")) walkGlob(join(dir, name), rel == "" ? name : `${rel}/${name}`, g, visited, found);
+			const below = rel == "" ? name : `${rel}/${name}`;
+			if (!name.startsWith(".") && globReachesInto(g, below)) walkGlob(join(dir, name), below, g, visited, found);
 		} else {
 			const path = rel == "" ? e : `${rel}/${e}`;
 			if (globMatch(g, path)) found.push(path);
@@ -147,7 +148,7 @@ function listGlob(base: string, pattern: string): Result<string, string> {
 	const g = compileGlob(pattern.startsWith("/") ? pattern : `/${pattern}`);
 	if (!g.ok) return Result.err(`glob('${pattern}'): ${g.error}`);
 	const found: string[] = [];
-	if (exists(base)) walkGlob(base, "", g.value, [], found);
+	if (exists(base)) walkGlob(base, "", g.value, new HashSet<string>(), found);
 	return Result.ok(found.sort().join("\n"));
 }
 

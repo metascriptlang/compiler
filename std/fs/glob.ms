@@ -133,6 +133,16 @@ export function globMatch(g: Glob, path: string): boolean {
 	return matchSegments(g.segments, 0, pathSegs, 0);
 }
 
+export function globReachesInto(g: Glob, dir: string): boolean {
+	const dirs = dir.split("/");
+	for (let i = 0; i < dirs.length; i += 1) {
+		if (i >= g.segments.length) return false;
+		if (g.segments[i] == "**") return true;
+		if (!segMatch(g.segments[i], dirs[i])) return false;
+	}
+	return dirs.length < g.segments.length;
+}
+
 // Match against any compiled glob. Returns true if at least one matches.
 export function globMatchAny(gs: Glob[], path: string): boolean {
 	for (const g of gs) {
@@ -447,4 +457,24 @@ test "compileGlobs collects errors" {
 	const result = compileGlobs(["*.ms", "a**b", "**/*.cms"]);
 	assert result.globs.length == 2;
 	assert result.errors.length == 1;
+}
+
+test "a pattern reaches into the directories its leading segments name and no others" {
+	const g = mustCompile("/tools/solana/*.ms");
+	assert globReachesInto(g, "tools");
+	assert globReachesInto(g, "tools/solana");
+	assert !globReachesInto(g, "tools/solana/node_modules");
+	assert !globReachesInto(g, "out");
+}
+
+test "a pattern reaches into every directory below a ** segment" {
+	const g = mustCompile("/tools/**/*.sh");
+	assert globReachesInto(g, "tools/editor/deep");
+	assert !globReachesInto(g, "src/tools");
+	assert globReachesInto(mustCompile("docs/"), "docs/any");
+}
+
+test "a pattern with no directory segment reaches into no directory" {
+	assert !globReachesInto(mustCompile("/*.ms"), "src");
+	assert globReachesInto(mustCompile("*.ms"), "src");
 }
