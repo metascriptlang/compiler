@@ -63,6 +63,7 @@ import {
 import { Token, TokenKind, createToken } from "../../lexer/token";
 import { actorHandleIndex, instantiateGenericBody, isMaybeType, genericParamsOf, nullType, voidType, unwrapRefBase, skipModifier, peelToRepr, unwrapMaybeType, isFloatType, numberLiteralBase } from "../../checker/types";
 import { isUnsignedIntegerType } from "../../checker/compat";
+import { adaptedValueOf } from "../../checker/fit";
 import { hasFlag, isTypeSymbol, SymbolFlag, symbolCarried, overloadWinner, holdSymbol } from "../../checker/symbol";
 import { forEachChild } from "../../ast/visitor";
 import { int64Bits } from "../../utils/stdBackport";
@@ -839,9 +840,8 @@ export function stripMacroArgWrappers(node: Node): Node {
 	while (n != null) {
 		if ((n.kind == NodeKind.HiddenDeref && !n.flags.has(NodeFlag.ExplicitDeref)) || n.kind == NodeKind.HiddenAddr) {
 			n = (n.data as HiddenDerefData).expr;
-		} else if (n.kind == NodeKind.HiddenStdConv && n.paramSyms != null && (n.data as HiddenStdConvData).convExpr.kind == NodeKind.CallExpr) {
-			// A function value adapted to a slot of another arity: the checker's thunk calls the value the author wrote.
-			n = ((n.data as HiddenStdConvData).convExpr.data as CallExprData).callee;
+		} else if (adaptedValueOf(n) != null) {
+			n = adaptedValueOf(n)!;
 		} else if (n.kind == NodeKind.HiddenStdConv || n.kind == NodeKind.HiddenSubConv) {
 			n = (n.data as HiddenStdConvData).convExpr;
 		} else {

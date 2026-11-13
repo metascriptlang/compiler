@@ -1374,6 +1374,14 @@ function arityAdapterConv(ctx: CheckerContext | null, expr: Node, formal: Type, 
 	return conv;
 }
 
+// The function value an arity adapter wraps, which is what the author wrote: a re-check or a macro reads
+// the adapter as this value, because the thunk's call is the checker's, not the source's.
+export function adaptedValueOf(n: Node): Node | null {
+	if (n.kind != NodeKind.HiddenStdConv || n.paramSyms == null) return null;
+	const inner = (n.data as HiddenStdConvData).convExpr;
+	return inner != null && inner.kind == NodeKind.CallExpr ? (inner.data as CallExprData).callee : null;
+}
+
 function runtimeParamName(fn: Type, index: int32): string {
 	let ri = 0;
 	for (let i = 0; i < fn.typeChildren.length; i += 1) {

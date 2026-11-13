@@ -17,7 +17,7 @@ import { mintCtorRoutine, mintCtorVariant, resetCtorRoutines, ctorRoutineOf, cto
 import { splitTopLevel } from "../utils/string";
 import { monoRoutineBaseName } from "../monomorphize/registry";
 import { callCheckExpr } from "./checkerCallbacks";
-import { fitNode } from "./fit";
+import { fitNode, adaptedValueOf } from "./fit";
 import { CheckerContext, stripGenFlag, getExtReceiverType, isExtensionFlag, registerExtension, truncateExtensions, addError, isEngineCheckMode, nominalTypeSym, newSym, stampItem, LIFECYCLE_HOOK_NAMES, isLifecycleHookName, lifecycleHookOp, hookReceiverSym, hookReceiverFormal, declaredTypeSym, ownExtensionCount, extensionsUnsharedWith } from "./context";
 import { createContext, resetDefaultsCheckedAtDeclaration } from "./context";
 import { monoCloneNode } from "../monomorphize/clone";
@@ -1003,14 +1003,15 @@ function bindsInto(node: Node, redeclared: Symbol[]): boolean {
 function clearStateKeepingOuterBindings(node: Node, redeclared: Symbol[]): void {
 	if (node == null) return;
 	while (isCheckerWrapper(node)) {
-		const inner = node.kind == NodeKind.HiddenStdConv || node.kind == NodeKind.HiddenSubConv
+		const inner = adaptedValueOf(node) ?? (node.kind == NodeKind.HiddenStdConv || node.kind == NodeKind.HiddenSubConv
 			? (node.data as HiddenStdConvData).convExpr
 			: node.kind == NodeKind.TypeAssertion
 			? (node.data as TypeAssertionData).asExpr
-			: (node.data as HiddenDerefData).expr;
+			: (node.data as HiddenDerefData).expr);
 		if (inner == null) break;
 		node.kind = inner.kind;
 		node.data = inner.data;
+		node.paramSyms = inner.paramSyms;
 		node.nodeType = inner.nodeType;
 		node.resolvedSym = inner.resolvedSym;
 		node.flags = node.flags.union(inner.flags);
