@@ -8,13 +8,13 @@ import { Node, NodeKind, NodeData, DeclKind, createNode, createNodeAt, NodeFlag,
 import { getIdentId } from "./idents";
 import { isAssignOp, isLogicalAssignOp } from "../ast/operators";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { genericParamsOf, unownedSlotOf, ownedSlotOf, withoutOwned, isOwnedRef, peelTransparentInstance, isStdCollection, isTagCarriedUnion, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createPrimitive, anonStructName, isNumeric, isIntegerType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedNumberDiscriminant, findVariantByNumberDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, hasGenericParams, getMinArity, setMinArity, skipModifier, createPromise, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isResult, getResultOkType, getAttachedOp, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, spelled, peelThrough, PEEL_ALL, PEEL_ALIAS, literalBase, getResultErrType, isValuePointee, classParentOf, isNullableShape, isOutParam, distinctBody, genericInstanceMembers, functionSlotOf, holdsInferred, createNumberLiteral, numberLiteralBase, integerLiteralName, fractionLiteralName, widenNumberLiteralType, isIterator, isLockedRef, getIteratorYieldType, getBuiltinKind, withoutNullMember, nullableUnionOf, createUnion, createArc, createTypeRef, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, createGenericInstance, getReturnType, unwrapVarargs, detectUnionDiscriminant, collectStringDiscriminantValues, unionVariantHasProperty, findVariantByFieldName, duSharedFieldOffsetDiffers, createUnifyBindings, mergeUnifyBindings, UnifyBindings, isNarrowingIntConv, integerRank, createSpawnHandle, createEnumLiteral, isBrandDistinct, isSendableFunction, copyTypeShallow, isLiteralSet, isEnumLiteral, substituteBound, withoutUnowned } from "./types";
+import { genericParamsOf, unownedSlotOf, ownedSlotOf, withoutOwned, isOwnedRef, peelTransparentInstance, isStdCollection, isTagCarriedUnion, symGenericParams, genericParamNamesOf, runtimeClassSym, soleUnionMember, isFunctionKind, isArrayShaped, inferredType, noneType, numberType, int32Type, float64Type, isFloatType, createReadonlyView, propagateReadonlyView, isReadonlyView, isNodeGraphType, createRef, createStruct, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createTuple, isAtomicRef, createSpan, createFunction, createClosureType, closureStorageType, createPrimitive, anonStructName, isNumeric, isIntegerType, getElementType, getProperty, sizeOfType, typeNameOf, isIndexableMapType, unwrapRef, unwrapRefNullUnion, isDiscriminatedUnion, getDiscriminantName, findVariantByStringDiscriminant, findSharedStringDiscriminant, findSharedNumberDiscriminant, findVariantByNumberDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, hasGenericParams, getMinArity, setMinArity, skipModifier, createPromise, isAwaitable, isAffineAwaitable, awaitedType, asyncBodyType, isResult, getResultOkType, getAttachedOp, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType, isMaybeType, unwrapMaybeType, typeDisplayName, booleanLiteralValue, peelToStructOrUnion, unknownRefusal, unknownRefusalText, UnknownRefusal, smuggledIntoUnknown, objectConversion, ObjConv, isUnknownType, isUnresolvedType, distinctCallTarget, literalTagDiscriminant, withoutReadonlyView, isViewType, unwrapRefBase, spelled, peelThrough, PEEL_ALL, PEEL_ALIAS, literalBase, getResultErrType, isValuePointee, classParentOf, isNullableShape, isOutParam, distinctBody, genericInstanceMembers, functionSlotOf, holdsInferred, createNumberLiteral, numberLiteralBase, integerLiteralName, fractionLiteralName, widenNumberLiteralType, isIterator, isLockedRef, getIteratorYieldType, getBuiltinKind, withoutNullMember, nullableUnionOf, createUnion, createArc, createTypeRef, createMaybeType, isMaybeWrappable, isPrimitiveUnionMember, createGenericInstance, getReturnType, unwrapVarargs, detectUnionDiscriminant, collectStringDiscriminantValues, unionVariantHasProperty, findVariantByFieldName, duSharedFieldOffsetDiffers, createUnifyBindings, mergeUnifyBindings, UnifyBindings, isNarrowingIntConv, integerRank, createSpawnHandle, createEnumLiteral, isBrandDistinct, isSendableFunction, copyTypeShallow, isLiteralSet, isEnumLiteral, substituteBound, withoutUnowned, classBodyOf } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, isCapturableValue, isCapturedAcross, isFrameValue, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markConsumed, classDeclNodeOf, parentClassSymOf, isVisibleSymbol, Scope, RoutineFlag, routineFlagSet } from "./symbol";
 import { stdSymbol, markUsedIn, CheckerContext, ExportedSymInfo, Severity, addError, addErrorRange, addWarning, findAllExtensionsByName, resolveOperatorCall, resolveUserOperator, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, findExportedSymbol, extractGenericNames, isGenericFn, isEngineCheckMode, macroConverterFor, isGeneratorFlags, routineFlags, routineSuspends, refusesTypeAsValue, extDeclaresReceiver, addFatalError, findAccessor, dispatchMethodOf } from "./context";
 import {
 	isAssignable, isReinterpretUnsafe, nonNullMemberOfNullable, needsStdConv, findFirstMismatch,
 	scoreCandidatePriority, scoreCandidateWithSkip, isNoMatch, emptyCandidateScore, cmpCandidates, typeRelation, TypeRelation, arityAdapts,
-	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, expectsEnumMember, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix } from "./compat";
+	CandidateScore, sameType, isAnonStructAdoption, dropsReadonlyView, isValueStructDecl, sameNominal, expectsEnumMember, valueStructBaseDepth, numericConvRefuses, viewFieldNotHeld, numericRefusalReason, explainStructuralPrefix, fieldReprMismatch } from "./compat";
 import { checkArcPointeeSendable } from "./sendable";
 import { keyedProxyAccess, readIndexThroughProxy, refuseProxyOperator, updateThroughProxy, writeThroughProxy } from "./proxy";
 import { viewTypeArgumentFault, distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, typedArrayElement, isKeyConstraint, indexedAccessOf, createStringLiteral, createBooleanLiteral, numberLiteralTypeOf, enumMemberLiteralOf, evictionNeedsElementHook } from "./types";
@@ -2912,8 +2912,50 @@ function becomeOperand(node: Node, operand: Node): void {
 	node.data = operand.data;
 }
 
+// An object literal checked against a structural type keeps each literal member its context
+// asked for (`kind: "circle"` against `kind: Kind`), in the target's fields and order, so it
+// stays a field prefix of the target. Null when no member keeps more than the target says.
+function ownLiteralShape(node: Node): Type | null {
+	if (node.kind != NodeKind.ObjectLiteral) return null;
+	const stamped = node.nodeType;
+	if (stamped == null || stamped.kind != TypeKind.Ref || classBodyOf(stamped) != null) return null;
+	const shape = stamped.typeReturn;
+	if (shape == null || shape.kind != TypeKind.Struct) return null;
+	const d = node.data as ObjectLiteralData;
+	if (d.keys.includes("...") || d.keys.includes("__computed__")) return null;
+	const types = shape.typeChildren.slice();
+	let kept = false;
+	for (let i = 0; i < shape.typeNames.length && i < types.length; i += 1) {
+		const at = d.keys.indexOf(shape.typeNames[i]);
+		if (at < 0 || d.properties[at] == null) continue;
+		const nested = ownLiteralShape(d.properties[at]);
+		const own = nested ?? literalOfUnionContext(d.properties[at], types[i]) ?? d.properties[at].nodeType;
+		if (own == null || sameType(own, types[i]) || fieldReprMismatch(own, types[i])) continue;
+		if (nested == null && !isLiteralKindType(own)) continue;
+		types[i] = own;
+		kept = true;
+	}
+	if (!kept) return null;
+	const objectType = createStruct("", shape.typeNames.slice(), types, true);
+	if (shape.optionalFields != null) objectType.optionalFields = shape.optionalFields;
+	return createRef(objectType);
+}
+
+// `boolean` is `true | false` and an enum is the union of its members, so a literal of either
+// keeps its own type there as it does under any literal context.
+function literalOfUnionContext(value: Node, context: Type): Type | null {
+	if (context.kind == TypeKind.Boolean && value.kind == NodeKind.BooleanLiteral) return createBooleanLiteral((value.data as BooleanLiteralData).boolValue);
+	if (context.kind == TypeKind.Enum) return enumMemberLiteralOf(value);
+	return null;
+}
+
+function isLiteralKindType(t: Type): boolean {
+	return t.kind == TypeKind.StringLiteral || t.kind == TypeKind.BooleanLiteral || t.kind == TypeKind.NumberLiteral || t.kind == TypeKind.EnumLiteral;
+}
+
 // `e satisfies T` checks e with T as its contextual type and keeps e's own type.
-// The relation is into Readonly<T> because satisfies makes no alias of e.
+// The relation is into Readonly<T> because satisfies makes no alias of e; an object literal
+// retyped by ownLiteralShape was already checked against T itself.
 function checkSatisfiesExpr(ctx: CheckerContext, node: Node): void {
 	const d = node.data as SatisfiesExprData;
 	const typeLoc = node.typeExpr != null ? node.typeExpr.location : node.location;
@@ -2923,8 +2965,13 @@ function checkSatisfiesExpr(ctx: CheckerContext, node: Node): void {
 	const resolved = !isUnresolvedType(target) && target.kind != TypeKind.Error;
 	const operandMark = ctx.errors.length;
 	checkExpr(ctx, node, resolved ? target : null);
+	const literalShape = resolved && !reportedErrorSince(ctx, operandMark) ? ownLiteralShape(node) : null;
+	if (literalShape != null) {
+		clearCheckerState(node);
+		checkExpr(ctx, node, literalShape);
+	}
 	const own = node.nodeType;
-	if (resolved && !reportedErrorSince(ctx, operandMark) && own != null && !isUnresolvedType(own) && own.kind != TypeKind.Error && !isAssignable(own, createReadonlyView(target))) {
+	if (resolved && literalShape == null && !reportedErrorSince(ctx, operandMark) && own != null && !isUnresolvedType(own) && own.kind != TypeKind.Error && !isAssignable(own, createReadonlyView(target))) {
 		addError(ctx, "Type '" + typeDisplayName(own) + "' does not satisfy the expected type '" + typeDisplayName(target) + "'", node.location.line, node.location.column);
 	}
 }
@@ -4902,7 +4949,7 @@ function processEmitInterpolation(ctx: CheckerContext, node: Node): void {
 
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
-import { instantiateClassConstructor, pickBodyCtx, literalFieldInitializer, instantiateParentClass, declaresUserHook, lookupInstanceHook } from "./instantiate";
+import { clearCheckerState, instantiateClassConstructor, pickBodyCtx, literalFieldInitializer, instantiateParentClass, declaresUserHook, lookupInstanceHook } from "./instantiate";
 import { readSignatureReturn, iterateSpreadSource, adoptExpansionResult, anyArgIsParametric, invokedMacroSym, isDirectiveInvocation, macroDeclOf, checkCallExpr, checkDiscriminatedConstruction, rearmLiteralForRecheck, checkJsxConsumed, checkMacroArgs, checkMatchExpr, checkMemberExpr, checkNewExpr, checkTryExpr, engineNodeHasVirtualKey, engineNodeVirtualKeyType, foldComptimeNodeAliasArgs, macroDepthExceeded, resolveCalleeIdent, inheritContainerInfo, retypeEmptyArrayBranch, unwrapSpliceManyAtExpr, isHoistingSplice, bindRefsToHoistedPrefix, checkPropagatedErrorAgainst, markNamesUsed, keepFoldedType, keepComptimeNominalType, isNominalLiteralType, takeDefaultArgTemps, adoptAwaitedThenable, adoptAwaitedValue, awaitReturnedThenable, refuseUnhashableKey, declaresField } from "./callResolve";
 
 function bodyIntoBlock(body: Node, temps: Node[]): void {

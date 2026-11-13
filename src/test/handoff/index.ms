@@ -189,6 +189,7 @@ import "./unknownAdmission";
 import "./cstringIntoString";
 import "./valueElementIntoUnknown";
 import "./writableViewInvariant";
+import "./satisfiesKeepsLiteralMembers";
 import "./nullishUnionJoin";
 import "./genericAliasConsumers";
 import "./readonlyPtrView";
