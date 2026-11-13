@@ -5,7 +5,8 @@
 // This transform only does the structural AST rewrite (MemberExpr → direct call).
 // No registry re-lookup needed — follows reference pattern where sem resolves UFCS.
 
-import { Node, NodeKind, NodeFlag, CallExprData, MemberExprData, ExprStmtData, SymbolKind, Symbol, TypeKind, SourceLocation, BuiltinKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, CallExprData, MemberExprData, ExprStmtData, SymbolKind, SymbolFlag, Symbol, TypeKind, SourceLocation, BuiltinKind } from "../../ast/node";
+import { hasFlag } from "../../checker/symbol";
 import { TransformContext } from "../context";
 import { mapChildren } from "../walker";
 import { makeTypedIdentResolved, makeCall, makeMember, makeHiddenSubConv } from "../util";
@@ -43,8 +44,8 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	// Static extensions (Math.floor) and true extension methods still get rewritten.
 	if (ctx.jsBackend
 		&& !node.flags.has(NodeFlag.ExtStatic)
-		&& sym != null && sym.declNode != null
-		&& sym.declNode.kind == NodeKind.MethodDecl) {
+		&& sym != null && (hasFlag(sym, SymbolFlag.UnionMethod) || (sym.declNode != null
+		&& sym.declNode.kind == NodeKind.MethodDecl))) {
 		return node;
 	}
 	if (sym == null) throw new Error(`internal: extension call '.${member.property}' reached lowering without its resolved symbol`);

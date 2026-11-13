@@ -66,6 +66,7 @@ import { enterCompilerFuncs, leaveCompilerFuncs, callBuiltinKind } from "./util"
 import { lowerAsync } from "./lowering/asyncDesugar";
 import { lowerAsyncBridge } from "./lowering/asyncBridge";
 import { lowerAwaitSpill } from "./lowering/awaitSpill";
+import { lowerMethodDispatch } from "./lowering/methodDispatchLower";
 import { CallInlining, lowerCallInline } from "./lowering/iterInline";
 import { flowAddMs } from "../compiler/flows";
 
@@ -139,6 +140,7 @@ function lowerForRaiser(program: Node, ctx: TransformContext, placed: boolean, n
 	result = lowerNullishCoalesce(lowerOptionalChain(result, ctx), ctx);
 	result = lowerNewExpr(result, ctx);
 	result = lowerUserOperators(result, ctx);
+	result = lowerMethodDispatch(result, ctx);
 	result = ownTaskResults(result);
 	result = lowerLambda(result, ctx);
 	result = lowerAsyncBridge(result, ctx);
