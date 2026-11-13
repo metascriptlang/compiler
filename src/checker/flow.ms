@@ -662,7 +662,7 @@ function getTypeAtSwitchClause(state: FlowState, flow: FlowNode): FlowType {
 	// Collect the case-test values in the clause range. Each SwitchCaseData
 	// may contain multiple caseTests (fall-through `case "a": case "b":`) —
 	// all those tests produce the same narrowed body.
-	let narrowed: Type | null = null;
+	const parts: Type[] = [];
 	let anyDefault = false;
 	const lo: int32 = clauseData.clauseStart;
 	const hi: int32 = clauseData.clauseEnd;
@@ -683,22 +683,15 @@ function getTypeAtSwitchClause(state: FlowState, flow: FlowNode): FlowType {
 		while (ti < cd.caseTests.length) {
 			const testVal = cd.caseTests[ti];
 			const filtered = narrowTypeByDiscriminantProperty(parent.t, md.property, testVal, true);
-			if (filtered != null && filtered != parent.t) {
-				// Union accumulated narrowed types.
-				if (narrowed == null) {
-					narrowed = filtered;
-				} else if (narrowed != filtered) {
-					narrowed = createUnion([narrowed, filtered]);
-				}
-			}
+			if (filtered != null && filtered != parent.t) parts.push(filtered);
 			ti = ti + 1;
 		}
 		ci = ci + 1;
 	}
 	// Default clause: no positive narrowing in Phase 2. Return parent unchanged.
 	// Phase 6 will negate the covered cases to produce the correct remainder.
-	if (anyDefault || narrowed == null) return parent;
-	return flowType(narrowed, parent.incomplete);
+	if (anyDefault || parts.length == 0 || parent.t == null) return parent;
+	return flowType(joinNarrowings(parent.t!, parts), parent.incomplete);
 }
 
 // A match arm holds when the discriminant equals one of its patterns: the narrowing of
@@ -712,15 +705,15 @@ function narrowTypeByMatchArm(t: Type | null, arm: FlowSwitchClauseData, refNode
 	const patterns = (cases[arm.clauseStart].data as MatchCaseData).casePatterns;
 	_narrowDepth = _narrowDepth + 1;
 	const peeled = peelTransparentInstance(t);
-	let acc: Type | null = null;
+	const parts: Type[] = [];
+	let whole = false;
 	for (let i = 0; i < patterns.length; i += 1) {
 		const one = narrowTypeByEqualityAt(peeled, disc, patterns[i], refNode);
-		if (i == 0) { acc = one; continue; }
-		if (acc == null || one == null || acc == peeled || one == peeled) { acc = peeled; continue; }
-		if (acc != one) acc = createUnion([acc, one]);
+		if (one == null || one == peeled) { whole = true; break; }
+		parts.push(one);
 	}
 	_narrowDepth = _narrowDepth - 1;
-	return acc == peeled ? t : acc;
+	return whole || parts.length == 0 ? t : joinNarrowings(peeled, parts);
 }
 
 function narrowTypeByEqualityAt(t: Type, disc: Node, pattern: Node, refNode: Node): Type | null {
@@ -1149,7 +1142,7 @@ function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: 
 			const withoutRight = narrowType(t, d.right, refNode, false);
 			if (withoutLeft == null || withoutRight == null || withoutLeft == t || withoutRight == t) return t;
 			if (withoutLeft == withoutRight) return withoutLeft;
-			return createUnion([withoutLeft, withoutRight]);
+			return t == null ? createUnion([withoutLeft, withoutRight]) : joinNarrowings(t, [withoutLeft, withoutRight]);
 		}
 		if (d.operator == "||") {
 			if (!assumeTrue) {
@@ -1161,7 +1154,7 @@ function narrowTypeInner(t: Type | null, expr: Node, refNode: Node, assumeTrue: 
 			const withRight = narrowType(t, d.right, refNode, true);
 			if (withLeft == null || withRight == null || withLeft == t || withRight == t) return t;
 			if (withLeft == withRight) return withLeft;
-			return createUnion([withLeft, withRight]);
+			return t == null ? createUnion([withLeft, withRight]) : joinNarrowings(t, [withLeft, withRight]);
 		}
 	}
 	// Aliased condition: `const isX = <predicate>; if (isX) { ... }` — look up
@@ -2318,6 +2311,30 @@ function soleVariantHolds(t: Type, propName: string, valueExpr: Node | null): bo
 	}
 	const wanted = field.kind == TypeKind.EnumLiteral ? enumMemberLiteralOf(valueExpr) : field.kind == TypeKind.StringLiteral ? createStringLiteral(stringLiteralValueOf(valueExpr) ?? "\u0000none") : null;
 	return wanted != null && wanted.kind == field.kind && literalDiscValue(wanted) == literalDiscValue(field);
+}
+
+// Narrowings that hold together (the patterns of one arm, the labels of one case, the sides of an `||`)
+// select members of the union they narrowed, so they join as that union filtered: its members in its
+// order, keeping its discriminant contract, so a later test inside the arm narrows the result again.
+function joinNarrowings(from: Type, parts: Type[]): Type {
+	const base = peelTransparentInstance(from);
+	if (base.kind != TypeKind.Union || !isDiscriminatedUnion(base)) return parts.length == 1 ? parts[0] : createUnion(parts);
+	const picked: boolean[] = [];
+	for (let i = 0; i < base.typeChildren.length; i += 1) picked.push(false);
+	for (const part of parts) {
+		const members = part.kind == TypeKind.Union ? part.typeChildren : [part];
+		for (const m of members) {
+			const at = base.typeChildren.indexOf(m);
+			if (at < 0) return createUnion(parts);
+			picked[at] = true;
+		}
+	}
+	const kept: Type[] = [];
+	for (let i = 0; i < base.typeChildren.length; i += 1) {
+		if (picked[i]) kept.push(base.typeChildren[i]);
+	}
+	if (kept.length == base.typeChildren.length) return from;
+	return kept.length == 1 ? kept[0] : unionPreservingDiscriminant(base, kept);
 }
 
 // Residual union after excluding variants from a metadata-carrying DU.
