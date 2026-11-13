@@ -47,7 +47,8 @@ stringCaseTables.addCopyFileToSource(tables.captureStdOut(), path("std/core/stri
 const subject = option("subject", "the compiler the gate lanes test; the graph's own msc when unset", "");
 const candidate: Arg = subject == "" ? msc : path(subject);
 const laneLimit = option("laneLimit", "seconds a gate lane may run before its process tree is killed", 5400);
-const withTrailer = 'limit=$1; shift; t0=$SECONDS; set -m; "$@" 2>&1 & lane=$!; (sleep "$limit"; kill -KILL -- "-$lane") >/dev/null 2>&1 & watch=$!; set +m; wait "$lane"; rc=$?; kill -KILL -- "-$watch" 2>/dev/null || printf "\\nTIMEOUT after %ss, process tree killed\\n" "$limit"; printf "\\nSECS=%d\\nRC=%d\\nEND\\n" $((SECONDS - t0)) $rc';
+const killItsWindowsProcessTrees = `if [ -r "/proc/$lane/winpid" ]; then for w in $(ps | awk -v g="$lane" '$1 !~ /^[0-9]+$/ { $1 = ""; $0 = $0 } $3 == g { print $4 }'); do taskkill //T //F //PID "$w" >/dev/null 2>&1; done; fi; `;
+const withTrailer = 'limit=$1; shift; t0=$SECONDS; late=0; set -m; "$@" 2>&1 & lane=$!; set +m; while kill -0 "$lane" 2>/dev/null; do if [ $((SECONDS - t0)) -ge "$limit" ]; then late=1; ' + killItsWindowsProcessTrees + 'kill -KILL -- "-$lane" 2>/dev/null; break; fi; sleep 0.2; done; wait "$lane" 2>/dev/null; rc=$?; [ $late = 0 ] || printf "\\nTIMEOUT after %ss, process tree killed\\n" "$limit"; printf "\\nSECS=%d\\nRC=%d\\nEND\\n" $((SECONDS - t0)) $rc';
 
 const selected = option("lanes", "the gate lanes to run, comma-separated; every lane when unset", "");
 export const lanes = writeFiles();
