@@ -1,7 +1,6 @@
 import { compileRaiser } from "../../compiler/compile";
 import { newCliOptions } from "../../compiler/options";
 import { RaiserModule } from "../../raiser/module";
-import { RaiserOpcode } from "../../raiser/bytecode";
 import { disasmFunc } from "../../raiser/disasm";
 import { mkdirExclusive, removeAll, writeFile } from "std/fs";
 import { tmpDir } from "std/os";
@@ -28,11 +27,11 @@ function compiled(source: string): RaiserModule {
 	}
 }
 
-function guards(mod: RaiserModule, name: string): int32 {
+function guards(mod: RaiserModule, name: string, binding: string): int32 {
 	for (const f of mod.functions) {
 		if (f.name != name) continue;
 		let n: int32 = 0;
-		for (const inst of f.code) if (inst.op == RaiserOpcode.BTruthy) n += 1;
+		for (const text of f.names) if (text == binding) n += 1;
 		return n;
 	}
 	throw new Error(`no function ${name}`);
@@ -41,10 +40,10 @@ function guards(mod: RaiserModule, name: string): int32 {
 
 test "a module binding read only by routines no statement enters before its declaration carries no guard" {
 	const mod = compiled(READERS);
-	assert guards(mod, "readObj") == 0 && guards(mod, "readInt") == 0, disasmFunc(mod.functions[0]);
+	assert guards(mod, "readObj", "origin") == 0 && guards(mod, "readInt", "counter") == 0, disasmFunc(mod.functions[0]);
 }
 
 test "a module binding read by a routine a statement references before its declaration keeps its guard" {
 	const mod = compiled(READERS.replace("const origin = new P(3);", "const readers = [readObj, readInt];\nconst origin = new P(3);"));
-	assert guards(mod, "readObj") >= 1 && guards(mod, "readInt") >= 1;
+	assert guards(mod, "readObj", "origin") >= 1 && guards(mod, "readInt", "counter") >= 1;
 }
