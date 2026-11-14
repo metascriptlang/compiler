@@ -89,7 +89,10 @@ let forOfSources = new HashMap<Symbol, Node>();
 let assignedSources = new HashMap<Symbol, Node[]>();
 let heldSources = new HashMap<Symbol, Node[]>();
 let fieldSources = new HashMap<Symbol, Node[]>();
-let flowScanned: Node[] = [];
+let flowScanned = new HashMap<Node, boolean>();
+let resultSourceFound = new HashMap<Symbol, EffectCause>();
+let resultSourceNone = new HashMap<Symbol, boolean>();
+let sourceCuts: int32 = 0;
 let resolving: Symbol[] = [];
 const UNFOLLOWED = "a value the checker cannot follow";
 let assumedOpen = false;
@@ -187,7 +190,10 @@ export function runDeferredEffectChecks(ctx: CheckerContext, program: Node): voi
 	assignedSources = new HashMap<Symbol, Node[]>();
 	heldSources = new HashMap<Symbol, Node[]>();
 	fieldSources = new HashMap<Symbol, Node[]>();
-	flowScanned = [];
+	flowScanned = new HashMap<Node, boolean>();
+	resultSourceFound = new HashMap<Symbol, EffectCause>();
+	resultSourceNone = new HashMap<Symbol, boolean>();
+	sourceCuts = 0;
 }
 
 function isUncheckedGeneric(sym: Symbol): boolean {
@@ -1390,7 +1396,10 @@ function leafModuleSource(dispatchRegistry: DispatchRegistry, p: Node): EffectCa
 const resultSourceOpen: Symbol[] = [];
 
 function localModuleSource(dispatchRegistry: DispatchRegistry, sym: Symbol): EffectCause | null {
-	if (resolving.includes(sym)) return null;
+	if (resolving.includes(sym)) {
+		sourceCuts += 1;
+		return null;
+	}
 	resolving.push(sym);
 	const decl = sym.declNode;
 	const bound = decl != null && decl.kind == NodeKind.VariableDecl ? (decl.data as VariableDeclData).initializer : null;
@@ -1427,10 +1436,19 @@ function unseenResultSource(call: Node): EffectCause | null {
 }
 
 function routineResultSource(dispatchRegistry: DispatchRegistry, sym: Symbol): EffectCause | null {
-	if (isExternalRoutine(sym) || resultSourceOpen.includes(sym)) return null;
+	if (isExternalRoutine(sym)) return null;
 	recordBodyRead(sym.modulePath);
+	const known = resultSourceFound.get(sym);
+	if (known != null) return known;
+	if (resultSourceNone.has(sym)) return null;
+	if (resultSourceOpen.includes(sym)) {
+		sourceCuts += 1;
+		return null;
+	}
 	const body = routineBody(unpackDecl(sym.declNode));
 	if (body == null) return null;
+	const outermost = resultSourceOpen.length == 0 && resolving.length == 0;
+	const cutsBefore = sourceCuts;
 	resultSourceOpen.push(sym);
 	scanFlows(body);
 	const returned: Node[] = [];
@@ -1438,6 +1456,8 @@ function routineResultSource(dispatchRegistry: DispatchRegistry, sym: Symbol): E
 	else returned.push(body);
 	const c = firstModuleSource(dispatchRegistry, returned);
 	resultSourceOpen.pop();
+	if (c != null) resultSourceFound.set(sym, c);
+	else if (outermost || sourceCuts == cutsBefore) resultSourceNone.set(sym, true);
 	return c;
 }
 
@@ -1667,8 +1687,8 @@ function addSource(table: HashMap<Symbol, Node[]>, sym: Symbol, value: Node): vo
 }
 
 function scanFlows(node: Node | null): void {
-	if (node == null || flowScanned.includes(node)) return;
-	flowScanned.push(node);
+	if (node == null || flowScanned.has(node)) return;
+	flowScanned.set(node, true);
 	const visit = (n: Node): void => {
 		if (n.kind == NodeKind.BinaryExpr && (n.data as BinaryExprData).operator == "=" && (n.data as BinaryExprData).left != null) {
 			const d = n.data as BinaryExprData;
