@@ -1242,6 +1242,20 @@ export function gcmEncryptInto(xk: Readonly<Word[]>, nonce: InputBytes, aad: Inp
 	requireRange("source", src, srcAt, length);
 	requireRange("destination", dst, dstAt, length);
 	requireRange("tag", tag, tagAt, 16);
+	sealGcm(xk, nonce, aad, src, srcAt, length, dst, dstAt, tag, tagAt);
+}
+
+/**
+ * Seals `buf[at, +length)` in place and writes its tag to `buf[at + length, +16)`; false, with nothing written,
+ * when the nonce is not 12 bytes or the range leaves `buf`.
+ */
+export function gcmSealAt(xk: Readonly<Word[]>, nonce: InputBytes, aad: InputBytes, buf: OutputBytes, at: int32, length: int32): boolean {
+	if (nonce.length != 12 || at < 0 || length < 0 || at + length + 16 > buf.length) return false;
+	sealGcm(xk, nonce, aad, buf, at, length, buf, at, buf, at + length);
+	return true;
+}
+
+function sealGcm(xk: Readonly<Word[]>, nonce: InputBytes, aad: InputBytes, src: InputBytes, srcAt: int32, length: int32, dst: OutputBytes, dstAt: int32, tag: OutputBytes, tagAt: int32): void {
 	when (c) {
 		if (aesHwAvailable()) {
 			aesGcmHwSeal(xk, nonce, aad, src, srcAt, length, dst, dstAt, tag, tagAt);

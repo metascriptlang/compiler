@@ -7,7 +7,7 @@
 // CBC vectors: NIST SP 800-38A (2001), Appendix F.2.1, F.2.3 and F.2.5 (AES-128/192/256-CBC). US gov work.
 // NOT constant-time: T-table AES leaks the key via cache timing. Phase 2 audit parked.
 
-import { expandKey, expandKeyDecrypt, gcmSealWithNonce, gcmOpen, gcmEncryptInto, gcmDecryptInto, cbcEncrypt, cbcDecrypt } from "./aes";
+import { expandKey, expandKeyDecrypt, gcmSealWithNonce, gcmOpen, gcmEncryptInto, gcmSealAt, gcmDecryptInto, cbcEncrypt, cbcDecrypt } from "./aes";
 import { newGhash, updateGhash, finishGhash } from "./ghash";
 import { encodeHex, decodeHex } from "../../core/encoding";
 
@@ -341,6 +341,22 @@ test "GCM encrypt and decrypt into caller ranges, in place" {
 	assert !gcmDecryptInto(xk, ivCafe.decodeHex(), "".decodeHex(), record, 5, 60, record, 65, record, 5);
 	assert gcmDecryptInto(xk, ivCafe.decodeHex(), aadF.decodeHex(), record, 5, 60, record, 65, record, 5);
 	assert eqHex(record.slice(5, 65), pt);
+}
+
+test "GCM sealAt seals a record in place and refuses a bad nonce or range without writing" {
+	const xk = expandKey(k128f.decodeHex());
+	const pt = "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a721c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39";
+	const record = new Array<uint8>(5 + 60 + 16);
+	const plain = pt.decodeHex();
+	for (let i = 0; i < 60; i++) record[5 + i] = plain[i];
+	assert gcmSealAt(xk, ivCafe.decodeHex(), aadF.decodeHex(), record, 5, 60);
+	assert eqHex(record.slice(5, 65), "42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e2329aca12e21d514b25466931c7d8f6a5aac84aa051ba30b396a0aac973d58e091");
+	assert eqHex(record.slice(65, 81), "5bc94fbc3221a5db94fae95ae7121a47");
+	const before = record.encodeHex();
+	assert !gcmSealAt(xk, ivCafe.decodeHex().slice(0, 11), aadF.decodeHex(), record, 5, 60);
+	assert !gcmSealAt(xk, ivCafe.decodeHex(), aadF.decodeHex(), record, 6, 60);
+	assert !gcmSealAt(xk, ivCafe.decodeHex(), aadF.decodeHex(), record, -1, 60);
+	assert record.encodeHex() == before;
 }
 
 test "GCM decryptInto does not write dst on tag failure" {

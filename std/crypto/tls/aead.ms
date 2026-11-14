@@ -4,7 +4,7 @@
  * the portable kernels, sealing and opening in place.
  */
 
-import { KeySchedule, expandKey, wipeKeySchedule, gcmEncryptInto, gcmDecryptInto } from "../pure/aes";
+import { KeySchedule, expandKey, wipeKeySchedule, gcmEncryptInto, gcmSealAt, gcmDecryptInto } from "../pure/aes";
 import { keyWords, chacha20Poly1305SealInto, chacha20Poly1305OpenInto, chacha20Poly1305SealAt, chacha20Poly1305OpenAt } from "../pure/chacha";
 import { kindSha256, kindSha384 } from "../pure/state";
 import { wipeBytes, wipeWords } from "../pure/secret";
@@ -124,7 +124,7 @@ export function aeadSealAt(
 		if (!chacha20Poly1305SealAt(key.chachaKey, nonce, aad, buf, at, length)) unreachable("chacha20-poly1305: the record layer passed a bad nonce or range");
 		return;
 	}
-	gcmEncryptInto(key.aesSchedule, nonce, aad, buf, at, length, buf, at, buf, at + length);
+	if (!gcmSealAt(key.aesSchedule, nonce, aad, buf, at, length)) unreachable("aes-gcm: the record layer passed a bad nonce or range");
 }
 
 /** Opens `buf[at, +length)` in place once the tag after it verifies; false, with nothing written, when it does not. */
