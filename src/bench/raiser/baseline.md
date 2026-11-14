@@ -268,3 +268,8 @@ per scheme. Same probe on the slice's candidate: haro 0.916G instructions (-12.6
 A try with no catch falls from its body into its finally instead of taking a `Jump 0` there, one dispatch per
 cleanup scope run (`compileTryCatchStmt`). Same probe on the slice's candidate: rowsEl 0.962G instructions (from
 0.969G), haro 0.914G (from 0.916G).
+
+`===` and `!==` between two class instances held in Ref registers branch on their handles (`BeqR`/`BrNeR`, which
+the register verifier already ranked from the integer forms) instead of the general value compare `EqVal`, which
+ran on the VM's slow path (`compileCompareTest`, `holdsClassInstance`). Same probe on the slice's candidate: rowsEl
+0.932G instructions (from 0.962G; `EqVal` 31M became `BrNeR` on the fast path), haro unchanged at 0.914G.
