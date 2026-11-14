@@ -277,3 +277,8 @@ ran on the VM's slow path (`compileCompareTest`, `holdsClassInstance`). Same pro
 Quiet rtx window on main `9519f3e558c` (after the fixed-length for-of, try fall-through and identity branch slices),
 load 3.0: rowsEl c 135 ms, raiser 2992 ms (22.2x, from 23.9x); haro c 82 ms, raiser 3071 ms (37.5x, from 41.5x and
 48.6x at `71bf722e2624`).
+
+The value of `&&` and `||` whose result register is a Bool or a Word tests the left operand with one counted branch
+(`jumpIfValue`, as the condition form does) instead of `BTruthy` and one or two `Jump`s (`compileLogicalExpr`).
+Same probe on the slice's candidate: haro 0.899G instructions (from 0.914G; `Jump` 17M left in all of it), rowsEl
+0.931G.
