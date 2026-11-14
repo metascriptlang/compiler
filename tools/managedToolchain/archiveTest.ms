@@ -18,8 +18,8 @@ function member(name: string, body: Buffer): Buffer {
 }
 
 function bsdMember(name: string, body: Buffer): Buffer {
-	const encoded = bytes(name);
-	while (encoded.length % 8 != 0) { encoded.push(0); }
+	const text = bytes(name);
+	const encoded = Buffer.concat(text, Buffer.alloc((8 - text.length % 8) % 8));
 	return member("#1/" + String(encoded.length), Buffer.concat(encoded, body));
 }
 
@@ -40,9 +40,7 @@ function coffArchive(names: Buffer, parts: Buffer[]): Buffer {
 }
 
 function truncated(data: Buffer, count: int32): Buffer {
-	const copy = Buffer.copy(data);
-	copy.length = copy.length - count;
-	return copy;
+	return Buffer.copy(data.subarray(0, data.length - count));
 }
 
 function expectMembers(data: Buffer, expected: ArchiveMember[]): void {
@@ -187,11 +185,11 @@ when (!testBuild) {
 		{ data: member("nu\0l.o/", bytes("x")), why: "invalid ar member name" },
 		{ data: member("", bytes("x")), why: "invalid ar member name" },
 	]) { expectRefusal(archive([invalid.data]), invalid.why); }
-	for (const invalidName of [
+	const invalidNames: number[][] = [
 		[192, 175], [237, 160, 128], [244, 144, 128, 128], [226, 130],
-	]) {
-		const raw = Buffer.fromArray([]);
-		for (const byte of invalidName) { raw.push(byte as uint8); }
+	];
+	for (const invalidName of invalidNames) {
+		const raw = Buffer.fromArray(invalidName);
 		expectRefusal(archive([member("#1/" + String(raw.length), raw)]),
 			"not UTF-8");
 	}

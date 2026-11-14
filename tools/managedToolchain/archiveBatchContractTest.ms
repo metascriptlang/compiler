@@ -123,7 +123,7 @@ function checkMembers(path: string, count: int32, payload: Buffer): void {
 	cases += 1;
 }
 
-function emptyIndex(data: Buffer, at: int32, size: int32): boolean {
+function emptyIndex(data: Readonly<Span<uint8>>, at: int32, size: int32): boolean {
 	if (at < 0 || at + 60 + size > data.length || data[at] != 47 ||
 		data[at + 58] != 96 || data[at + 59] != 10) { return false; }
 	for (let i: int32 = 1; i < 16; i += 1) {
