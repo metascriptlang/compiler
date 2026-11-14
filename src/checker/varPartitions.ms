@@ -9,8 +9,8 @@ import {
 	MatchExprData, MatchCaseData, ExprStmtData, IfStmtData, TryCatchStmtData, DestructuringDeclData, ObjectPatternData,
 	ObjectPatternPropData, ArrayPatternData, ActorDeclData, createNodeAt, BuiltinKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { receiverOf, returnsView, routineBody, viewCallSources, isViewCall, aliasTarget, boundRoutine, isImmortalModuleConst, moduleSourceOf, moduleStateCause, mayStoreIntoReceiver, runsVisibleBody, EffectCause } from "./effects";
-import { isAwaitable, isOwnedRef, ownsNoStorage, typeVisitAdd, viewStructChangesInPlace, isPrimitiveKind, isViewType, isViewStruct, nestedViewType, nestedViewShown, ownedAlternativeOf, holdsViewSkippingClear, TypeVisitSet, isReadonlyView, isStructType, typeDisplayName, isLockedRef, isAtomicRef, typeCarriesRef, withoutReadonlyView, withoutNullMember } from "./types";
+import { receiverOf, returnsView, routineBody, viewCallSources, isViewCall, aliasTarget, boundRoutine, isImmortalModuleConst, moduleSourceOf, moduleStateCause, mayStoreIntoReceiver, runsVisibleBody, calledRoutine, unpackDecl, EffectCause, cause, through } from "./effects";
+import { isAwaitable, isOwnedRef, ownsNoStorage, typeVisitAdd, viewStructChangesInPlace, isPrimitiveKind, isViewType, isViewStruct, nestedViewType, nestedViewShown, ownedAlternativeOf, holdsViewSkippingClear, TypeVisitSet, isReadonlyView, isStructType, typeDisplayName, isLockedRef, isAtomicRef, typeCarriesRef, withoutReadonlyView, withoutNullMember, isSendableFunction } from "./types";
 import { hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "./symbol";
 import { CheckerContext, DispatchRegistry, addError, dispatchEntryFor, dispatchOverridesFor } from "./context";
 import { isAddressTaking, checkPointerEscapesIn } from "./pointerAddress";
@@ -347,6 +347,16 @@ export function resetResizeSummaries(): void {
 	pendingOpen = new HashMap<Node, PendingLend[]>();
 	pendingStack = [];
 	pendingCyclic = false;
+	reachDone = new HashMap<Node, ReachInput[]>();
+	reachOpen = new HashMap<Node, ReachInput[]>();
+	reachIndex = new HashMap<Node, int32>();
+	reachLow = new HashMap<Node, int32>();
+	reachStack = [];
+	reachCounter = 0;
+	reachCurrent = null;
+	reachSelf = [];
+	reachSettling = 0;
+	reachLate = [];
 	leaverScansOpen = [];
 }
 
@@ -1145,6 +1155,15 @@ interface BorrowUnit {
 	leavers: Node[];
 	worker: boolean;
 	actorCtor: string;
+	tracksReach: boolean;
+	reachFor: Node | null;
+	relays: Relay[];
+	runByCall: Node[];
+}
+
+interface Relay {
+	root: Symbol;
+	fn: Symbol;
 }
 
 interface CallWrite {
@@ -1722,6 +1741,7 @@ function assign(u: BorrowUnit, node: Node, d: BinaryExprData): void {
 		potentialMutation(u.p, sym, d.left, ownsStorage(sym.symbolType) ? "" : VALUE_WRITE);
 		if (d.operator == "=") {
 			deps(u, sym, d.right);
+			storeIntoModuleState(u, left, d.right);
 			if (reachableByCalls(u, sym, "")) escape(u, d.right);
 		}
 		return;
@@ -1744,6 +1764,7 @@ function assign(u: BorrowUnit, node: Node, d: BinaryExprData): void {
 			for (const s of sources) { ufConnect(u.p, t, s); }
 		}
 		markModuleSource(u, targets, d.right);
+		markModuleSource(u, sources, left);
 	}
 }
 
@@ -1893,6 +1914,379 @@ function resizesReceiver(node: Node, recv: Node): boolean {
 	return held.kind == TypeKind.Array || held.kind == TypeKind.String;
 }
 
+interface ReachInput {
+	input: int32;
+	capture: Symbol | null;
+	cause: EffectCause | null;
+	group: int32;
+	relayedTo: Symbol[];
+}
+
+interface Actual {
+	roots: Symbol[];
+	source: EffectCause | null;
+}
+
+let reachDone = new HashMap<Node, ReachInput[]>();
+let reachOpen = new HashMap<Node, ReachInput[]>();
+let reachIndex = new HashMap<Node, int32>();
+let reachLow = new HashMap<Node, int32>();
+let reachStack: Node[] = [];
+let reachCounter: int32 = 0;
+let reachCurrent: Node | null = null;
+let reachSelf: Node[] = [];
+let reachSettling: int32 = 0;
+let reachLate: Node[] = [];
+
+const REACH_SETTLE_ROUNDS: int32 = 64;
+
+function reachShape(entries: ReachInput[]): string {
+	let shape = "";
+	for (const e of entries) {
+		shape += `${e.input}/${e.capture != null ? e.capture.name : ""}/${e.cause != null}/${e.group}/${e.relayedTo.length};`;
+	}
+	return shape;
+}
+
+function lowerReach(decl: Node, to: int32): void {
+	const low = reachLow.get(decl);
+	if (low == null) throw new Error(`internal: the routine at ${decl.location.line}:${decl.location.column} reached a caller still being summarised only while its own component was settling`);
+	if (to < low) reachLow.set(decl, to);
+}
+
+function reachOf(ctx: CheckerContext, decl: Node): ReachInput[] {
+	const done = reachDone.get(decl);
+	if (done != null) return done;
+	const open = reachOpen.get(decl);
+	if (open != null) {
+		const at = reachIndex.get(decl);
+		if (at != null && reachCurrent != null) {
+			if (decl == reachCurrent && !reachSelf.includes(decl)) reachSelf.push(decl);
+			lowerReach(reachCurrent, at);
+		}
+		return open;
+	}
+	visitReach(ctx, decl);
+	const low = reachLow.get(decl);
+	if (low != null && reachCurrent != null) lowerReach(reachCurrent, low);
+	return reachDone.get(decl) ?? reachOpen.get(decl)!;
+}
+
+function visitReach(ctx: CheckerContext, decl: Node): void {
+	const outer = reachCurrent;
+	const at = reachCounter;
+	reachCounter += 1;
+	reachIndex.set(decl, at);
+	reachLow.set(decl, at);
+	reachStack.push(decl);
+	reachOpen.set(decl, []);
+	reachCurrent = decl;
+	reachOpen.set(decl, scanReach(ctx, decl));
+	reachCurrent = outer;
+	if (reachLow.get(decl) != at) return;
+	const members: Node[] = [];
+	while (true) {
+		const m = reachStack.pop()!;
+		reachIndex.delete(m);
+		reachLow.delete(m);
+		members.push(m);
+		if (m == decl) break;
+	}
+	const recursive = members.length > 1 || reachSelf.includes(decl);
+	reachSelf = reachSelf.filter((n: Node): boolean => !members.includes(n));
+	if (reachSettling > 0) {
+		for (const m of members) { reachLate.push(m); }
+		return;
+	}
+	if (recursive) settleReach(ctx, members);
+	for (const m of members) {
+		reachDone.set(m, reachOpen.get(m)!);
+		reachOpen.delete(m);
+	}
+}
+
+function settleReach(ctx: CheckerContext, members: Node[]): void {
+	const outer = reachCurrent;
+	reachSettling += 1;
+	let rounds: int32 = 0;
+	let changed = true;
+	while (changed) {
+		changed = false;
+		rounds += 1;
+		if (rounds > REACH_SETTLE_ROUNDS) throw new Error(`internal: the module-state reach of the routine at ${members[0].location.line}:${members[0].location.column} did not settle in ${REACH_SETTLE_ROUNDS} rounds`);
+		for (let i = 0; i < members.length; i += 1) {
+			reachCurrent = members[i];
+			const next = scanReach(ctx, members[i]);
+			if (reachShape(next) != reachShape(reachOpen.get(members[i])!)) {
+				reachOpen.set(members[i], next);
+				changed = true;
+			}
+		}
+		if (reachLate.length > 0) {
+			for (const m of reachLate) { members.push(m); }
+			reachLate = [];
+			changed = true;
+		}
+	}
+	reachSettling -= 1;
+	reachCurrent = outer;
+}
+
+function scanReach(ctx: CheckerContext, decl: Node): ReachInput[] {
+	const body = routineBody(decl);
+	if (body == null) return [];
+	const reported = ctx.errors.length;
+	const u = newUnit(ctx, [], false);
+	u.tracksReach = true;
+	u.reachFor = decl;
+	runPass(u, body, 1);
+	runPass(u, body, 2);
+	if (ctx.errors.length > reported) throw new Error(`internal: the module-state reach scan of the routine at ${decl.location.line}:${decl.location.column} reported an error`);
+	const params = decl.paramSyms ?? [];
+	const all: ReachInput[] = [];
+	for (let i = 0; i < u.p.vars.length; i += 1) {
+		const v = u.p.vars[i];
+		if (!v.external || !carriesPointer(v.sym.symbolType)) continue;
+		const at = params.indexOf(v.sym);
+		const input: int32 = at >= 0 ? (at as int32) : CAPTURE_INPUT;
+		const group = ufRoot(u.p, i);
+		const relayedTo: Symbol[] = [];
+		for (const r of u.relays) {
+			if (ufRoot(u.p, variableId(u.p, r.root)) == group && !relayedTo.includes(r.fn)) relayedTo.push(r.fn);
+		}
+		all.push({ input, capture: input == CAPTURE_INPUT ? v.sym : null, cause: moduleSourceIn(u, i), group, relayedTo });
+	}
+	return all.filter((e: ReachInput): boolean => e.cause != null || e.relayedTo.length > 0
+		|| all.some((o: ReachInput): boolean => o != e && o.group == e.group));
+}
+
+function actualOf(u: BorrowUnit, parts: Node[]): Actual {
+	const out: Actual = { roots: [], source: null };
+	for (const a of parts) {
+		if (!carriesPointer(a.nodeType)) continue;
+		rootsOf(a, out.roots);
+		out.source = out.source ?? moduleSourceOfValue(u, a);
+	}
+	return out;
+}
+
+function capturedActual(u: BorrowUnit, sym: Symbol): Actual {
+	registerVariable(u.p, sym, true, 0);
+	return { roots: [sym], source: null };
+}
+
+function restArguments(call: Node, input: int32): Node[] {
+	const t = call.resolvedSym != null ? call.resolvedSym.symbolType : null;
+	if (t == null || t.kind != TypeKind.Function || t.typeChildren.length == 0) return [];
+	const last = t.typeChildren.length - 1;
+	if (input != last || t.typeChildren[last] == null || t.typeChildren[last].kind != TypeKind.Varargs) return [];
+	return (call.data as CallExprData).arguments.slice(call.flags.has(NodeFlag.ExtCall) ? input : input + 1);
+}
+
+function passedActual(u: BorrowUnit, call: Node, e: ReachInput): Actual {
+	if (e.input == CAPTURE_INPUT) return capturedActual(u, e.capture!);
+	const first = lentArgument(call, e.input);
+	const parts: Node[] = first != null ? [first] : [];
+	for (const rest of restArguments(call, e.input)) { parts.push(rest); }
+	return actualOf(u, parts);
+}
+
+function handedBy(u: BorrowUnit, call: Node): Actual {
+	const recv = receiverOf(call);
+	const parts: Node[] = recv != null ? [recv] : [];
+	for (const a of (call.data as CallExprData).arguments) { parts.push(a); }
+	return actualOf(u, parts);
+}
+
+function reach(u: BorrowUnit, roots: Symbol[], c: EffectCause | null): void {
+	if (c == null) return;
+	for (const r of roots) {
+		const id = variableId(u.p, r);
+		if (id >= 0) reachRegion(u.p, ufRoot(u.p, id), c, u.p.abstractTime);
+	}
+}
+
+function unseenTie(site: Node): EffectCause {
+	return cause(site, "is handed to a function value, which may tie it to module state,");
+}
+
+function tieInputs(u: BorrowUnit, site: Node, what: string, decl: Node, entries: ReachInput[], actualFor: (e: ReachInput) => Actual, passedFor: (param: int32) => Node | null): void {
+	const actuals: Actual[] = [];
+	for (let i = 0; i < entries.length; i += 1) {
+		const mine = actualFor(entries[i]);
+		actuals.push(mine);
+		for (let j = 0; j < i; j += 1) {
+			if (entries[j].group != entries[i].group) continue;
+			for (const a of mine.roots) {
+				for (const b of actuals[j].roots) { ufConnect(u.p, a, b); }
+			}
+			reach(u, mine.roots, actuals[j].source);
+			reach(u, actuals[j].roots, mine.source);
+		}
+		reach(u, mine.roots, through(site, what, entries[i].cause));
+		for (const fn of entries[i].relayedTo) {
+			const at = (decl.paramSyms ?? []).indexOf(fn);
+			const passed = at >= 0 ? passedFor(at as int32) : null;
+			if (at < 0) handToParameter(u, site, fn, mine);
+			else if (passed != null) handTo(u, site, peelConv(passed)!, mine);
+			else reach(u, mine.roots, unseenTie(site));
+		}
+	}
+}
+
+function handToParameter(u: BorrowUnit, site: Node, fn: Symbol, handed: Actual): void {
+	if (isSendableFunction(fn.symbolType)) return;
+	reach(u, handed.roots, handed.source);
+	if (u.reachFor == null) {
+		reach(u, handed.roots, unseenTie(site));
+		return;
+	}
+	for (const r of handed.roots) {
+		if (variableId(u.p, r) >= 0) u.relays.push({ root: r, fn });
+	}
+}
+
+function routineOfValue(value: Node): Node | null {
+	const made = madeRoutine(value);
+	if (made != null || value.kind != NodeKind.Identifier || value.resolvedSym == null) return made;
+	const sym = value.resolvedSym;
+	if (sym.symbolKind != SymbolKind.Function || sym.declNode == null || hasFlag(sym, SymbolFlag.ImportC) || routineBody(sym.declNode) == null) return null;
+	recordBodyRead(sym.modulePath);
+	return sym.declNode;
+}
+
+function handTo(u: BorrowUnit, site: Node, value: Node, handed: Actual): void {
+	const routine = routineOfValue(value);
+	if (routine != null) {
+		tieInputs(u, site, "is handed to the function passed there,", routine, reachOf(u.ctx, routine),
+			(e: ReachInput): Actual => e.input == CAPTURE_INPUT ? capturedActual(u, e.capture!) : handed,
+			(param: int32): Node | null => null);
+		return;
+	}
+	if (value.kind == NodeKind.Identifier && value.resolvedSym != null && value.resolvedSym.symbolKind == SymbolKind.Parameter) {
+		handToParameter(u, site, value.resolvedSym, handed);
+		return;
+	}
+	if (isSendableFunction(value.nodeType)) return;
+	reach(u, handed.roots, handed.source);
+	reach(u, handed.roots, unseenTie(site));
+}
+
+function isRoutineTyped(node: Node | null): boolean {
+	return node != null && node.nodeType != null && node.nodeType.kind == TypeKind.Function;
+}
+
+function tieCallInputs(u: BorrowUnit, call: Node): void {
+	const d = call.data as CallExprData;
+	const callee = peelConv(d.callee);
+	const passed = (param: int32): Node | null => lentArgument(call, param);
+	const actual = (e: ReachInput): Actual => passedActual(u, call, e);
+	const made = madeRoutine(callee);
+	if (made != null) {
+		tieInputs(u, call, "calls '" + calleeName(call) + "'", made, reachOf(u.ctx, made), actual, passed);
+		return;
+	}
+	const sym = call.resolvedSym;
+	let seen = false;
+	if (sym != null && (sym.symbolKind == SymbolKind.Function || sym.symbolKind == SymbolKind.Method)) {
+		if (hasFlag(sym, SymbolFlag.GeneratedOp)) return;
+		const impl = calledRoutine(call) ?? sym;
+		if (impl.declNode != null && !hasFlag(impl, SymbolFlag.ImportC) && routineBody(impl.declNode) != null) {
+			seen = true;
+			recordBodyRead(impl.modulePath);
+			tieInputs(u, call, "calls '" + calleeName(call) + "'", impl.declNode, reachOf(u.ctx, impl.declNode), actual, passed);
+		}
+		const entry = dispatchEntryFor(u.ctx.dispatchRegistry, impl);
+		if (entry != null && !entry.overloaded) {
+			for (const o of dispatchOverridesFor(u.ctx.dispatchRegistry, entry.classSym, entry.methodName)) {
+				if (o.sym.declNode == null || routineBody(o.sym.declNode) == null) continue;
+				seen = true;
+				recordBodyRead(o.sym.modulePath);
+				tieInputs(u, call, "calls '" + entry.methodName + "' as overridden in '" + o.classSym.name + "'", o.sym.declNode, reachOf(u.ctx, o.sym.declNode), actual, passed);
+			}
+		}
+		if (seen) return;
+	} else if (callee != null) {
+		handTo(u, call, callee, handedBy(u, call));
+	}
+	for (const a of d.arguments) {
+		if (isRoutineTyped(peelConv(a))) handTo(u, call, peelConv(a)!, handedBy(u, call));
+	}
+}
+
+function reachCallEffects(u: BorrowUnit, node: Node, recv: Node | null): void {
+	if (!runsVisibleBody(node)) {
+		const summary = calleeSummary(u.ctx.dispatchRegistry, node);
+		const all: Node[] = [];
+		if (recv != null) all.push(recv);
+		const keepsArguments = recv != null && mayStoreIntoReceiver(node);
+		for (const a of (node.data as CallExprData).arguments) {
+			all.push(a);
+			if (keepsArguments && carriesPointer(a.nodeType)) joinStored(u, a, recv!);
+		}
+		storedIntoOther(u, all, summary);
+	}
+	tieCallInputs(u, node);
+}
+
+function reachAssign(u: BorrowUnit, d: BinaryExprData): void {
+	if (d.operator != "=") return;
+	const left = peelConv(d.left)!;
+	if (left.kind == NodeKind.Identifier && left.resolvedSym != null) {
+		joinRegionOf(u, left.resolvedSym, d.right);
+		storeIntoModuleState(u, left, d.right);
+		return;
+	}
+	if (!carriesPointer(left.nodeType)) return;
+	const targets: Symbol[] = [];
+	rootsOf(left, targets);
+	const sources: Symbol[] = [];
+	rootsOf(d.right, sources);
+	for (const t of targets) {
+		for (const s of sources) { ufConnect(u.p, t, s); }
+	}
+	markModuleSource(u, targets, d.right);
+	markModuleSource(u, sources, left);
+}
+
+function storeIntoModuleState(u: BorrowUnit, target: Node, value: Node): void {
+	if (!carriesPointer(value.nodeType)) return;
+	const sources: Symbol[] = [];
+	rootsOf(value, sources);
+	markModuleSource(u, sources, target);
+}
+
+function constructedBy(newNode: Node): Node | null {
+	const classSym = (newNode.data as NewExprData).newCallee.resolvedSym;
+	const decl = classSym != null ? unpackDecl(classSym.declNode) : null;
+	if (decl == null || decl.kind != NodeKind.ClassDecl) return null;
+	recordBodyRead(classSym!.modulePath);
+	for (const m of membersOf(decl)) {
+		const member = unpackDecl(m);
+		if (member != null && member.kind == NodeKind.ConstructorDecl) return member;
+	}
+	return null;
+}
+
+function tieNewInputs(u: BorrowUnit, node: Node): void {
+	const ctor = constructedBy(node);
+	if (ctor == null) return;
+	const args = (node.data as NewExprData).newArguments;
+	tieInputs(u, node, "constructs '" + (node.data as NewExprData).newCallee.resolvedSym!.name + "'", ctor, reachOf(u.ctx, ctor),
+		(e: ReachInput): Actual => e.input == CAPTURE_INPUT ? capturedActual(u, e.capture!) : actualOf(u, e.input >= 1 && e.input <= args.length ? [args[e.input - 1]] : []),
+		(param: int32): Node | null => param >= 1 && param <= args.length ? args[param - 1] : null);
+}
+
+function tieCaptures(u: BorrowUnit, site: Node, routine: Node, what: string, runByItsCall: boolean): void {
+	const entries = reachOf(u.ctx, routine);
+	const captures = entries.filter((e: ReachInput): boolean => e.input == CAPTURE_INPUT);
+	tieInputs(u, site, what, routine, captures, (e: ReachInput): Actual => capturedActual(u, e.capture!), (param: int32): Node | null => null);
+	if (runByItsCall) return;
+	for (const c of captures) {
+		if (entries.some((o: ReachInput): boolean => o.input != CAPTURE_INPUT && o.group == c.group)) reach(u, [c.capture!], unseenTie(site));
+	}
+}
+
 function callEffects(u: BorrowUnit, node: Node): void {
 	const d = node.data as CallExprData;
 	const sym = node.resolvedSym;
@@ -1900,6 +2294,10 @@ function callEffects(u: BorrowUnit, node: Node): void {
 		? sym.symbolType
 		: (d.callee != null ? d.callee.nodeType : null);
 	const recv = receiverOf(node);
+	if (u.reachFor != null) {
+		reachCallEffects(u, node, recv);
+		return;
+	}
 	const summary = calleeSummary(u.ctx.dispatchRegistry, node);
 	let offset: int32 = 0;
 	const resizes = recv != null && resizesReceiver(node, recv);
@@ -1932,6 +2330,7 @@ function callEffects(u: BorrowUnit, node: Node): void {
 	changeEscaped(u, node, passesRoutine ? anyResize() : summary, runsClosures);
 	if (summary.writes || runsClosures) noteCallWrite(u, node, all, fnType, recv != null && !node.flags.has(NodeFlag.ExtCall) ? -1 : 0, runsClosures, summary.leavesRunning || handsOverLeaver(u.ctx.dispatchRegistry, node));
 	if (u.lends.length > 0 && keepsRoutine(u.ctx.dispatchRegistry, node)) noteKeptRoutines(u, node);
+	if (u.tracksReach) tieCallInputs(u, node);
 }
 
 function joinTime(u: BorrowUnit, call: Node): int32 {
@@ -1997,6 +2396,11 @@ function capturedWrites(u: BorrowUnit, node: Node | null, s: ResizeSummary): voi
 		}
 	}
 	forEachChild(node, (child: Node): void => { capturedWrites(u, child, s); });
+}
+
+function isBoundHere(u: BorrowUnit, routine: Node): boolean {
+	const at = u.named.indexOf(routine);
+	return at >= 0 && boundRoutine(u.namedSyms[at]) == routine;
 }
 
 function recordClosure(u: BorrowUnit, node: Node): void {
@@ -2199,23 +2603,32 @@ function walkLoop(u: BorrowUnit, parts: (Node | null)[]): void {
 function walk(u: BorrowUnit, node: Node | null): void {
 	if (node == null) return;
 	u.p.abstractTime += 1;
-	if (u.pass == 2 && isAddressTaking(node)) refuseViewRefParamAddress(u, node);
+	const full = u.reachFor == null;
+	if (full && u.pass == 2 && isAddressTaking(node)) refuseViewRefParamAddress(u, node);
 	match (node.kind) {
 		NodeKind.Identifier => {
 			u.p.abstractTime -= 1;
 			useSym(u, node.resolvedSym);
+			if (u.pass == 2 && u.tracksReach) {
+				const made = boundRoutine(node.resolvedSym);
+				if (made != null) {
+					recordBodyRead(node.resolvedSym!.modulePath);
+					tieCaptures(u, node, made, "is captured by '" + node.resolvedSym!.name + "'", u.runByCall.includes(node));
+				}
+			}
 		},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
 			walk(u, d.initializer);
 			u.p.abstractTime += 1;
 			declare(u, node.resolvedSym, u.p.inLoop > 0);
-			if (u.pass == 1) nameLend(u, node.resolvedSym, d.initializer);
+			if (full && u.pass == 1) nameLend(u, node.resolvedSym, d.initializer);
 			if (u.pass == 1 && node.resolvedSym != null && peelConv(d.initializer) != null) {
 				u.named.push(peelConv(d.initializer)!);
 				u.namedSyms.push(node.resolvedSym);
 			}
-			if (u.pass == 2) deps(u, node.resolvedSym, d.initializer);
+			if (u.pass == 2 && full) deps(u, node.resolvedSym, d.initializer);
+			else if (u.pass == 2 && node.resolvedSym != null && d.initializer != null) joinRegionOf(u, node.resolvedSym, d.initializer);
 		},
 		NodeKind.DestructuringDecl => {
 			const d = node.data as DestructuringDeclData;
@@ -2227,50 +2640,61 @@ function walk(u: BorrowUnit, node: Node | null): void {
 			const d = node.data as BinaryExprData;
 			walk(u, d.left);
 			walk(u, d.right);
-			if (u.pass == 2 && isAssignOp(d.operator)) assign(u, node, d);
+			if (u.pass == 2 && isAssignOp(d.operator)) {
+				if (full) assign(u, node, d);
+				else reachAssign(u, d);
+			}
 		},
 		NodeKind.UpdateExpr => {
 			const d = node.data as UpdateExprData;
 			walk(u, d.updateArg);
-			if (u.pass == 2) mutateRoots(u, d.updateArg, node, "", VALUE_WRITE);
+			if (full && u.pass == 2) mutateRoots(u, d.updateArg, node, "", VALUE_WRITE);
 		},
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
 			walk(u, d.callee);
 			if (u.pass == 2 && isSpawnCall(node) && d.arguments.length > 0) u.thunks.push(thunkOf(d.arguments[0]));
+			if (u.pass == 2 && u.tracksReach) {
+				const called = peelConv(d.callee);
+				if (called != null) u.runByCall.push(called);
+				if (!keepsRoutine(u.ctx.dispatchRegistry, node)) {
+					for (const a of d.arguments) { u.runByCall.push(peelConv(a)!); }
+				}
+			}
 			for (const a of d.arguments) { walk(u, a); }
-			if (u.pass == 1 && isSpawnCall(node) && d.arguments.length > 0) openLend(u, node, d.arguments[0]);
-			if (u.pass == 1 && opensCallLend(u.ctx.dispatchRegistry, node)) openCallLend(u, node);
-			else if (u.pass == 1 && node.kind == NodeKind.CallExpr) refuseGlobalCallLends(u, node);
+			if (full && u.pass == 1 && isSpawnCall(node) && d.arguments.length > 0) openLend(u, node, d.arguments[0]);
+			if (full && u.pass == 1 && opensCallLend(u.ctx.dispatchRegistry, node)) openCallLend(u, node);
+			else if (full && u.pass == 1 && node.kind == NodeKind.CallExpr) refuseGlobalCallLends(u, node);
 			if (u.pass == 2 && !isSpawnCall(node)) callEffects(u, node);
-			if (u.pass == 2 && isMessageSend(node)) refuseModuleArgs(u, node);
+			if (full && u.pass == 2 && isMessageSend(node)) refuseModuleArgs(u, node);
 		},
 		NodeKind.NewExpr => {
 			const d = node.data as NewExprData;
 			walk(u, d.newCallee);
 			for (const a of d.newArguments) { walk(u, a); }
-			if (u.pass == 2) {
+			if (u.pass == 2 && full) {
 				const summary = newSummary(u.ctx.dispatchRegistry, node);
 				for (const a of d.newArguments) { argEffect(u, a, null, false, summary); }
 				if (summary.writes) noteCallWrite(u, node, d.newArguments, null, 0, false, summary.leavesRunning);
 			}
+			if (u.pass == 2 && u.tracksReach) tieNewInputs(u, node);
 		},
 		NodeKind.MoveExpr => {
 			const d = node.data as MoveExprData;
 			walk(u, d.moveArg);
-			if (u.pass == 2) mutateRoots(u, d.moveArg, node);
+			if (full && u.pass == 2) mutateRoots(u, d.moveArg, node);
 		},
 		NodeKind.ArrayLiteral => {
 			const d = node.data as ArrayLiteralData;
 			for (const e of d.elements) { walk(u, e); }
-			if (u.pass == 2) {
+			if (full && u.pass == 2) {
 				for (const e of d.elements) { handOff(u, e, currentScope(u)); }
 			}
 		},
 		NodeKind.ObjectLiteral => {
 			const d = node.data as ObjectLiteralData;
 			for (const e of d.properties) { walk(u, e); }
-			if (u.pass == 2) {
+			if (full && u.pass == 2) {
 				for (const e of d.properties) { handOff(u, e, currentScope(u)); }
 			}
 		},
@@ -2332,8 +2756,9 @@ function walk(u: BorrowUnit, node: Node | null): void {
 		},
 		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {
 			u.p.abstractTime -= 1;
-			if (u.pass == 1 && lendsCapturesToActors(u.ctx.dispatchRegistry, node)) openCaptureLend(u, node);
-			if (u.pass == 2) recordClosure(u, node);
+			if (full && u.pass == 1 && lendsCapturesToActors(u.ctx.dispatchRegistry, node)) openCaptureLend(u, node);
+			if (full && u.pass == 2) recordClosure(u, node);
+			if (u.pass == 2 && u.tracksReach && !isBoundHere(u, node)) tieCaptures(u, node, node, "is captured by the function made", u.runByCall.includes(node));
 		},
 		NodeKind.ClassDecl | NodeKind.MethodDecl | NodeKind.ConstructorDecl | NodeKind.TestDecl => {
 			u.p.abstractTime -= 1;
@@ -2763,7 +3188,7 @@ function newUnit(ctx: CheckerContext, pointers: Symbol[], worker: boolean): Borr
 	return {
 		p: createPartitions(), pass: 1, scope: [], defers: [], ctx, pointers, blocks: [], captured: [], routines: [], suspends: [], suspendSites: [], escaped: [],
 		lends: [], closerSites: [], closerAwaits: [], thunks: [], writers: [], callWrites: [], joins: [], joinTimes: [], named: [], namedSyms: [],
-		closures: [], closureWrites: [], leavers: [], worker, actorCtor: "",
+		closures: [], closureWrites: [], leavers: [], worker, actorCtor: "", tracksReach: false, reachFor: null, relays: [], runByCall: [],
 	};
 }
 
@@ -2933,6 +3358,7 @@ function checkUnit(ctx: CheckerContext, body: Node | null, routine: Node | null 
 	}
 	const u = newUnit(ctx, scan.pointers, false);
 	u.actorCtor = actorCtor;
+	u.tracksReach = scan.spawn || actorCtor != "";
 	collectLeavers(body, u.leavers);
 	runPass(u, body, 1);
 	for (const l of u.lends) {

@@ -225,7 +225,7 @@ export function checkActorHookEffects(hook: Node, hookName: string, actorName: s
 	});
 }
 
-function cause(site: Node, what: string): EffectCause {
+export function cause(site: Node, what: string): EffectCause {
 	return { site, text: what + " at " + site.location.line + ":" + site.location.column };
 }
 
@@ -1113,7 +1113,7 @@ function stateName(sym: Symbol): string {
 	return "module-level '" + sym.name + "'";
 }
 
-function unpackDecl(decl: Node | null): Node | null {
+export function unpackDecl(decl: Node | null): Node | null {
 	if (decl != null && decl.kind == NodeKind.DecoratedDecl) return (decl.data as DecoratedDeclData).decoratedNode;
 	return decl;
 }
@@ -1122,7 +1122,7 @@ function isRoutine(sym: Symbol | null): boolean {
 	return sym != null && (sym.symbolKind == SymbolKind.Function || sym.symbolKind == SymbolKind.Method);
 }
 
-function through(site: Node, what: string, inner: EffectCause | null): EffectCause | null {
+export function through(site: Node, what: string, inner: EffectCause | null): EffectCause | null {
 	if (inner == null) return null;
 	const c = cause(site, what);
 	return { site, text: c.text + ", which " + inner.text, advice: inner.advice };
