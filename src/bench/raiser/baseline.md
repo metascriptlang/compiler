@@ -258,3 +258,9 @@ A constant load into a Word, Bool or Float register that every path overwrites b
 haro 1.048G instructions (-6.1%; `LoadConstW` 113M to 46M; -33.3% from `71bf722e2624`), `schemeAt` 0.529G; rowsEl
 0.969G. Quiet rtx window at load 3.8: rowsEl c 139 ms, raiser 3319 ms (23.9x); haro c 82 ms, raiser 3405 ms (41.5x
 from 42.0x). The dropped loads are among the cheapest instructions, so wall time moves less than the count.
+
+A for-of over a const bound to an array literal under a read-only array type checks no length after each element
+(`forOfLower` `holdsFixedLength`, on every backend): no mutable alias of that array exists and a read-only view never
+converts back, so the check could never fire. It was haro's `SCHEMES` loop in `schemeAt`, an `ArrayLen` and a branch
+per scheme. Same probe on the slice's candidate: haro 0.916G instructions (-12.6%; -41.7% from `71bf722e2624`),
+`schemeAt` 0.397G; rowsEl 0.969G, unchanged. Wall time not yet taken in a quiet window.
