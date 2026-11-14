@@ -155,6 +155,8 @@ export interface RaiserCompState {
 	tries: RaiserTryInfo[];
 	cellNodes: Node[];
 	cellRegs: int32[];
+	loopReadNodes: Node[];
+	loopReadRegs: int32[];
 	argSlices: Node[];   // the slice expressions that are direct arguments of the calls being compiled: the view each makes is released after its call
 	argViews: int32[];
 	site: int32;
@@ -178,7 +180,7 @@ export function createCompState(): RaiserCompState {
 	const loopItems: RaiserLoopInfo[] = [];
 	const loopStack: RaiserLoopStack = { items: loopItems };
 	return { code, constants, nextReg: 0, regClasses: [], layouts: createVmLayouts(), legacyRoots: new HashSet<Symbol>(), resultType: null, resultShape: null, lentParam: null, locals, loopStack,
-		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, hookMovedAt: -1, hookMovedReg: -1, moveTempAt: -1, moveTempReg: -1, moveTempSource: null, packedMoveAt: -1, packedMoveSource: null, tries: [], cellNodes: [], cellRegs: [], argSlices: [], argViews: [], site: 0, inlineSites: [], siteIds: new HashMap<InlineFrame, int32>(), defaultResult: -1 };
+		funcMap: createFuncMap(), copyTypes: [], copyPlans: [], classTypes: [], globals: { items: [] }, receiverReg: -1, hookMovedAt: -1, hookMovedReg: -1, moveTempAt: -1, moveTempReg: -1, moveTempSource: null, packedMoveAt: -1, packedMoveSource: null, tries: [], cellNodes: [], cellRegs: [], loopReadNodes: [], loopReadRegs: [], argSlices: [], argViews: [], site: 0, inlineSites: [], siteIds: new HashMap<InlineFrame, int32>(), defaultResult: -1 };
 }
 
 export function enterSite(s: RaiserCompState, node: Node): void {

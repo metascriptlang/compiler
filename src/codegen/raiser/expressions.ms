@@ -3591,7 +3591,7 @@ function isToStringCall(call: Node): boolean {
 	return callee.kind == NodeKind.MemberExpr && (callee.data as MemberExprData).property == "toString";
 }
 
-function isStrIndexReadCall(node: Node): boolean {
+export function isStrIndexReadCall(node: Node): boolean {
 	const d = node.data as CallExprData;
 	if (d.callee.kind != NodeKind.MemberExpr || d.callee.resolvedSym == null) return false;
 	const nativeName = d.callee.resolvedSym.nativeName;
@@ -3751,6 +3751,8 @@ function hasStringType(node: Node): boolean {
 }
 
 function compileStrIndexRead(s: RaiserCompState, node: Node, op: RaiserOpcode): int32 {
+	const loaded = s.loopReadNodes.indexOf(node);
+	if (loaded >= 0) return s.loopReadRegs[loaded];
 	const d = node.data as CallExprData;
 	const md = d.callee.data as MemberExprData;
 	const strReg = compileExpr(s, md.object);

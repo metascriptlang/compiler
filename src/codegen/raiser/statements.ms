@@ -3,7 +3,7 @@
 
 import {
 	Node, NodeKind, NodeFlag, TypeKind, DeclKind, Symbol, SymbolFlag, SymbolKind,
-	BinaryExprData, UnaryExprData, UpdateExprData, MemberExprData, ArrayAccessData, HiddenStdConvData, HiddenDerefData, NumberLiteralData,
+	BinaryExprData, UnaryExprData, UpdateExprData, MemberExprData, ArrayAccessData, HiddenStdConvData, HiddenDerefData, NumberLiteralData, CallExprData, OutExprData,
 	ReturnStmtData, BlockStmtData, ExprStmtData, MacroInvocationData, UnreachableStmtData, ConditionalExprData,
 	VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData,
 	ForStmtData, ForOfStmtData, BreakStmtData, ContinueStmtData,
@@ -22,7 +22,7 @@ import {
 	emitClosurePair,
 	registerRaiserStmtCompiler, resolveGlobal, resolveStaticInitGuard, resolveRoutine, addConst, isScalarClass,
 } from "./context";
-import { compilePackedExpr, notePackedMove, compileExpr, compileExprForEffect, condJumps, exprIsString, isAssignOp } from "./expressions";
+import { compilePackedExpr, notePackedMove, compileExpr, compileExprForEffect, condJumps, exprIsString, isAssignOp, isStrIndexReadCall } from "./expressions";
 import { forEachChild } from "../../ast/visitor";
 import { markBoundedCounterStep } from "../../transform/util";
 import { compileOwnershipStmt } from "./drcLower";
@@ -291,8 +291,11 @@ function compileIfStmt(s: RaiserCompState, node: Node): void {
 function compileDoWhileStmt(s: RaiserCompState, node: Node): void {
 	const d = node.data as DoWhileStmtData;
 	const outerLocals = loadConstGlobalsBeforeLoop(s, [d.doCondition, d.doBody]);
+	const outerReads = loadInvariantReadsBeforeLoop(s, [d.doCondition, d.doBody]);
 	compileDoWhileLoop(s, d);
 	s.locals.items.shrink(outerLocals);
+	s.loopReadNodes.shrink(outerReads);
+	s.loopReadRegs.shrink(outerReads);
 }
 
 function compileDoWhileLoop(s: RaiserCompState, d: DoWhileStmtData): void {
@@ -313,8 +316,11 @@ function compileDoWhileLoop(s: RaiserCompState, d: DoWhileStmtData): void {
 function compileWhileStmt(s: RaiserCompState, node: Node): void {
 	const d = node.data as WhileStmtData;
 	const outerLocals = loadConstGlobalsBeforeLoop(s, [d.whileCondition, d.whileBody]);
+	const outerReads = loadInvariantReadsBeforeLoop(s, [d.whileCondition, d.whileBody]);
 	compileWhileLoop(s, d);
 	s.locals.items.shrink(outerLocals);
+	s.loopReadNodes.shrink(outerReads);
+	s.loopReadRegs.shrink(outerReads);
 }
 
 function loadConstGlobalsBeforeLoop(s: RaiserCompState, parts: (Node | null)[]): int32 {
@@ -329,6 +335,44 @@ function loadConstGlobalsBeforeLoop(s: RaiserCompState, parts: (Node | null)[]):
 		declareLocal(s, sym, reg);
 	}
 	return outerLocals;
+}
+
+function loadInvariantReadsBeforeLoop(s: RaiserCompState, parts: (Node | null)[]): int32 {
+	const outerReads = s.loopReadNodes.length;
+	const written = new HashSet<Symbol>();
+	const reads: Node[] = [];
+	for (const part of parts) collectLoopReads(part, written, reads);
+	for (const call of reads) {
+		const d = call.data as CallExprData;
+		if (!invariantOperand(s, (d.callee.data as MemberExprData).object, written) || !invariantOperand(s, d.arguments[0], written)) continue;
+		const reg = compileExpr(s, call);
+		s.loopReadNodes.push(call);
+		s.loopReadRegs.push(reg);
+	}
+	return outerReads;
+}
+
+function collectLoopReads(node: Node | null, written: HashSet<Symbol>, reads: Node[]): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.ClassDecl) return;
+	const target = writtenTarget(node);
+	if (target != null && target.kind == NodeKind.Identifier && target.resolvedSym != null) written.add(target.resolvedSym!);
+	if (node.kind == NodeKind.CallExpr && isStrIndexReadCall(node)) reads.push(node);
+	forEachChild(node, (child: Node): void => { collectLoopReads(child, written, reads); });
+}
+
+function writtenTarget(node: Node): Node | null {
+	if (node.kind == NodeKind.BinaryExpr && isAssignOp((node.data as BinaryExprData).operator)) return (node.data as BinaryExprData).left;
+	if (node.kind == NodeKind.UpdateExpr) return (node.data as UpdateExprData).updateArg;
+	if (node.kind == NodeKind.HiddenAddr) return (node.data as HiddenDerefData).expr;
+	if (node.kind == NodeKind.OutExpr) return (node.data as OutExprData).outArg;
+	return null;
+}
+
+function invariantOperand(s: RaiserCompState, node: Node, written: HashSet<Symbol>): boolean {
+	if (node.kind == NodeKind.NumberLiteral) return true;
+	if (node.kind != NodeKind.Identifier || node.resolvedSym == null || written.has(node.resolvedSym!)) return false;
+	return resolveLocal(s, node.resolvedSym) >= 0;
 }
 
 function collectConstGlobalReads(s: RaiserCompState, node: Node | null, declared: HashSet<Symbol>, read: Symbol[]): void {
@@ -513,8 +557,11 @@ function compileForStmt(s: RaiserCompState, node: Node): void {
 	}
 
 	const outerLocals = loadConstGlobalsBeforeLoop(s, [d.forCondition, d.forBody, d.forUpdate]);
+	const outerReads = loadInvariantReadsBeforeLoop(s, [d.forCondition, d.forBody, d.forUpdate]);
 	compileForLoop(s, d);
 	s.locals.items.shrink(outerLocals);
+	s.loopReadNodes.shrink(outerReads);
+	s.loopReadRegs.shrink(outerReads);
 }
 
 function compileForLoop(s: RaiserCompState, d: ForStmtData): void {
