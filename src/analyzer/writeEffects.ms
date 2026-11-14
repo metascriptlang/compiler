@@ -16,7 +16,7 @@ import { skipConvDfa } from "./alias";
 import { RcInfo, RcKind, noRcInfo } from "./classify";
 import { returnsBorrow } from "../codegen/c/types";
 import { makeNumber, makeString } from "../checker/literalNodes";
-import { isSinkTypeForParam, isStructType, isUnownedRef, unownedElementOf, unwrapRefNullUnion, withoutUnowned, heldBeyond, opensToHeld, classDistance, createArray, createFunction, createGenericParam, createUnion, int32Type, nullType, isReadonlyView, isSendableFunction, stringType, withoutReadonlyView } from "../checker/types";
+import { boundElement, isUncountedElement, isSinkTypeForParam, isStructType, isUnownedRef, unownedElementOf, unwrapRefNullUnion, withoutUnowned, heldBeyond, opensToHeld, classDistance, createArray, createFunction, createGenericParam, createUnion, int32Type, nullType, isReadonlyView, isSendableFunction, stringType, withoutReadonlyView } from "../checker/types";
 import { isAssignable, sameType } from "../checker/compat";
 import { generatedRef, isRuntimeProcSym, makeAssign, makeBlock, makeCall, makeCallResolved, makeExprStmt, makeFnDecl, makeIdentResolved, makeReturn } from "../transform/util";
 import { cstringSource } from "../transform/native/cstringConvLower";
@@ -442,7 +442,7 @@ function canAliasIn(w: WriteEffects, arg: Type | null, ret: Type | null, seen: H
 	if (arg == null || ret == null) return true;
 	if (seen.has(ret)) return false;
 	seen.add(ret);
-	if (ret.kind == TypeKind.Ptr || (owning && isUnownedRef(ret))) return false;
+	if (ret.kind == TypeKind.Ptr || (owning && (isUnownedRef(ret) || ret.kind == TypeKind.Cursor))) return false;
 	const a = holderType(arg);
 	if (a == null) return containsPointer(arg, 0);
 	const r = holderType(ret);
@@ -1666,11 +1666,15 @@ function takesOwnerOrAddress(w: WriteEffects, call: Node, held: Type | null): bo
 	const recv = receiverOf(call);
 	if (recv != null && shift == 1 && formals.length > 0 && handsOver(formals[0]) && namesExistingOwner(w, recv, held)) return true;
 	const args = (call.data as CallExprData).arguments;
+	const callee = (call.data as CallExprData).callee;
+	const params = shift == 1 ? formals.slice(1) : formals;
+	const receiverFormal = shift == 1 && formals.length > 0 && callee.kind == NodeKind.MemberExpr ? formals[0] : null;
 	for (let i = 0; i < args.length; i += 1) {
 		const a = args[i];
 		if (a == null) continue;
 		if (a.kind == NodeKind.HiddenAddr && namesExistingOwner(w, a, held)) return true;
-		if (handsOver(i + shift < formals.length ? formals[i + shift] : null) && namesExistingOwner(w, a, held)) return true;
+		const intoUncounted = i < params.length && isSinkTypeForParam(params[i]) && isUncountedElement(boundElement(params, i, args, receiverFormal, callee));
+		if (!intoUncounted && handsOver(i + shift < formals.length ? formals[i + shift] : null) && namesExistingOwner(w, a, held)) return true;
 	}
 	return false;
 }
