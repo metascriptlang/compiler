@@ -158,6 +158,16 @@ Measured 2026-09-27 with installed build `b899f456`, source baseline tree
 contracts both passed 14/14 natively; the runtime sibling printed
 `int64-fidelity all-ok` on C and JS. This is not a whole-tier green claim.
 
+Most handoff tests embed their program in a string and compile it in-process, so
+`msc check` over the test files never relates the embedded program: for a change to
+the type relation (`src/checker/compat.ms`), run the handoff tests that exercise it
+on the candidate before the gate. Gate q1113144312-rtx (2026-11-13, `wt/ts-satisfies`)
+went RED on `numberLiteralFieldLayout` after a check sweep over 3151 files reported
+nothing new. The same arc's whole-suite run (`msc test src/test/handoff/index.ms`,
+2026-11-14, rtx loaded by a gate) reported 5 red files that each passed singly with
+main's counts; answer a red from a loaded suite run with that file alone before
+blaming the change.
+
 ### Corpus programs (`corpus/programs/`)
 
 Standalone programs (not `test {}` files) print deterministic stdout and exit.
