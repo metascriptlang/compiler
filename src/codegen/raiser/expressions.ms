@@ -1255,6 +1255,13 @@ function compileValueAssign(s: RaiserCompState, left: Node, right: Node): int32 
 	return -1;
 }
 
+function holdsClassInstance(node: Node): boolean {
+	let t = skipModifier(node.nodeType);
+	const nonNull = t != null ? nonNullMemberOfNullable(t) : null;
+	if (nonNull != null) t = nonNull;
+	return t != null && t.kind == TypeKind.Ref && t.sym != null && t.sym.symbolKind == SymbolKind.Class;
+}
+
 function isPointerTyped(node: Node): boolean {
 	let t = skipModifier(node.nodeType);
 	const nonNull = t != null ? nonNullMemberOfNullable(t) : null;
@@ -1596,6 +1603,9 @@ function compileCompareTest(s: RaiserCompState, node: Node): RaiserInstruction |
 		const swapped = op == ">" || op == ">=";
 		const strict = op == "<" || op == ">";
 		return raiserABC(strict ? RaiserOpcode.LtStr : RaiserOpcode.LeStr, swapped ? rReg : lReg, swapped ? lReg : rReg, 1);
+	}
+	if (isEqualityOp(op) && classOfReg(s, lReg) == RaiserRegClass.Ref && classOfReg(s, rReg) == RaiserRegClass.Ref && holdsClassInstance(d.left) && holdsClassInstance(d.right)) {
+		return raiserABC(comparisonOpcode(op), lReg, rReg, 1);
 	}
 	if (isEqualityOp(op) && (inRefFile(classOfReg(s, lReg)) || inRefFile(classOfReg(s, rReg)))) return raiserABC(valueOpcode, lReg, rReg, 1);
 	if (isFloatExpr(d.left) || isFloatExpr(d.right)) return raiserABC(comparisonOpcodeF64(op), floatOperand(s, lReg), floatOperand(s, rReg), 1);
