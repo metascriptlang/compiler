@@ -71,6 +71,8 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.StrByteAt => "StrByteAt",
 		RaiserOpcode.StrCharCodeAt => "StrCharCodeAt",
 		RaiserOpcode.StrCharCodeAtImm => "StrCharCodeAtImm",
+		RaiserOpcode.BrNilR => "BrNilR",
+		RaiserOpcode.BrLiveR => "BrLiveR",
 		RaiserOpcode.EqStr => "EqStr",
 		RaiserOpcode.NeStr => "NeStr",
 		RaiserOpcode.LtStr => "LtStr",
@@ -240,6 +242,7 @@ export function disasmInst(inst: RaiserInstruction): string {
 	if (op == RaiserOpcode.LoadInt) return `${name} ${ra} #${immValue(inst.b)}`;
 	if (op == RaiserOpcode.StrCharCodeAtImm) return `${name} ${ra} ${regText(op, 1, inst.b)} #${immValue(inst.c)}`;
 	if (op == RaiserOpcode.AddI64Imm || op == RaiserOpcode.SubI64Imm) return `${name} ${ra} ${regText(op, 1, inst.b)} #${immValue(inst.c)}`;
+	if (op == RaiserOpcode.BrNilR || op == RaiserOpcode.BrLiveR) return `${name} ${ra} ->${branchOffset(inst.c)}`;
 	if (isBranchI64(op)) return `${name} ${ra} ${isBranchImm(op) ? `#${immValue(inst.b)}` : regText(op, 1, inst.b)} ->${branchOffset(inst.c)}`;
 	if (isImmCompare(op)) return `${name} ${ra} #${immValue(inst.b)} ${regText(op, 2, inst.c)}`;
 	if (isABxOp(op)) return `${name} ${ra} K${getBx(inst)}`;

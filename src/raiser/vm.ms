@@ -3105,6 +3105,22 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 				}
 				break;
 			}
+			case RaiserOpcode.BrNilR: {
+				if (slots[fb + (((word >> 8) & 65535) as int32)] == 0) {
+					const offset = packedBranch(word);
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					ip = ip + offset;
+				}
+				break;
+			}
+			case RaiserOpcode.BrLiveR: {
+				if (slots[fb + (((word >> 8) & 65535) as int32)] != 0) {
+					const offset = packedBranch(word);
+					if (offset < 0 && --budget < 0) { vm.ip = ip; vm.funcIdx = funcIdx; vm.base = fb; vm.loopCount = vm.loopLimit - budget; vmError(vm, vmLoopLimitMessage(vm)); return; }
+					ip = ip + offset;
+				}
+				break;
+			}
 			case RaiserOpcode.BrNeR: {
 				const ia = ((word >> 8) & 65535) as int32;
 				const ib = ((word >> 24) & 65535) as int32;

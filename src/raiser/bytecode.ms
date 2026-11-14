@@ -248,9 +248,11 @@ export enum RaiserOpcode {
 	LoadFieldRequired,
 	HiXorLo,          // ABC: words[A] = high half XOR low half of the 128-bit product of words[B] and words[C], read unsigned (msHiXorLo)
 	StrCharCodeAtImm, // ABC: words[A] = UTF-16 code unit at the immediate index in C of the string refs[B], -1 outside it
+	BrNilR,           // ABC: if refs[A] is nil pc += branchOffset(C)
+	BrLiveR,          // ABC: if refs[A] is not nil pc += branchOffset(C)
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.StrCharCodeAtImm;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.BrLiveR;
 
 export const FINALLY_LEAVE: int32 = 1;
 
@@ -400,6 +402,7 @@ export function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.ConcatStrR => "rrr",
 		RaiserOpcode.StrByteAt | RaiserOpcode.StrCharCodeAt => "iri",
 		RaiserOpcode.StrCharCodeAtImm => "ir-",
+		RaiserOpcode.BrNilR | RaiserOpcode.BrLiveR => "r--",
 		RaiserOpcode.RcInc | RaiserOpcode.RcDec | RaiserOpcode.DestroyValue | RaiserOpcode.UnownedRc => "y--",
 		RaiserOpcode.WasMoved => "x--",
 		RaiserOpcode.SinkValue => "yy-",
@@ -609,7 +612,7 @@ export function isBranchI64(op: RaiserOpcode): boolean {
 	return match (op) {
 		RaiserOpcode.BrEqI64 | RaiserOpcode.BrNeI64 | RaiserOpcode.BrLtI64 | RaiserOpcode.BrLeI64 | RaiserOpcode.BrGtI64 | RaiserOpcode.BrGeI64
 			| RaiserOpcode.BrEqI64Imm | RaiserOpcode.BrNeI64Imm | RaiserOpcode.BrLtI64Imm | RaiserOpcode.BrLeI64Imm
-			| RaiserOpcode.BrGtI64Imm | RaiserOpcode.BrGeI64Imm | RaiserOpcode.BrEqR | RaiserOpcode.BrNeR
+			| RaiserOpcode.BrGtI64Imm | RaiserOpcode.BrGeI64Imm | RaiserOpcode.BrEqR | RaiserOpcode.BrNeR | RaiserOpcode.BrNilR | RaiserOpcode.BrLiveR
 			| RaiserOpcode.ForLtI64 | RaiserOpcode.ForLtI64Imm => true,
 		_ => false,
 	};
@@ -899,7 +902,8 @@ test "the last opcodes have their roles in the table" {
 	assert opRole(RaiserOpcode.LoadFieldRequired, 1) == RaiserRole.Ref;
 	assert opRole(RaiserOpcode.LoadFieldRequired, 2) == RaiserRole.None;
 	assert opRole(RaiserOpcode.HiXorLo, 0) == RaiserRole.Int && opRole(RaiserOpcode.HiXorLo, 1) == RaiserRole.Int && opRole(RaiserOpcode.HiXorLo, 2) == RaiserRole.Int;
-	assert LAST_RAISER_OPCODE == RaiserOpcode.StrCharCodeAtImm;
+	assert LAST_RAISER_OPCODE == RaiserOpcode.BrLiveR;
+	assert opRole(RaiserOpcode.BrNilR, 0) == RaiserRole.Ref && opRole(RaiserOpcode.BrNilR, 1) == RaiserRole.None && isBranchI64(RaiserOpcode.BrLiveR);
 	assert opRole(RaiserOpcode.StrCharCodeAtImm, 0) == RaiserRole.Int && opRole(RaiserOpcode.StrCharCodeAtImm, 1) == RaiserRole.Ref && opRole(RaiserOpcode.StrCharCodeAtImm, 2) == RaiserRole.None;
 }
 
