@@ -7,11 +7,13 @@ function built(name: string, body: string): string {
 	return builtModuleC("blockStoreEmit", name, source, ["--release"]);
 }
 
-test "E2E C: a checked store of each element into another array runs in sticky blocks guarded against a shared array" {
+test "E2E C: a checked store of each element into another array, under one bound or two, runs in sticky blocks guarded against a shared array" {
 	const bodies: string[] = [
 		"return a.values().map((x) => x * 2).toArray();",
 		"for (let i = 0; i < a.length; i++) b[i] = a[i] + k; return b;",
 		"for (let i = 0; i < a.length; i++) { const t = a[i] ^ k; b[i] = t * 3; } return b;",
+		"for (let i = 0; i < k && i < a.length; i++) b[i] = a[i] + k; return b;",
+		"return a.map((x) => x * 2);",
 	];
 	for (const body of bodies) {
 		const c = built("sticky", body);

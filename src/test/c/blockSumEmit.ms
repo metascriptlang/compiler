@@ -64,3 +64,21 @@ test "E2E C: a sticky block runs proven checks unchecked, checks a counter's ran
 		for (const d of dropped.split("|")) assert !c.contains(d), `${fn} kept ${d}`;
 	}
 }
+
+test "E2E C: a sum written as t = t + E, t = E + t or t = t - E runs in sticky blocks like t += E, and t = E - t keeps its checked loop" {
+	const fns: string[] = [
+		"function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const x of upTo(n)) t = t + ((x ^ n) & 1023); return t; }",
+		"function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const x of upTo(n)) t = ((x ^ n) & 1023) + t; return t; }",
+		"function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const x of upTo(n)) t = t - (x * 3 + 1); return t; }",
+		"function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (let i = 0; i < n; i++) t = t + xs[i]; return t; }",
+		"function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (let k = 0; k < n && k < xs.length; k += 1) { const x = xs[k]; t = t + x; } return t; }",
+	];
+	for (const fn of fns) {
+		const c = built("assigned", fn);
+		assert !c.startsWith("error:"), c.slice(0, 400);
+		assert c.contains("msBlockRangeFits("), fn;
+	}
+	const c = built("assigned", "function f(xs: int32[], n: int32): int32 { let t: int32 = 0; for (const x of upTo(n)) t = ((x ^ n) & 1023) - t; return t; }");
+	assert !c.startsWith("error:"), c.slice(0, 400);
+	assert !c.contains("msBlockRangeFits("), "t = E - t";
+}
