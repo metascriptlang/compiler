@@ -334,14 +334,25 @@ function releasedWhileAlive(w: WriteEffects, p: Partitions, vid: int32, defs: Lo
 	const rebound = (v.flags & VF_ASSIGNED) != 0;
 	for (let k = 0; k < writeSites.length; k += 1) {
 		if (writeTimes[k] < v.aliveStart || writeTimes[k] > v.aliveEnd) continue;
-		if (releasesAnything(w, writeSites[k], held, defs) && !assignsUnownedView(p, vid, writeSites[k])) return true;
+		if (releasesAnything(w, writeSites[k], held, defs) && !restsOnLocal(p, vid, localAssignedAt(writeSites[k]))) return true;
 	}
 	for (let k = 0; k < bindSites.length; k += 1) {
 		if (bindTimes[k] < v.aliveStart || bindTimes[k] > v.aliveEnd) continue;
 		const releases = releasesAnything(w, bindSites[k], held, defs) || (rebound && reassignedAfter(p, vid, bindTimes[k]) && bindsOwnerThatCanHold(bindSites[k], v.sym, held));
-		if (releases && !bindsLentValue(p, vid, bindSites[k])) return true;
+		if (releases && !bindsLentValue(p, vid, bindSites[k]) && !restsOnLocal(p, vid, bindSites[k].kind == NodeKind.VariableDecl ? bindSites[k].resolvedSym : null)) return true;
 	}
 	return false;
+}
+
+function localAssignedAt(site: Node): Symbol | null {
+	return site.kind == NodeKind.BinaryExpr ? getIdentSym((site.data as BinaryExprData).left) : null;
+}
+
+function restsOnLocal(p: Partitions, vid: int32, local: Symbol | null): boolean {
+	const id = variableId(p, local);
+	if (id < 0) return false;
+	if (id != vid) restsOn[vid].push(id);
+	return true;
 }
 
 // A view rebound after its declaration may point at a target owned only by a local bound later,
