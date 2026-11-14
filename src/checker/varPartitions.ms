@@ -9,7 +9,7 @@ import {
 	MatchExprData, MatchCaseData, ExprStmtData, IfStmtData, TryCatchStmtData, DestructuringDeclData, ObjectPatternData,
 	ObjectPatternPropData, ArrayPatternData, ActorDeclData, createNodeAt, BuiltinKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { receiverOf, returnsView, routineBody, viewCallSources, isViewCall, aliasTarget, boundRoutine, isImmortalModuleConst, moduleSourceOf, moduleStateCause, mayStoreIntoReceiver, runsVisibleBody, calledRoutine, unpackDecl, EffectCause, cause, through } from "./effects";
+import { receiverOf, returnsView, routineBody, viewCallSources, isViewCall, aliasTarget, boundRoutine, isImmortalModuleConst, moduleSourceOf, moduleStateCause, mayStoreIntoReceiver, runsVisibleBody, calledRoutine, unpackDecl, installResultReach, noteSourceCut, EffectCause, cause, through } from "./effects";
 import { isAwaitable, isOwnedRef, ownsNoStorage, typeVisitAdd, viewStructChangesInPlace, isPrimitiveKind, isViewType, isViewStruct, nestedViewType, nestedViewShown, ownedAlternativeOf, holdsViewSkippingClear, TypeVisitSet, isReadonlyView, isStructType, typeDisplayName, isLockedRef, isAtomicRef, typeCarriesRef, withoutReadonlyView, withoutNullMember, isSendableFunction } from "./types";
 import { hasFlag, SymbolFlag, RoutineFlag, routineFlagSet } from "./symbol";
 import { CheckerContext, DispatchRegistry, addError, dispatchEntryFor, dispatchOverridesFor } from "./context";
@@ -870,6 +870,7 @@ interface PendingLend {
 
 const THIS_INPUT: int32 = -1;
 const CAPTURE_INPUT: int32 = -2;
+const RESULT_INPUT: int32 = -3;
 
 let pendingDone = new HashMap<Node, PendingLend[]>();
 let pendingOpen = new HashMap<Node, PendingLend[]>();
@@ -2056,8 +2057,92 @@ function scanReach(ctx: CheckerContext, decl: Node): ReachInput[] {
 		}
 		all.push({ input, capture: input == CAPTURE_INPUT ? v.sym : null, cause: moduleSourceIn(u, i), group, relayedTo });
 	}
-	return all.filter((e: ReachInput): boolean => e.cause != null || e.relayedTo.length > 0
+	const kept = all.filter((e: ReachInput): boolean => e.cause != null || e.relayedTo.length > 0
 		|| all.some((o: ReachInput): boolean => o != e && o.group == e.group));
+	const result = returnedSource(u, body);
+	if (result != null) kept.push({ input: RESULT_INPUT, capture: null, cause: result, group: -1, relayedTo: [] });
+	return kept;
+}
+
+function returnedSource(u: BorrowUnit, body: Node): EffectCause | null {
+	const returned: Node[] = [];
+	if (body.kind == NodeKind.BlockStmt) returnedValues(body, returned);
+	else returned.push(body);
+	for (const value of returned) {
+		const c = carriesPointer(value.nodeType) ? moduleSourceOfValue(u, value) : null;
+		if (c != null) return c;
+	}
+	return null;
+}
+
+function returnedValues(node: Node, out: Node[]): void {
+	if (node.kind == NodeKind.ReturnStmt) {
+		const value = (node.data as ReturnStmtData).argument;
+		if (value != null) out.push(value);
+		return;
+	}
+	forEachChild(node, (child: Node): void => { if (!isNestedRoutineNode(child)) returnedValues(child, out); });
+}
+
+let reachContext: CheckerContext | null = null;
+
+export function prepareResultReach(ctx: CheckerContext): void {
+	reachContext = ctx;
+	installResultReach(resultReachOf);
+}
+
+function settledReach(ctx: CheckerContext, decl: Node): ReachInput[] {
+	const entries = reachOf(ctx, decl);
+	if (!reachDone.has(decl)) noteSourceCut();
+	return entries;
+}
+
+function resultReachOf(value: Node): EffectCause | null {
+	const ctx = reachContext;
+	const n = peelConv(value);
+	if (ctx == null || n == null) return null;
+	if (n.kind == NodeKind.NewExpr) {
+		const ctor = constructedBy(n);
+		if (ctor == null) return null;
+		const self = settledReach(ctx, ctor).find((e: ReachInput): boolean => e.input == 0);
+		return self != null ? through(n, "constructs '" + (n.data as NewExprData).newCallee.resolvedSym!.name + "'", self.cause) : null;
+	}
+	if (n.kind != NodeKind.CallExpr) return null;
+	for (const target of calledBodies(n)) {
+		const r = settledReach(ctx, target.decl).find((e: ReachInput): boolean => e.input == RESULT_INPUT);
+		if (r != null) return through(n, target.what, r.cause);
+	}
+	return null;
+}
+
+interface CalledBody {
+	decl: Node;
+	what: string;
+}
+
+function calledBodies(call: Node): CalledBody[] {
+	const out: CalledBody[] = [];
+	const made = madeRoutine(peelConv((call.data as CallExprData).callee));
+	if (made != null) {
+		out.push({ decl: made, what: "calls '" + calleeName(call) + "'" });
+		return out;
+	}
+	const sym = call.resolvedSym;
+	if (sym == null || (sym.symbolKind != SymbolKind.Function && sym.symbolKind != SymbolKind.Method) || hasFlag(sym, SymbolFlag.GeneratedOp)) return out;
+	const impl = calledRoutine(call) ?? sym;
+	if (impl.declNode != null && !hasFlag(impl, SymbolFlag.ImportC) && routineBody(impl.declNode) != null) {
+		recordBodyRead(impl.modulePath);
+		out.push({ decl: impl.declNode, what: "calls '" + calleeName(call) + "'" });
+	}
+	const entry = dispatchEntryFor(reachContext!.dispatchRegistry, impl);
+	if (entry != null && !entry.overloaded) {
+		for (const o of dispatchOverridesFor(reachContext!.dispatchRegistry, entry.classSym, entry.methodName)) {
+			if (o.sym.declNode == null || routineBody(o.sym.declNode) == null) continue;
+			recordBodyRead(o.sym.modulePath);
+			out.push({ decl: o.sym.declNode, what: "calls '" + entry.methodName + "' as overridden in '" + o.classSym.name + "'" });
+		}
+	}
+	return out;
 }
 
 function actualOf(u: BorrowUnit, parts: Node[]): Actual {
@@ -2113,6 +2198,10 @@ function unseenTie(site: Node): EffectCause {
 function tieInputs(u: BorrowUnit, site: Node, what: string, decl: Node, entries: ReachInput[], actualFor: (e: ReachInput) => Actual, passedFor: (param: int32) => Node | null): void {
 	const actuals: Actual[] = [];
 	for (let i = 0; i < entries.length; i += 1) {
+		if (entries[i].input == RESULT_INPUT) {
+			actuals.push({ roots: [], source: null });
+			continue;
+		}
 		const mine = actualFor(entries[i]);
 		actuals.push(mine);
 		for (let j = 0; j < i; j += 1) {
@@ -3886,12 +3975,14 @@ function scanUnits(ctx: CheckerContext, node: Node | null, actor: string = ""): 
 }
 
 export function checkRoutineBorrows(ctx: CheckerContext, routine: Node): void {
+	prepareResultReach(ctx);
 	scanUnits(ctx, routine);
 	checkPointerEscapesIn(ctx, routine);
 }
 
 export function checkViewBorrows(ctx: CheckerContext, program: Node): void {
 	if (program == null || program.kind != NodeKind.Program) return;
+	prepareResultReach(ctx);
 	checkUnit(ctx, program);
 	for (const stmt of (program.data as ProgramData).programStmts) { scanUnits(ctx, stmt); }
 }

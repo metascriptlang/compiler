@@ -3,7 +3,9 @@
 // reads a module scalar; a callee that ties another value to module state, not the lent one; a callee
 // that stores after the await; a recursive callee that only reads; a closure handed to a callee that
 // ties nothing to module state; a callee that reads one argument while it stores into the other; a
-// closure bound by const whose result is its argument's field, called in a task on a lent value.
+// closure bound by const whose result is its argument's field, called in a task on a lent value; a
+// routine that returns, through an alias, a value built from a module scalar; a class whose field
+// initializer reads a module scalar.
 //
 // INVARIANT (ULTRALOCK V0, V4): a callee whose body is visible ties to module state only the inputs
 //   its body stores, so a value it only reads stays lendable.
@@ -17,6 +19,7 @@ class Leaf { v: int32 = 1; }
 const SHARED = new Node();
 const REGISTRY: Node[] = [];
 let COUNTER: int32 = 3;
+class Counted { items: Node[] = []; v: int32 = COUNTER; }
 
 function fill(out: Node[]): void { out.push(SHARED); }
 function register(n: Node): void { REGISTRY.push(n); }
@@ -30,6 +33,7 @@ function addFresh(out: Node[]): void {
 function total(n: Node): int32 { return n.v + (n.child != null ? total(n.child!) : 0); }
 function each(out: Node[], f: (n: Node) => void): void { for (const n of out) { f(n); } }
 function countInto(seen: int32[], from: Leaf[]): void { seen.push(from.length); }
+function freshReturn(): Node[] { const a: Node[] = []; const b = a; const n = new Node(); n.v = COUNTER; b.push(n); return a; }
 
 async function readerOk(): Promise<int32> {
 	const out: Node[] = [new Node()];
@@ -98,11 +102,21 @@ async function boundReaderInTaskOk(): Promise<int32> {
 	return await t;
 }
 
+async function freshReturnOk(): Promise<int32> {
+	const b = freshReturn();
+	return await spawn(() => b[0].v);
+}
+
+async function scalarInitializerOk(): Promise<int32> {
+	const c = new Counted();
+	return await spawn(() => c.v);
+}
+
 async function main(): Promise<void> {
 	const a = await readerOk() + await comparerOk() + await freshStoreOk() + await otherValueOk();
-	const b = await afterJoinOk() + await recursiveReaderOk() + await passedClosureOk() + await readsOneStoresOtherOk() + await boundReaderInTaskOk();
+	const b = await afterJoinOk() + await recursiveReaderOk() + await passedClosureOk() + await readsOneStoresOtherOk() + await boundReaderInTaskOk() + await freshReturnOk() + await scalarInitializerOk();
 	console.log(`a=${a} b=${b}`);
-	if (a == 9 && b == 12) console.log("GUARD-OK");
+	if (a == 9 && b == 18) console.log("GUARD-OK");
 }
 
 await main();

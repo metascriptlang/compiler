@@ -93,6 +93,19 @@ let flowScanned = new HashMap<Node, boolean>();
 let resultSourceFound = new HashMap<Node, EffectCause>();
 let resultSourceNone = new HashMap<Node, boolean>();
 let sourceCuts: int32 = 0;
+let resultReach: ((value: Node) => EffectCause | null) | null = null;
+
+export function installResultReach(reach: ((value: Node) => EffectCause | null) | null): void {
+	resultReach = reach;
+}
+
+export function noteSourceCut(): void {
+	sourceCuts += 1;
+}
+
+function reachedResult(value: Node): EffectCause | null {
+	return resultReach != null ? resultReach(value) : null;
+}
 let resolving: Symbol[] = [];
 const UNFOLLOWED = "a value the checker cannot follow";
 let assumedOpen = false;
@@ -1387,7 +1400,7 @@ function leafModuleSource(dispatchRegistry: DispatchRegistry, p: Node): EffectCa
 		NodeKind.ObjectLiteral => firstModuleSource(dispatchRegistry, (p.data as ObjectLiteralData).properties),
 		NodeKind.SpreadExpr => spreadCopiesValues(p) ? null : moduleSourceOf(dispatchRegistry, (p.data as SpreadExprData).spreadArg),
 		NodeKind.AwaitExpr => moduleSourceOf(dispatchRegistry, (p.data as AwaitExprData).awaitArg),
-		NodeKind.NewExpr => firstModuleSource(dispatchRegistry, (p.data as NewExprData).newArguments),
+		NodeKind.NewExpr => firstModuleSource(dispatchRegistry, (p.data as NewExprData).newArguments) ?? constructedSource(dispatchRegistry, p),
 		NodeKind.CallExpr => isSpawnCall(p) ? null : callResultModuleSource(dispatchRegistry, p),
 		_ => null,
 	};
@@ -1421,17 +1434,38 @@ function callResultModuleSource(dispatchRegistry: DispatchRegistry, call: Node):
 		const made = callee != null ? calledClosure(peelConv(callee)) : null;
 		if (made == null) return unseenResultSource(call);
 		const name = peelConv(callee!).kind == NodeKind.Identifier ? "calls '" + (peelConv(callee!).data as IdentifierData).name + "'" : "calls the function made there";
-		return through(call, name, bodyResultSource(dispatchRegistry, made));
+		return through(call, name, bodyResultSource(dispatchRegistry, made)) ?? reachedResult(call);
 	}
 	const own = through(call, "calls '" + sym!.name + "'", routineResultSource(dispatchRegistry, sym!));
 	if (own != null) return own;
 	const entry = dispatchEntryFor(dispatchRegistry, sym!);
-	if (entry == null || entry.overloaded) return null;
-	for (const o of dispatchOverridesFor(dispatchRegistry, entry.classSym, entry.methodName)) {
-		const c = through(call, "calls '" + entry.methodName + "' as overridden in '" + o.classSym.name + "'", routineResultSource(dispatchRegistry, o.sym));
+	if (entry != null && !entry.overloaded) {
+		for (const o of dispatchOverridesFor(dispatchRegistry, entry.classSym, entry.methodName)) {
+			const c = through(call, "calls '" + entry.methodName + "' as overridden in '" + o.classSym.name + "'", routineResultSource(dispatchRegistry, o.sym));
+			if (c != null) return c;
+		}
+	}
+	return reachedResult(call);
+}
+
+function constructedSource(dispatchRegistry: DispatchRegistry, newNode: Node): EffectCause | null {
+	const classSym = (newNode.data as NewExprData).newCallee.resolvedSym;
+	if (classSym == null || classSym.symbolKind != SymbolKind.Class) return null;
+	return fieldInitializerSource(dispatchRegistry, newNode, classSym, 0) ?? reachedResult(newNode);
+}
+
+function fieldInitializerSource(dispatchRegistry: DispatchRegistry, newNode: Node, classSym: Symbol, depth: int32): EffectCause | null {
+	const decl = unpackDecl(classSym.declNode);
+	if (decl == null || decl.kind != NodeKind.ClassDecl || depth > 32) return null;
+	recordBodyRead(classSym.modulePath);
+	for (const m of membersOf(decl)) {
+		const member = unpackDecl(m);
+		if (member == null || member.kind != NodeKind.PropertyDecl || (member.data as PropertyDeclData).propIsStatic) continue;
+		const c = through(newNode, "constructs '" + classSym.name + "', whose field initializer", moduleSourceOf(dispatchRegistry, (member.data as PropertyDeclData).propInitializer));
 		if (c != null) return c;
 	}
-	return null;
+	const parent = parentClassSymOf(classSym);
+	return parent != null ? fieldInitializerSource(dispatchRegistry, newNode, parent, depth + 1) : null;
 }
 
 function unseenResultSource(call: Node): EffectCause | null {

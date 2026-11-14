@@ -1,6 +1,7 @@
 // A value a callee ties to module state is refused where it is lent to a task, whichever way the
 // callee ties it: by storing module state into its parameter, its receiver or a local it captured,
-// or by storing that input into module state, in a function or a constructor.
+// or by storing that input into module state, in a function or a constructor; or by returning a value it
+// tied to module state through an alias, a nested callee, a field initializer or a constructor body.
 //
 // INVARIANT (ULTRALOCK V0, V4): a partition reachable from module state is not lendable, directly
 //   or through a callee. A call joins the inputs its callee stores into one another, and an input
@@ -27,6 +28,9 @@
 // GUARD-CHECK-FAIL uses module-level 'CURRENT'
 // GUARD-CHECK-FAIL constructs 'Keeper'
 // GUARD-CHECK-FAIL calls 'pick'
+// GUARD-CHECK-FAIL calls 'aliasReturn'
+// GUARD-CHECK-FAIL whose field initializer
+// GUARD-CHECK-FAIL constructs 'TiedCtor'
 // GUARD-CHECK-FAIL module state crosses threads only as a const value
 
 class Node { v: int32 = 1; child: Node | null = null; }
@@ -69,6 +73,10 @@ function registerAlias(n: Node): void { const r = REGISTRY; r.push(n); }
 function hang(n: Node): void { SHARED.child = n; }
 function setCurrent(n: Node): void { CURRENT = n; }
 class Keeper { constructor(n: Node) { REGISTRY.push(n); } }
+function aliasReturn(): Node[] { const a: Node[] = []; const b = a; b.push(SHARED); return a; }
+function filledReturn(): Node[] { const a: Node[] = []; fill(a); return a; }
+class Tied { items: Node[] = [SHARED]; }
+class TiedCtor { items: Node[] = []; constructor() { this.items.push(SHARED); } }
 function each(out: Node[], f: (n: Node) => void): void { for (const n of out) { f(n); } }
 
 async function viaParam(): Promise<int32> {
@@ -257,6 +265,26 @@ async function boundClosureResult(): Promise<int32> {
 	return await spawn(() => out[0].v); // GUARD-REFUSED
 }
 
+async function returnedThroughAlias(): Promise<int32> {
+	const b = aliasReturn();
+	return await spawn(() => b[0].v); // GUARD-REFUSED
+}
+
+async function returnedAfterCallee(): Promise<int32> {
+	const b = filledReturn();
+	return await spawn(() => b[0].v); // GUARD-REFUSED
+}
+
+async function constructedByFieldInitializer(): Promise<int32> {
+	const t = new Tied();
+	return await spawn(() => t.items.length); // GUARD-REFUSED
+}
+
+async function constructedByConstructorBody(): Promise<int32> {
+	const t = new TiedCtor();
+	return await spawn(() => t.items.length); // GUARD-REFUSED
+}
+
 async function main(): Promise<void> {
 	console.log(await viaParam() + await viaThis() + await viaThisField() + await viaDeep() + await viaClosure() + await viaClosureOfClosure());
 	console.log(await viaAlias() + await viaIndex() + await viaField() + await viaLocalFirst() + await viaCallResult() + await viaElement());
@@ -264,6 +292,7 @@ async function main(): Promise<void> {
 	console.log(await viaBoundClosureParameter() + await viaFunctionValue(fill) + await viaPassedClosure() + await viaPassedFunctionValue(register));
 	console.log(await storedByCallee() + await storedByCalleeDeep() + await storedThroughAlias() + await elementStoredByCallee() + await hungByCallee() + await hungHere());
 	console.log(await keptByModuleLet() + await keptByCalleeLet() + await keptByConstructor() + await boundClosureResult());
+	console.log(await returnedThroughAlias() + await returnedAfterCallee() + await constructedByFieldInitializer() + await constructedByConstructorBody());
 }
 
 await main();

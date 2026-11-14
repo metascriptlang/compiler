@@ -36,7 +36,7 @@ import { bindFlowGraph } from "../binder/index";
 import { bindContainerNames, bindModuleNames, bindTemplateBodyNames, releaseNames, paramSymbol } from "./bindNames";
 import { getFlowTypeOfReference, isEndOfBodyReachable, isPostSuperFlowNode } from "./flow";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
-import { checkViewBorrows } from "./varPartitions";
+import { checkViewBorrows, prepareResultReach } from "./varPartitions";
 import { checkMovesIn } from "./moveCheck";
 import { listMovePaths } from "./movePathsList";
 import { checkActorHookEffects, runDeferredEffectChecks } from "./effects";
@@ -4830,6 +4830,7 @@ export function finishModuleCheck(bound: BoundModule): CheckerContext {
 	if (!isEngineCheckMode()) stampHeaderPaths(ctx);
 	stampJsModulePaths(ctx);
 	analyzeParamMutations(ctx, program);
+	prepareResultReach(ctx);
 	runDeferredEffectChecks(ctx, program);
 	checkViewBorrows(ctx, program);
 	checkMovesIn(ctx, program);
