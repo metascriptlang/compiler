@@ -22,7 +22,8 @@ export function lastIndexOf<T>(this arr: Vec<T>, value: T, fromIndex: int32 = -1
 export function findIndex<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): number {
 	const n = arr.length;
 	for (let i = 0; i < n && i < arr.length; i += 1) {
-		if (fn(arr[i], i)) return i;
+		const x = arr[i];
+		if (fn(x, i)) return i;
 	}
 	return -1;
 }
@@ -51,7 +52,8 @@ export function flatMap<T, U>(this arr: Vec<T>, fn: (x: T, i: number) => U[]): U
 	const out: U[] = [];
 	const n = arr.length;
 	for (let i = 0; i < n && i < arr.length; i += 1) {
-		const inner = fn(arr[i], i);
+		const x = arr[i];
+		const inner = fn(x, i);
 		for (let j = 0; j < inner.length; j += 1) out.push(inner[j]);
 	}
 	return out;
@@ -104,7 +106,8 @@ export function spliceCount(deleteCount: number, room: int64): int64 {
 export function every<T>(this arr: Vec<T>, fn: (x: T, i: number) => boolean): boolean {
 	const n = arr.length;
 	for (let i = 0; i < n && i < arr.length; i += 1) {
-		if (!fn(arr[i], i)) return false;
+		const x = arr[i];
+		if (!fn(x, i)) return false;
 	}
 	return true;
 }
@@ -114,7 +117,8 @@ export function reduce<T, U>(this arr: Vec<T>, fn: (acc: U, x: T, i: number) => 
 	const n = arr.length;
 	let acc = init;
 	for (let i = 0; i < n && i < arr.length; i += 1) {
-		acc = fn(acc, arr[i], i);
+		const x = arr[i];
+		acc = fn(acc, x, i);
 	}
 	return acc;
 }
@@ -125,7 +129,8 @@ export function reduce<T>(this arr: Vec<T>, fn: (acc: T, x: T, i: number) => T):
 	if (n == 0) throw new TypeError("Reduce of empty array with no initial value");
 	let acc = arr[0];
 	for (let i = 1; i < n && i < arr.length; i += 1) {
-		acc = fn(acc, arr[i], i);
+		const x = arr[i];
+		acc = fn(acc, x, i);
 	}
 	return acc;
 }
