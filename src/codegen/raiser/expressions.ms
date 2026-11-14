@@ -3756,6 +3756,11 @@ function compileStrIndexRead(s: RaiserCompState, node: Node, op: RaiserOpcode): 
 	const d = node.data as CallExprData;
 	const md = d.callee.data as MemberExprData;
 	const strReg = compileExpr(s, md.object);
+	if (op == RaiserOpcode.StrCharCodeAt && immLiteral(d.arguments[0]) && classOfReg(s, strReg) == RaiserRegClass.Ref) {
+		const at = allocWord(s);
+		emitInst(s, raiserABC(RaiserOpcode.StrCharCodeAtImm, at, strReg, immField(immLiteralValue(d.arguments[0]))));
+		return at;
+	}
 	const idxReg = compileExpr(s, d.arguments[0]);
 	if (classOfReg(s, strReg) != RaiserRegClass.Ref || classOfReg(s, idxReg) != RaiserRegClass.Word) {
 		throw new Error(`internal: ${opName(op)} reads a ${classOfReg(s, strReg)} receiver and a ${classOfReg(s, idxReg)} index, not a Ref string and a Word index`);

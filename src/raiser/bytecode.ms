@@ -247,9 +247,10 @@ export enum RaiserOpcode {
 	RetN,
 	LoadFieldRequired,
 	HiXorLo,          // ABC: words[A] = high half XOR low half of the 128-bit product of words[B] and words[C], read unsigned (msHiXorLo)
+	StrCharCodeAtImm, // ABC: words[A] = UTF-16 code unit at the immediate index in C of the string refs[B], -1 outside it
 }
 
-export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.HiXorLo;
+export const LAST_RAISER_OPCODE: RaiserOpcode = RaiserOpcode.StrCharCodeAtImm;
 
 export const FINALLY_LEAVE: int32 = 1;
 
@@ -398,6 +399,7 @@ export function opRoleLetters(op: RaiserOpcode): string {
 		RaiserOpcode.ConcatStr => "rxx",
 		RaiserOpcode.ConcatStrR => "rrr",
 		RaiserOpcode.StrByteAt | RaiserOpcode.StrCharCodeAt => "iri",
+		RaiserOpcode.StrCharCodeAtImm => "ir-",
 		RaiserOpcode.RcInc | RaiserOpcode.RcDec | RaiserOpcode.DestroyValue | RaiserOpcode.UnownedRc => "y--",
 		RaiserOpcode.WasMoved => "x--",
 		RaiserOpcode.SinkValue => "yy-",
@@ -896,8 +898,9 @@ test "the last opcodes have their roles in the table" {
 	assert opRole(RaiserOpcode.LoadFieldRequired, 0) == RaiserRole.Any;
 	assert opRole(RaiserOpcode.LoadFieldRequired, 1) == RaiserRole.Ref;
 	assert opRole(RaiserOpcode.LoadFieldRequired, 2) == RaiserRole.None;
-	assert LAST_RAISER_OPCODE == RaiserOpcode.HiXorLo;
 	assert opRole(RaiserOpcode.HiXorLo, 0) == RaiserRole.Int && opRole(RaiserOpcode.HiXorLo, 1) == RaiserRole.Int && opRole(RaiserOpcode.HiXorLo, 2) == RaiserRole.Int;
+	assert LAST_RAISER_OPCODE == RaiserOpcode.StrCharCodeAtImm;
+	assert opRole(RaiserOpcode.StrCharCodeAtImm, 0) == RaiserRole.Int && opRole(RaiserOpcode.StrCharCodeAtImm, 1) == RaiserRole.Ref && opRole(RaiserOpcode.StrCharCodeAtImm, 2) == RaiserRole.None;
 }
 
 test "frame data opcodes append to the numeric ABI and pack scalar MemKind in slot" {

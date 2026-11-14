@@ -3826,6 +3826,10 @@ function dispatch(vm: RaiserVM, code: Span<int64>, slots: Ptr<int64>, objects: S
 				slots[fb + (((word >> 8) & 65535) as int32)] = heapHandleCharCodeAt(vm.arrayHeap, slots[fb + (((word >> 24) & 65535) as int32)], slots[fb + (((word >> 40) & 65535) as int32)]);
 				break;
 			}
+			case RaiserOpcode.StrCharCodeAtImm: {
+				slots[fb + (((word >> 8) & 65535) as int32)] = heapHandleCharCodeAt(vm.arrayHeap, slots[fb + (((word >> 24) & 65535) as int32)], immValue(((word >> 40) & 65535) as number));
+				break;
+			}
 			case RaiserOpcode.StrByteAt: {
 				slots[fb + (((word >> 8) & 65535) as int32)] = heapHandleByteAt(vm.arrayHeap, slots[fb + (((word >> 24) & 65535) as int32)], slots[fb + (((word >> 40) & 65535) as int32)]);
 				break;
@@ -4131,6 +4135,9 @@ function vmStepHeap(vm: RaiserVM, op: RaiserOpcode, ia: int32, ib: int32, ic: in
 		},
 		RaiserOpcode.StrCharCodeAt => {
 			setRegInt(vm, ia, heapHandleCharCodeAt(vm.arrayHeap, vm.regs.slots[(ib >> 3) + vm.base], getReg(vm, ic).intVal));
+		},
+		RaiserOpcode.StrCharCodeAtImm => {
+			setRegInt(vm, ia, heapHandleCharCodeAt(vm.arrayHeap, vm.regs.slots[(ib >> 3) + vm.base], immValue(ic)));
 		},
 		RaiserOpcode.StrSlice => {
 			vmHandleStrSlice(vm, ia, ib, ic);
