@@ -90,8 +90,8 @@ let assignedSources = new HashMap<Symbol, Node[]>();
 let heldSources = new HashMap<Symbol, Node[]>();
 let fieldSources = new HashMap<Symbol, Node[]>();
 let flowScanned = new HashMap<Node, boolean>();
-let resultSourceFound = new HashMap<Symbol, EffectCause>();
-let resultSourceNone = new HashMap<Symbol, boolean>();
+let resultSourceFound = new HashMap<Node, EffectCause>();
+let resultSourceNone = new HashMap<Node, boolean>();
 let sourceCuts: int32 = 0;
 let resolving: Symbol[] = [];
 const UNFOLLOWED = "a value the checker cannot follow";
@@ -191,8 +191,8 @@ export function runDeferredEffectChecks(ctx: CheckerContext, program: Node): voi
 	heldSources = new HashMap<Symbol, Node[]>();
 	fieldSources = new HashMap<Symbol, Node[]>();
 	flowScanned = new HashMap<Node, boolean>();
-	resultSourceFound = new HashMap<Symbol, EffectCause>();
-	resultSourceNone = new HashMap<Symbol, boolean>();
+	resultSourceFound = new HashMap<Node, EffectCause>();
+	resultSourceNone = new HashMap<Node, boolean>();
 	sourceCuts = 0;
 }
 
@@ -1393,7 +1393,7 @@ function leafModuleSource(dispatchRegistry: DispatchRegistry, p: Node): EffectCa
 	};
 }
 
-const resultSourceOpen: Symbol[] = [];
+const resultSourceOpen: Node[] = [];
 
 function localModuleSource(dispatchRegistry: DispatchRegistry, sym: Symbol): EffectCause | null {
 	if (resolving.includes(sym)) {
@@ -1416,7 +1416,13 @@ function callResultModuleSource(dispatchRegistry: DispatchRegistry, call: Node):
 	const merged = (recv != null ? moduleSourceOf(dispatchRegistry, recv) : null) ?? firstModuleSource(dispatchRegistry, (call.data as CallExprData).arguments);
 	if (merged != null) return merged;
 	const sym = call.resolvedSym;
-	if (!isRoutine(sym)) return unseenResultSource(call);
+	if (!isRoutine(sym)) {
+		const callee = (call.data as CallExprData).callee;
+		const made = callee != null ? calledClosure(peelConv(callee)) : null;
+		if (made == null) return unseenResultSource(call);
+		const name = peelConv(callee!).kind == NodeKind.Identifier ? "calls '" + (peelConv(callee!).data as IdentifierData).name + "'" : "calls the function made there";
+		return through(call, name, bodyResultSource(dispatchRegistry, made));
+	}
 	const own = through(call, "calls '" + sym!.name + "'", routineResultSource(dispatchRegistry, sym!));
 	if (own != null) return own;
 	const entry = dispatchEntryFor(dispatchRegistry, sym!);
@@ -1435,29 +1441,42 @@ function unseenResultSource(call: Node): EffectCause | null {
 	return cause(call, "calls a function value, whose result may be module state,");
 }
 
+function calledClosure(callee: Node): Node | null {
+	if (isRoutineNode(callee)) return callee;
+	if (callee.kind != NodeKind.Identifier || callee.resolvedSym == null) return null;
+	const made = boundRoutine(callee.resolvedSym);
+	if (made != null) recordBodyRead(callee.resolvedSym.modulePath);
+	return made;
+}
+
 function routineResultSource(dispatchRegistry: DispatchRegistry, sym: Symbol): EffectCause | null {
 	if (isExternalRoutine(sym)) return null;
 	recordBodyRead(sym.modulePath);
-	const known = resultSourceFound.get(sym);
+	const decl = unpackDecl(sym.declNode);
+	return decl != null ? bodyResultSource(dispatchRegistry, decl) : null;
+}
+
+function bodyResultSource(dispatchRegistry: DispatchRegistry, decl: Node): EffectCause | null {
+	const known = resultSourceFound.get(decl);
 	if (known != null) return known;
-	if (resultSourceNone.has(sym)) return null;
-	if (resultSourceOpen.includes(sym)) {
+	if (resultSourceNone.has(decl)) return null;
+	if (resultSourceOpen.includes(decl)) {
 		sourceCuts += 1;
 		return null;
 	}
-	const body = routineBody(unpackDecl(sym.declNode));
+	const body = routineBody(decl);
 	if (body == null) return null;
 	const outermost = resultSourceOpen.length == 0 && resolving.length == 0;
 	const cutsBefore = sourceCuts;
-	resultSourceOpen.push(sym);
+	resultSourceOpen.push(decl);
 	scanFlows(body);
 	const returned: Node[] = [];
 	if (body.kind == NodeKind.BlockStmt) collectReturned(body, returned);
 	else returned.push(body);
 	const c = firstModuleSource(dispatchRegistry, returned);
 	resultSourceOpen.pop();
-	if (c != null) resultSourceFound.set(sym, c);
-	else if (outermost || sourceCuts == cutsBefore) resultSourceNone.set(sym, true);
+	if (c != null) resultSourceFound.set(decl, c);
+	else if (outermost || sourceCuts == cutsBefore) resultSourceNone.set(decl, true);
 	return c;
 }
 

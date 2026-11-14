@@ -26,6 +26,7 @@
 // GUARD-CHECK-FAIL uses module-level 'REGISTRY'
 // GUARD-CHECK-FAIL uses module-level 'CURRENT'
 // GUARD-CHECK-FAIL constructs 'Keeper'
+// GUARD-CHECK-FAIL calls 'pick'
 // GUARD-CHECK-FAIL module state crosses threads only as a const value
 
 class Node { v: int32 = 1; child: Node | null = null; }
@@ -249,13 +250,20 @@ async function keptByConstructor(): Promise<int32> {
 	return await spawn(() => n.v); // GUARD-REFUSED
 }
 
+async function boundClosureResult(): Promise<int32> {
+	const out: Node[] = [];
+	const pick = (): Node => SHARED;
+	out.push(pick());
+	return await spawn(() => out[0].v); // GUARD-REFUSED
+}
+
 async function main(): Promise<void> {
 	console.log(await viaParam() + await viaThis() + await viaThisField() + await viaDeep() + await viaClosure() + await viaClosureOfClosure());
 	console.log(await viaAlias() + await viaIndex() + await viaField() + await viaLocalFirst() + await viaCallResult() + await viaElement());
 	console.log(await viaNestedField() + await viaRecursion() + await viaOverride(new SharedFiller()) + await viaOtherArgument());
 	console.log(await viaBoundClosureParameter() + await viaFunctionValue(fill) + await viaPassedClosure() + await viaPassedFunctionValue(register));
 	console.log(await storedByCallee() + await storedByCalleeDeep() + await storedThroughAlias() + await elementStoredByCallee() + await hungByCallee() + await hungHere());
-	console.log(await keptByModuleLet() + await keptByCalleeLet() + await keptByConstructor());
+	console.log(await keptByModuleLet() + await keptByCalleeLet() + await keptByConstructor() + await boundClosureResult());
 }
 
 await main();

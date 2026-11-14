@@ -2,7 +2,8 @@
 // state, or only compares its argument against it; a callee that stores a value built there while it
 // reads a module scalar; a callee that ties another value to module state, not the lent one; a callee
 // that stores after the await; a recursive callee that only reads; a closure handed to a callee that
-// ties nothing to module state; a callee that reads one argument while it stores into the other.
+// ties nothing to module state; a callee that reads one argument while it stores into the other; a
+// closure bound by const whose result is its argument's field, called in a task on a lent value.
 //
 // INVARIANT (ULTRALOCK V0, V4): a callee whose body is visible ties to module state only the inputs
 //   its body stores, so a value it only reads stays lendable.
@@ -86,11 +87,22 @@ async function readsOneStoresOtherOk(): Promise<int32> {
 	return seen.length + await t;
 }
 
+async function boundReaderInTaskOk(): Promise<int32> {
+	const g = new Node();
+	g.child = new Node();
+	const t = spawn(() => {
+		const pick = (x: Readonly<Node>) => x.child;
+		const c = pick(g);
+		return c != null ? c.v : 0;
+	});
+	return await t;
+}
+
 async function main(): Promise<void> {
 	const a = await readerOk() + await comparerOk() + await freshStoreOk() + await otherValueOk();
-	const b = await afterJoinOk() + await recursiveReaderOk() + await passedClosureOk() + await readsOneStoresOtherOk();
+	const b = await afterJoinOk() + await recursiveReaderOk() + await passedClosureOk() + await readsOneStoresOtherOk() + await boundReaderInTaskOk();
 	console.log(`a=${a} b=${b}`);
-	if (a == 9 && b == 11) console.log("GUARD-OK");
+	if (a == 9 && b == 12) console.log("GUARD-OK");
 }
 
 await main();

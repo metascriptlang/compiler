@@ -36,7 +36,7 @@ const SITES: ReaderSite[] = [
 	{ file: "checker/ctorDecl.ms", readers: 2, records: 0 },
 	{ file: "checker/varPartitions.ms", readers: 14, records: 10 },
 	{ file: "checker/places.ms", readers: 8, records: 0 },
-	{ file: "checker/effects.ms", readers: 11, records: 8 },
+	{ file: "checker/effects.ms", readers: 11, records: 9 },
 	{ file: "checker/sendable.ms", readers: 13, records: 1 },
 	{ file: "checker/converterCycle.ms", readers: 3, records: 1 },
 	{ file: "checker/importElision.ms", readers: 3, records: 0 },
