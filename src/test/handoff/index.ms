@@ -172,6 +172,7 @@ import "./raiserCursorBindingKeepsItsInitializer";
 import "./raiserShortCircuitFlagThreaded";
 import "./raiserBoolTestBranches";
 import "./raiserLoopInvariantStringRead";
+import "./raiserCharCodeAtImmediate";
 import "./raiserReturnLeavesTries";
 import "./raiserRequiredField";
 import "./raiserRuntimeLayout";
