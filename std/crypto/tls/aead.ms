@@ -121,7 +121,7 @@ export function aeadSealAt(
 	length: int32,
 ): void {
 	if (usesChacha(key.suite)) {
-		if (!chacha20Poly1305SealAt(key.chachaKey, nonce, aad, buf, at, length)) throw new Error(`chacha20-poly1305: bad nonce or range`);
+		if (!chacha20Poly1305SealAt(key.chachaKey, nonce, aad, buf, at, length)) unreachable("chacha20-poly1305: the record layer passed a bad nonce or range");
 		return;
 	}
 	gcmEncryptInto(key.aesSchedule, nonce, aad, buf, at, length, buf, at, buf, at + length);
