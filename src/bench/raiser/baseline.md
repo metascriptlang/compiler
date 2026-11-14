@@ -286,3 +286,13 @@ Same probe on the slice's candidate: haro 0.899G instructions (from 0.914G; `Jum
 A null test of a value held in a Ref register is one branch on the register being 0 (`BrNilR`/`BrLiveR`, the
 Ref-file counterpart of `BrEqR`; nil is 0 in a Ref register and a box never sits in one) instead of `IsKind` and a
 branch on its bool. Same probe on the slice's candidate: rowsEl 0.913G instructions (from 0.931G), haro 0.899G.
+
+A one-character ASCII string from `String.fromCharCode` or `charAt` is the interned constant, as C's
+`msStringAsciiChar` gives (`asciiCharString` in `src/raiser/value.ms`), and the Raiser tier of `std/core/string` has
+C's one-code `fromCharCode`, which builds no argument array. It was haro's `isUrlChar`:
+`URL_PUNCTUATION.indexOf(String.fromCharCode(c))` built an argument array, appended to an empty string and allocated
+the host's result on every call. Same probe, rtx, both arms `--danger`, checksums equal to C: haro 6.69M VM block
+allocations (15.66M before; `CallHost` 4.48M, `NewArray` 2.41M and `ConcatStrR` 2.34M became 0, 0.16M and none),
+0.873G instructions (0.899G); rowsEl 0.913G instructions, unchanged. Wall time not yet taken in a quiet window.
+What haro still allocates most: `StrSlice` 3.68M (`text.slice(i, i + scheme.length) == scheme` in `schemeAt`, which C
+allocates too), `NewObject` 1.07M and `LoadFieldRequired` 1.02M (Int fields boxed while a struct is packed in `changes`).
