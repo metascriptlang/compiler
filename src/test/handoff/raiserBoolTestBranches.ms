@@ -53,7 +53,7 @@ test "a test of a boolean value is one branch, in either sense" {
 	assert count(f, RaiserOpcode.BTruthy) == 0 && count(f, RaiserOpcode.Jump) == 0, disasmFunc(f);
 }
 
-test "a null test of a reference is a kind check and one branch" {
+test "a null test of a reference is one branch" {
 	const f = named(compiled(TESTS), "walk");
-	assert count(f, RaiserOpcode.BTruthy) == 0 && count(f, RaiserOpcode.IsKind) == 1, disasmFunc(f);
+	assert count(f, RaiserOpcode.BTruthy) == 0 && count(f, RaiserOpcode.IsKind) == 0 && count(f, RaiserOpcode.BrNilR) + count(f, RaiserOpcode.BrLiveR) == 1, disasmFunc(f);
 }
