@@ -17,7 +17,7 @@ import { hasFlag, symbolKey } from "../../checker/symbol";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { isStaticExtensionFlag } from "../../checker/context";
 import { bodyIsErrorBlind } from "../../checker/raises";
-import { isIterator, peelTransparentInstance, destrPositionalElemType, getIteratorYieldType, isFloatType, isIntegerType, peelToRepr } from "../../checker/types";
+import { isIterator, peelTransparentInstance, destrPositionalElemType, getIteratorYieldType, isFloatType, isIntegerType, peelToRepr, withoutUnowned } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { Spiller, lowerAssign, lowerOperandList } from "./operandOrder";
 import { sameType } from "../../checker/compat";
@@ -1108,10 +1108,11 @@ function expandConsumer(call: InlineCall, returned: Type | null, st: InlineState
 	const stmts: Node[] = [];
 	let result: Symbol | null = null;
 	if (returned != null && returned.kind != TypeKind.Void) {
-		result = freshOwnedSym(ctx, "res", returned);
+		const held = withoutUnowned(returned);
+		result = freshOwnedSym(ctx, "res", held);
 		const decl = makeVarDecl(result.name, makeNull(loc), DeclKind.Let, loc);
 		decl.resolvedSym = result;
-		decl.nodeType = returned;
+		decl.nodeType = held;
 		stmts.push(decl);
 	}
 	const out: Node[] = [];
