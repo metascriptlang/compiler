@@ -282,3 +282,7 @@ The value of `&&` and `||` whose result register is a Bool or a Word tests the l
 (`jumpIfValue`, as the condition form does) instead of `BTruthy` and one or two `Jump`s (`compileLogicalExpr`).
 Same probe on the slice's candidate: haro 0.899G instructions (from 0.914G; `Jump` 17M left in all of it), rowsEl
 0.931G.
+
+A null test of a value held in a Ref register is one branch on the register being 0 (`BrNilR`/`BrLiveR`, the
+Ref-file counterpart of `BrEqR`; nil is 0 in a Ref register and a box never sits in one) instead of `IsKind` and a
+branch on its bool. Same probe on the slice's candidate: rowsEl 0.913G instructions (from 0.931G), haro 0.899G.
