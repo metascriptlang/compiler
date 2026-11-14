@@ -57,3 +57,22 @@ test "the first operand of an || whose right operand makes a fresh value branche
 	const f = named(compiled(TESTS), "orAt");
 	assert branchesIntoFlagTest(f) == 0, disasmFunc(f);
 }
+
+function flagStoresLeft(f: RaiserFunction): int32 {
+	const lines = disasmFunc(f).split("\n").filter((line: string): boolean => !line.startsWith(";") && line.includes(": "));
+	let flag = "";
+	for (const line of lines) {
+		const at = line.indexOf(": BrEqI64Imm ") >= 0 ? line.indexOf(": BrEqI64Imm ") + 13 : line.indexOf(": BrNeI64Imm ") >= 0 ? line.indexOf(": BrNeI64Imm ") + 13 : -1;
+		if (at >= 0) flag = line.slice(at, line.indexOf(" ", at));
+	}
+	if (flag == "") return -1;
+	let n: int32 = 0;
+	for (const line of lines) if (line.includes(": LoadConstW " + flag + " ") || line.includes(": LoadInt " + flag + " ")) n += 1;
+	return n;
+}
+
+test "the flag of a fresh-operand && or || keeps no initial store once its test is branched past" {
+	const mod = compiled(TESTS);
+	assert flagStoresLeft(named(mod, "andAt")) == 0, disasmFunc(named(mod, "andAt"));
+	assert flagStoresLeft(named(mod, "orAt")) == 0, disasmFunc(named(mod, "orAt"));
+}
