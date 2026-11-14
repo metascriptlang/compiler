@@ -14,12 +14,13 @@ import {
 	applyConfigDefines,
 	seedProjectDir,
 	isDefined,
+	definedValue,
 } from "./defines";
 import {
 	BuildConfig, BuildSection, ResolveSection, defaultBuildSection, defaultResolveSection, loadBuildConfig, validateCacheDirectory,
 } from "./buildConfig";
 import { getParserDefines, setParserDefines } from "../parser/context";
-import { setExtraGlobalImports, setModulePasses } from "../checker/prelude";
+import { extraGlobalImports, setExtraGlobalImports, setModulePasses } from "../checker/prelude";
 import { setDefaultLoopLimit } from "../raiser/vm";
 import { TargetInfo, hostTargetInfo, floatInt64Align } from "../checker/types";
 
@@ -378,7 +379,8 @@ function applyCacheConfig(
 
 // The project's build.ms goes in before any source is parsed: target, defines under the
 // command line's -d: switches, then globalImports and their module passes.
-export function applyProjectConfig(opts: CliOptions, projectRoot: string): Result<BuildConfig, string> {
+export function applyProjectConfig(opts: CliOptions, root: string): Result<BuildConfig, string> {
+	const projectRoot = root == "" || isAbsolute(root) ? root : normalize(join(cwd(), root));
 	setParserDefines(opts.defines);
 	opts.projectRoot = projectRoot;
 	const buildMsPath = join(projectRoot, "build.ms");
@@ -1200,6 +1202,25 @@ test "invalid project cache declarations fail even under CLI and environment ove
 			removeAll(project);
 		}
 	});
+}
+
+test "a relative project root reads its globalImports and projectDir from the working directory" {
+	const rel = `out/test/relativeRoot${Date.now()}`;
+	const project = normalize(join(cwd(), rel));
+	const parserDefines = getParserDefines();
+	try {
+		assert ensureDir(join(project, "src")).ok;
+		assert writeFile(join(project, "build.ms"), 'const config = { globalImports: ["./src/prelude"] };').ok;
+		const opts = newCliOptions();
+		assert applyProjectConfig(opts, rel).ok;
+		assert opts.projectRoot == project;
+		assert extraGlobalImports().length == 1 && extraGlobalImports()[0] == join(project, "src/prelude");
+		assert definedValue(opts.defines, "projectDir") == project;
+	} finally {
+		setExtraGlobalImports([]);
+		setParserDefines(parserDefines);
+		removeAll(project);
+	}
 }
 
 test "a relative project root still produces absolute manifest cache paths" {
