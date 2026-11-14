@@ -3,7 +3,6 @@
 // rewrites lone surrogates to U+FFFD while the C payload keeps raw WTF-8.
 
 import { wellFormedPrefix, repairedLength, writeRepaired } from "./utf8Repair";
-import { newEncodingOutput } from "std/core/encoding/output";
 
 // ===== WTF-8 byte tier =====
 
@@ -57,7 +56,7 @@ export function wellFormedString(data: Readonly<Span<uint8>>): string {
 export function asString(this arr: Readonly<uint8[]>): string {
 	const valid = wellFormedPrefix(arr, 0, true);
 	if (valid == arr.length) return decodeWellFormed(arr);
-	const out = newEncodingOutput(repairedLength(arr, valid, true));
+	const out = new Array<uint8>(repairedLength(arr, valid, true) as float64);
 	for (let i = 0; i < valid; i++) out[i] = arr[i];
 	writeRepaired(arr, valid, true, out);
 	return decodeWellFormed(out);
