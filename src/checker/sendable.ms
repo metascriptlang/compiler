@@ -363,6 +363,14 @@ function consumeSentClosure(ctx: CheckerContext, ident: Node): void {
 
 // Returns true when this arg is a plain-ref BORROW the caller must not discard
 // (the discard itself is diagnosed at the call site via ctx.stmtPosExpr).
+function lendsAClosure(sent: Node, t: Type): boolean {
+	if (!isSendableFunction(t)) return false;
+	if (sent.kind == NodeKind.ArrowFunction || sent.kind == NodeKind.FunctionExpr) return true;
+	const sym = sent.resolvedSym;
+	return sent.kind == NodeKind.Identifier && sym != null && !hasFlag(sym, SymbolFlag.Global)
+		&& (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Parameter);
+}
+
 function withOperand(arg: Node, operand: Node, replacement: Node): Node {
 	if (arg === operand) return replacement;
 	if (arg.kind == NodeKind.HiddenStdConv || arg.kind == NodeKind.HiddenSubConv) {
@@ -419,7 +427,7 @@ function judgeActorArg(ctx: CheckerContext, call: Node, argNode: Node, pi: numbe
 	}
 	if (sendClass) refuseSentClosures(ctx, argNode, argNode);
 	if (isSendable(t, sent, sendClass)) {
-		if (isPlainRefBorrow) refuseKeptBorrow(call, argNode, pi);
+		if (isPlainRefBorrow || (!sendClass && lendsAClosure(sent, t))) refuseKeptBorrow(call, argNode, pi);
 		return isPlainRefBorrow;
 	}
 	const argLabel = sent.kind == NodeKind.Identifier
