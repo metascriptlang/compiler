@@ -55,7 +55,7 @@ function readsInLoops(f: RaiserFunction): int32 {
 		for (let k = pc + 1 - back; k <= pc; k += 1) if (k >= 0) inLoop[k] = true;
 	}
 	let n: int32 = 0;
-	for (let pc = 0; pc < lines.length; pc += 1) if (inLoop[pc] && lines[pc].includes(": StrCharCodeAt ")) n += 1;
+	for (let pc = 0; pc < lines.length; pc += 1) if (inLoop[pc] && lines[pc].includes(": StrCharCodeAt")) n += 1;
 	return n;
 }
 
