@@ -10,13 +10,14 @@
 
 import {
 	Node, NodeKind, NodeFlag, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, Type, TypeKind, Symbol, SymbolKind, createNodeAt,
-	BlockStmtData, WhileStmtData, IfStmtData, ThrowStmtData, StringLiteralData, VariableDeclData, CallExprData, TypeAssertionData, HiddenStdConvData, HiddenDerefData,
+	BlockStmtData, WhileStmtData, IfStmtData, ThrowStmtData, FunctionDeclData, StringLiteralData, VariableDeclData, CallExprData, TypeAssertionData, HiddenStdConvData, HiddenDerefData,
 	ArrayAccessData, NumberLiteralData, TryCatchStmtData, BinaryExprData, UpdateExprData, OutExprData,
 } from "../../ast/node";
 import { TransformContext, SymSet, createSymSet, symSetAdd, symSetContains, freshTempSym } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { isAssignOp } from "../../ast/operators";
 import { hasFlag, setFlag, makeSymbol, SymbolFlag } from "../../checker/symbol";
+import { isExtensionFlag } from "../../checker/context";
 import { appendLoopTail } from "./forLoopLower";
 import { calleeFormals } from "./jsVarParamLower";
 import { receiverIsPlace } from "./operandOrder";
@@ -36,11 +37,32 @@ import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts, makeCtx } fro
 // ===== Main Entry Point =====
 
 export function lowerForOf(program: Node, ctx: TransformContext): Node {
-	return walkNode(program, forOfVisitor(ctx, program));
+	const hookLoops = new HashSet<Node>();
+	collectHookLoops(program, hookLoops);
+	return walkNode(program, forOfVisitor(ctx, program, hookLoops));
+}
+
+function collectHookLoops(node: Node | null, out: HashSet<Node>): void {
+	if (node == null) return;
+	if (node.kind == NodeKind.FunctionDecl && isNoThrowHook(node.data as FunctionDeclData)) {
+		collectLoops((node.data as FunctionDeclData).fnBody, out);
+		return;
+	}
+	forEachChild(node, (child: Node): void => { collectHookLoops(child, out); });
+}
+
+function isNoThrowHook(d: Readonly<FunctionDeclData>): boolean {
+	return (d.fnName == "onDestroy" || d.fnName == "onTrace") && isExtensionFlag(d.fnFlags);
+}
+
+function collectLoops(node: Node | null, out: HashSet<Node>): void {
+	if (node == null || node.kind == NodeKind.FunctionDecl || node.kind == NodeKind.ArrowFunction || node.kind == NodeKind.FunctionExpr || node.kind == NodeKind.ClassDecl) return;
+	if (node.kind == NodeKind.ForOfStmt) out.add(node);
+	forEachChild(node, (child: Node): void => { collectLoops(child, out); });
 }
 
 // Closure-returning visitor to capture ctx
-function forOfVisitor(ctx: TransformContext, program: Node): (node: Node) => Node {
+function forOfVisitor(ctx: TransformContext, program: Node, hookLoops: Readonly<HashSet<Node>>): (node: Node) => Node {
 	const rebound = new Rebound(program);
 	return (node: Node): Node => {
 		if (node.kind != NodeKind.ForOfStmt) return node;
@@ -58,7 +80,7 @@ function forOfVisitor(ctx: TransformContext, program: Node): (node: Node) => Nod
 		}
 
 		// Array/String: index-based pattern
-		return lowerArrayForOf(d, ctx, loc, bindingSym, rebound);
+		return lowerArrayForOf(d, ctx, loc, bindingSym, rebound, hookLoops.has(node));
 	};
 }
 
@@ -162,7 +184,7 @@ function makeBareCatch(tryBody: Node, loc: SourceLocation): Node {
 
 // ===== Array/String For-Of =====
 
-function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLocation, bindingSym: Symbol | null, rebound: Rebound): Node {
+function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLocation, bindingSym: Symbol | null, rebound: Rebound, inHook: boolean): Node {
 	const indexType = counterType(ctx);
 	const idxSym = freshTempSym(ctx, "idx", indexType);
 	const lenSym = freshTempSym(ctx, "len", indexType);
@@ -270,7 +292,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	let bodyStmts = extractBodyStmts(d.forOfBody);
 	let whileLabel = "";
 	if (lengthCanChange) {
-		const tail = appendLoopTail(bodyStmts, lengthCheck(iterExpr, lenSym, isString, loc), ctx, loc);
+		const tail = appendLoopTail(bodyStmts, lengthCheck(iterExpr, lenSym, isString, inHook, loc), ctx, loc);
 		bodyStmts = tail.tailStmts;
 		whileLabel = tail.tailLabel;
 	}
@@ -358,9 +380,9 @@ function addTarget(target: Node, out: SymSet): void {
 	forEachChild(target, (c: Node): void => addTarget(c, out));
 }
 
-function lengthCheck(iterExpr: Node, lenSym: Symbol, isString: boolean, loc: SourceLocation): Node {
+function lengthCheck(iterExpr: Node, lenSym: Symbol, isString: boolean, inHook: boolean, loc: SourceLocation): Node {
 	const changed = makeBinary(lengthOf(iterExpr, isString, loc), "!=", makeIdentResolved(lenSym, loc), loc);
-	const raise = createNodeAt(NodeKind.ThrowStmt, { throwArg: makeString(lengthChangedMessage(isString), loc) }, loc);
+	const raise = inHook ? createNodeAt(NodeKind.UnreachableStmt, { unreachableMsg: lengthChangedMessage(isString) }, loc) : createNodeAt(NodeKind.ThrowStmt, { throwArg: makeString(lengthChangedMessage(isString), loc) }, loc);
 	const guard = makeIf(changed, makeBlock([raise], loc), makeBlock([], loc), loc);
 	if (!isString) guard.flags = guard.flags.incl(NodeFlag.LengthGuard);
 	return guard;
