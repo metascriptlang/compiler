@@ -427,7 +427,7 @@ function judgeActorArg(ctx: CheckerContext, call: Node, argNode: Node, pi: numbe
 	}
 	if (sendClass) refuseSentClosures(ctx, argNode, argNode);
 	if (isSendable(t, sent, sendClass)) {
-		if (isPlainRefBorrow || (!sendClass && lendsAClosure(sent, t))) refuseKeptBorrow(call, argNode, pi);
+		if (isPlainRefBorrow || (ctx.awaitedCall === call && lendsAClosure(sent, t))) refuseKeptBorrow(call, argNode, pi);
 		return isPlainRefBorrow;
 	}
 	const argLabel = sent.kind == NodeKind.Identifier
