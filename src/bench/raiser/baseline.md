@@ -208,3 +208,38 @@ which move the elements and release only those taken out (corpus `spliceReleases
 rtx, both arms `--danger` (before: 1.59G instructions, 207M RcInc + RcDec): rowsEl 1.00G instructions, checksums
 equal to C. `apps/run.sh` runs the Raiser arm in danger mode since `6aa07d7c365d`; until then it ran debug mode,
 with Neon's `when (debug)` blocks and range checks, which cost rowsEl 4% of its instructions (1.66G against 1.59G).
+
+### T0 bytecode slices, 2026-11-14
+
+Four slices that change only the emitted bytecode, every program keeping its output: a for-of binding the analyzer
+makes a cursor is bound by its element load with no `null` stored first (`2ef118fbb4e`, `tryHoistVar` in
+`src/analyzer/inject.ms`); a loop reads each `const` module binding from a register loaded before it
+(`07ec16cacc72`, `loadConstGlobalsBeforeLoop` in `src/codegen/raiser/statements.ms`); a branch into a test of a flag
+its straight run just loaded with a constant lands where that constant leads (`a8ba553459f`, `threadConstantTests`,
+which makes the `&&`/`||` flag of a fresh right operand cost nothing on the first operand's exit); a test of a Bool or
+Word register is one `BrNeI64Imm`/`BrEqI64Imm r #0` (`b916f0053f3`, `jumpIfValue` in `expressions.ms`).
+
+Same probe as above, rtx, both arms `--danger`, checksums equal to C, main `71bf722e2624` before and `b916f0053f3`
+after:
+
+| | before | after |
+|---|---|---|
+| haro instructions | 1.572G | 1.245G (-20.8%) |
+| haro `schemeAt` | 1.048G | 0.725G |
+| haro `LoadGlobal` | 139M | 11M |
+| rowsEl instructions | 1.002G | 0.970G (-3.2%) |
+| rowsEl `Jump` | 78M | 48M |
+| rowsEl `BTruthy` | 38M | none |
+
+Wall time, `apps/run.sh 3` medians in quiet rtx windows (`run-remote.sh --quiet 15`), C arm and Raiser arm both
+`--danger`; the window before ran main `71bf722e2624` with the first slice applied, at load 8.8, and the one after
+ran `b916f0053f3` at load 4.5:
+
+| | rowsEl c ms | rowsEl raiser ms | ratio | haro c ms | haro raiser ms | ratio |
+|---|---|---|---|---|---|---|
+| before | 152 | 3798 | 25.0x | 82 | 3986 | 48.6x |
+| after | 137 | 3342 | 24.4x | 81 | 3599 | 44.4x |
+
+The C arm of rowsEl ran 10% faster in the second window, so compare the ratios: haro -8.6%, rowsEl -2.4%. What
+rowsEl still executes most: `LoadSlotR` 111M, `MoveR` 68M, `LoadConst` 63M, `RcDec` 59M, `LoadInt` 56M, and a
+Try/Finally around each scope's cleanup in its reactive core (`link`, `recompute`).
