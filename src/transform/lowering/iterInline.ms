@@ -22,7 +22,7 @@ import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { Spiller, lowerAssign, lowerOperandList } from "./operandOrder";
 import { sameType } from "../../checker/compat";
 import {
-	makeBlock, makeVarDecl, makeIdentResolved, makeBreak, makeSwitchWrapper, makeExprStmt,
+	makeBlock, makeVarDecl, makeIdentResolved, makeBreak, makeSwitchWrapper, makeExprStmt, makeHiddenDeref,
 	extractBodyStmts, boolToDeclKind, makeNull, makeAssign, makeBinary, makeWhile, syntheticToken,
 } from "../util";
 import { parseInput, getStmts, makeCtx, makeJsCtx } from "../testUtil";
@@ -36,6 +36,7 @@ interface InlineState {
 	generators: HashMap<Symbol, Node>;
 	ownConsumers: HashMap<Symbol, Node>;
 	ownForwarders: HashMap<Symbol, Node>;
+	leafTakers: HashMap<Symbol, Node>;
 	recursive: HashSet<Symbol>;
 	expanding: HashSet<Symbol>;
 	fromCaller: HashSet<Node>;
@@ -180,16 +181,19 @@ export function lowerIterInline(program: Node, ctx: TransformContext): Node {
 	const generators = new HashMap<Symbol, Node>();
 	const consumers = new HashMap<Symbol, Node>();
 	const forwarders = new HashMap<Symbol, Node>();
-	collectInlinable(program, generators, consumers, forwarders);
-	if (generators.size == 0 && !offersGenerators(ctx)) return program;
+	const inlines = new HashMap<Symbol, Node>();
+	collectInlinable(program, generators, consumers, forwarders, ctx.jsBackend ? null : inlines);
+	if (generators.size == 0 && inlines.size == 0 && !offersGenerators(ctx)) return program;
 	const localNames = new HashSet<string>();
 	if (ctx.jsBackend) collectLocalNames(program, true, localNames);
 	const ownConsumers = new HashMap<Symbol, Node>();
 	const ownForwarders = new HashMap<Symbol, Node>();
 	for (const sym of consumers.keys()) ownConsumers.set(sym, keptBody(consumers.get(sym)!));
 	for (const sym of forwarders.keys()) ownForwarders.set(sym, keptBody(forwarders.get(sym)!));
+	const leafTakers = new HashMap<Symbol, Node>();
+	for (const sym of inlines.keys()) leafTakers.set(sym, keptBody(inlines.get(sym)!));
 	const st: InlineState = {
-		ctx, generators, ownConsumers, ownForwarders, recursive: recursiveGenerators(generators), expanding: new HashSet<Symbol>(), fromCaller: new HashSet<Node>(),
+		ctx, generators, ownConsumers, ownForwarders, leafTakers, recursive: recursiveGenerators(generators), expanding: new HashSet<Symbol>(), fromCaller: new HashSet<Node>(),
 		localNames, stored: new HashMap<Symbol, StoredChain>(),
 	};
 	collectStored(program, st);
@@ -240,17 +244,20 @@ function collectInlinable(
 	generators: HashMap<Symbol, Node>,
 	consumers: HashMap<Symbol, Node>,
 	forwarders: HashMap<Symbol, Node>,
+	inlines: HashMap<Symbol, Node> | null = null,
 ): void {
 	if (node.kind == NodeKind.FunctionDecl && node.resolvedSym != null) {
+		const sym = node.resolvedSym;
 		const fd = node.data as FunctionDeclData;
 		const generator = fd.fnFlags.indexOf("generator") >= 0;
 		const plain = fd.fnFlags.indexOf("async") < 0 && fd.fnFlags.indexOf("gen:") < 0;
-		if (plain && generator) generators.set(node.resolvedSym, node);
+		if (plain && generator) generators.set(sym, node);
 		const fn = plain && !generator && fd.fnBody != null;
-		if (fn && returnsIterator(node)) forwarders.set(node.resolvedSym, node);
-		else if (fn && takesIterator(node)) consumers.set(node.resolvedSym, node);
+		if (fn && returnsIterator(node)) forwarders.set(sym, node);
+		else if (fn && takesIterator(node)) consumers.set(sym, node);
+		else if (fn && inlines != null && (hasFlag(sym, SymbolFlag.Inline) || (sym.instantiatedFrom != null && hasFlag(sym.instantiatedFrom, SymbolFlag.Inline)))) inlines.set(sym, node);
 	}
-	forEachChild(node, (child: Node): void => { collectInlinable(child, generators, consumers, forwarders); });
+	forEachChild(node, (child: Node): void => { collectInlinable(child, generators, consumers, forwarders, inlines); });
 }
 
 function isIteratorType(t: Type | null): boolean {
@@ -449,7 +456,7 @@ function consumerOperand(e: Node, st: InlineState): InlineCall | null {
 	const call = underProjections(e);
 	if (call.kind != NodeKind.CallExpr || call.nodeType == null || call.nodeType.kind == TypeKind.Void) return null;
 	const target = callTarget(call);
-	if (target == null || (!st.ownConsumers.has(target.sym) && !_offerNames.has(target.sym.name))) return null;
+	if (target == null || (!st.ownConsumers.has(target.sym) && !st.leafTakers.has(target.sym) && !_offerNames.has(target.sym.name))) return null;
 	return matchConsumer(call, st);
 }
 
@@ -683,6 +690,10 @@ function matchConsumer(call: Node, st: InlineState): InlineCall | null {
 	const target = callTarget(call);
 	if (target == null) return null;
 	const sym = target.sym;
+	const taker = st.leafTakers.get(sym);
+	if (taker != null && inlinable(taker, target, false, st) && passesLeafArrow(target.args) && readsArraysAsIs(taker, target.args)) {
+		return { decl: taker, args: target.args, foreign: (sym.instantiatedFrom ?? sym).modulePath != ownModule(st.ctx) };
+	}
 	const decl = st.ownConsumers.has(sym) ? st.ownConsumers.get(sym)! : foreignBody(sym, OfferKind.Consumer, st);
 	if (decl == null || !inlinable(decl, target, false, st)) return null;
 	const body = (decl.data as FunctionDeclData).fnBody;
@@ -693,6 +704,26 @@ function matchConsumer(call: Node, st: InlineState): InlineCall | null {
 		}
 	}
 	return null;
+}
+
+function readsArraysAsIs(decl: Node, args: Node[]): boolean {
+	const params = decl.paramSyms!;
+	const body = (decl.data as FunctionDeclData).fnBody;
+	for (let i = 0; i < params.length; i += 1) {
+		const t = params[i].symbolType;
+		if (t == null || t.kind != TypeKind.Array) continue;
+		const k = args[i].nodeType != null ? args[i].nodeType!.kind : TypeKind.Array;
+		if (writesTo(body, params[i]) || (k != TypeKind.Array && k != TypeKind.Ref)) return false;
+	}
+	return true;
+}
+
+function passesLeafArrow(args: Node[]): boolean {
+	for (const a of args) {
+		const arrow = unconverted(a);
+		if (arrow.kind == NodeKind.ArrowFunction && lambdaLeafValue(arrow) != null) return true;
+	}
+	return false;
 }
 
 function callTarget(call: Node): CallTarget | null {
@@ -1109,6 +1140,10 @@ function inlinedBody(call: InlineCall, out: Node[], st: InlineState, loc: Source
 		const param = params[i];
 		const arg = call.args[i];
 		const writes = writesTo(fd.fnBody, param);
+		if (viewsArray(param, arg)) {
+			sources.set(param, makeHiddenDeref(stableOrBound(arg, out, st, loc), loc));
+			continue;
+		}
 		if (!writes && isStableRead(arg) && storedRead(arg, st) == null) {
 			renames.set(param, arg.resolvedSym!);
 			continue;
@@ -1134,6 +1169,27 @@ function inlinedBody(call: InlineCall, out: Node[], st: InlineState, loc: Source
 		markCalls(copy, st.fromCaller);
 		return copy;
 	});
+}
+
+// A `this arr: Vec<T>` receiver reads a `T[]` argument through it, without a conversion node.
+function viewsArray(param: Symbol, arg: Node): boolean {
+	return param.symbolType != null && param.symbolType.kind == TypeKind.Array && arg.nodeType != null && arg.nodeType.kind == TypeKind.Ref;
+}
+
+function stableOrBound(arg: Node, out: Node[], st: InlineState, loc: SourceLocation): Node {
+	if (isStableRead(arg) && storedRead(arg, st) == null) return makeIdentResolved(arg.resolvedSym!, loc);
+	const inner = matchConsumer(arg, st);
+	const r = inner != null ? expandConsumer(inner, arg.nodeType, st, loc) : null;
+	if (r != null && r.result != null) {
+		for (const s of r.stmts) { out.push(s); }
+		return makeIdentResolved(r.result!, loc);
+	}
+	const temp = freshOwnedSym(st.ctx, "view", arg.nodeType);
+	const bound = makeVarDecl(temp.name, arg, DeclKind.Const, loc);
+	bound.resolvedSym = temp;
+	bound.nodeType = arg.nodeType;
+	out.push(bound);
+	return makeIdentResolved(temp, loc);
 }
 
 function relocate(node: Node, loc: SourceLocation): void {
@@ -1795,6 +1851,26 @@ function nodeCount(node: Node): int32 {
 
 function passesAsIs(arg: Node, param: Symbol): boolean {
 	if (arg.kind == NodeKind.NumberLiteral || arg.kind == NodeKind.BooleanLiteral) return sameType(arg.nodeType, param.symbolType);
+	if (arg.kind == NodeKind.HiddenStdConv) return sameType(arg.nodeType, param.symbolType) && isFloatOfLocal(arg);
+	return isLocalRead(arg) && sameType(arg.resolvedSym!.symbolType, param.symbolType) && sameType(arg.nodeType, param.symbolType);
+}
+
+function droppable(arg: Node): boolean {
+	if (arg.kind == NodeKind.Identifier || arg.kind == NodeKind.NumberLiteral) return true;
+	return arg.kind == NodeKind.HiddenStdConv && isFloatOfLocal(arg);
+}
+
+function isFloatOfLocal(conv: Node): boolean {
+	const read = (conv.data as HiddenStdConvData).convExpr;
+	return isFloatRepr(conv.nodeType) && isLocalRead(read) && (isIntegerType(read.nodeType) || isFloatRepr(read.nodeType));
+}
+
+function isFloatRepr(t: Type | null): boolean {
+	const r = peelToRepr(t);
+	return r != null && (r.kind == TypeKind.Number || isFloatType(r));
+}
+
+function isLocalRead(arg: Node): boolean {
 	const sym = arg.resolvedSym;
 	if (arg.kind != NodeKind.Identifier || sym == null || hasFlag(sym, SymbolFlag.Global)) return false;
 	return sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Parameter;
@@ -1850,26 +1926,6 @@ test "a generator consumed in place leaves no for-of and no yield in the consume
 
 function stillForOf(src: string): boolean {
 	const stmts = getStmts(lowered(src));
-	if (arg.kind == NodeKind.HiddenStdConv) return sameType(arg.nodeType, param.symbolType) && isFloatOfLocal(arg);
-	return isLocalRead(arg) && sameType(arg.resolvedSym!.symbolType, param.symbolType) && sameType(arg.nodeType, param.symbolType);
-}
-
-function droppable(arg: Node): boolean {
-	if (arg.kind == NodeKind.Identifier || arg.kind == NodeKind.NumberLiteral) return true;
-	return arg.kind == NodeKind.HiddenStdConv && isFloatOfLocal(arg);
-}
-
-function isFloatOfLocal(conv: Node): boolean {
-	const read = (conv.data as HiddenStdConvData).convExpr;
-	return isFloatRepr(conv.nodeType) && isLocalRead(read) && (isIntegerType(read.nodeType) || isFloatRepr(read.nodeType));
-}
-
-function isFloatRepr(t: Type | null): boolean {
-	const r = peelToRepr(t);
-	return r != null && (r.kind == TypeKind.Number || isFloatType(r));
-}
-
-function isLocalRead(arg: Node): boolean {
 	return stmts[stmts.length - 1].kind == NodeKind.ForOfStmt;
 }
 
