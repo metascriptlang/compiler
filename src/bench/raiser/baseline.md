@@ -296,3 +296,10 @@ allocations (15.66M before; `CallHost` 4.48M, `NewArray` 2.41M and `ConcatStrR` 
 0.873G instructions (0.899G); rowsEl 0.913G instructions, unchanged. Wall time not yet taken in a quiet window.
 What haro still allocates most: `StrSlice` 3.68M (`text.slice(i, i + scheme.length) == scheme` in `schemeAt`, which C
 allocates too), `NewObject` 1.07M and `LoadFieldRequired` 1.02M (Int fields boxed while a struct is packed in `changes`).
+
+A struct value read from a field of a typed struct cell into a packed value is copied slot by slot into registers of
+the slots' classes (`packBySlot` in `src/codegen/raiser/packedValues.ms`), where it went through the untyped legacy
+boundary: a box of the cell, a kind check, and per field a lookup by name into a boxed register, a kind check and a
+narrowing. It was haro's `changes`, `rect: p.rect` of each placed pane. Same probe: haro 5.43M VM block allocations
+(6.69M; `LoadFieldRequired` 1.02M and `Box` 0.27M became 0.01M and 0.02M), 0.865G instructions (0.873G). Wall time
+not yet taken in a quiet window.
