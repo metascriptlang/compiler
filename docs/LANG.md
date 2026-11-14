@@ -2064,6 +2064,12 @@ which TypeScript accepts. Wider than TypeScript: an integer literal under `numbe
 a union target keeps `T`. Without a contextual object type it is the anonymous read-only literal as
 before; `[ … ] as const` stays refused (it needs a readonly tuple type).
 
+Rejected: seeding a flow fact that `p.kind` is `"circle"` while `p` keeps type `T`, because TypeScript
+reads a property at its declared type unless an assignment or a guard narrows it (typescript-go
+`getTypeAtFlowAssignment`, `internal/checker/flow.go:220` at 89d5d5b28), so the narrow member must live in
+`p`'s own type; and a separate refinement view type over `T`, because a structural object type
+whose fields are a prefix of `T`'s already carries the narrow members and casts to `T` as a pointer.
+
 Measured on C, danger, JS, ESM and the Raiser with a candidate of `wt/ts-satisfies` (tip `499c62a`, rtx and
 d87, 2026-11-13): corpus `satisfiesKeepsLiteralMembers` prints `circle 2 6`, `circle circle`, `square 2`,
 `true lib`; the refusals above are `handoff/satisfiesKeepsLiteralMembers.ms`. `as const` measured on C and
