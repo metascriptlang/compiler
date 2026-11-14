@@ -168,6 +168,32 @@ test "a conditional joining Unowned reads stays a view when nothing can release 
 	assert bodyOf(released, "f").contains("msIncref"), bodyOf(released, "f");
 }
 
+const HOLDERS_HEAD = "class T { id: int32 = 4; }\nclass S { t: T | null = null; }\nclass H { at: Unowned<T> | null = null; ss: S[] = []; }\n";
+const HOLDERS_TAIL = "const t = new T();\nconst h = new H();\nh.at = t;\nconst s = new S();\ns.t = t;\nh.ss.push(s);\nconsole.log(f(h));\n";
+
+test "an Unowned view stays uncounted beside a local that may own its target only while that local is a cursor" {
+	const rebound = emitted(HOLDERS_HEAD + "function f(h: Readonly<H>): int32 { const p = h.at; let s: Readonly<S> | null = null; for (const x of h.ss) { s = x; } return p != null && s != null ? p.id : 0; }\n" + HOLDERS_TAIL);
+	assert !bodyOf(rebound, "f").contains("msIncref"), bodyOf(rebound, "f");
+	const bound = emitted(HOLDERS_HEAD + "function f(h: Readonly<H>): int32 { const p = h.at; for (const x of h.ss) { const s: Readonly<S> = x; if (s.t != null) return 1; } return p != null ? p.id : 0; }\n" + HOLDERS_TAIL);
+	assert !bodyOf(bound, "f").contains("msIncref"), bodyOf(bound, "f");
+	const owner = emitted(HOLDERS_HEAD + "function f(h: Readonly<H>): int32 { const p = h.at; let s: S | null = null; for (let i = 0; i < 2; i += 1) { s = new S(); } return p != null && s != null ? p.id : 0; }\n" + HOLDERS_TAIL);
+	assert bodyOf(owner, "f").contains("msIncref"), bodyOf(owner, "f");
+}
+
+test "a holder of a Cursor field releases nothing an Unowned view reads" {
+	const cursor = emitted(HOLDERS_HEAD + "class Item { at: Cursor<Readonly<S>>; constructor(s: Readonly<S>) { this.at = s; } }\nfunction g(h: Readonly<H>, items: Item[]): int32 { const p = h.at; items.pop(); return p != null ? p.id : 0; }\nfunction f(h: Readonly<H>): int32 { return g(h, [new Item(h.ss[0])]); }\n" + HOLDERS_TAIL);
+	assert !bodyOf(cursor, "g").contains("msIncref"), bodyOf(cursor, "g");
+	const strong = emitted(HOLDERS_HEAD + "class Item { at: S; constructor(s: S) { this.at = s; } }\nfunction g(h: Readonly<H>, items: Item[]): int32 { const p = h.at; items.pop(); return p != null ? p.id : 0; }\nfunction f(h: Readonly<H>): int32 { return g(h, [new Item(new S())]); }\n" + HOLDERS_TAIL);
+	assert bodyOf(strong, "g").contains("msIncref"), bodyOf(strong, "g");
+}
+
+test "a push into an array of Cursor elements hands over nothing an Unowned view reads" {
+	const cursors = emitted(HOLDERS_HEAD + "function f(h: Readonly<H>): int32 { const p = h.at; const seen: Cursor<Readonly<S>>[] = []; for (const x of h.ss) { seen.push(x); } return p != null ? p.id + seen.length : 0; }\n" + HOLDERS_TAIL);
+	assert !bodyOf(cursors, "f").contains("msIncref"), bodyOf(cursors, "f");
+	const owners = emitted(HOLDERS_HEAD + "function g(h: H, keep: S[]): int32 { const p = h.at; const s = new S(); keep.push(s); return p != null ? p.id : 0; }\nfunction f(h: H): int32 { return g(h, []); }\n" + HOLDERS_TAIL);
+	assert bodyOf(owners, "g").contains("msIncref"), bodyOf(owners, "g");
+}
+
 test "a view a routine returns through an Unowned edge stays uncounted until a call can release its type" {
 	const head = VIEWS_HEAD + "class L { names: string[] = []; }\nconst log = new L();\nfunction atOf(h: H): Readonly<T> | null { return h.at; }\nfunction note(l: L, s: string): int32 { l.names.push(s); l.names = []; return 0; }\n";
 	const unrelated = emitted(head + "function f(h: H, r: R): int32 { const p = atOf(h); note(log, \"x\"); return p != null ? p.id : 0; }\n" + VIEWS_TAIL);
