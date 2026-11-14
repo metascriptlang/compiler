@@ -273,3 +273,7 @@ cleanup scope run (`compileTryCatchStmt`). Same probe on the slice's candidate: 
 the register verifier already ranked from the integer forms) instead of the general value compare `EqVal`, which
 ran on the VM's slow path (`compileCompareTest`, `holdsClassInstance`). Same probe on the slice's candidate: rowsEl
 0.932G instructions (from 0.962G; `EqVal` 31M became `BrNeR` on the fast path), haro unchanged at 0.914G.
+
+Quiet rtx window on main `9519f3e558c` (after the fixed-length for-of, try fall-through and identity branch slices),
+load 3.0: rowsEl c 135 ms, raiser 2992 ms (22.2x, from 23.9x); haro c 82 ms, raiser 3071 ms (37.5x, from 41.5x and
+48.6x at `71bf722e2624`).
