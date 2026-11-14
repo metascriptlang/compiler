@@ -777,7 +777,7 @@ function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
 	compileStmt(s, d.tryBody);
 	s.tries.pop();
 	let returnTop = guardedTry.returnTop;
-	const toFinally = emitJumpPlaceholder(s);
+	const toFinally = d.hasCatchClause ? emitJumpPlaceholder(s) : -1;
 
 	let catchIdx = -1;
 	let catchEnd = -1;
@@ -811,7 +811,7 @@ function compileTryCatchStmt(s: RaiserCompState, node: Node): void {
 	} else {
 		patchAbxTo(s, tryIdx, RaiserOpcode.Try, 0, finIdx);
 	}
-	patchJumpTo(s, toFinally, finIdx);
+	if (toFinally >= 0) patchJumpTo(s, toFinally, finIdx);
 	if (d.finallyBody != null) {
 		if (s.nextReg <= returnTop) s.nextReg = returnTop + 1;
 		s.tries.push({ finallyBody: null, routeReg, inFinallyBody: true, returnTop: -1 });
