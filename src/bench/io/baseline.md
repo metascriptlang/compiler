@@ -224,3 +224,31 @@ the pool's lock spins 40 rounds before it parks.
 The owner's local loop (allocate and free 64 live cells, pinned to one core, best of 10) runs 1.0% fewer instructions
 at 32 B and 2.8% fewer at 256 B and 1 KiB, the unread `foreignCells` count gone, at 3.34-3.38 ns against 3.38-3.54.
 Not measured: m1m, Windows, and the `src/bench` program rows, which free no cell from another thread.
+
+## Remote frees as claimed batches — rtx, 2026-11-14
+
+A thread freeing a block it does not own now claims the block with one compare-and-swap (a small cell's second word,
+a big chunk's state word) and sends only its address, in a 512-byte batch from its own region; the owner frees an
+address only if the block still carries the claim, so every second free is refused whichever threads made the two
+frees (ULTRALOCK M10, `allocatorThreadRegions`). Every correct program keeps its result.
+
+The same probe as above, `main` = main `71bf722e2624` (runs), `batches` = this change, quiet rtx (load 1-2, a
+whole-host window), interleaved best of 5, cores 24-31. ns per message, `main` → `batches`:
+
+| size | F = 1 | F = 2 | F = 4 |
+|---|---|---|---|
+| 32 B | 3.8 → 7.8 | 9.4 → 10.9 | 10.0 → 12.7 |
+| 256 B | 5.0 → 8.5 | 16.2 → 9.1 | 16.2 → 11.1 |
+| 1 KiB | 12.4 → 14.6 | 16.0 → 16.3 | 17.7 → 17.2 |
+
+With one freer the cost is the claim, a locked instruction on x86-64, and the owner putting each received block on
+its own chunk's free list before it takes it again (runs handed the fetched cells out directly); with two or four
+freers the freer no longer writes the cell, so its line stays with the owner. A batch of 1 KiB or 2 KiB gives 32 B at
+F = 1 6.8 and 6.1 instead of 7.7 (an 8-core slot, load 1-5) and moves no other row; it stays 512 B, because a thread
+freeing for many owners in turn posts part-filled batches: with a page each, `746-spawnStoredUnawaited` mapped up to
+20 MB against main's 7.2 (512 B: 7.1).
+
+The owner's own take and free of one cell in turn (`churn`, pinned, best of 5): 2.35 → 2.51 ns at 32, 256 and 1 KiB;
+64 live cells: 2.20 → 2.31 at 32 B, 3.47 → 3.42 at 256 B, 3.64 → 3.58 at 1 KiB; one big chunk taken and freed in
+turn: 25.1 → 26.1 ns at 8 KiB. `src/bench` collections and json rows: within 3% either way.
+Not measured: m1m, Windows.
