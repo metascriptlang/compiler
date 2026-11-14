@@ -244,3 +244,10 @@ test "two nested counters prove an index built from both" {
 	assert !result.value.contains("msIndexFail"), result.value;
 	assert !result.value.contains("msOverflowI32"), result.value;
 }
+
+test "an index converted from a number to int64 is checked as the truncated double, not a BigInt" {
+	const result = compileToJSBare("function f(xs: int32[], k: number): int32 { return xs[k as int64]; }");
+	assert result.ok;
+	assert result.value.contains("Math.trunc(msCheckRangeI64(k))"), result.value;
+	assert !result.value.contains("BigInt("), result.value;
+}

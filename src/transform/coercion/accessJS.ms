@@ -61,9 +61,11 @@ function inlineIndexCheck(node: Node, temps: Node[], ctx: TransformContext): Nod
 	if (!isRuntimeProcCall(node, "msChkIndex")) return node;
 	const args = (node.data as CallExprData).arguments;
 	const loc = node.location;
+	const truncated = truncatedBeforeBigInt(args[0]);
+	if (truncated != null) args[0] = truncated;
 	const repr = peelToRepr(args[0].nodeType);
-	const wide = isWideInteger(repr);
-	if (!wide && !isIntegerType(repr) && !isFloatType(repr)) return node;
+	const wide = truncated == null && isWideInteger(repr);
+	if (truncated == null && !wide && !isIntegerType(repr) && !isFloatType(repr)) return node;
 	const len = cloneIfPure(args[1]);
 	const lenAgain = cloneIfPure(args[1]);
 	if (len == null || lenAgain == null) return node;
@@ -89,6 +91,29 @@ function inlineIndexCheck(node: Node, temps: Node[], ctx: TransformContext): Nod
 	const checked = makeConditional(inRange, value, fail, loc);
 	checked.nodeType = node.nodeType;
 	return checked;
+}
+
+/**
+ * The `Math.trunc(..)` a number-to-int64 conversion wraps in `BigInt(..)`. Compared with a length as a double,
+ * that integer selects the same element and fails the same indexes as its BigInt does.
+ */
+function truncatedBeforeBigInt(index: Node): Node | null {
+	if (!isGlobalCall(index, "globalThis.BigInt")) return null;
+	const inner = (index.data as CallExprData).arguments[0];
+	if (inner.kind != NodeKind.CallExpr) return null;
+	const callee = (inner.data as CallExprData).callee;
+	if (callee.kind != NodeKind.MemberExpr || (callee.data as MemberExprData).property != "trunc") return null;
+	return isGlobalRef((callee.data as MemberExprData).object, "globalThis.Math") ? inner : null;
+}
+
+function isGlobalCall(node: Node, name: string): boolean {
+	if (node.kind != NodeKind.CallExpr) return false;
+	const d = node.data as CallExprData;
+	return d.arguments.length == 1 && isGlobalRef(d.callee, name);
+}
+
+function isGlobalRef(node: Node, name: string): boolean {
+	return node.kind == NodeKind.Identifier && node.resolvedSym != null && node.resolvedSym.nativeName == name;
 }
 
 function inlineOverflowCheck(node: Node, temps: Node[], ctx: TransformContext): Node {
