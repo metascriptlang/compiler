@@ -448,9 +448,7 @@ export function threadConstantTests(s: RaiserCompState): void {
 	for (let pc = 0; pc < code.length; pc += 1) {
 		const test = jumpDestination(code[pc], pc);
 		if (test <= pc || test + 1 >= code.length) continue;
-		const truthy = constantTestAt(s, test, pc, landed);
-		if (truthy < 0) continue;
-		const dest = truthy == 1 ? test + 2 : jumpDestination(code[test + 1], test + 1);
+		const dest = constantTestDestination(s, test, pc, landed);
 		if (dest > pc) patchJumpTo(s, pc as int32, dest as int32);
 	}
 }
@@ -461,20 +459,34 @@ function jumpDestination(inst: RaiserInstruction, pc: number): number {
 	return -1;
 }
 
-function constantTestAt(s: RaiserCompState, test: number, from: number, landed: boolean[]): int32 {
+function constantTestDestination(s: RaiserCompState, test: number, from: number, landed: boolean[]): number {
 	const code = s.code;
 	const t = code[test];
-	if (t.op != RaiserOpcode.BTruthy || t.c != 1 || code[test + 1].op != RaiserOpcode.Jump) return -1;
+	const isTruthy = t.op == RaiserOpcode.BTruthy && t.c == 1 && code[test + 1].op == RaiserOpcode.Jump;
+	const isImmBranch = t.op == RaiserOpcode.BrEqI64Imm || t.op == RaiserOpcode.BrNeI64Imm;
+	if (!isTruthy && !isImmBranch) return -1;
+	const at = constantLoadBefore(s, t.a, from, landed);
+	if (at < 0) return -1;
+	const load = code[at];
+	let value: int64 = 0;
+	if (load.op == RaiserOpcode.LoadInt) value = immValue(load.b);
+	else {
+		const k = s.constants[getBx(load)];
+		if (k.kind != RaiserValueKind.Bool && k.kind != RaiserValueKind.Int) return -1;
+		value = k.intVal as int64;
+	}
+	if (isTruthy) return value != 0 ? test + 2 : jumpDestination(code[test + 1], test + 1);
+	const taken = (value == immValue(t.b)) == (t.op == RaiserOpcode.BrEqI64Imm);
+	return taken ? jumpDestination(t, test) : test + 1;
+}
+
+function constantLoadBefore(s: RaiserCompState, reg: number, from: number, landed: boolean[]): number {
+	const code = s.code;
 	for (let q = from - 1; q >= 0; q -= 1) {
 		if (landed[q + 1]) return -1;
 		const inst = code[q];
-		if (inst.a == t.a && inst.op == RaiserOpcode.LoadInt) return immValue(inst.b) != 0 ? 1 : 0;
-		if (inst.a == t.a && inst.op == RaiserOpcode.LoadConst) {
-			const k = s.constants[getBx(inst)];
-			if (k.kind != RaiserValueKind.Bool && k.kind != RaiserValueKind.Int) return -1;
-			return k.intVal != 0 ? 1 : 0;
-		}
-		if (namesRegister(inst, t.a) || inst.op == RaiserOpcode.Jump || inst.op == RaiserOpcode.Ret || inst.op == RaiserOpcode.RetN || inst.op == RaiserOpcode.Throw) return -1;
+		if (inst.a == reg && (inst.op == RaiserOpcode.LoadInt || inst.op == RaiserOpcode.LoadConst)) return q;
+		if (namesRegister(inst, reg) || inst.op == RaiserOpcode.Jump || inst.op == RaiserOpcode.Ret || inst.op == RaiserOpcode.RetN || inst.op == RaiserOpcode.Throw) return -1;
 	}
 	return -1;
 }

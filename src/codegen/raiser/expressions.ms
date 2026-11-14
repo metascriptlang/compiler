@@ -1643,6 +1643,11 @@ function branchOpcode(test: RaiserOpcode, whenTrue: boolean): RaiserOpcode {
 }
 
 function jumpIfValue(s: RaiserCompState, reg: int32, whenTrue: boolean): int32[] {
+	const cls = classOfReg(s, reg);
+	if (cls == RaiserRegClass.Bool || cls == RaiserRegClass.Word) {
+		emitInst(s, raiserABC(whenTrue ? RaiserOpcode.BrNeI64Imm : RaiserOpcode.BrEqI64Imm, reg, immField(0), branchField(0)));
+		return [codeLen(s) - 1];
+	}
 	emitInst(s, raiserABC(RaiserOpcode.BTruthy, reg, 0, 1));
 	return jumpAfterSkip(s, whenTrue);
 }
