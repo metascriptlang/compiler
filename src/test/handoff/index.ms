@@ -170,6 +170,7 @@ import "./raiserModuleTdzEntry";
 import "./raiserConstBindingLoadedBeforeLoop";
 import "./raiserCursorBindingKeepsItsInitializer";
 import "./raiserShortCircuitFlagThreaded";
+import "./raiserAsciiCharsInterned";
 import "./raiserBoolTestBranches";
 import "./raiserLoopInvariantStringRead";
 import "./raiserCharCodeAtImmediate";

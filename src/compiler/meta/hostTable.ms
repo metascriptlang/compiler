@@ -41,7 +41,7 @@ import {
 	heapObjectFieldCount, heapObjectFieldNameAt, heapObjectFieldValueAt, heapObjectGetField,
 	heapArrayLen, heapArrayGet, heapStringText, heapAllocArray, heapArrayPush, heapAllocStoredString, rcIncref, raiserArray,
 	raiserObject, raiserInt, createStructHeap, createArrayHeap, raiserEqual, handleIndex, stringBytesHandle, setStringBytesHandle,
-	heapAllocBytesOf, heapArrayAssignBytes, heapAllocStringOfBytes,
+	heapAllocBytesOf, heapArrayAssignBytes, heapAllocStringOfBytes, asciiCharString,
 } from "../../raiser/value";
 import { ADAPTEE_FIELD } from "../../transform/coercion/implicitConvLower";
 import {
@@ -1081,7 +1081,9 @@ function _bridgeAtanh(vm: RaiserVM): void { hostReturnFloat(vm, Math.atanh(hostA
 function _bridgeFmod(vm: RaiserVM): void { hostReturnFloat(vm, hostArgFloat(vm, 0) % hostArgFloat(vm, 1)); }
 
 function _bridgeMsStringFromCodePoint(vm: RaiserVM): void {
-	hostReturnString(vm, fromCodePoint(unboxInt(hostArg(vm, 0))));
+	const cp = unboxInt(hostArg(vm, 0));
+	if (cp >= 0 && cp < 0x80) { hostReturn(vm, asciiCharString(cp as int64)); return; }
+	hostReturnString(vm, fromCodePoint(cp));
 }
 
 // Tier 1 — string ↔ VM-heap byte-array kernels. These cross the VM-heap

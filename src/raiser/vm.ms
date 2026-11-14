@@ -15,7 +15,7 @@ import {
 	RaiserObjectHeap, RaiserObjectData, RaiserClassType, createClassType, fieldNameIs, appendField, fieldIndex, fieldValueAt, fieldStoreAt, fieldRefusal, objectFieldCount, fieldNameAt, layOutObject, slotKind, createStructHeap, heapAllocObject, raiserObject, heapObjectGetField, raiserIsInstance, RAISER_NO_CLASS, heapSeqHandles, heapObjectCellHandles,
 	heapNewObjectCell, objectCellHandle, objectCellFieldValue, objectCellStoreField, OWNED_BY_RECEIVER_RC, isObjectCell, objectCellClass, heapObjectClass, heapObjectFieldIndex, heapObjectFieldValueAt, heapObjectFieldNameAt, heapObjectFieldCount, heapObjectFieldRefusal, heapObjectStoreFieldAt, heapObjectAppendField, heapObjectSetRc, heapObjectLaidCount,
 	raiserFuture, raiserElemAddr, raiserFieldAddrAt, fieldAddrName, heapObjectSetField, heapAllocString, heapStringText, heapStringLive, stringHandleRc, heapBoxLive,
-	rcIncref, rcDecref, holdsCount, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcFreeHandle, rcCountOf, copyGraph, copiesAsValue, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringDataAt, heapAllocStringUnfilled, heapAllocBytes, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, heapHandleLength, clearArrayHeap, clearObjectHeap, ORC_DEFAULT_THRESHOLD,
+	rcIncref, rcDecref, holdsCount, rcIncrefHandle, rcDecrefHandle, rcDecIsLast, rcFreeHandle, rcCountOf, copyGraph, copiesAsValue, raiserToBool, constStringText, constStringCount, raiserEqual, heapStringEquals, heapStringLess, heapStringLessEq, heapStringLength, heapStringByteLength, heapStringDataAt, heapAllocStringUnfilled, heapAllocBytes, heapStringSlice, heapConcat, heapAppend, heapStringHeldOnce, asciiCharString, heapConcatHandles, heapAppendHandle, heapHandleHeldOnce, heapHandleByteAt, heapHandleCharCodeAt, heapHandleLength, clearArrayHeap, clearObjectHeap, ORC_DEFAULT_THRESHOLD,
 	RaiserFutureCounts, createFutureCounts, futureHandle, futureSlot, futureHandleLive, futureCountUp, futureCountDown, CLOSURE_LAYOUT,
 } from "./value";
 import {
@@ -5569,7 +5569,10 @@ function vmHandleStrLen(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 function vmHandleStrCharAt(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {
 	const source = getDyn(vm, ib);
 	const i = getDyn(vm, ic).intVal;
-	setRegString(vm, ia, i >= 0 && i < heapStringLength(vm.arrayHeap, source) ? heapStringSlice(vm.arrayHeap, source, i as int32, (i + 1) as int32) : "");
+	if (i < 0 || i >= heapStringLength(vm.arrayHeap, source)) { setRegString(vm, ia, ""); return; }
+	const unit = heapHandleCharCodeAt(vm.arrayHeap, source.intVal, i);
+	if (unit < 0x80) { setRegRef(vm, ia, RaiserValueKind.String, asciiCharString(unit).intVal); return; }
+	setRegString(vm, ia, heapStringSlice(vm.arrayHeap, source, i as int32, (i + 1) as int32));
 }
 
 function vmHandleStrSlice(vm: RaiserVM, ia: int32, ib: int32, ic: int32): void {

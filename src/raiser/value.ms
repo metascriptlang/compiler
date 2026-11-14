@@ -225,6 +225,18 @@ function constHandle(text: string): int64 {
 	return handle;
 }
 
+function internAsciiChars(): int64[] {
+	const handles: int64[] = [];
+	for (let byte = 0; byte < 0x80; byte += 1) handles.push(constHandle(String.fromCharCode(byte)));
+	return handles;
+}
+
+const ASCII_CHAR_HANDLES: int64[] = internAsciiChars();
+
+export function asciiCharString(byte: int64): RaiserValue {
+	return { kind: RaiserValueKind.String, intVal: ASCII_CHAR_HANDLES[byte as int32], floatVal: 0.0 };
+}
+
 export function constNameIds(names: string[]): int64[] {
 	const ids: int64[] = [];
 	for (const n of names) ids.push(constHandle(n));
