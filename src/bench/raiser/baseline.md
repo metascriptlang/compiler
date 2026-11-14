@@ -252,3 +252,9 @@ load 2.3: rowsEl c 134 ms, raiser 3307 ms (24.7x); haro c 82 ms, raiser 3445 ms 
 four and 48.6x before them). rowsEl takes neither path, so its 24.4x to 24.7x is the windows' spread. What haro's
 `schemeAt` still runs per scheme: the `&&` flag's initial `LoadConstW` (113M in all of haro), dead once the branch
 is threaded past its test, which a dead-store pass needs a per-opcode read/write table to remove.
+
+A constant load into a Word, Bool or Float register that every path overwrites before reading it is dropped
+(`4e72d876b67`, `dropDeadConstantLoads`): the `&&` flag's initial store once its test is branched past. Same probe:
+haro 1.048G instructions (-6.1%; `LoadConstW` 113M to 46M; -33.3% from `71bf722e2624`), `schemeAt` 0.529G; rowsEl
+0.969G. Quiet rtx window at load 3.8: rowsEl c 139 ms, raiser 3319 ms (23.9x); haro c 82 ms, raiser 3405 ms (41.5x
+from 42.0x). The dropped loads are among the cheapest instructions, so wall time moves less than the count.
