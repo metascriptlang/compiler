@@ -269,6 +269,7 @@ void msDiscardCurrentException(void) {
 static void msErrorDestroy(void* p) {
 	msError* e = (msError*)p;
 	msStringDecref(e->message);
+	msStringDecref(e->name);
 }
 
 const msTypeInfo msErrorTypeInfo = {
@@ -281,7 +282,9 @@ const msTypeInfo msErrorTypeInfo = {
 
 msError* msMakeError(msString message) {
 	msError* e = (msError*)msAllocTyped(sizeof(msError), &msErrorTypeInfo);
+	static const struct { int64_t cap; char data[6]; } errorName = { MS_STRLIT_FLAG | MS_ASCII_BITS | 5, "Error" };
 	e->message = message;
+	e->name = MS_STRING_LIT(&errorName, 5);
 	return e;
 }
 

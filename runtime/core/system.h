@@ -116,9 +116,10 @@ typedef struct {
 } msException;
 
 /* Heap Error object — DRC-managed. Layout MUST match the std `Error` class
- * struct (single msString message) so a caught `Error*` reads it directly. */
+ * struct (message, then name) so a caught `Error*` reads it directly. */
 typedef struct {
 	msString message;
+	msString name;
 } msError;
 
 extern const msTypeInfo msErrorTypeInfo;

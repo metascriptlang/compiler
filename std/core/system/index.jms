@@ -37,27 +37,37 @@ export class Result<T, E> {
 
 export class Error {
 	message: string;
+	name: string = "Error";
 
 	constructor(message: string) {
 		this.message = message;
+	}
+
+	toString(): string {
+		if (this.name.length == 0) return this.message;
+		if (this.message.length == 0) return this.name;
+		return `${this.name}: ${this.message}`;
 	}
 }
 
 export class RangeError extends Error {
 	constructor(message: string) {
 		super(message);
+		this.name = "RangeError";
 	}
 }
 
 export class SyntaxError extends Error {
 	constructor(message: string) {
 		super(message);
+		this.name = "SyntaxError";
 	}
 }
 
 export class TypeError extends Error {
 	constructor(message: string) {
 		super(message);
+		this.name = "TypeError";
 	}
 }
 
