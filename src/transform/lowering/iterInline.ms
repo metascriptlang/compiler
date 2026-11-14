@@ -60,6 +60,7 @@ interface InlineCall {
 	decl: Node;
 	args: Node[];
 	foreign: boolean;
+	pure?: boolean;
 }
 
 interface CallTarget {
@@ -692,7 +693,7 @@ function matchConsumer(call: Node, st: InlineState): InlineCall | null {
 	const sym = target.sym;
 	const taker = st.leafTakers.get(sym);
 	if (taker != null && inlinable(taker, target, false, st) && passesLeafArrow(target.args) && readsArraysAsIs(taker, target.args)) {
-		return { decl: taker, args: target.args, foreign: (sym.instantiatedFrom ?? sym).modulePath != ownModule(st.ctx) };
+		return { decl: taker, args: target.args, foreign: (sym.instantiatedFrom ?? sym).modulePath != ownModule(st.ctx), pure: true };
 	}
 	const decl = st.ownConsumers.has(sym) ? st.ownConsumers.get(sym)! : foreignBody(sym, OfferKind.Consumer, st);
 	if (decl == null || !inlinable(decl, target, false, st)) return null;
@@ -714,6 +715,7 @@ function readsArraysAsIs(decl: Node, args: Node[]): boolean {
 		if (t == null || t.kind != TypeKind.Array) continue;
 		const k = args[i].nodeType != null ? args[i].nodeType!.kind : TypeKind.Array;
 		if (writesTo(body, params[i]) || (k != TypeKind.Array && k != TypeKind.Ref)) return false;
+		if (k == TypeKind.Array && !isPlace(args[i]) && args[i].kind != NodeKind.CallExpr) return false;
 	}
 	return true;
 }
@@ -1141,8 +1143,9 @@ function inlinedBody(call: InlineCall, out: Node[], st: InlineState, loc: Source
 		const param = params[i];
 		const arg = call.args[i];
 		const writes = writesTo(fd.fnBody, param);
-		if (viewsArray(param, arg)) {
-			sources.set(param, makeHiddenDeref(stableOrBound(arg, out, st, loc), loc));
+		if (call.pure == true && isArrayParam(param)) {
+			const read = placeOrBound(arg, out, st, loc);
+			sources.set(param, arg.nodeType != null && arg.nodeType.kind == TypeKind.Ref ? makeHiddenDeref(read, loc) : read);
 			continue;
 		}
 		if (!writes && isStableRead(arg) && storedRead(arg, st) == null) {
@@ -1172,13 +1175,14 @@ function inlinedBody(call: InlineCall, out: Node[], st: InlineState, loc: Source
 	});
 }
 
-// A `this arr: Vec<T>` receiver reads a `T[]` argument through it, without a conversion node.
-function viewsArray(param: Symbol, arg: Node): boolean {
-	return param.symbolType != null && param.symbolType.kind == TypeKind.Array && arg.nodeType != null && arg.nodeType.kind == TypeKind.Ref;
+function isArrayParam(param: Symbol): boolean {
+	return param.symbolType != null && param.symbolType.kind == TypeKind.Array;
 }
 
-function stableOrBound(arg: Node, out: Node[], st: InlineState, loc: SourceLocation): Node {
-	if (isStableRead(arg) && storedRead(arg, st) == null) return makeIdentResolved(arg.resolvedSym!, loc);
+// A `this arr: Vec<T>` receiver is lent: it reads a `T[]` through it and a `Vec<T>` in place, never a copy, and
+// neither the expanded body nor a pure leaf arrow can write the place it reads.
+function placeOrBound(arg: Node, out: Node[], st: InlineState, loc: SourceLocation): Node {
+	if (isPlace(arg) && storedRead(arg, st) == null) return arg;
 	const inner = matchConsumer(arg, st);
 	const r = inner != null ? expandConsumer(inner, arg.nodeType, st, loc) : null;
 	if (r != null && r.result != null) {
@@ -1191,6 +1195,17 @@ function stableOrBound(arg: Node, out: Node[], st: InlineState, loc: SourceLocat
 	bound.nodeType = arg.nodeType;
 	out.push(bound);
 	return makeIdentResolved(temp, loc);
+}
+
+function isPlace(n: Node): boolean {
+	if (n.kind == NodeKind.Identifier) {
+		const sym = n.resolvedSym;
+		return sym != null && (sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Parameter);
+	}
+	if (n.kind == NodeKind.HiddenDeref) return isPlace((n.data as HiddenDerefData).expr);
+	if (n.kind != NodeKind.MemberExpr || (n.data as MemberExprData).isOptional) return false;
+	const field = n.resolvedSym;
+	return field != null && field.symbolKind == SymbolKind.Property && !hasFlag(field, SymbolFlag.Static) && isPlace((n.data as MemberExprData).object);
 }
 
 function relocate(node: Node, loc: SourceLocation): void {
