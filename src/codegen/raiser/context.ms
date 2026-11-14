@@ -245,7 +245,7 @@ export function resolveStaticInitGuard(s: RaiserCompState, sym: Symbol | null): 
 }
 
 // Opcodes whose A operand is the register they write, in the class their role names.
-function writesA(op: RaiserOpcode): boolean {
+export function writesA(op: RaiserOpcode): boolean {
 	return match (op) {
 		RaiserOpcode.LoadInt | RaiserOpcode.AddI64 | RaiserOpcode.SubI64 | RaiserOpcode.MulI64 | RaiserOpcode.DivI64 | RaiserOpcode.ModI64 | RaiserOpcode.NegI64
 			| RaiserOpcode.AddU64 | RaiserOpcode.SubU64 | RaiserOpcode.MulU64 | RaiserOpcode.DivU64 | RaiserOpcode.ModU64

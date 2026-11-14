@@ -18,7 +18,7 @@ import {
 	declareLocal, declaredSymbol, regIsFixedLocal, resetTemps, resolveLocal,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, patchJumpsTo, codeLen,
 	emitAbxPlaceholder, patchAbxTo,
-	pushLoop, jumpTarget, currentLoop, landsPast, patchLoopBreaks, patchLoopContinues, queueRaiserCompileError, emitTrapNil,
+	pushLoop, jumpTarget, currentLoop, landsPast, writesA, patchLoopBreaks, patchLoopContinues, queueRaiserCompileError, emitTrapNil,
 	emitClosurePair,
 	registerRaiserStmtCompiler, resolveGlobal, resolveStaticInitGuard, resolveRoutine, addConst, isScalarClass,
 } from "./context";
@@ -495,6 +495,90 @@ export function threadConstantTests(s: RaiserCompState): void {
 		const dest = constantTestDestination(s, test, pc, landed);
 		if (dest > pc) patchJumpTo(s, pc as int32, dest as int32);
 	}
+}
+
+export function dropDeadConstantLoads(s: RaiserCompState): void {
+	const code = s.code;
+	for (const inst of code) {
+		if (inst.op == RaiserOpcode.Try || inst.op == RaiserOpcode.Catch || inst.op == RaiserOpcode.Finally || inst.op == RaiserOpcode.FinallyEnd) return;
+	}
+	const dead: boolean[] = code.map((): boolean => false);
+	let any = false;
+	for (let pc = 0; pc < code.length; pc += 1) {
+		const inst = code[pc];
+		if (inst.op != RaiserOpcode.LoadConst && inst.op != RaiserOpcode.LoadInt) continue;
+		const cls = classOfReg(s, inst.a as int32);
+		if (cls != RaiserRegClass.Word && cls != RaiserRegClass.Bool && cls != RaiserRegClass.Float) continue;
+		if (readBeforeWritten(code, pc + 1, inst.a)) continue;
+		dead[pc] = true;
+		any = true;
+	}
+	if (any) dropInstructions(s, dead);
+}
+
+function readBeforeWritten(code: RaiserInstruction[], from: number, reg: number): boolean {
+	const seen: boolean[] = code.map((): boolean => false);
+	const work: number[] = [from];
+	while (work.length > 0) {
+		const pc = work.pop()!;
+		if (pc >= code.length || seen[pc]) continue;
+		seen[pc] = true;
+		const inst = code[pc];
+		if (overwrites(inst, reg)) continue;
+		if (isFrameDataOp(inst.op) || namesRegister(inst, reg)) return true;
+		if (inst.op == RaiserOpcode.Ret || inst.op == RaiserOpcode.Throw || inst.op == RaiserOpcode.Halt) continue;
+		const to = jumpDestination(inst, pc);
+		if (inst.op == RaiserOpcode.Jump) {
+			work.push(to);
+			continue;
+		}
+		if (to >= 0) work.push(to);
+		else if (landsPast(inst, pc as int32, (pc + 2) as int32)) work.push(pc + 1 + inst.c);
+		work.push(pc + 1);
+	}
+	return false;
+}
+
+function overwrites(inst: RaiserInstruction, reg: number): boolean {
+	if (inst.a != reg) return false;
+	if (inst.op == RaiserOpcode.LoadConst) return true;
+	if (inst.op != RaiserOpcode.Move && inst.op != RaiserOpcode.MoveW && !writesA(inst.op)) return false;
+	const fields = [inst.b, inst.c];
+	for (let slot = 1; slot < 3; slot += 1) {
+		const role = opRole(inst.op, slot as int32);
+		if (role != RaiserRole.None && (fields[slot - 1] == reg || ((role == RaiserRole.IntPair || role == RaiserRole.Route) && fields[slot - 1] + 1 == reg))) return false;
+	}
+	return !opHasSite(inst.op);
+}
+
+function isFrameDataOp(op: RaiserOpcode): boolean {
+	return op == RaiserOpcode.RetN || op == RaiserOpcode.MoveN || op == RaiserOpcode.ZeroN || op == RaiserOpcode.LoadFrame || op == RaiserOpcode.StoreFrame;
+}
+
+function dropInstructions(s: RaiserCompState, dead: boolean[]): void {
+	const code = s.code;
+	const at: number[] = [];
+	let kept = 0;
+	for (let pc = 0; pc < code.length; pc += 1) {
+		at.push(kept);
+		if (!dead[pc]) kept += 1;
+	}
+	at.push(kept);
+	for (let pc = 0; pc < code.length; pc += 1) {
+		if (dead[pc]) continue;
+		const inst = code[pc];
+		const to = jumpDestination(inst, pc);
+		if (inst.op == RaiserOpcode.Jump) {
+			const jump = raiserAx(RaiserOpcode.Jump, at[to] - at[pc] - 1);
+			jump.line = inst.line;
+			jump.site = inst.site;
+			code[pc] = jump;
+		} else if (to >= 0) inst.c = branchField((at[to] - at[pc] - 1) as int64);
+		else if (landsPast(inst, pc as int32, (pc + 2) as int32)) inst.c = at[pc + 1 + inst.c] - at[pc] - 1;
+	}
+	const live: RaiserInstruction[] = [];
+	for (let pc = 0; pc < code.length; pc += 1) if (!dead[pc]) live.push(code[pc]);
+	s.code = live;
 }
 
 function jumpDestination(inst: RaiserInstruction, pc: number): number {
