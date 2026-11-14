@@ -35,3 +35,16 @@ test "E2E C: a capturing, multi-statement, reassigned or non-word callback stays
 		assert c.contains(INDIRECT), body;
 	}
 }
+
+test "E2E C: an @inline array method given a pure leaf arrow runs in place with the arrow inline, and its map and sum run in sticky blocks" {
+	const fn = "function g(a: int32[], k: int32): int32 { return a.map((x) => x * 2).filter((x) => x % 3 != 0).reduce((acc: int32, x) => acc + x, 0 as int32); }";
+	const c = builtModuleC("lambdaLeafEmit", "eager", `${fn}\nconsole.log(g([1, 2, 3], 3));\n`, ["--release"]);
+	assert !c.startsWith("error:"), c.slice(0, 400);
+	assert !c.contains(INDIRECT), fn;
+	assert c.contains("msBlockRangeFits("), fn;
+	assert c.contains("msBlockSameData("), fn;
+	const capturing = "function g(a: int32[], k: int32): int32 { return a.map((x) => x * k).reduce((acc: int32, x) => acc + x, 0 as int32); }";
+	const kept = builtModuleC("lambdaLeafEmit", "eagercall", `${capturing}\nconsole.log(g([1, 2, 3], 3));\n`, ["--release"]);
+	assert !kept.startsWith("error:"), kept.slice(0, 400);
+	assert kept.contains(INDIRECT), capturing;
+}
