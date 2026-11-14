@@ -243,3 +243,12 @@ ran `b916f0053f3` at load 4.5:
 The C arm of rowsEl ran 10% faster in the second window, so compare the ratios: haro -8.6%, rowsEl -2.4%. What
 rowsEl still executes most: `LoadSlotR` 111M, `MoveR` 68M, `LoadConst` 63M, `RcDec` 59M, `LoadInt` 56M, and a
 Try/Finally around each scope's cleanup in its reactive core (`link`, `recompute`).
+
+Two more on haro's `schemeAt`: a string read whose receiver and index a loop never writes is made once before
+the loop (`2c7821f9306`, `loadInvariantReadsBeforeLoop`), and `charCodeAt` at a literal index is one
+`StrCharCodeAtImm` (`44bfd693925`). Same probe on `44bfd693925`: haro 1.117G instructions (1.245G after the first
+four, 1.572G at `71bf722e2624`, -28.9% in all), `schemeAt` 0.596G; rowsEl 0.970G, unchanged. Quiet rtx window at
+load 2.3: rowsEl c 134 ms, raiser 3307 ms (24.7x); haro c 82 ms, raiser 3445 ms (42.0x, from 44.4x after the first
+four and 48.6x before them). rowsEl takes neither path, so its 24.4x to 24.7x is the windows' spread. What haro's
+`schemeAt` still runs per scheme: the `&&` flag's initial `LoadConstW` (113M in all of haro), dead once the branch
+is threaded past its test, which a dead-store pass needs a per-opcode read/write table to remove.
