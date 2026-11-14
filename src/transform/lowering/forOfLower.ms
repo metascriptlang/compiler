@@ -20,7 +20,7 @@ import { hasFlag, setFlag, makeSymbol, SymbolFlag } from "../../checker/symbol";
 import { appendLoopTail } from "./forLoopLower";
 import { calleeFormals } from "./jsVarParamLower";
 import { receiverIsPlace } from "./operandOrder";
-import { withoutOwned, int32Type, charType, stringType, noneType, booleanType, getIteratorReturnFnType, createArray, createSizedArray, createRef, isIterator, isMaybeType, getIteratorNextFnType, peelTransparentInstance } from "../../checker/types";
+import { withoutOwned, int32Type, charType, stringType, noneType, booleanType, getIteratorReturnFnType, createArray, createSizedArray, createRef, isIterator, isMaybeType, getIteratorNextFnType, peelTransparentInstance, isReadonlyView, createReadonlyView } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { walkNode } from "../walker";
 import { clonePlace, isVariantRead } from "../place";
@@ -174,12 +174,13 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		&& iterType.typeReturn != null && iterType.typeReturn.kind == TypeKind.Array;
 	const elemArrType = isRefArray ? iterType.typeReturn : iterType;
 	const isString = iterType != null && iterType.kind == TypeKind.String;
-	const lengthCanChange = (isString && !ctx.jsBackend) || (elemArrType != null && elemArrType.kind == TypeKind.Array);
+	const iterable = d.forOfIterable;
+	const lengthCanChange = (isString && !ctx.jsBackend)
+		|| (elemArrType != null && elemArrType.kind == TypeKind.Array && !(iterable.kind == NodeKind.Identifier && holdsFixedLength(iterable.resolvedSym, rebound)));
 
 	// A value iterable reached from a symbol is read at its location each element: a snapshot of a
 	// value is a heap copy whenever the body writes through the same root, and an address taken once
 	// dangles when the body grows an outer array (NIM-REF TR-26). A T[] or a string is read once.
-	const iterable = d.forOfIterable;
 	const readsLocation = !isRefArray && !isString && (iterable.kind == NodeKind.Identifier
 		|| ((iterable.kind == NodeKind.MemberExpr || iterable.kind == NodeKind.ArrayAccess) && isSymbolPath(iterable)));
 	const heldByConst = (isRefArray || isString) && iterable.kind == NodeKind.Identifier && cannotRebind(iterable.resolvedSym, rebound);
@@ -286,7 +287,29 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 class Rebound {
 	program: Node;
 	syms: SymSet | null = null;
+	fixedLength: SymSet | null = null;
 	constructor(program: Node) { this.program = program; }
+}
+
+function holdsFixedLength(sym: Symbol | null, r: Rebound): boolean {
+	if (sym == null) return false;
+	if (r.fixedLength == null) {
+		const out = createSymSet();
+		collectFixedLength(r.program, out);
+		r.fixedLength = out;
+	}
+	return symSetContains(r.fixedLength!, sym);
+}
+
+function collectFixedLength(node: Node, out: SymSet): void {
+	if (node.kind == NodeKind.VariableDecl && node.resolvedSym != null && node.resolvedSym.symbolType != null) {
+		const d = node.data as VariableDeclData;
+		const t = peelTransparentInstance(node.resolvedSym.symbolType);
+		const array = t.kind == TypeKind.Ref && t.typeReturn != null ? peelTransparentInstance(t.typeReturn) : t;
+		if (d.declKind == DeclKind.Const && d.initializer != null && d.initializer.kind == NodeKind.ArrayLiteral
+			&& array.kind == TypeKind.Array && isReadonlyView(t)) symSetAdd(out, node.resolvedSym);
+	}
+	forEachChild(node, (c: Node): void => collectFixedLength(c, out));
 }
 
 function reboundSyms(r: Rebound): SymSet {
@@ -551,6 +574,41 @@ test "a string for-of binds each byte as a char" {
 	const read = (item.data as VariableDeclData).initializer;
 	assert read.kind == NodeKind.CallExpr;
 	assert ((read.data as CallExprData).callee.data as IdentifierData).name == "msStringByteAt";
+}
+
+function loopOverBinding(binding: string, declType: Type): Node[] {
+	const parsed = parseInput(`${binding}; for (const x of arr) { use(x); }`);
+	if (!parsed.ok) throw new Error(parsed.error);
+	const sym = makeSymbol("arr", SymbolKind.Variable, declType, false);
+	const stmts = getStmts(parsed.value);
+	stmts[0].resolvedSym = sym;
+	walkNode(parsed.value, (n: Node): Node => {
+		if (n.kind == NodeKind.Identifier && (n.data as IdentifierData).name == "arr") n.resolvedSym = sym;
+		return n;
+	});
+	(stmts[1].data as ForOfStmtData).forOfIterable.nodeType = declType;
+	const lowered = (getStmts(lowerForOf(parsed.value, makeCtx()))[1].data as BlockStmtData).statements;
+	return loopBody(lowered[lowered.length - 1]);
+}
+
+test "a const read-only array literal checks no length after each element" {
+	assert !lastIsLengthCheck(loopOverBinding("const arr = [1, 2]", createReadonlyView(createArray(int32Type()))));
+}
+
+test "a const read-only reference array literal checks no length after each element" {
+	assert !lastIsLengthCheck(loopOverBinding("const arr = [1, 2]", createReadonlyView(createRef(createArray(int32Type())))));
+}
+
+test "a const mutable array literal checks its length after each element" {
+	assert lastIsLengthCheck(loopOverBinding("const arr = [1, 2]", createArray(int32Type())));
+}
+
+test "a const read-only view of another array checks its length after each element" {
+	assert lastIsLengthCheck(loopOverBinding("const arr = other", createReadonlyView(createArray(int32Type()))));
+}
+
+test "a let read-only array literal checks its length after each element" {
+	assert lastIsLengthCheck(loopOverBinding("let arr = [1, 2]", createReadonlyView(createArray(int32Type()))));
 }
 
 test "a sized array for-of keeps the bounded loop" {
