@@ -17,7 +17,7 @@ import { hasFlag, symbolKey } from "../../checker/symbol";
 import { placedInstanceOf, placedInstances } from "../../checker/instantiate";
 import { isStaticExtensionFlag } from "../../checker/context";
 import { bodyIsErrorBlind } from "../../checker/raises";
-import { isIterator, peelTransparentInstance, destrPositionalElemType, getIteratorYieldType, isFloatType } from "../../checker/types";
+import { isIterator, peelTransparentInstance, destrPositionalElemType, getIteratorYieldType, isFloatType, isIntegerType, peelToRepr } from "../../checker/types";
 import { expandArrayRet, expandObjectRet } from "../desugar/destructuringLower";
 import { Spiller, lowerAssign, lowerOperandList } from "./operandOrder";
 import { sameType } from "../../checker/compat";
@@ -1660,7 +1660,7 @@ function inlinedLambdaCall(call: Node, leaves: HashMap<Symbol, Node>): Node | nu
 	if (c.arguments.length < params.length || !sameType(value.nodeType, call.nodeType)) return null;
 	for (let i = 0; i < c.arguments.length; i += 1) {
 		const arg = c.arguments[i];
-		if (i < params.length ? !passesAsIs(arg, params[i]) : arg.kind != NodeKind.Identifier && arg.kind != NodeKind.NumberLiteral) return null;
+		if (i < params.length ? !passesAsIs(arg, params[i]) : !droppable(arg)) return null;
 	}
 	const copy = cloneNodeKeepSem(value);
 	frameCopy(copy, new InlineFrame(c.callee.resolvedSym!.name, null, call.location.line), new HashMap<InlineFrame, InlineFrame>());
@@ -1797,8 +1797,7 @@ function passesAsIs(arg: Node, param: Symbol): boolean {
 	if (arg.kind == NodeKind.NumberLiteral || arg.kind == NodeKind.BooleanLiteral) return sameType(arg.nodeType, param.symbolType);
 	const sym = arg.resolvedSym;
 	if (arg.kind != NodeKind.Identifier || sym == null || hasFlag(sym, SymbolFlag.Global)) return false;
-	if (sym.symbolKind != SymbolKind.Variable && sym.symbolKind != SymbolKind.Parameter) return false;
-	return sameType(sym.symbolType, param.symbolType) && sameType(arg.nodeType, param.symbolType);
+	return sym.symbolKind == SymbolKind.Variable || sym.symbolKind == SymbolKind.Parameter;
 }
 
 function substituteParams(node: Node, params: Symbol[], args: Node[]): Node {
@@ -1851,6 +1850,26 @@ test "a generator consumed in place leaves no for-of and no yield in the consume
 
 function stillForOf(src: string): boolean {
 	const stmts = getStmts(lowered(src));
+	if (arg.kind == NodeKind.HiddenStdConv) return sameType(arg.nodeType, param.symbolType) && isFloatOfLocal(arg);
+	return isLocalRead(arg) && sameType(arg.resolvedSym!.symbolType, param.symbolType) && sameType(arg.nodeType, param.symbolType);
+}
+
+function droppable(arg: Node): boolean {
+	if (arg.kind == NodeKind.Identifier || arg.kind == NodeKind.NumberLiteral) return true;
+	return arg.kind == NodeKind.HiddenStdConv && isFloatOfLocal(arg);
+}
+
+function isFloatOfLocal(conv: Node): boolean {
+	const read = (conv.data as HiddenStdConvData).convExpr;
+	return isFloatRepr(conv.nodeType) && isLocalRead(read) && (isIntegerType(read.nodeType) || isFloatRepr(read.nodeType));
+}
+
+function isFloatRepr(t: Type | null): boolean {
+	const r = peelToRepr(t);
+	return r != null && (r.kind == TypeKind.Number || isFloatType(r));
+}
+
+function isLocalRead(arg: Node): boolean {
 	return stmts[stmts.length - 1].kind == NodeKind.ForOfStmt;
 }
 
