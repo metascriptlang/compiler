@@ -347,6 +347,7 @@ export function resetResizeSummaries(): void {
 	pendingOpen = new HashMap<Node, PendingLend[]>();
 	pendingStack = [];
 	pendingCyclic = false;
+	leaverScansOpen = [];
 }
 
 function noResize(): ResizeSummary {
@@ -708,14 +709,19 @@ function writesWhatItCaptures(dispatchRegistry: DispatchRegistry, value: Node | 
 	return writesOutside(dispatchRegistry, routineBody(made), own);
 }
 
+let leaverScansOpen: Node[] = [];
+
 function handsOverLeaver(dispatchRegistry: DispatchRegistry, call: Node): boolean {
 	for (const a of (call.data as CallExprData).arguments) {
 		if (a.nodeType == null || a.nodeType.kind != TypeKind.Function) continue;
 		const value = peelConv(a)!;
 		const made = madeRoutine(value);
 		if (made != null) {
+			if (leaverScansOpen.includes(made)) continue;
+			leaverScansOpen.push(made);
 			const s = noResize();
 			scanResizes(dispatchRegistry, routineBody(made), s, []);
+			leaverScansOpen.pop();
 			if (s.leavesRunning) return true;
 		} else if (value.kind == NodeKind.Identifier && value.resolvedSym != null && value.resolvedSym.symbolKind == SymbolKind.Function
 			&& leftRunningBy(dispatchRegistry, value.resolvedSym)) {
