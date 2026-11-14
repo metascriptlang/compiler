@@ -26,7 +26,7 @@
 // Tests: src/test/js/intArith.ms — every decision reads a resolved type, which
 // a parse-only fixture cannot supply.
 
-import { Node, NodeKind, NodeFlag, DeclKind, createNodeAt, ForStmtData, VariableDeclData, BinaryExprData, ConditionalExprData, UnaryExprData, UpdateExprData, IdentifierData, NumberLiteralData, BigIntLiteralData, SourceLocation, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, createNodeAt, ForStmtData, VariableDeclData, BinaryExprData, ConditionalExprData, UnaryExprData, CallExprData, MemberExprData, UpdateExprData, IdentifierData, NumberLiteralData, BigIntLiteralData, SourceLocation, Type, TypeKind } from "../../ast/node";
 import { peelStdConv } from "../../ast/shape";
 import { TransformContext } from "../context";
 import { peelToRepr, createPrimitive } from "../../checker/types";
@@ -231,11 +231,46 @@ function binaryAsUnsigned(node: Node): Node {
 	if (t == null || t.kind != TypeKind.Uint32) return node;
 	if (d.operator == ">>") {
 		d.operator = ">>>";
+		d.left = peelTrim(d.left);
+		d.right = peelTrim(d.right);
 		return node;
 	}
-	if (d.operator == "*") return truncateTo(exactMul(d.left, d.right, node.location), t.kind, node.location);
+	if (d.operator == "*") return truncateTo(exactMul(peelTrim(d.left), peelTrim(d.right), node.location), t.kind, node.location);
 	if (!wrapsOnUint32(d.operator)) return node;
+	d.left = peelTrim(d.left);
+	d.right = peelTrim(d.right);
 	return truncateTo(node, t.kind, node.location);
+}
+
+/**
+ * The integer under a uint32 trim this pass placed, for an operand whose consumer reduces it modulo 2^32 again:
+ * a bitwise operator, a shift, Math.imul, or a + or - that is trimmed itself. Only a trim over an integer
+ * result is taken off, so the result keeps its value; a trim over a float, as a conversion places, stays.
+ */
+function peelTrim(operand: Node): Node {
+	if (operand.kind != NodeKind.BinaryExpr) return operand;
+	const d = operand.data as BinaryExprData;
+	if (d.operator != ">>>" || !isLiteralInt(d.right, 0) || !isIntegerOperation(d.left)) return operand;
+	return d.left;
+}
+
+function isIntegerOperation(node: Node): boolean {
+	if (node.kind == NodeKind.UnaryExpr) return (node.data as UnaryExprData).unaryOp == "~";
+	if (node.kind == NodeKind.CallExpr) {
+		const callee = (node.data as CallExprData).callee;
+		return callee.kind == NodeKind.MemberExpr && (callee.data as MemberExprData).property == "imul";
+	}
+	if (node.kind != NodeKind.BinaryExpr) return false;
+	return match ((node.data as BinaryExprData).operator) {
+		"<<" | ">>" | ">>>" | "&" | "|" | "^" => true,
+		"+" | "-" => isInt32Wide(node.nodeType),
+		_ => false,
+	};
+}
+
+function isInt32Wide(t: Type | null): boolean {
+	const r = peelToRepr(t);
+	return r != null && (r.kind == TypeKind.Uint32 || r.kind == TypeKind.Int32 || subIntKind(r) != TypeKind.Unknown);
 }
 
 function unaryAsUnsigned(node: Node, ctx: TransformContext): Node {
@@ -247,6 +282,7 @@ function unaryAsUnsigned(node: Node, ctx: TransformContext): Node {
 	const narrow = subIntKind(t);
 	if (narrow != TypeKind.Unknown) return wrapTo(node, narrow, node.location);
 	if (t.kind != TypeKind.Uint32) return node;
+	if (d.unaryOp == "~") d.operand = peelTrim(d.operand);
 	return truncateTo(node, t.kind, node.location);
 }
 

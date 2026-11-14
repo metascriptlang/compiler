@@ -188,6 +188,24 @@ test "uint32 compound add wraps and loses the compound form" {
 	assert !result.value.contains("+=");
 }
 
+test "a uint32 operand a bitwise or shift consumer reduces again carries no trim of its own" {
+	const result = compileToJS("function f(x: uint32, n: uint32): uint32 { return (x << n) | (x >> (32 - n)); }");
+	assert result.ok;
+	assert result.value.contains("(((x << n) | (x >>> (32 - n))) >>> 0)"), result.value;
+}
+
+test "a wrapped uint32 sum inside a trimmed sum carries no trim of its own" {
+	const result = compileToJS("function f(a: uint32, b: uint32, c: uint32): uint32 { return (a + b) + (c << 3); }");
+	assert result.ok;
+	assert result.value.contains("(((a + b) + (c << 3)) >>> 0)"), result.value;
+}
+
+test "a uint32 sum a comparison reads keeps its trim" {
+	const result = compileToJS("function f(a: uint32, b: uint32, c: uint32): boolean { return a + b < c; }");
+	assert result.ok;
+	assert result.value.contains("(((a + b) >>> 0) < c)"), result.value;
+}
+
 test "uint32 remainder is left alone" {
 	const result = compileToJS("function f(a: uint32, b: uint32): uint32 { return a % b; }");
 	assert result.ok;
