@@ -2311,7 +2311,7 @@ function reserveClosureArgs(s: RaiserCompState, call: Node, args: Node[], callee
 		const a = args[i];
 		const borrowed = params != null && i < params.length && params[i].kind != TypeKind.Sink;
 		const sunk = declared != null && i < declared.length && declared[i].kind == TypeKind.Sink;
-		const reg = !sunk && isClosureLiteral(a) || borrowed && materializesFramePlace(s, a) ? allocRef(s) : -1;
+		const reg = !sunk && isClosureLiteral(a) ? allocRef(s) : borrowed && materializesFramePlace(s, a) ? allocReg(s, regClassOf(s, a.nodeType)) : -1;
 		held.push(reg);
 		if (reg >= 0) {
 			emitLoadConst(s, reg, raiserNil());
