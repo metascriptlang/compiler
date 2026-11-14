@@ -214,6 +214,23 @@ export function resetInstantiationState(): void {
 	_instanceHooks = new HashMap<Symbol, InstanceHook[]>();
 	_hookScannedInstances = new HashMap<Symbol, Type[]>();
 	_hookInstanceTypes = new HashMap<Symbol, Type[]>();
+	_instanceHookChecks = [];
+}
+
+export interface InstanceHookCheck {
+	sym: Symbol;
+	generic: Symbol;
+	hook: string;
+	ownerName: string;
+	at: SourceLocation;
+}
+
+let _instanceHookChecks: InstanceHookCheck[] = [];
+
+export function takeInstanceHookChecks(): InstanceHookCheck[] {
+	const taken = _instanceHookChecks;
+	_instanceHookChecks = [];
+	return taken;
 }
 
 export function forgetInstanceHooks(owner: Symbol): void {
@@ -374,7 +391,9 @@ function instantiateInstanceHooks(owner: Symbol, members: Node[], instanceName: 
 		}
 		ensureShaped(hookSym, ctx);
 		const inst = instantiateGenericFunction(hookSym, params, types, ctx, loc);
-		if (inst != null) recordInstanceHook(owner, types, lifecycleHookOp(md.methodName), inst);
+		if (inst == null) continue;
+		recordInstanceHook(owner, types, lifecycleHookOp(md.methodName), inst);
+		_instanceHookChecks.push({ sym: inst, generic: hookSym, hook: md.methodName, ownerName: instanceName, at: loc });
 	}
 }
 
@@ -397,7 +416,9 @@ function instantiateBoundHook(genericSym: Symbol, instType: Type, op: AttachedOp
 	unifyType(formal, instType, bindings);
 	if (bindings.names.length == 0) return;
 	const inst = instantiateGenericFunction(hookSym, bindings.params, bindings.types, ctx, loc);
-	if (inst != null) recordInstanceHook(genericSym, instType.typeChildren, op, inst);
+	if (inst == null) return;
+	recordInstanceHook(genericSym, instType.typeChildren, op, inst);
+	_instanceHookChecks.push({ sym: inst, generic: hookSym, hook: hookSym.name, ownerName: typeDisplayName(instType), at: loc });
 }
 
 function bindGenericTypeHook(ctx: CheckerContext, hookSym: Symbol, receiver: Type, hook: string, at: SourceLocation): void {

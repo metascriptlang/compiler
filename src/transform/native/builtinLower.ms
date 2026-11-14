@@ -16,6 +16,7 @@ import { Node, NodeKind, NodeFlag, ProgramData, SourceLocation, CallExprData, Me
 import { peelTransparentInstance, isNumeric, isIntegerType, createResult, createPrimitive, stringType, booleanType, int32Type, createFunction, inferredType, isResult, getResultOkType, getResultErrType, isMaybeType, unwrapMaybeType, literalBase, isStringLike, isNullableBigInt } from "../../checker/types";
 import { TransformContext, mintSym } from "../context";
 import { findAllExtensionsByName, findFirstMatchingExt } from "../../checker/context";
+import { isRadixLiteral } from "../../checker/effects";
 import { walkNode } from "../walker";
 import {
 	makeTypedIdentResolved, makeCall, makeString, makeNumber, makeMember,
@@ -204,12 +205,6 @@ function lowerEnumReverseIndex(node: Node, ctx: TransformContext): Node {
 // ===== Universal .toString() =====
 // Every type has a compiler-provided default. User extensions take priority.
 // Resolution: user extension > number > boolean > enum > string > struct/class > array > fallback
-
-function isRadixLiteral(n: Node): boolean {
-	if (n.kind != NodeKind.NumberLiteral) return false;
-	const v = (n.data as NumberLiteralData).value;
-	return v >= 2 && v <= 36;
-}
 
 function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLocation, ctx: TransformContext): Node {
 	const base = isStringLike(objType) ? stringType() : literalBase(objType);

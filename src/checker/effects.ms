@@ -3,18 +3,18 @@
 
 import { stdModuleName } from "../module/tiers";
 import { stmtsOf, membersOf } from "./unitsInCheck";
-import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrayPatternData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, HiddenDerefData, HiddenStdConvData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ExportDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, IdentifierData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, ObjectLiteralData, ObjectPatternData, ObjectPatternPropData, PropertyDeclData, ReturnStmtData, SpreadExprData, Symbol, SymbolKind, Type, TryExprData, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData, BuiltinKind } from "../ast/node";
+import { ActorDeclData, ArrayAccessData, ArrayLiteralData, ArrayPatternData, ArrowFunctionData, AwaitExprData, BinaryExprData, CallExprData, ConditionalExprData, HiddenDerefData, HiddenStdConvData, ConstructorDeclData, DecoratedDeclData, DestructuringDeclData, ExportDeclData, ForOfStmtData, FunctionDeclData, FunctionExprData, IdentifierData, MatchCaseData, MatchExprData, MemberExprData, MethodDeclData, MoveExprData, NewExprData, Node, NodeFlag, NodeKind, NumberLiteralData, ObjectLiteralData, ObjectPatternData, ObjectPatternPropData, PropertyDeclData, ReturnStmtData, SpreadExprData, Symbol, SymbolKind, Type, TryCatchStmtData, TryExprData, TypeAssertionData, TypeKind, UpdateExprData, VariableDeclData, BuiltinKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { CheckerContext, DispatchRegistry, ExtensionRegistry, LIFECYCLE_HOOK_NAMES, addError, hasErrors, isGenericFn, dispatchEntryFor, dispatchOverridesFor, extReceiverSym, findAllExtensionsByName, nominalTypeSym } from "./context";
 import { isAsyncFunctionNode, isSpawnCall } from "./freestanding";
 import { RoutineFlag, SymbolFlag, SymbolTable, findOverloadImpl, hasFlag, lookupSymbol, overloadWinner, parentClassSymOf, routineFlagSet, setFlag } from "./symbol";
-import { brandBase, declaredFieldType, functionSlotOf, hasGenericParams, isAtomicRef, isImmortalConstType, isPrimitiveKind, isReadonlyView, isSendableFunction, isValueOnlyType, typeCarriesRef, typeNameOf } from "./types";
+import { brandBase, declaredFieldType, functionSlotOf, hasGenericParams, isAtomicRef, isImmortalConstType, isNumeric, widenNumberLiteralType, isPrimitiveKind, isReadonlyView, isSendableFunction, isValueOnlyType, typeCarriesRef, typeNameOf } from "./types";
 import { constBindingInitializer } from "./constFold";
 import { isScalarPrimitive } from "./fit";
 import { isFrozenByConst } from "./assignable";
 import { ctorRoutineOf } from "./ctorRoutine";
 import { DYNAMIC_IMPORT } from "./importCall";
-import { lookupModuleProgram } from "./instantiate";
+import { lookupModuleProgram, takeInstanceHookChecks } from "./instantiate";
 import { ModuleGraph, addModule, createModule, createModuleGraph } from "../module/graph";
 import { recordBodyRead } from "./bodyReads";
 
@@ -26,6 +26,7 @@ export enum Effect {
 	StoresBorrowed,
 	StartsTask,
 	RunsElsewhere,
+	Throws,
 }
 
 enum BorrowKind {
@@ -71,6 +72,7 @@ let elsewhereTable: EffectTable = emptyTable();
 let suspendTable: EffectTable = emptyTable();
 let sharedConstTable: EffectTable = emptyTable();
 let startTable: EffectTable = emptyTable();
+let throwTable: EffectTable = emptyTable();
 let startsByModule = new HashMap<string, boolean>();
 let cycles = new HashMap<string, string[]>();
 let freshConsts = new HashMap<Symbol, boolean>();
@@ -126,6 +128,7 @@ interface DeferredCheck {
 let deferred: DeferredCheck[] = [];
 let hookRegistry: ExtensionRegistry | null = null;
 const TASK_DROP_HOOKS: string[] = ["onDestroy", "onCopy", "onClone"];
+const NO_THROW_HOOKS: string[] = ["onDestroy", "onTrace"];
 const BUILTINS_WRITING_NOTHING: BuiltinKind[] = [BuiltinKind.PtrBits, BuiltinKind.Float64Bits, BuiltinKind.Float64FromBits, BuiltinKind.HiXorLo, BuiltinKind.MapFatal, BuiltinKind.LoadLE64, BuiltinKind.LoadLE32, BuiltinKind.AsBytes, BuiltinKind.ResultOk, BuiltinKind.ResultErr, BuiltinKind.Swap];
 
 function tableFor(e: Effect): EffectTable {
@@ -137,6 +140,7 @@ function tableFor(e: Effect): EffectTable {
 		Effect.Suspends => suspendTable,
 		Effect.StoresBorrowed => sharedConstTable,
 		Effect.StartsTask => startTable,
+		Effect.Throws => throwTable,
 	};
 }
 
@@ -191,6 +195,7 @@ export function runDeferredEffectChecks(ctx: CheckerContext, program: Node): voi
 	suspendTable = emptyTable();
 	sharedConstTable = emptyTable();
 	startTable = emptyTable();
+	throwTable = emptyTable();
 	startsByModule = new HashMap<string, boolean>();
 	cycles = new HashMap<string, string[]>();
 	freshConsts = new HashMap<Symbol, boolean>();
@@ -222,14 +227,29 @@ function checkHookEffects(ctx: CheckerContext): void {
 	for (const hook of LIFECYCLE_HOOK_NAMES) {
 		for (const m of findAllExtensionsByName(registry, hook)) {
 			if (m.isStatic || m.sym == null || m.sym!.modulePath != ctx.modulePath || isUncheckedGeneric(m.sym!)) continue;
-			const c = routineEffect(ctx.dispatchRegistry, m.sym!, Effect.Suspends);
-			if (c == null) continue;
 			const owner = extReceiverSym(m);
-			const of = owner != null ? " of '" + owner.name + "'" : "";
-			const at = m.sym!.declNode != null ? m.sym!.declNode!.location : c.site.location;
-			addError(ctx, "lifecycle hook '" + hook + "'" + of + " must not spawn, await or call a function value, but it " + c.text, at.line, at.column);
+			const at = m.sym!.declNode != null ? m.sym!.declNode!.location : null;
+			if (at == null) throw new Error(`internal: lifecycle hook '${hook}' has no declaration`);
+			checkHook(ctx, m.sym!, hook, owner != null ? owner.name : "", at.line, at.column);
 		}
 	}
+	for (const inst of takeInstanceHookChecks()) {
+		if (isUncheckedGeneric(inst.generic) || hookFault(ctx.dispatchRegistry, inst.generic, inst.hook) == null) checkHook(ctx, inst.sym, inst.hook, inst.ownerName, inst.at.line, inst.at.column);
+	}
+}
+
+function checkHook(ctx: CheckerContext, sym: Symbol, hook: string, ownerName: string, line: int32, column: int32): void {
+	const fault = hookFault(ctx.dispatchRegistry, sym, hook);
+	if (fault == null) return;
+	const of = ownerName != "" ? " of '" + ownerName + "'" : "";
+	addError(ctx, "lifecycle hook '" + hook + "'" + of + " must not " + fault, line, column);
+}
+
+function hookFault(dispatchRegistry: DispatchRegistry, sym: Symbol, hook: string): string | null {
+	const c = routineEffect(dispatchRegistry, sym, Effect.Suspends);
+	if (c != null) return "spawn, await or call a function value, but it " + c.text;
+	const t = NO_THROW_HOOKS.includes(hook) ? routineEffect(dispatchRegistry, sym, Effect.Throws) : null;
+	return t != null ? "throw, but it " + t.text : null;
 }
 
 export function checkActorHookEffects(hook: Node, hookName: string, actorName: string): void {
@@ -1257,6 +1277,8 @@ export function callEffect(dispatchRegistry: DispatchRegistry, call: Node, e: Ef
 		return e == Effect.StoresBorrowed || e == Effect.ActorReach ? null : cause(call, "calls a function value");
 	}
 	if (hasFlag(sym!, SymbolFlag.GeneratedOp) || isStdBuiltinWritingNothing(sym!) || isScalarToString(call, sym!)) return null;
+	if (e == Effect.Throws && hasFlag(sym!, SymbolFlag.Throws)) return { site: call, text: cause(call, "calls '" + sym!.name + "'").text + ", which is marked @throws" };
+	if (e == Effect.Throws && hasFlag(sym!, SymbolFlag.Async)) return null;
 	const external = isExternalRoutine(sym!);
 	if (external) {
 		if (e != Effect.SideEffect || isStdNativeMethod(call, sym!) || !externSignatureHoldsPointer(sym!)) return null;
@@ -1320,6 +1342,38 @@ function isGenericArrayByteMover(sym: Symbol): boolean {
 	return GENERIC_ARRAY_BYTE_MOVERS.includes(native);
 }
 
+export function isRadixLiteral(n: Node): boolean {
+	if (n.kind != NodeKind.NumberLiteral) return false;
+	const v = (n.data as NumberLiteralData).value;
+	return v >= 2 && v <= 36;
+}
+
+function toStringReceiver(call: Node): Node | null {
+	const callee = (call.data as CallExprData).callee;
+	return callee != null && callee.kind == NodeKind.MemberExpr ? (callee.data as MemberExprData).object : null;
+}
+
+function isNumberToString(call: Node): boolean {
+	const callee = (call.data as CallExprData).callee;
+	const sym = call.resolvedSym ?? (callee != null ? callee.resolvedSym : null);
+	const recv = toStringReceiver(call);
+	if (sym == null) return false;
+	if (sym.name != "toString" || recv == null || recv.nodeType == null || !isNumeric(widenNumberLiteralType(recv.nodeType!))) return false;
+	return sym.builtinKind == BuiltinKind.ToStringMethod || stdModuleName(sym.modulePath) == "std/core/number";
+}
+
+function numberToStringThrows(dispatchRegistry: DispatchRegistry, call: Node): EffectCause | null {
+	const args = (call.data as CallExprData).arguments;
+	if (args.length > 0 && !isRadixLiteral(args[args.length - 1])) return cause(call, "calls 'toString' with a radix checked at run time");
+	const recv = walkEffect(dispatchRegistry, toStringReceiver(call), Effect.Throws);
+	if (recv != null) return recv;
+	for (const arg of args) {
+		const c = walkEffect(dispatchRegistry, arg, Effect.Throws);
+		if (c != null) return c;
+	}
+	return null;
+}
+
 function isScalarToString(call: Node, sym: Symbol): boolean {
 	const args = (call.data as CallExprData).arguments;
 	return sym.builtinKind == BuiltinKind.ToString && args.length == 1 && isScalarPrimitive(args[0].nodeType);
@@ -1359,7 +1413,7 @@ function ownedValueHookEffect(dispatchRegistry: DispatchRegistry, site: Node, e:
 function useEffect(dispatchRegistry: DispatchRegistry, node: Node, e: Effect): EffectCause | null {
 	const sym = node.resolvedSym;
 	if (sym == null) return null;
-	if ((e == Effect.Suspends || e == Effect.StoresBorrowed || e == Effect.StartsTask || e == Effect.RunsElsewhere) && sym.symbolKind != SymbolKind.Function) return null;
+	if ((e == Effect.Suspends || e == Effect.StoresBorrowed || e == Effect.StartsTask || e == Effect.RunsElsewhere || e == Effect.Throws) && sym.symbolKind != SymbolKind.Function) return null;
 	if (isModuleState(sym)) return isConstantValue(dispatchRegistry, sym, e) ? null : cause(node, "uses " + stateName(sym));
 	if (sym.symbolKind == SymbolKind.Function) return through(node, "refers to '" + sym.name + "'", routineEffect(dispatchRegistry, sym, e));
 	return null;
@@ -1570,12 +1624,15 @@ export function walkEffect(dispatchRegistry: DispatchRegistry, node: Node | null
 	if (node == null) return null;
 	if (isRoutineNode(node)) return walkNestedRoutine(dispatchRegistry, node, e);
 	if (e == Effect.RunsElsewhere && node.kind == NodeKind.CallExpr && isMessageToAnotherActor(node)) return cause(node, "messages an actor");
-	if ((e == Effect.Suspends || reachesModuleState(e)) && node.kind == NodeKind.CallExpr && isMessageToAnotherActor(node)) return messageOperandsEffect(dispatchRegistry, node, e);
+	if ((e == Effect.Suspends || e == Effect.Throws || reachesModuleState(e)) && node.kind == NodeKind.CallExpr && isMessageToAnotherActor(node)) return messageOperandsEffect(dispatchRegistry, node, e);
+	if (e == Effect.Throws && node.kind == NodeKind.TryCatchStmt) return tryStmtThrows(dispatchRegistry, node.data as TryCatchStmtData);
+	if (e == Effect.Throws && node.kind == NodeKind.CallExpr && isNumberToString(node)) return numberToStringThrows(dispatchRegistry, node);
 	const here: EffectCause | null = match (node.kind) {
 		NodeKind.Identifier | NodeKind.MemberExpr => useEffect(dispatchRegistry, node, e),
 		NodeKind.CallExpr => e == Effect.StoresBorrowed ? sinkStoreOf(dispatchRegistry, node) ?? viewArgEffect(dispatchRegistry, node) ?? callEffect(dispatchRegistry, node, e) : callEffect(dispatchRegistry, node, e),
 		NodeKind.NewExpr => e == Effect.StoresBorrowed ? newViewArgEffect(dispatchRegistry, node) ?? newEffect(dispatchRegistry, node, e) : newEffect(dispatchRegistry, node, e),
 		NodeKind.AwaitExpr => e == Effect.Suspends && !inAsync ? cause(node, "awaits") : null,
+		NodeKind.ThrowStmt => e == Effect.Throws ? cause(node, "throws") : null,
 		NodeKind.BinaryExpr | NodeKind.ArrayLiteral | NodeKind.ObjectLiteral => e == Effect.StoresBorrowed ? slotStoreOf(dispatchRegistry, node) : null,
 		NodeKind.ReturnStmt => e == Effect.StoresBorrowed ? resultStoreOf(dispatchRegistry, (node.data as ReturnStmtData).argument) : null,
 		_ => null,
@@ -1585,6 +1642,11 @@ export function walkEffect(dispatchRegistry: DispatchRegistry, node: Node | null
 	if (op != null) return op;
 	if ((e == Effect.StoresBorrowed || reachesModuleState(e)) && node.kind == NodeKind.ForOfStmt && node.resolvedSym != null) forOfSources.set(node.resolvedSym!, (node.data as ForOfStmtData).forOfIterable);
 	return walkChildren(dispatchRegistry, node, e);
+}
+
+function tryStmtThrows(dispatchRegistry: DispatchRegistry, d: TryCatchStmtData): EffectCause | null {
+	const body = d.hasCatchClause ? null : walkEffect(dispatchRegistry, d.tryBody, Effect.Throws);
+	return body ?? walkEffect(dispatchRegistry, d.catchBody, Effect.Throws) ?? walkEffect(dispatchRegistry, d.finallyBody, Effect.Throws);
 }
 
 // What a stored value borrows, seen through conversions, both arms of a choice, field and element
