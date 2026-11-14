@@ -7,7 +7,7 @@ import { raiserPackedEligible } from "../../analyzer/classify";
 import { MemKind } from "../../raiser/layout";
 import {
 	RaiserSlotShape, RaiserRegClass, RaiserOpcode, RaiserConvClass,
-	raiserABC, convOperand,
+	raiserABC, convOperand, MAX_SLOT,
 } from "../../raiser/bytecode";
 import {
 	RaiserValueKind, raiserInt, raiserFloat, raiserBool, raiserConstString,
@@ -15,7 +15,7 @@ import {
 import { VmLayouts, vmLayoutOf } from "./layout";
 import {
 	packedSlotShapeOf, regClassOf, zeroScalar, structShapeOperand,
-	slotClassesOf, fieldInst, newArrayInst,
+	slotClassesOf, fieldInst, newArrayInst, layoutOf, slotKindsOf,
 } from "./valueCopy";
 import {
 	RaiserCompState, allocPackedBlock, allocReg, allocWord, allocBool,
@@ -440,6 +440,54 @@ function packInto(
 		} else packInto(s, layouts, packedIndex(s, layouts, place, i), field);
 		emitInst(s, raiserABC(RaiserOpcode.WasMoved, field, 0, 0));
 	}
+}
+
+function copiesBySlot(s: RaiserCompState, layouts: VmLayouts, t: Type): boolean {
+	const body = bodyOf(t);
+	if (body.kind != TypeKind.Struct || isMaybeType(body)) return false;
+	const names = layoutOf(t);
+	const classes = slotKindsOf(s, t);
+	for (let i = 0; i < body.typeNames.length; i += 1) {
+		const child = body.typeChildren[i];
+		if (storesNothing(body, child)) continue;
+		const slot = names.indexOf(body.typeNames[i]);
+		if (slot < 0 || slot > MAX_SLOT) return false;
+		const kind = vmLayoutOf(layouts, child).kind;
+		if (kind == MemKind.Block) {
+			if (classes[slot] != RaiserRegClass.Ref || !copiesBySlot(s, layouts, child)) return false;
+		} else if (kind == MemKind.Ptr || classes[slot] != scalarClass(child, kind)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+function packBySlot(
+	s: RaiserCompState, layouts: VmLayouts, place: RaiserFramePlace, cell: int32,
+): void {
+	const body = bodyOf(place.valueType);
+	const names = layoutOf(place.valueType);
+	const classes = slotKindsOf(s, place.valueType);
+	for (let i = 0; i < body.typeNames.length; i += 1) {
+		const name = body.typeNames[i];
+		if (storesNothing(body, body.typeChildren[i])) continue;
+		const slot = names.indexOf(name);
+		const field = packedField(s, layouts, place, name);
+		const value = allocReg(s, classes[slot]);
+		emitInst(s, slotInst(RaiserOpcode.LoadSlot, value, cell, addConst(s, raiserConstString(name)), slot));
+		if (vmLayoutOf(layouts, field.valueType).kind == MemKind.Block) packBySlot(s, layouts, field, value);
+		else emitPackedStore(s, layouts, field, value);
+	}
+}
+
+export function emitTypedCellToPacked(
+	s: RaiserCompState, layouts: VmLayouts, typed: RaiserLegacyValue,
+): RaiserFramePlace {
+	if (classOfReg(s, typed.reg) != RaiserRegClass.Ref || !copiesBySlot(s, layouts, typed.valueType)) return emitLegacyToPacked(s, layouts, typed);
+	validateLegacy(s, typed);
+	const result = allocPackedValue(s, layouts, typed.valueType);
+	packBySlot(s, layouts, result, typed.reg);
+	return result;
 }
 
 export function emitLegacyToPacked(

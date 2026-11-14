@@ -40,7 +40,7 @@ import {
 	callRaiserOnDemand, queueRaiserCompileError, resolveRoutine, resolveConstructor, resolveClassInit, setRaiserCallSite, inStdDemand, stdRoutineRefusal, refusalAt,
 	callRaiserStmtCompiler, enterSite, emitTrap, emitTrapNil, emitClosurePair, RAISER_KIND_CLOSURE, RAISER_KIND_PLAIN_OBJECT, CLOSURE_PAIR, CLOSURE_PAIR_KINDS, slotInst, resolveGlobal, raiserClassKey, raiserClassId, classSymOfType, landResult, declaredSymbol, emitAbxPlaceholder, patchAbxTo,
 } from "./context";
-import { RaiserFramePlace, allocPackedValue, packedFramePlace, packedField, packedIndex, emitPackedCopy, emitPackedLoad, emitPackedStore, emitLegacyToPacked, emitPackedToLegacy, bodyOf, literalValue } from "./packedValues";
+import { RaiserFramePlace, allocPackedValue, packedFramePlace, packedField, packedIndex, emitPackedCopy, emitPackedLoad, emitPackedStore, emitLegacyToPacked, emitTypedCellToPacked, emitPackedToLegacy, bodyOf, literalValue } from "./packedValues";
 import { nullAccessHead } from "../../transform/maybeCarrier";
 import { readsMemberInPlace } from "../../analyzer/inject";
 import { isViewCall } from "../../checker/effects";
@@ -901,7 +901,7 @@ function compilePackedExprRaw(s: RaiserCompState, node: Node, valueType: Type): 
 		return result;
 	}
 	const value = compileExprRaw(s, node);
-	const result = emitLegacyToPacked(s, s.layouts, { reg: value, valueType, shape: { words: 1, block: false } });
+	const result = emitTypedCellToPacked(s, s.layouts, { reg: value, valueType, shape: { words: 1, block: false } });
 	if (makesFreshCell(s, node) && inRefFile(classOfReg(s, value))) emitInst(s, raiserABC(RaiserOpcode.RcDec, value, 0, 0));
 	return result;
 }

@@ -183,6 +183,7 @@ import "./raiserRequiredField";
 import "./raiserRuntimeLayout";
 import "./raiserSpliceMovesElements";
 import "./raiserValueUnionCopy";
+import "./raiserTypedStructRead";
 import "./sendableFunction";
 import "./slotRelation";
 import "./brandArrayRelations";
