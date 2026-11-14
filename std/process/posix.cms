@@ -154,8 +154,11 @@ when (posix) {
 		const result: string[] = [];
 		const entries = parentEnvironment() as Ptr<void> as Ptr<cstring | null> | null;
 		if (entries == null) return result;
-		for (let i = 0; entries[i] != null; i++) result.push(entries[i] as string);
-		return result;
+		for (let i = 0; true; i++) {
+			const entry = entries[i];
+			if (entry == null) return result;
+			result.push(entry as string);
+		}
 	}
 
 	// ===== The spawn plan: one record of a spawn's steps, run by posix_spawn or after a fork =====
