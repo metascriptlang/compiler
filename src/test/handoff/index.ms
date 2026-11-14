@@ -174,6 +174,7 @@ import "./raiserBoolTestBranches";
 import "./raiserLoopInvariantStringRead";
 import "./raiserCharCodeAtImmediate";
 import "./raiserFixedLengthForOf";
+import "./raiserTryFallsIntoFinally";
 import "./raiserReturnLeavesTries";
 import "./raiserRequiredField";
 import "./raiserRuntimeLayout";
