@@ -1396,13 +1396,7 @@ export function cbcDecrypt(xk: Readonly<Word[]>, iv: InputBytes, cipher: InputBy
 		return null;
 	}
 	const length = size - (declassify(pad) as int32);
-	when (!js) {
-		const padded: Span<uint8> = out;
-		wipeBytes(padded[length..size]);
-		return out.subarray(0, length);
-	} else {
-		const plain = out.slice(0, length);
-		wipeBytes(out);
-		return plain;
-	}
+	const padded: Span<uint8> = out;
+	wipeBytes(padded[length..size]);
+	return out.subarray(0, length);
 }

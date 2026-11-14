@@ -2,36 +2,21 @@ import { Buffer } from "std/core/buffer";
 import { ByteInput } from "std/core/buffer/bytes";
 import { wipeBytes } from "./secret";
 
-when (!js) {
-	/** The bytes a kernel reads in place: any view of the caller's bytes. */
-	export type InputBytes = Readonly<Span<uint8>>;
-	/** Where a kernel writes bytes: on C any view, a Buffer's included, on JavaScript an array. */
-	export type OutputBytes = Span<uint8>;
-	/** A kernel's fresh result: on C the Buffer the API returns, on JavaScript an array. */
-	export type OutputArray = Buffer;
+/** The bytes a kernel reads in place: any view of the caller's bytes. */
+export type InputBytes = Readonly<Span<uint8>>;
+/** Where a kernel writes bytes: any view, a Buffer's included. */
+export type OutputBytes = Span<uint8>;
+/** A kernel's fresh result: the Buffer the API returns. */
+export type OutputArray = Buffer;
 
-	export function outputArray(size: number): OutputArray {
-		return new Buffer(size);
-	}
+export function outputArray(size: number): OutputArray {
+	return new Buffer(size);
+}
 
-	/** A kernel's result as the Buffer the API returns: on C the result itself. */
-	@inline
-	export function outputBuffer(bytes: OutputArray): Buffer {
-		return bytes;
-	}
-} else {
-	export type InputBytes = Readonly<Span<uint8>>;
-	export type OutputBytes = uint8[];
-	export type OutputArray = uint8[];
-
-	export function outputArray(size: number): OutputArray {
-		return new Array<uint8>(size);
-	}
-
-	/** A kernel's result as the Buffer the API returns: on JavaScript a copy of the array. */
-	export function outputBuffer(bytes: OutputArray): Buffer {
-		return Buffer.from(bytes);
-	}
+/** A kernel's result as the Buffer the API returns: the result itself. */
+@inline
+export function outputBuffer(bytes: OutputArray): Buffer {
+	return bytes;
 }
 
 /** An owned copy of the bytes an operation reads: a string is its UTF-8 bytes. */
