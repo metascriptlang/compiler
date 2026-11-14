@@ -2043,6 +2043,14 @@ function compileLogicalExpr(s: RaiserCompState, node: Node): int32 {
 	// Compile left operand
 	compileExprInto(s, d.left, dest);
 
+	const cls = classOfReg(s, dest);
+	if (cls == RaiserRegClass.Bool || cls == RaiserRegClass.Word) {
+		const past = jumpIfValue(s, dest, d.operator == "||");
+		compileExprInto(s, d.right, dest);
+		patchJumpsTo(s, past, codeLen(s));
+		return dest;
+	}
+
 	if (d.operator == "&&") {
 		// a && b: if a is falsy, skip b (result = a)
 		const jumpPastB = emitBranchIfFalsy(s, dest);
