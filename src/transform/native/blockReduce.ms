@@ -20,6 +20,7 @@ import { makeIntNumber } from "../../checker/literalNodes";
 import { clonePlace } from "../place";
 import { isSignedKind, bitsOfKind } from "../numKinds";
 import { versionSumLoop, versionStoreLoop, REDUCE_BLOCK } from "./blockSum";
+import { checkedAccumulation } from "./intCheckInject";
 
 type Reduce = { acc: Node, op: string, term: Node };
 type Reduction = { acc: Node, op: string, arrays: Node[], index: Node, len: Node, widthTag: string };
@@ -188,12 +189,9 @@ function matchIndexed(stmts: Node[], index: Node, len: Node): Reduction | null {
 
 function reduceStmt(stmt: Node): Reduce | null {
 	if (stmt.kind != NodeKind.ExprStmt) return null;
-	const e = (stmt.data as ExprStmtData).expr;
-	const add = isRuntimeProcCall(e, "msAddAssign");
-	if (!add && !isRuntimeProcCall(e, "msSubAssign")) return null;
-	const args = (e.data as CallExprData).arguments;
-	if (args.length != 2 || !isSignedLocal(args[0])) return null;
-	return { acc: args[0], op: add ? "+=" : "-=", term: args[1] };
+	const step = checkedAccumulation((stmt.data as ExprStmtData).expr);
+	if (step == null || !isSignedLocal(step.acc)) return null;
+	return { acc: step.acc, op: step.sub ? "-=" : "+=", term: step.term };
 }
 
 function widened(term: Node, acc: Node): Node | null {

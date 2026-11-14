@@ -19,7 +19,7 @@ import { peelToRepr, createPrimitive, typeDisplayName } from "../../checker/type
 import { wrapInConv, isBitwiseBinaryOp, isBitwiseCompoundOp } from "../../checker/fit";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, runtimeRef, makeNumber } from "../util";
+import { makeCall, runtimeRef, makeNumber, isRuntimeProcCall } from "../util";
 import { is64Kind, isSignedKind, isFloatKind } from "../numKinds";
 
 export function lowerNumberBitwiseOperands(program: Node, ctx: TransformContext): Node {
@@ -268,6 +268,28 @@ export function isIntCheckCall(n: Node): boolean {
 
 export function isIntCheckWrite(n: Node): boolean {
 	return isIntCheckCall(n) && n.flags.has(NodeFlag.WritesOperand);
+}
+
+export type CheckedAccumulation = { acc: Node, sub: boolean, term: Node };
+
+export function checkedAccumulation(e: Node): CheckedAccumulation | null {
+	const compound = isRuntimeProcCall(e, "msAddAssign") || isRuntimeProcCall(e, "msSubAssign");
+	if (compound) {
+		const args = (e.data as CallExprData).arguments;
+		return args.length == 2 ? { acc: args[0], sub: isRuntimeProcCall(e, "msSubAssign"), term: args[1] } : null;
+	}
+	if (e.kind != NodeKind.BinaryExpr || (e.data as BinaryExprData).operator != "=") return null;
+	const d = e.data as BinaryExprData;
+	const t = d.left.kind == NodeKind.Identifier && d.left.resolvedSym != null ? signedRepr(d.left.nodeType) : null;
+	const r = signedRepr(d.right.nodeType);
+	if (t == null || r == null || r.kind != t.kind || !isIntCheckCall(d.right)) return null;
+	const args = (d.right.data as CallExprData).arguments;
+	if (args.length != 2) return null;
+	const isAcc = (n: Node): boolean => n.kind == NodeKind.Identifier && n.resolvedSym == d.left.resolvedSym;
+	if (isRuntimeProcCall(d.right, ownWidthName("msSub", t))) return isAcc(args[0]) ? { acc: d.left, sub: true, term: args[1] } : null;
+	if (!isRuntimeProcCall(d.right, ownWidthName("msAdd", t))) return null;
+	if (isAcc(args[0])) return { acc: d.left, sub: false, term: args[1] };
+	return isAcc(args[1]) ? { acc: d.left, sub: false, term: args[0] } : null;
 }
 
 function helperKind(t: Type): TypeKind {

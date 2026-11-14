@@ -22,13 +22,15 @@ import { clonePlace } from "../place";
 import { isSignedKind, bitsOfKind } from "../numKinds";
 import { forEachChild } from "../../ast/visitor";
 import { cloneFresh } from "../lowering/iterInline";
+import { checkedAccumulation } from "./intCheckInject";
 import { hasFlag } from "../../checker/symbol";
 import { cloneNodeKeepSem } from "../../monomorphize/clone";
 
 type SumLoop = { acc: Node, sub: boolean, index: Node, bounds: Node[], guard: Node[], decls: Node[], term: Node };
 type Guard = { cond: Node, length: int32 };
 type Fast = { bad: Symbol, counters: HashSet<Symbol>, guarded: Node[], ranges: HashMap<Symbol, Range>, counterChecks: Range[], products: Symbol[] | null, ctx: TransformContext, loc: SourceLocation };
-type StoreLoop = { index: Node, bounds: Node[], body: Node[], states: Symbol[], views: Symbol[] };
+type StoreLoop = { index: Node, bounds: Node[], guard: Node[], body: Node[], states: Symbol[], views: Symbol[] };
+type BoundedBody = { index: Node, bounds: Node[], guard: Node[], stmts: Node[] };
 type Range = { lo: int64, hi: int64 };
 type Wrapped = { op: string, a: Symbol, b: Symbol | null, overflow: Symbol };
 
@@ -37,7 +39,7 @@ export function versionSumLoop(loop: Node, ctx: TransformContext): Node | null {
 	return s == null ? null : sumLoop(s, loop, ctx);
 }
 
-function matchSumLoop(loop: Node): SumLoop | null {
+function boundedBody(loop: Node): BoundedBody | null {
 	const w = loop.data as WhileStmtData;
 	if (w.whileLabel != "" || w.whileBody.kind != NodeKind.BlockStmt) return null;
 	const bounds: Node[] = [];
@@ -53,26 +55,31 @@ function matchSumLoop(loop: Node): SumLoop | null {
 			if (reads(rest, g.resolvedSym!)) return null;
 		}
 	}
+	return { index, bounds, guard: guardStmts, stmts };
+}
+
+function matchSumLoop(loop: Node): SumLoop | null {
+	const b = boundedBody(loop);
+	if (b == null) return null;
+	const { index, bounds, stmts } = b;
+	const guardStmts = b.guard;
 	if (stmts.length < 2 || !isStep(stmts[stmts.length - 1], index)) return null;
 	const reduce = stmts[stmts.length - 2];
 	if (reduce.kind != NodeKind.ExprStmt) return null;
-	const e = (reduce.data as ExprStmtData).expr;
-	const add = isRuntimeProcCall(e, "msAddAssign");
-	if (!add && !isRuntimeProcCall(e, "msSubAssign")) return null;
-	const args = (e.data as CallExprData).arguments;
-	if (args.length != 2 || !isSmallSignedLocal(args[0]) || sameLocal(args[0], index)) return null;
-	const acc = args[0];
+	const step = checkedAccumulation((reduce.data as ExprStmtData).expr);
+	if (step == null || !isSmallSignedLocal(step.acc) || sameLocal(step.acc, index)) return null;
+	const acc = step.acc;
 	const decls = stmts.slice(0, stmts.length - 2);
 	for (const d of decls) {
 		if (d.kind != NodeKind.VariableDecl || d.resolvedSym == null || !isScalar(d.resolvedSym.symbolType)) return null;
 		const init = (d.data as VariableDeclData).initializer;
 		if (init == null || !isPure(init, acc)) return null;
 	}
-	if (!isPure(args[1], acc)) return null;
+	if (!isPure(step.term, acc)) return null;
 	for (const b of bounds) {
 		if (reads(b, acc.resolvedSym!) || reads(b, index.resolvedSym!)) return null;
 	}
-	return { acc, sub: !add, index, bounds, guard: guardStmts, decls, term: args[1] };
+	return { acc, sub: step.sub, index, bounds, guard: guardStmts, decls, term: step.term };
 }
 
 function isTrue(n: Node): boolean {
@@ -610,12 +617,9 @@ export function versionStoreLoop(loop: Node, ctx: TransformContext): Node | null
 }
 
 function matchStoreLoop(loop: Node): StoreLoop | null {
-	const w = loop.data as WhileStmtData;
-	if (w.whileLabel != "" || w.whileBody.kind != NodeKind.BlockStmt) return null;
-	const bounds: Node[] = [];
-	const index = boundedIndex(w.whileCondition, bounds);
-	if (index == null) return null;
-	const stmts = flatStatements(w.whileBody);
+	const b = boundedBody(loop);
+	if (b == null) return null;
+	const { index, bounds, stmts } = b;
 	if (stmts.length < 2 || !isStep(stmts[stmts.length - 1], index)) return null;
 	const body = stmts.slice(0, stmts.length - 1);
 	const states: Symbol[] = [];
@@ -657,7 +661,7 @@ function matchStoreLoop(loop: Node): StoreLoop | null {
 	for (const b of bounds) {
 		if (reads(b, index.resolvedSym!) && !sameLocal(b, index)) return null;
 	}
-	return { index, bounds, body, states, views };
+	return { index, bounds, guard: b.guard, body, states, views };
 }
 
 function storedView(stmt: Node, index: Node): Symbol | null {
@@ -778,7 +782,8 @@ function storeLoop(s: StoreLoop, loop: Node, ctx: TransformContext): Node {
 	const inBlock = typed(makeBinary(wide(cloneIdent(s.index, loc), loc), "<", makeIdentResolved(end, loc), loc), booleanType());
 	const checked = makeBlock([makeWhile(inBlock, w.whileBody, loc)], loc);
 	head.push(makeIf(typed(makeUnaryNot(makeIdentResolved(bad, loc), loc), booleanType()), makeBlock(take, loc), checked, loc));
-	return makeWhile(w.whileCondition, makeBlock(head, loc), loc);
+	const guard = s.guard.length > 0 ? (cloneFresh(makeBlock(s.guard, loc), new HashMap<Symbol, Symbol>(), ctx, true).data as BlockStmtData).statements : [];
+	return makeWhile(w.whileCondition, makeBlock(guard.concat(head), loc), loc);
 }
 
 function blockEnd(index: Node, bounds: Node[], loc: SourceLocation): Node {
