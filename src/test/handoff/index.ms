@@ -173,6 +173,7 @@ import "./raiserShortCircuitFlagThreaded";
 import "./raiserBoolTestBranches";
 import "./raiserLoopInvariantStringRead";
 import "./raiserCharCodeAtImmediate";
+import "./raiserFixedLengthForOf";
 import "./raiserReturnLeavesTries";
 import "./raiserRequiredField";
 import "./raiserRuntimeLayout";
