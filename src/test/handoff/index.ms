@@ -171,6 +171,7 @@ import "./raiserConstBindingLoadedBeforeLoop";
 import "./raiserCursorBindingKeepsItsInitializer";
 import "./raiserShortCircuitFlagThreaded";
 import "./raiserBoolTestBranches";
+import "./raiserLoopInvariantStringRead";
 import "./raiserReturnLeavesTries";
 import "./raiserRequiredField";
 import "./raiserRuntimeLayout";
