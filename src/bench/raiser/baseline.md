@@ -264,3 +264,7 @@ A for-of over a const bound to an array literal under a read-only array type che
 converts back, so the check could never fire. It was haro's `SCHEMES` loop in `schemeAt`, an `ArrayLen` and a branch
 per scheme. Same probe on the slice's candidate: haro 0.916G instructions (-12.6%; -41.7% from `71bf722e2624`),
 `schemeAt` 0.397G; rowsEl 0.969G, unchanged. Wall time not yet taken in a quiet window.
+
+A try with no catch falls from its body into its finally instead of taking a `Jump 0` there, one dispatch per
+cleanup scope run (`compileTryCatchStmt`). Same probe on the slice's candidate: rowsEl 0.962G instructions (from
+0.969G), haro 0.914G (from 0.916G).
