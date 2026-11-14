@@ -1695,9 +1695,14 @@ export function condJumps(s: RaiserCompState, node: Node, whenTrue: boolean): in
 				}
 				if (neverNullPacked(s, otherSide)) return jumpIfValue(s, compareNeverNull(s, otherSide, negated), whenTrue);
 				const valReg = compileExpr(s, otherSide);
+				const jumpWhenNil = negated ? !whenTrue : whenTrue;
+				if (classOfReg(s, valReg) == RaiserRegClass.Ref) {
+					emitInst(s, raiserABC(jumpWhenNil ? RaiserOpcode.BrNilR : RaiserOpcode.BrLiveR, valReg, 0, branchField(0)));
+					return [codeLen(s) - 1];
+				}
 				const isNil = allocBool(s);
 				emitInst(s, raiserABC(RaiserOpcode.IsKind, isNil, valReg, RaiserValueKind.Nil as number));
-				return jumpIfValue(s, isNil, negated ? !whenTrue : whenTrue);
+				return jumpIfValue(s, isNil, jumpWhenNil);
 			}
 			if (isEqOp && (isPointerTyped(d.left) || isPointerTyped(d.right))) {
 				const lReg = compileExpr(s, d.left);
