@@ -252,6 +252,7 @@ import "./deferBlockCheck";
 import "./forOfPattern";
 import "./viewBorrows";
 import "./viewBorrowPaths";
+import "./comptimeStaticMemberTier";
 import "./computedObjectKey";
 import "./constructorArity";
 import "./b4ErrorRecovery";

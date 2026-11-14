@@ -7,7 +7,7 @@ import { forEachChild } from "../../ast/visitor";
 import { parseSource } from "../../parser/statements/validation";
 import { parseAsBuildOf } from "../../parser/context";
 import { checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, buildPreludeContext, loadPreludeStdModule, registerSeedSymbols, clearSeedSymbols } from "../../checker/checkPass";
-import { DispatchRegistry, createDispatchRegistry, ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, declareReplica, forgetReplica, isPreludeExport, stdSymbol, extensionsOf, getExtReceiverType, getStaticExtTypeName, extractGenericNames } from "../../checker/context";
+import { DispatchRegistry, createDispatchRegistry, ExportRegistry, CheckerContext, CheckerError, CancelCtx, ExtensionMethod, Severity, addError, setEngineCheckMode, declareReplica, forgetReplica, isPreludeExport, stdSymbol, extensionsOf, getExtReceiverType, getStaticExtTypeName, extractGenericNames, findAllExtensionsByName } from "../../checker/context";
 import { sameType } from "../../checker/compat";
 import { typeDisplayName, createUnifyBindings, unifyType } from "../../checker/types";
 import { lookupSymbol, isMetaBuiltin } from "../../checker/symbol";
@@ -608,7 +608,10 @@ function jsTierScope(jsPath: string): Symbol[] | null {
 function jsTierOf(sym: Symbol): Symbol | null {
 	if (!isRoutineSym(sym)) return null;
 	const tier = jsTierScope(sym.modulePath);
-	if (tier == null || !tier.some((head: Symbol): boolean => head.name == sym.name)) return null;
+	if (tier == null) return null;
+	const owner = staticOwnerOf(sym);
+	const named = owner != "" ? staticTierMembers(sym, owner).length > 0 : tier.some((head: Symbol): boolean => head.name == sym.name);
+	if (!named) return null;
 	return tierTwinIn(sym, tier);
 }
 
@@ -620,7 +623,27 @@ function vmPreludeTwin(sym: Symbol): Symbol | null {
 	return tierTwinIn(sym, tier);
 }
 
-function tierTwinIn(sym: Symbol, tier: Symbol[]): Symbol | null {
+function staticOwnerOf(sym: Symbol): string {
+	const decl = sym.declNode;
+	return decl != null && decl.kind == NodeKind.FunctionDecl ? getStaticExtTypeName((decl.data as FunctionDeclData).fnFlags) : "";
+}
+
+function staticTierMembers(sym: Symbol, owner: string): Symbol[] {
+	const stem = sym.modulePath.slice(0, sym.modulePath.lastIndexOf("."));
+	const members: Symbol[] = [];
+	const exts = raiserPreludeCtx().extensionRegistry;
+	if (exts == null) return members;
+	for (const e of findAllExtensionsByName(exts, sym.name)) {
+		const held = e.sym;
+		if (!e.isStatic || held == null || held == sym) continue;
+		if ((held.modulePath == stem + ".rms" || held.modulePath == stem + ".ms") && staticOwnerOf(held) == owner) members.push(held);
+	}
+	return members;
+}
+
+function tierTwinIn(sym: Symbol, scope: Symbol[]): Symbol | null {
+	const owner = staticOwnerOf(sym);
+	const tier = owner != "" ? staticTierMembers(sym, owner) : scope;
 	if (sym.instantiatedFrom != null) return tierInstanceOf(sym, tier);
 	const builtShape = signatureShape(sym.symbolType);
 	let tierShape = "";
