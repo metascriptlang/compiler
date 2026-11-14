@@ -55,6 +55,9 @@ function inlineWhere(xs: Tree[], fn: (t: Tree) => boolean): int32 {
 function viaInline(xs: Tree[]): int32 {
 	return inlineWhere(xs, (k: Tree): boolean => k.v == 1);
 }
+function viaInlineCapturing(xs: Tree[], want: int32): int32 {
+	return inlineWhere(xs, (k: Tree): boolean => k.v == want);
+}
 function anyOf(xs: Tree[], fn: (t: Tree) => boolean): boolean {
 	return lastWhere(xs, fn) >= 0;
 }
@@ -65,6 +68,7 @@ console.log(sum(root) + pruneParent(root));
 console.log(eachSlot(slots, (s: Slot): int64 => s.w + s.item.v as int64));
 console.log(root.kids.countIf((k: Readonly<Tree>): boolean => k.v > 0));
 console.log(viaInline(root.kids));
+console.log(viaInlineCapturing(root.kids, 1));
 console.log(anyOf(root.kids, (k: Tree): boolean => k.v == 2));
 `;
 
@@ -116,11 +120,13 @@ test "a reader that forwards its callback calls the clone of the reader it forwa
 	assert count(bodyOf(code, "lastWheredollarlent_"), "msIncref") == 0;
 }
 
-test "an inline reader keeps its clone, and a call whose callback keeps the contract reaches the inline clone" {
+test "an inline reader keeps its clone, a call whose callback keeps the contract reaches the inline clone, and a pure leaf callback runs the reader in place holding nothing" {
 	const code = compiled();
 	const lent = bodyOf(code, "inlineWheredollarlent_");
 	assert lent != "" && count(lent, "msIncref") == 0 && count(lent, "msDecref") == 0, lent;
 	assert count(code, "static inline int32_t inlineWheredollarlent_") >= 1;
-	const via = bodyOf(code, "viaInline");
-	assert count(via, "inlineWheredollarlent_") == 1 && count(via, "inlineWhere__") == 0, via;
+	const capturing = bodyOf(code, "viaInlineCapturing");
+	assert count(capturing, "inlineWheredollarlent_") == 1 && count(capturing, "inlineWhere__") == 0, capturing;
+	const leaf = bodyOf(code, "viaInline");
+	assert leaf != "" && count(leaf, "inlineWhere") == 0 && count(leaf, "msIncref") == 0 && count(leaf, "msDecref") == 0, leaf;
 }
