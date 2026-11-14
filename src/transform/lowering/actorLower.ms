@@ -26,7 +26,7 @@ import {
 	syntheticToken, makeIdentResolved, makeTypedIdentResolved, makeCall, makeExprStmt, makeReturn,
 	makeVarDecl, makeMember, makeNumber, makeNull, makeAbsent, makeBlock, makeBinary,
 	isValueLayoutType, makeHiddenAddr, makeHiddenDeref, makeHiddenStdConv, makeTryFinally, runtimeRef,
-	makeFnDecl, makeLocalDecl, addGeneratedFn, generatedFnCount, makeMoveExpr,
+	makeFnDecl, makeLocalDecl, addGeneratedFn, generatedFnCount, makeMoveExpr, makeDefaultValue, makeAssign,
 } from "../util";
 import { voidType, noneType, createFunction, createPromise, createSink, createRef, createStruct, createPtr, createPrimitive, copyTypeShallow, unwrapRefNullUnion, getSysType, isStructType, isAtomicRef, instantiateGenericBody, typeDisplayName } from "../../checker/types";
 import { genericParamsOf, literalBase, setRepr } from "../../checker/types";
@@ -392,25 +392,30 @@ function buildDispatchBody(methods: Node[], actorRefType: Type, thisSym: Symbol,
 			const retType = m.nodeType != null && m.nodeType.typeReturn != null ? m.nodeType.typeReturn : null;
 			const retMk = typeMsgKind(retType);
 			const completeFn = msgCompleteName(retMk);
-			const resultSym = mintSym(ctx, SymbolKind.Variable, "_result", retType != null ? retType : noneType());
-			const resultDecl = makeVarDecl(resultSym.name, handlerCall, DeclKind.Const, loc);
+			const resultType = retType != null ? retType : noneType();
+			const resultSym = mintSym(ctx, SymbolKind.Variable, "_result", resultType);
+			const resultDecl = makeVarDecl(resultSym.name, makeDefaultValue(resultType, loc), DeclKind.Let, loc);
 			resultDecl.resolvedSym = resultSym;
+			resultDecl.nodeType = resultType;
+			const lentArgumentsEndBeforeTheReply = makeBlock([makeExprStmt(makeAssign(makeTypedIdentResolved(resultSym, resultType, loc), handlerCall, loc), loc)], loc);
 			const futAccessCall = makeCall(runtimeRef("msMsgReplyFuture", loc), [makeTypedIdentResolved(msgParamSym, null, loc)], loc);
 			if ((retMk == "array" || retMk == "struct") && retType != null) {
 				// Heap-box: msSinkBoxStruct → msMsgCompletePtr → await side's
 				// msUnboxStruct unboxes. Reply future stays a uniform 8-byte slot.
 				// boxCall.nodeType = void* per PARALOCK I13 (asyncBridge canonical).
-				const boxCall = makeCall(runtimeRef("msSinkBoxStruct", loc), [makeIdentResolved(resultSym, loc)], loc);
+				const reply = makeMoveExpr(makeTypedIdentResolved(resultSym, resultType, loc), loc);
+				reply.nodeType = resultType;
+				const boxCall = makeCall(runtimeRef("msSinkBoxStruct", loc), [reply], loc);
 				boxCall.nodeType = VOID_PTR;
 				const boxedSym = mintSym(ctx, SymbolKind.Variable, "_boxed", VOID_PTR);
 				const boxDecl = makeVarDecl(boxedSym.name, boxCall, DeclKind.Const, loc);
 				boxDecl.nodeType = VOID_PTR;
 				boxDecl.resolvedSym = boxedSym;
 				const completeCall = makeCall(runtimeRef(completeFn, loc), [futAccessCall, makeIdentResolved(boxedSym, loc)], loc);
-				body = makeBlock([resultDecl, boxDecl, makeExprStmt(completeCall, loc)], loc);
+				body = makeBlock([resultDecl, lentArgumentsEndBeforeTheReply, boxDecl, makeExprStmt(completeCall, loc)], loc);
 			} else {
 				const completeCall = makeCall(runtimeRef(completeFn, loc), [futAccessCall, makeIdentResolved(resultSym, loc)], loc);
-				body = makeBlock([resultDecl, makeExprStmt(completeCall, loc)], loc);
+				body = makeBlock([resultDecl, lentArgumentsEndBeforeTheReply, makeExprStmt(completeCall, loc)], loc);
 			}
 		}
 		const emptyBlock = makeBlock([], loc);
