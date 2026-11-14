@@ -43,7 +43,7 @@ function branchesIntoFlagTest(f: RaiserFunction): int32 {
 		if (arrow >= 0) target = pc + 1 + parseInt(line.slice(arrow + 2));
 		const jump = line.indexOf(": Jump ");
 		if (jump >= 0) target = pc + 1 + parseInt(line.slice(jump + 7));
-		if (target >= 0 && target < lines.length && lines[target].includes(": BTruthy ")) n += 1;
+		if (target >= 0 && target < lines.length && (lines[target].includes(": BTruthy ") || lines[target].includes(": BrEqI64Imm ") || lines[target].includes(": BrNeI64Imm "))) n += 1;
 	}
 	return n;
 }
