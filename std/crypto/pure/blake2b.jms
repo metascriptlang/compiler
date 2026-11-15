@@ -1,3 +1,4 @@
+import { OutputBytes } from "./bytes";
 import { load32LE } from "./endian";
 // 64-bit words are (low, high) uint32 pairs, as in sha2: JS has no cheap 64-bit integer.
 const iv: uint32[16] = [
@@ -175,7 +176,7 @@ export function updateBlake2b(s: Blake2bState, data: Readonly<uint8[]>, off: int
 }
 
 /** Pads, compresses the last block and writes the digest to `out` at `outOff`; the state is finished afterwards. */
-export function finishBlake2bInto(s: Blake2bState, out: uint8[], outOff: int32): void {
+export function finishBlake2bInto(s: Blake2bState, out: OutputBytes, outOff: int32): void {
 	if (s.finished) throw new Error("hash already finished");
 	for (let i = s.filled; i < 128; i++) s.block[i] = 0;
 	compress(s, s.block, 0, true);
