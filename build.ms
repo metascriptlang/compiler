@@ -47,6 +47,7 @@ stringCaseTables.addCopyFileToSource(tables.captureStdOut(), path("std/core/stri
 const subject = option("subject", "the compiler the gate lanes test; the graph's own msc when unset", "");
 const candidate: Arg = subject == "" ? msc : path(subject);
 const laneLimit = option("laneLimit", "seconds a gate lane may run before its process tree is killed", 5400);
+const laneRun = option("laneRun", "a name for this run of the lanes: a lane log is reused only by a build that gives the same name, by any build when unset", "");
 const killItsWindowsProcessTrees = `if [ -r "/proc/$lane/winpid" ]; then for w in $(ps | awk -v g="$lane" '$1 !~ /^[0-9]+$/ { $1 = ""; $0 = $0 } $3 == g { print $4 }'); do taskkill //T //F //PID "$w" >/dev/null 2>&1; done; fi; `;
 const withTrailer = 'limit=$1; shift; t0=$SECONDS; late=0; set -m; "$@" 2>&1 & lane=$!; set +m; while kill -0 "$lane" 2>/dev/null; do if [ $((SECONDS - t0)) -ge "$limit" ]; then late=1; ' + killItsWindowsProcessTrees + 'kill -KILL -- "-$lane" 2>/dev/null; break; fi; sleep 0.2; done; wait "$lane" 2>/dev/null; rc=$?; [ $late = 0 ] || printf "\\nTIMEOUT after %ss, process tree killed\\n" "$limit"; printf "\\nSECS=%d\\nRC=%d\\nEND\\n" $((SECONDS - t0)) $rc';
 
@@ -61,6 +62,7 @@ function roomOverTheMeasuredPeak(lane: string): number {
 }
 function bounded(lane: string, description: string, command: Arg[], env: Record<string, Arg>, inputs: LazyPath[], limit: number = laneLimit): Command {
 	const colour: Arg[] = noColourVariable.includes(lane) ? ["-u", "NO_COLOR"] : ["NO_COLOR=1"];
+	if (laneRun != "") colour.push(`LANE_RUN=${laneRun}`);
 	const argv: Arg[] = ["bash", "-c", withTrailer, lane, `${limit}`, "env", "-u", "FORCE_COLOR"];
 	return systemCommand(argv.concat(colour).concat(command), { env, inputs, description, timeout: (limit + 60) * 1000, maxRss: roomOverTheMeasuredPeak(lane) });
 }
