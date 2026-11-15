@@ -150,9 +150,9 @@ for (const entry of ["examples/escrow/program.ms", "examples/escrow/idl.cms", "e
 for (const file of solanaBoth.concat(["memoryMachineTest.jms", "kernelTest.jms"])) solanaTest(`std/solana/${file}`, ["--target=js"]);
 
 const checked = 'name=$1; shift; "$@"; rc=$?; [ $rc -eq 0 ] || printf "FAIL solana %s: exit %d\\n" "$name" $rc; exit $rc';
-const afterBuilds = 'name=$1; shift; for built in "${@:3}"; do [ -s "${built##*:}" ] || exit 0; done; "$@"; rc=$?; [ $rc -eq 0 ] || printf "FAIL solana %s: exit %d\\n" "$name" $rc; exit $rc';
+const afterBuilds = 'name=$1; shift; command -v node >/dev/null 2>&1 && [ -d tools/solana/node_modules/litesvm ] || { printf "FAIL solana replay-deps: node or tools/solana/node_modules/litesvm missing; run (cd tools/solana && npm ci)\\n"; exit 1; }; for built in "${@:3}"; do [ -s "${built##*:}" ] || exit 0; done; "$@"; rc=$?; [ $rc -eq 0 ] || printf "FAIL solana %s: exit %d\\n" "$name" $rc; exit $rc';
 const programSources = sources.concat([path("examples")]).concat(glob("tools/solana/*.ms"));
-const replaySources = glob("tools/solana/*.mjs").concat([path("tools/solana/package-lock.json")]);
+const replaySources = glob("tools/solana/*.mjs").concat([path("tools/solana/package-lock.json"), path("tools/solana/node_modules/.package-lock.json")]);
 function program(name: string, entry: string, flags: string[], file: string): LazyPath {
 	const command: Arg[] = ["bash", "-c", checked, "solana", name, candidate, "build", entry];
 	for (const flag of flags) command.push(flag);
