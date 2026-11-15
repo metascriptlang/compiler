@@ -692,7 +692,7 @@ function matchConsumer(call: Node, st: InlineState): InlineCall | null {
 	if (target == null) return null;
 	const sym = target.sym;
 	const taker = st.leafTakers.get(sym);
-	if (taker != null && inlinable(taker, target, false, st) && passesLeafArrow(target.args) && readsArraysAsIs(taker, target.args)) {
+	if (taker != null && !target.isStatic && passesLeafArrow(target.args) && readsArraysAsIs(taker, target.args) && inlinable(taker, target, false, st)) {
 		return { decl: taker, args: target.args, foreign: (sym.instantiatedFrom ?? sym).modulePath != ownModule(st.ctx), pure: true };
 	}
 	const decl = st.ownConsumers.has(sym) ? st.ownConsumers.get(sym)! : foreignBody(sym, OfferKind.Consumer, st);
