@@ -61,7 +61,11 @@ export function wellFormedPrefix(data: Readonly<Span<uint8>>, from: int64, surro
 		const lead = byteOf(data, i);
 		if (lead < 0x80) {
 			i += 1;
-			if (i <= room && (byteOf(data, i) | byteOf(data, i + 1) | byteOf(data, i + 2)) < 0x80) i += 3;
+			// The 3-byte ASCII lookahead measured 1.5-2.7x slower than the plain loop on C (m1m, 2026-11-15)
+			// and 3% faster on JS for pure ASCII (rtx node 24): keep it off C only.
+			when (!c) {
+				if (i <= room && (byteOf(data, i) | byteOf(data, i + 1) | byteOf(data, i + 2)) < 0x80) i += 3;
+			}
 			continue;
 		}
 		if (i <= room) {
