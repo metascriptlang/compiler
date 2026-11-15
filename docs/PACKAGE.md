@@ -541,8 +541,8 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   `Cannot resolve module 'std/process/native'`, `0/63 steps succeeded`; the same binary copied into
   the tree built the candidate and ran the lane above.
 
-- **`GATE_GRAPH_LANES="boundary cache fmt guard hcr lsp solana"` makes `tools/gate.sh` run those lanes as these
-  nodes**: the gate's builder runs `msc build -Dlanes=<lane> -Dsubject=<candidate>
+- **`GATE_GRAPH_LANES="boundary cache fmt guard hcr lsp solana suite tests"` makes `tools/gate.sh` run those
+  lanes as these nodes**: the gate's builder runs `msc build -Dlanes=<lane> -Dsubject=<candidate>
   -DlaneLimit=<limit> lanes`, the node logs one after another are the lane log, and a node's `RC` is
   the lane's. Unset, the gate is unchanged; a lane named there that has no such run stops the gate
   with an error that names it. Each pair below is two fresh checkouts of one tree on rtx, 2026-11-15,
@@ -561,6 +561,29 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   50a00a8f25b, --lanes build,solana, then --lanes guard three times, both at once
   direct   solana 2m31s · 0 red   guard 3m39s · 10 red · 1 known   3m01s · 9 red · 1 known   2m38s · 9 red · 1 known
   graph    solana 0m28s · 0 red   guard 3m34s ·  9 red · 1 known   2m02s · 9 red · 1 known   1m58s · 9 red · 1 known
+  636ad6ef5e7, --lanes build,suite,tests, one run after the other, GATE_PAR=8
+  direct   suite 6m23s · 0 red · 6213/6213   tests 10m16s · 0 red · 6046/6046   GREEN 12m49s   least RAM available 47 GB
+  graph    suite 6m25s · 0 red · 6213/6213   tests 10m22s · 0 red · 6046/6046   GREEN 12m53s   least RAM available 44 GB
+  ```
+
+  The suite and the tests lane keep `gate.sh`'s own driver (`run_test_lane`): it starts another tier
+  only while `MemAvailable` holds one more, and runs a part killed with 137 or 143 once again. Through
+  the graph each part is one build of one node, which `-Dlanes` names in full
+  (`-Dlanes=tests.js`, `-Dlanes=tests.c1`; `-DtestShards=<n>` is the gate's shard count of the C tier,
+  and 1 gives one node `tests.c` without `--tests-shard`), and the second run of a killed part uses
+  the run name `<run>.again`, because the first log is a node that succeeded. Not run: a part killed
+  for real inside a gate (`graph_lane_self_test` pins the second run's name with a stand-in).
+
+  A lane's wrapper kills what is left of the lane's process group once its leader has ended, so the
+  `SECS`, `RC`, `END` lines are the last of a log. Before, a lane whose leader was killed left its
+  children writing after them: under a RAM shortage on rtx, 2026-11-15T03:39, earlyoom ended
+  `msc test` of the suite, and the stored log had `RC=143` at line 7223 of 10778 with the test
+  binary's output after it. A subject that prints `early`, starts a child that prints `late` after
+  4 s and ends itself with `TERM`, as the lsp lane's subject:
+
+  ```
+  before   build exit 0 in 5 s   early · SECS=0 RC=143 END · late
+  after    build exit 0 in 1 s   early · SECS=1 RC=143 END
   ```
 
   The same nine guards are red in all six guard runs (main's reds, each with a card); the tenth of
@@ -585,7 +608,7 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   builds `src/test/fmt/run.ms` into the node's own output (`fmt.runner`), and `fmt` runs that file,
   because `msc run` would link the shared `out/debug/run` beside other lanes (`runner_self_test`).
   Not run through `gate.sh`: every lane whose selection `gate.sh` passes by environment or path
-  (suite, tests, corpus, san, tsan, tools). A second `gate.sh` run in one checkout,
+  (corpus, san, tsan, tools), and the tier selection of a gate without `--lanes` (`tier_select`). A second `gate.sh` run in one checkout,
   or in a fresh clone at a path where the same tree was built before, went red at build before any
   lane (`self-host: gen1 wrote no link response file and gen2 differs from it`: the candidate's link
   is restored from the cache), so each run of a pair needs a path of its own.
