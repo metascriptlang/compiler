@@ -524,8 +524,26 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   is the host's total RAM, not what other gates on the host leave free, which is what `gate.sh`
   reads from `MemAvailable`.
 
-Not verified: every lane in one build on one host, macOS, any lane but lsp on Windows, and a real land gated by
-these nodes.
+- **The solana replays report missing modules as one red, and the modules' lockfile is one of their
+  inputs.** `tools/solana/node_modules` is untracked: a gate checkout and a worktree are given a copy,
+  a bare copy of the tree has none. Tree `b4b6da6bdc5`, 2026-11-15, `msc build -Dlanes=solana lanes`
+  then `tools/gate.ms`, three times in one directory: without the modules, 109 s,
+  `solana · 1 red · 0 known · 1 new`, `new: replay-deps` (the line `gate.sh` prints; before, the same
+  state gave 15 reds, one `Cannot find package '@solana/kit'` per replay); with them copied in, 4 s,
+  `0 red`, the replays ran and every program build was reused; removed again, 1 s, the first run's red
+  log reused. A lane log that records a red is a node that succeeded, so it is reused until an input
+  changes: without `tools/solana/node_modules/.package-lock.json` among the inputs, the run after the
+  copy ended in 3 s with the same `replay-deps` red. A path that does not exist is accepted as an
+  input and changes the node's key when it appears.
+- **The builder is a copy of the installed compiler placed in the tree**, as a gate checkout has
+  (`./msc`), because a compiler reads the std beside it and `src/` may import std newer than the last
+  sync. Tree `b4b6da6bdc5` with the installed `2e3db04cfb2` run from its own directory:
+  `Cannot resolve module 'std/process/native'`, `0/63 steps succeeded`; the same binary copied into
+  the tree built the candidate and ran the lane above.
+
+Not verified: every lane in one build on one host with a verdict that matches `gate.sh` (one run,
+2026-11-15, did not: card `2026-11-13-gate-through-the-build-graph-remaining-steps.md`), macOS, any lane
+but lsp on Windows, and a real land gated by these nodes.
 
 ## Packages
 
