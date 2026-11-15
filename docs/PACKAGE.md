@@ -478,7 +478,12 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   `msc build -Drerun=… -DrerunBase=<merge base> reruns` and judges both sides' logs. Tree
   `a5471a26e199` with a bug seeded in `src/lexer/chars.ms`, load 26 to 52: 94 s including main's
   candidate, `tests · 8 red · 7 new · 1 not the slice's`. Not run for real: the corpus, san, tsan,
-  guard, hcr, lsp and suite rerun commands.
+  guard, hcr, lsp and suite rerun commands. The plan names a lane's subjects between `,` and `;`,
+  so a name that holds either is not judged, except in the lsp lane, whose rerun is the whole lane
+  (`lsp=lsp`): a land-form gate on rtx, 2026-11-15, had the scenario `a module a build.ms global
+  import reaches does not see the global import, as in batch checking` red once, and its shadow
+  line read `gate.sh 2 red · 0 new · 2 not the slice's … gate.ms 2 red · 1 new · 1 not the
+  slice's`; `tools/gateTest.ms` pins such a name (red on the tool before, green after, on m1m).
 - **Main's side is built in `out/gate-main` of the gating checkout**, a worktree of the merge base
   that runs the same `reruns` build. Rejected: one candidate of main shared by every gate on the host
   under a lock, as `gate.sh` keeps in `~/.metascript/gate-main/<tree>`, because `std/fs` has no file
@@ -657,6 +662,35 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   lane (`self-host: gen1 wrote no link response file and gen2 differs from it`: the candidate's link
   is restored from the cache), so each run of a pair needs a path of its own.
 
+  Three land-form gates with the gate's triage on and every lane named in the variable, each on
+  two fresh checkouts of `9eeab7776f6` at once on rtx, 2026-11-15, 16 cores, `GATE_PAR=8` each,
+  `--programs` naming three corpus programs, the scratch commit adding a newline to the files named:
+
+  ```
+  checker/assignable.ms, fmt/printer/calls.ms, raiser/context.ms, runtime/actor/actor.c, tools/gate.ms
+  direct   suite 6213/6213   tests 6046/6046   fmt 1 new   lsp 0 red   guard 10 red · 1 known · 9 not the slice's    RED (build, tools, suite, tests, fmt, lsp, guard) 20m13s
+  graph    suite 6213/6213   tests 6046/6046   fmt 1 new   lsp 0 red   guard 11 red · 1 known · 10 not the slice's   RED (build, tools, suite, tests, fmt, lsp, guard) 21m39s
+  the same without the fmt file
+  direct   suite 6213/6213   tests 6046/6046   lsp 0 red   guard 10 red · 1 known · 9 not the slice's   hcr 4 new   RED (build, tools, suite, tests, lsp, guard, hcr) 74m48s
+  graph    suite 6213/6213   tests 6046/6046   lsp 0 red   guard 10 red · 1 known · 9 not the slice's   hcr 3 new   RED (build, tools, suite, tests, lsp, guard, hcr) 54m44s
+  the same without runtime/actor/actor.c, three other gates on the host
+  direct   suite 6213/6213   tests 6046/6046   lsp 2 red · 2 not the slice's   corpus on 3 program(s) 18/18   san 3/3   solana 2m11s · 0 red   GREEN (build, tools, suite, tests, lsp, corpus, san, solana) 19m23s
+  graph    suite 6213/6213   tests 6046/6046   lsp 2 red · 2 not the slice's   corpus on 3 program(s) 18/18   san 3/3   solana 0m30s · 0 red   GREEN (build, tools, suite, tests, lsp, corpus, san, solana) 19m36s
+  ```
+
+  The verdict and the lanes it names are the same in each pair. The first stops at fmt (the
+  formatter's crash on main, which a rerun cannot judge) and the second at hcr (the three reds of
+  the hcr pair above, and `hcrWatchOwnOutput` in the direct run; `triage: a rerun could not judge`),
+  so both runs skip the phases after it, and no single gate on rtx ran every land lane: guard and
+  hcr are in the first two pairs, corpus with the raiser cells (18 cases, 15 without them), san and
+  solana in the third. The reds that differ within a pair were each red 0 of 3 times when the gate
+  ran them again: `actorChurnReap [drc]` (direct) against `nonisolatedReadFlaggedStop [tsan]` and
+  `rcFamilyMismatchAborts [drc]` (graph) in the first, `actorChurnReap [drc]` against
+  `rcFamilyMismatchAborts [drc]` in the second, two lsp scenarios each in the third, none shared.
+  The eight other guard reds not the slice's are the same in all four guard runs (red on main 3 of
+  3). Least RAM available: 16, 22 and 13 GB, with no process ended for memory. The build lane and
+  the triage reruns are `gate.sh`'s own in both runs of a pair.
+
 - **`-DlaneRun=<name>` names a run of the lanes, and `tools/gate.sh` gives every gate its own**, so
   a gate never reads the lane log of an earlier one: a log, red or green, is a node that succeeded,
   and the lanes declare only `src`, `std` and `runtime` as inputs. Unset, a log is reused by any
@@ -668,9 +702,10 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   subject /bin/false:    run a 1 s RC=1 · run a again 0 s, reused · run b 1 s RC=1, ran again
   ```
 
-Not verified: every lane in one build on one host with a verdict that matches `gate.sh` (one run,
-2026-11-15, did not: card `2026-11-13-gate-through-the-build-graph-remaining-steps.md`), macOS, any lane
-but lsp on Windows, and a real land gated by these nodes.
+Not verified: every lane as nodes of one build with a verdict that matches `gate.sh` (one run,
+2026-11-15, did not: card `2026-11-13-gate-through-the-build-graph-remaining-steps.md`; the pairs
+above run each lane as a build of its own, from `gate.sh`), every land lane in one gate, macOS, any
+lane but lsp on Windows, and a real land gated by these nodes.
 
 ## Packages
 
