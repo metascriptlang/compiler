@@ -55,7 +55,8 @@ const selected = option("lanes", "the gate lanes to run, comma-separated; every 
 export const lanes = writeFiles();
 const noColourVariable = ["suite", "tests", "fmt", "cache", "crypto", "tools"];
 function wanted(name: string): boolean {
-	return selected == "" || selected.split(",").includes(name.split(".")[0]);
+	const names = selected.split(",");
+	return selected == "" || names.includes(name) || names.includes(name.split(".")[0]);
 }
 function roomOverTheMeasuredPeak(lane: string): number {
 	return lane == "suite" ? 8e9 : lane == "tests" ? 6e9 : 0;
@@ -78,9 +79,12 @@ function lane(name: string, command: Arg[], env: Record<string, Arg> = {}, input
 const raiser: Arg[] = [candidate, "run", "--target=raiser"];
 const under: Record<string, Arg> = { MSC: candidate };
 lane("suite", [mscExe(), "test", "--time", "src/index.ms"], { MSC: mscExe() });
-for (const name of ["js", "handoff", "checker3pass", "lang", "fmt", "crypto"]) lane(`tests.${name}`, [candidate, "test", "--time", `src/test/${name}/index.ms`, "--tests-in-dir"], under);
+const testShards = option("testShards", "how many runs split the C tier between them; 1 runs it whole", 3);
+const wholeTiers = ["js", "handoff", "checker3pass", "lang", "fmt", "crypto"];
+if (testShards <= 1) wholeTiers.push("c");
+for (const name of wholeTiers) lane(`tests.${name}`, [candidate, "test", "--time", `src/test/${name}/index.ms`, "--tests-in-dir"], under);
 lane("tests.helpers", [candidate, "test", "--time", "src/test/helpers.ms", "--tests-in-dir"], under);
-for (let i = 0; i < 3; i++) lane(`tests.c${i}`, [candidate, "test", "--time", "src/test/c/index.ms", "--tests-in-dir", `--tests-shard=${i}/3`], under);
+for (let i = 0; i < testShards && testShards > 1; i++) lane(`tests.c${i}`, [candidate, "test", "--time", "src/test/c/index.ms", "--tests-in-dir", `--tests-shard=${i}/${testShards}`], under);
 for (let i = 0; i < guardShards; i++) lane(`guard.${i}`, raiser.concat(["src/test/guard/run.ms"]), { MSC: candidate, GUARD_SHARD: `${i}/${guardShards}` });
 const hcrShards = option("hcrShards", "how many hcr runners split the hot-reload tests between them", 4);
 for (let i = 0; i < hcrShards; i++) lane(`hcr.${i}`, raiser.concat(["src/test/hcr/run.ms"]), { MSC: candidate, HCR_SHARD: `${i}/${hcrShards}` });
