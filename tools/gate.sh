@@ -1941,6 +1941,7 @@ lane_cmd() {
   esac
 }
 
+GRAPH_RUN="$(date +%s).$$"
 through_graph() { case " ${GATE_GRAPH_LANES:-} " in *" $1 "*) return 0 ;; esac; return 1; }
 
 graph_lane_log() {
@@ -1959,7 +1960,7 @@ graph_lane_log() {
 
 run_lane_through_graph() {
   local lane=$1 out dir
-  out=$(env -u NO_COLOR -u FORCE_COLOR "$BUILDER" build --colors=off "-Dlanes=$lane" "-Dsubject=$CAND" "-DlaneLimit=$LANE_LIMIT" lanes 2>&1) \
+  out=$(env -u NO_COLOR -u FORCE_COLOR "$BUILDER" build --colors=off "-Dlanes=$lane" "-Dsubject=$CAND" "-DlaneLimit=$LANE_LIMIT" "-DlaneRun=$GRAPH_RUN" lanes 2>&1) \
     || { printf '%s\n' "$out" | tail -40; printf 'graph: the build of lane %s failed\n' "$lane"; return 1; }
   dir=$(printf '%s\n' "$out" | sed -n 's/^.*Built lanes → //p' | tail -1)
   [ -n "$dir" ] && [ -d "$dir" ] || { printf '%s\n' "$out" | tail -40; printf 'graph: the build of lane %s named no log directory\n' "$lane"; return 1; }
