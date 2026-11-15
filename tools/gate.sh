@@ -1965,10 +1965,42 @@ graph_lane_log() {
   return $rc
 }
 
+tool_node() { printf 'tools.%s\n' "$(printf '%s' "$1" | sed 's|/|_|g; s|: |.|g; s| |_|g')"; }
+
+tools_nodes() {
+  local p queue=0 py=0 release=0 native=0
+  while IFS=$'\t' read -r _ p; do
+    case "$p" in tools/bundler-plugin/* | src/test/js/declarationBundlers/*) native=1 ;; esac
+    [ -f "$p" ] || continue
+    case "$p" in
+      *.sh)
+        tool_node "$p: bash -n"
+        [ "$p" != tools/gate.sh ] || tool_node "$p: self-test"
+        case "$p" in tools/wt.sh | tools/landQueue.sh | tools/landQueueTest.sh) queue=1 ;; esac
+        case "$p" in tools/release.sh | tools/releaseToolchainTest.sh) release=1 ;; esac ;;
+      tools/managedToolchain/*.py) py=1 ;;
+      *.ms)
+        tool_node "$p: check"
+        case "$p" in
+          tools/managedToolchain/archiveBatchContractTest.ms | tools/managedToolchain/windowsEngineProducerTest.ms) ;;
+          tools/managedToolchain/*Test.ms) tool_node "$p: run" ;;
+          tools/gate.ms | tools/gateTest.ms) tool_node "tools/gateTest.ms: run" ;;
+        esac ;;
+    esac
+  done < <(awk -F'\t' '$1=="tools"' "$OUT/why")
+  [ "$release" -eq 0 ] || tool_node "tools/releaseToolchainTest.sh: self-test"
+  [ "$queue" -eq 0 ] || tool_node "tools/landQueueTest.sh: self-test"
+  [ "$py" -eq 0 ] || tool_node "tools/managedToolchain: self-test"
+  [ "$native" -eq 0 ] || { tool_node "tools/bundler-plugin/test.test.mjs: self-test"; tool_node "tools/bundler-plugin/test.mjs: check"; }
+}
+
 run_lane_through_graph() {
-  local lane=$1 run=${2:-$GRAPH_RUN} out dir
+  local lane=$1 run=${2:-$GRAPH_RUN} out dir nodes=$1
   local -a more=()
   case "$lane" in
+    tools)
+      nodes=$(tools_nodes | sort -u | paste -sd, -)
+      [ -n "$nodes" ] || return 0 ;;
     tests.*) more=("-DtestShards=$TEST_SHARDS") ;;
     corpus|san|tsan)
       [ "$lane" != corpus ] || more=("-DcorpusRaiser=$raiser_on")
@@ -1977,7 +2009,7 @@ run_lane_through_graph() {
     hcr) more=("-DhcrShards=${GATE_HCR_SHARDS:-$PAR}") ;;
     solana) solana_wants_replays || more=("-DsolanaReplays=0") ;;
   esac
-  out=$(env -u NO_COLOR -u FORCE_COLOR "$BUILDER" build --colors=off "-Dlanes=$lane" "-Dsubject=$CAND" "-DlaneLimit=$LANE_LIMIT" "-DlaneRun=$run" ${more[@]+"${more[@]}"} lanes 2>&1) \
+  out=$(env -u NO_COLOR -u FORCE_COLOR "$BUILDER" build --colors=off "-Dlanes=$nodes" "-Dsubject=$CAND" "-DlaneLimit=$LANE_LIMIT" "-DlaneRun=$run" ${more[@]+"${more[@]}"} lanes 2>&1) \
     || { printf '%s\n' "$out" | tail -40; printf 'graph: the build of lane %s failed\n' "$lane"; return 1; }
   dir=$(printf '%s\n' "$out" | sed -n 's/^.*Built lanes → //p' | tail -1)
   [ -n "$dir" ] && [ -d "$dir" ] || { printf '%s\n' "$out" | tail -40; printf 'graph: the build of lane %s named no log directory\n' "$lane"; return 1; }
@@ -2008,6 +2040,11 @@ graph_lane_self_test() (
   d=$(mktemp -d) || return 1
   got="$(test_node src/index.ms) $(test_node src/test/helpers.ms --tests-in-dir) $(test_node src/test/js/index.ms --tests-in-dir) $(test_node src/test/c/index.ms --tests-in-dir --tests-shard=2/3)"
   [ "$got" = "suite tests.helpers tests.js tests.c2" ] || { printf 'FAIL graph lanes: the node of a test job: %s\n' "$got"; bad=1; }
+  OUT=$d
+  printf 'tools\ttools/gate.sh\ntools\ttools/gate.ms\nbuild\ttools/release.sh\ntools\ttools/wt.sh\ntools\ttools/managedToolchain/archiveTest.ms\ntools\ttools/managedToolchain/archiveBatchContractTest.ms\ntools\ttools/gone.sh\ntools\tsrc/test/js/declarationBundlers/run.mjs\n' >"$d/why"
+  got=$(tools_nodes | tr '\n' ' ')
+  [ "$got" = "tools.tools_gate.sh.bash_-n tools.tools_gate.sh.self-test tools.tools_gate.ms.check tools.tools_gateTest.ms.run tools.tools_wt.sh.bash_-n tools.tools_managedToolchain_archiveTest.ms.check tools.tools_managedToolchain_archiveTest.ms.run tools.tools_managedToolchain_archiveBatchContractTest.ms.check tools.tools_landQueueTest.sh.self-test tools.tools_bundler-plugin_test.test.mjs.self-test tools.tools_bundler-plugin_test.mjs.check " ] \
+    || { printf 'FAIL graph lanes: the tool nodes of the paths a change touches: %s\n' "$got"; bad=1; }
   run_lane_through_graph() { printf 'ran %s as %s\n' "$1" "$2"; return 143; }
   GRAPH_RUN=7 test_one_through_graph cand src/test/c/index.ms "$d/c.part" --tests-in-dir --tests-shard=0/3
   got=$(cat "$d/c.part" "$d/c.part.rc" | tr '\n' '|')
@@ -2561,7 +2598,7 @@ fi
 promote_builder
 if [ -x "$TOP/msc" ]; then BUILDER="$TOP/msc"; else BUILDER=$(command -v msc) || die "no ./msc and no msc on PATH"; fi
 for graph_lane in ${GATE_GRAPH_LANES:-}; do
-  case "$graph_lane" in boundary|cache|corpus|fmt|guard|hcr|lsp|san|solana|suite|tests|tsan) ;; *) die "GATE_GRAPH_LANES: lane '$graph_lane' has no run through the build graph yet (every lane but build, crypto and tools has one)" ;; esac
+  case "$graph_lane" in boundary|cache|corpus|fmt|guard|hcr|lsp|san|solana|suite|tests|tools|tsan) ;; *) die "GATE_GRAPH_LANES: lane '$graph_lane' has no run through the build graph yet (every lane but build and crypto has one)" ;; esac
 done
 cand_key=""
 [ -n "$(git status --porcelain -- src std runtime)" ] || cand_key=$(tree_key HEAD)
