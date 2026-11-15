@@ -16,6 +16,8 @@ export const ucs2Encoding: int32 = 6;
 
 export function encodingOf(name: string): int32 {
 	if (name == "utf8") return utf8Encoding;
+	if (name == "hex") return hexEncoding;
+	if (name == "base64") return base64Encoding;
 	if (name.equalsIgnoreCase("utf8") || name.equalsIgnoreCase("utf-8")) return utf8Encoding;
 	if (name.equalsIgnoreCase("hex")) return hexEncoding;
 	if (name.equalsIgnoreCase("base64")) return base64Encoding;
