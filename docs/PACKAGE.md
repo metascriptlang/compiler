@@ -567,6 +567,17 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   checkout went red at build before any lane (`self-host: gen1 wrote no link response file and gen2
   differs from it`), so a pair needs two checkouts; not traced.
 
+- **`-DlaneRun=<name>` names a run of the lanes, and `tools/gate.sh` gives every gate its own**, so
+  a gate never reads the lane log of an earlier one: a log, red or green, is a node that succeeded,
+  and the lanes declare only `src`, `std` and `runtime` as inputs. Unset, a log is reused by any
+  build with the same inputs, which is what the edit loop wants. `-Dlanes=lsp` on rtx, 2026-11-15,
+  tree `99377421f47`, one directory:
+
+  ```
+  subject the builder:   run a 46 s RC=0 · run a again 0 s, reused · run b 34 s RC=0 · no name 35 s · no name again 0 s, reused
+  subject /bin/false:    run a 1 s RC=1 · run a again 0 s, reused · run b 1 s RC=1, ran again
+  ```
+
 Not verified: every lane in one build on one host with a verdict that matches `gate.sh` (one run,
 2026-11-15, did not: card `2026-11-13-gate-through-the-build-graph-remaining-steps.md`), macOS, any lane
 but lsp on Windows, and a real land gated by these nodes.
