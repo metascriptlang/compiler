@@ -1970,6 +1970,9 @@ run_lane_through_graph() {
   local -a more=()
   case "$lane" in
     tests.*) more=("-DtestShards=$TEST_SHARDS") ;;
+    corpus|san|tsan)
+      [ "$lane" != corpus ] || more=("-DcorpusRaiser=$raiser_on")
+      [ -z "$only_csv" ] || more+=("-DcorpusOnly=$only_csv") ;;
     guard) more=("-DguardShards=${GATE_GUARD_SHARDS:-$PAR}") ;;
     hcr) more=("-DhcrShards=${GATE_HCR_SHARDS:-$PAR}") ;;
     solana) solana_wants_replays || more=("-DsolanaReplays=0") ;;
@@ -2558,7 +2561,7 @@ fi
 promote_builder
 if [ -x "$TOP/msc" ]; then BUILDER="$TOP/msc"; else BUILDER=$(command -v msc) || die "no ./msc and no msc on PATH"; fi
 for graph_lane in ${GATE_GRAPH_LANES:-}; do
-  case "$graph_lane" in boundary|cache|fmt|guard|hcr|lsp|solana|suite|tests) ;; *) die "GATE_GRAPH_LANES: lane '$graph_lane' has no run through the build graph yet (boundary, cache, fmt, guard, hcr, lsp, solana, suite and tests have one)" ;; esac
+  case "$graph_lane" in boundary|cache|corpus|fmt|guard|hcr|lsp|san|solana|suite|tests|tsan) ;; *) die "GATE_GRAPH_LANES: lane '$graph_lane' has no run through the build graph yet (every lane but build, crypto and tools has one)" ;; esac
 done
 cand_key=""
 [ -n "$(git status --porcelain -- src std runtime)" ] || cand_key=$(tree_key HEAD)
@@ -3042,7 +3045,7 @@ for phase in "${PHASES[@]}"; do
     esac
     launched="$launched $lane"
     if skip_lane "$lane"; then continue; fi
-    build_runner "$lane"
+    through_graph "$lane" || build_runner "$lane"
     lane_body "$lane" & pids="$pids $!"
   done
   [ -z "$pids" ] || wait $pids
