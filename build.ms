@@ -82,7 +82,7 @@ for (let i = 0; i < 3; i++) lane(`tests.c${i}`, [candidate, "test", "--time", "s
 for (let i = 0; i < guardShards; i++) lane(`guard.${i}`, raiser.concat(["src/test/guard/run.ms"]), { MSC: candidate, GUARD_SHARD: `${i}/${guardShards}` });
 const hcrShards = option("hcrShards", "how many hcr runners split the hot-reload tests between them", 4);
 for (let i = 0; i < hcrShards; i++) lane(`hcr.${i}`, raiser.concat(["src/test/hcr/run.ms"]), { MSC: candidate, HCR_SHARD: `${i}/${hcrShards}` });
-lane("fmt", [candidate, "run", "src/test/fmt/run.ms"]);
+if (wanted("fmt")) lane("fmt", [laneNode("fmt.runner", [candidate, "build", "src/test/fmt/run.ms"]).addPrefixedOutputFileArg("--output=", "fmtRunner")]);
 lane("lsp", raiser.concat(["src/test/lsp/run.ms"]), under);
 lane("cache", raiser.concat(["src/test/cache/run.ms", candidate]));
 for (const name of ["nativeBuildBoundary", "projectConfigCommands", "preludePackKey"]) lane(`boundary.${name}`, raiser.concat([`src/test/${name}.ms`, candidate]));
