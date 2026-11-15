@@ -93,6 +93,7 @@ let flowScanned = new HashMap<Node, boolean>();
 let resultSourceFound = new HashMap<Node, EffectCause>();
 let resultSourceNone = new HashMap<Node, boolean>();
 let sourceCuts: int32 = 0;
+let returnedByBody = new HashMap<Node, Node[]>();
 let resultReach: ((value: Node) => EffectCause | null) | null = null;
 
 export function installResultReach(reach: ((value: Node) => EffectCause | null) | null): void {
@@ -207,6 +208,7 @@ export function runDeferredEffectChecks(ctx: CheckerContext, program: Node): voi
 	resultSourceFound = new HashMap<Node, EffectCause>();
 	resultSourceNone = new HashMap<Node, boolean>();
 	sourceCuts = 0;
+	returnedByBody = new HashMap<Node, Node[]>();
 }
 
 function isUncheckedGeneric(sym: Symbol): boolean {
@@ -1504,14 +1506,21 @@ function bodyResultSource(dispatchRegistry: DispatchRegistry, decl: Node): Effec
 	const cutsBefore = sourceCuts;
 	resultSourceOpen.push(decl);
 	scanFlows(body);
-	const returned: Node[] = [];
-	if (body.kind == NodeKind.BlockStmt) collectReturned(body, returned);
-	else returned.push(body);
-	const c = firstModuleSource(dispatchRegistry, returned);
+	const c = firstModuleSource(dispatchRegistry, returnedOf(body));
 	resultSourceOpen.pop();
 	if (c != null) resultSourceFound.set(decl, c);
 	else if (outermost || sourceCuts == cutsBefore) resultSourceNone.set(decl, true);
 	return c;
+}
+
+function returnedOf(body: Node): Node[] {
+	const known = returnedByBody.get(body);
+	if (known != null) return known;
+	const returned: Node[] = [];
+	if (body.kind == NodeKind.BlockStmt) collectReturned(body, returned);
+	else returned.push(body);
+	returnedByBody.set(body, returned);
+	return returned;
 }
 
 function collectReturned(node: Node, out: Node[]): void {

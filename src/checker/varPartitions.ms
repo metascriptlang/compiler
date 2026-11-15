@@ -2092,10 +2092,10 @@ export function prepareResultReach(ctx: CheckerContext): void {
 	installResultReach(resultReachOf);
 }
 
-function settledReach(ctx: CheckerContext, decl: Node): ReachInput[] {
-	const entries = reachOf(ctx, decl);
-	if (!reachDone.has(decl)) noteSourceCut();
-	return entries;
+function reachedCause(ctx: CheckerContext, decl: Node, input: int32): EffectCause | null {
+	const found = reachOf(ctx, decl).find((e: ReachInput): boolean => e.input == input);
+	if (found == null && !reachDone.has(decl)) noteSourceCut();
+	return found != null ? found.cause : null;
 }
 
 function resultReachOf(value: Node): EffectCause | null {
@@ -2105,13 +2105,12 @@ function resultReachOf(value: Node): EffectCause | null {
 	if (n.kind == NodeKind.NewExpr) {
 		const ctor = constructedBy(n);
 		if (ctor == null) return null;
-		const self = settledReach(ctx, ctor).find((e: ReachInput): boolean => e.input == 0);
-		return self != null ? through(n, "constructs '" + (n.data as NewExprData).newCallee.resolvedSym!.name + "'", self.cause) : null;
+		return through(n, "constructs '" + (n.data as NewExprData).newCallee.resolvedSym!.name + "'", reachedCause(ctx, ctor, 0));
 	}
 	if (n.kind != NodeKind.CallExpr) return null;
 	for (const target of calledBodies(n)) {
-		const r = settledReach(ctx, target.decl).find((e: ReachInput): boolean => e.input == RESULT_INPUT);
-		if (r != null) return through(n, target.what, r.cause);
+		const r = through(n, target.what, reachedCause(ctx, target.decl, RESULT_INPUT));
+		if (r != null) return r;
 	}
 	return null;
 }
