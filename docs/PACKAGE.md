@@ -541,7 +541,7 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   `Cannot resolve module 'std/process/native'`, `0/63 steps succeeded`; the same binary copied into
   the tree built the candidate and ran the lane above.
 
-- **`GATE_GRAPH_LANES="boundary cache fmt hcr lsp"` makes `tools/gate.sh` run those lanes as these
+- **`GATE_GRAPH_LANES="boundary cache fmt guard hcr lsp solana"` makes `tools/gate.sh` run those lanes as these
   nodes**: the gate's builder runs `msc build -Dlanes=<lane> -Dsubject=<candidate>
   -DlaneLimit=<limit> lanes`, the node logs one after another are the lane log, and a node's `RC` is
   the lane's. Unset, the gate is unchanged; a lane named there that has no such run stops the gate
@@ -558,7 +558,19 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   10cd8e11206, --lanes build,hcr, both at once
   direct   hcr 16m01s · 4 red: hcrStepCrash, hcrStepJoinCrash, hcrStepSpareCrash, hcrWatchOwnOutput   RED 18m49s
   graph    hcr 16m04s · 3 red: hcrStepCrash, hcrStepJoinCrash, hcrStepSpareCrash                      RED 18m50s
+  50a00a8f25b, --lanes build,solana, then --lanes guard three times, both at once
+  direct   solana 2m31s · 0 red   guard 3m39s · 10 red · 1 known   3m01s · 9 red · 1 known   2m38s · 9 red · 1 known
+  graph    solana 0m28s · 0 red   guard 3m34s ·  9 red · 1 known   2m02s · 9 red · 1 known   1m58s · 9 red · 1 known
   ```
+
+  The same nine guards are red in all six guard runs (main's reds, each with a card); the tenth of
+  the first direct run is `actorChurnReap [drc]`, a flake under load with a card, and an earlier
+  direct run of that tree also had `rcFamilyMismatchAborts [drc]` red once. The guard lane takes its
+  shard count from the gate (`-DguardShards`) and splits by fixed shards, where `gate.sh` lets its
+  runners claim guards from one list. The solana lane runs its host tests at once (the direct lane
+  one after another) and leaves the on-chain programs and replays out (`-DsolanaReplays=0`) unless
+  the gate's own rule asks for them (`--release`, or a path under `tools/solana` or
+  `runtime/freestanding`); a gate with that rule true was not run through the graph.
 
   The three hcr reds both runs name are the ones a card records as failing under `run-remote.sh` and in no
   land gate, and `hcrWatchOwnOutput` is red now and then on Linux in either way of running the
@@ -573,7 +585,7 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   builds `src/test/fmt/run.ms` into the node's own output (`fmt.runner`), and `fmt` runs that file,
   because `msc run` would link the shared `out/debug/run` beside other lanes (`runner_self_test`).
   Not run through `gate.sh`: every lane whose selection `gate.sh` passes by environment or path
-  (suite, tests, guard, corpus, san, tsan, solana, tools). A second `gate.sh` run in one checkout,
+  (suite, tests, corpus, san, tsan, tools). A second `gate.sh` run in one checkout,
   or in a fresh clone at a path where the same tree was built before, went red at build before any
   lane (`self-host: gen1 wrote no link response file and gen2 differs from it`: the candidate's link
   is restored from the cache), so each run of a pair needs a path of its own.
