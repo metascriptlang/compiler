@@ -1966,9 +1966,14 @@ graph_lane_log() {
 }
 
 run_lane_through_graph() {
-  local lane=$1 out dir shards=1
-  [ "$lane" != hcr ] || shards=${GATE_HCR_SHARDS:-$PAR}
-  out=$(env -u NO_COLOR -u FORCE_COLOR "$BUILDER" build --colors=off "-Dlanes=$lane" "-Dsubject=$CAND" "-DlaneLimit=$LANE_LIMIT" "-DlaneRun=$GRAPH_RUN" "-DhcrShards=$shards" lanes 2>&1) \
+  local lane=$1 out dir
+  local -a more=()
+  case "$lane" in
+    guard) more=("-DguardShards=${GATE_GUARD_SHARDS:-$PAR}") ;;
+    hcr) more=("-DhcrShards=${GATE_HCR_SHARDS:-$PAR}") ;;
+    solana) solana_wants_replays || more=("-DsolanaReplays=0") ;;
+  esac
+  out=$(env -u NO_COLOR -u FORCE_COLOR "$BUILDER" build --colors=off "-Dlanes=$lane" "-Dsubject=$CAND" "-DlaneLimit=$LANE_LIMIT" "-DlaneRun=$GRAPH_RUN" ${more[@]+"${more[@]}"} lanes 2>&1) \
     || { printf '%s\n' "$out" | tail -40; printf 'graph: the build of lane %s failed\n' "$lane"; return 1; }
   dir=$(printf '%s\n' "$out" | sed -n 's/^.*Built lanes → //p' | tail -1)
   [ -n "$dir" ] && [ -d "$dir" ] || { printf '%s\n' "$out" | tail -40; printf 'graph: the build of lane %s named no log directory\n' "$lane"; return 1; }
@@ -2523,7 +2528,7 @@ fi
 promote_builder
 if [ -x "$TOP/msc" ]; then BUILDER="$TOP/msc"; else BUILDER=$(command -v msc) || die "no ./msc and no msc on PATH"; fi
 for graph_lane in ${GATE_GRAPH_LANES:-}; do
-  case "$graph_lane" in boundary|cache|fmt|hcr|lsp) ;; *) die "GATE_GRAPH_LANES: lane '$graph_lane' has no run through the build graph yet (boundary, cache, fmt, hcr and lsp have one)" ;; esac
+  case "$graph_lane" in boundary|cache|fmt|guard|hcr|lsp|solana) ;; *) die "GATE_GRAPH_LANES: lane '$graph_lane' has no run through the build graph yet (boundary, cache, fmt, guard, hcr, lsp and solana have one)" ;; esac
 done
 cand_key=""
 [ -n "$(git status --porcelain -- src std runtime)" ] || cand_key=$(tree_key HEAD)
@@ -2653,6 +2658,10 @@ solana_replays() {
   return $rc
 }
 
+solana_wants_replays() {
+  [ "$release" -eq 1 ] || awk -F'\t' '$1=="solana" && $2 ~ /^(tools\/solana|runtime\/freestanding)\//{f=1} END{exit !f}' "$OUT/why"
+}
+
 run_solana_lane() {
   local dir="$OUT/solana" rc=0 entry
   mkdir -p "$dir" || { printf 'FAIL setup: cannot create %s\n' "$dir"; return 1; }
@@ -2668,9 +2677,7 @@ run_solana_lane() {
     std/solana/simulatorHostTest.ms; do
     solana_host_test "$entry" --target=js || rc=1
   done
-  if [ "$release" -eq 1 ] || awk -F'\t' '$1=="solana" && $2 ~ /^(tools\/solana|runtime\/freestanding)\//{f=1} END{exit !f}' "$OUT/why"; then
-    solana_replays "$dir" || rc=1
-  fi
+  ! solana_wants_replays || solana_replays "$dir" || rc=1
   return $rc
 }
 
