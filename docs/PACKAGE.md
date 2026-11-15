@@ -541,26 +541,31 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   `Cannot resolve module 'std/process/native'`, `0/63 steps succeeded`; the same binary copied into
   the tree built the candidate and ran the lane above.
 
-- **`GATE_GRAPH_LANES="boundary lsp"` makes `tools/gate.sh` run those lanes as these nodes**: the
-  gate's builder runs `msc build -Dlanes=<lane> -Dsubject=<candidate> -DlaneLimit=<limit> lanes`, the
-  node logs one after another are the lane log, and a node's `RC` is the lane's. Unset, the gate is
-  unchanged; a lane named there that has no such run stops the gate with an error that names it.
-  Two checkouts of `0c693544f49` on rtx, 2026-11-15, `tools/gate.sh --lanes build,boundary,fmt,lsp`
-  with `GATE_TRIAGE=0`, the second with the variable:
+- **`GATE_GRAPH_LANES="boundary cache fmt lsp"` makes `tools/gate.sh` run those lanes as these
+  nodes**: the gate's builder runs `msc build -Dlanes=<lane> -Dsubject=<candidate>
+  -DlaneLimit=<limit> lanes`, the node logs one after another are the lane log, and a node's `RC` is
+  the lane's. Unset, the gate is unchanged; a lane named there that has no such run stops the gate
+  with an error that names it. Each pair below is two fresh checkouts of one tree on rtx, 2026-11-15,
+  `GATE_TRIAGE=0`, the second with the variable:
 
   ```
+  0c693544f49, --lanes build,boundary,fmt,lsp
   direct   boundary 9m33s · 0 red   lsp 0m42s · 0 red   RED (build, boundary, fmt, lsp) 11m55s
   graph    boundary 8m10s · 0 red   lsp 0m46s · 0 red   RED (build, boundary, fmt, lsp) 10m41s
+  da60cc67cf1, --lanes build,fmt,cache, both at once
+  direct   cache 9m02s · 0 red   fmt 3m19s · 1 red · 1 new: std/crypto/tls/aead.ms   RED 11m43s
+  graph    cache 9m03s · 0 red   fmt 3m25s · 1 red · 1 new: std/crypto/tls/aead.ms   RED 11m46s
   ```
 
-  The red of both runs is fmt, the formatter's crash on main. The fmt lane gave the same verdict
-  through the graph (`fmt: exit 1 with no named failure`) in a run that still accepted it, and is not
-  accepted now: its node runs `msc run src/test/fmt/run.ms`, which links the shared `out/debug/run`
-  beside other lanes, where `gate.sh` builds the lane a runner of its own (`runner_self_test`). Not
-  run through `gate.sh`: cache, and every lane whose selection `gate.sh` passes by environment or
-  path (suite, tests, guard, hcr, corpus, san, tsan, solana, tools). A second `gate.sh` run in the
-  first checkout went red at build before any lane (`self-host: gen1 wrote no link response file and
-  gen2 differs from it`), so the two runs need two checkouts; not traced.
+  The red of the first pair is fmt, the formatter's crash on main (`fmt: exit 1 with no named
+  failure` in both); the second pair's checkouts drop the crashing line's type annotation, and both
+  runs then name the same `LOSSY` file. The fmt lane is two nodes, as in `gate.sh`: the candidate
+  builds `src/test/fmt/run.ms` into the node's own output (`fmt.runner`), and `fmt` runs that file,
+  because `msc run` would link the shared `out/debug/run` beside other lanes (`runner_self_test`).
+  Not run through `gate.sh`: every lane whose selection `gate.sh` passes by environment or path
+  (suite, tests, guard, hcr, corpus, san, tsan, solana, tools). A second `gate.sh` run in one
+  checkout went red at build before any lane (`self-host: gen1 wrote no link response file and gen2
+  differs from it`), so a pair needs two checkouts; not traced.
 
 Not verified: every lane in one build on one host with a verdict that matches `gate.sh` (one run,
 2026-11-15, did not: card `2026-11-13-gate-through-the-build-graph-remaining-steps.md`), macOS, any lane
