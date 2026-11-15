@@ -1941,6 +1941,56 @@ lane_cmd() {
   esac
 }
 
+through_graph() { case " ${GATE_GRAPH_LANES:-} " in *" $1 "*) return 0 ;; esac; return 1; }
+
+graph_lane_log() {
+  local dir=$1 lane=$2 f prc rc=0 seen=0
+  for f in "$dir/$lane.log" "$dir/$lane".*.log; do
+    [ -f "$f" ] || continue
+    seen=1
+    awk '{ l[NR] = $0 } END { n = NR; if (n >= 3 && l[n] == "END" && l[n-1] ~ /^RC=[0-9]+$/ && l[n-2] ~ /^SECS=[0-9]+$/) n -= 3; for (i = 1; i <= n; i++) print l[i] }' "$f"
+    prc=$(tail -3 "$f" | sed -n 's/^RC=\([0-9][0-9]*\)$/\1/p')
+    [ -n "$prc" ] || { printf 'graph: %s ends without its SECS, RC and END lines\n' "${f##*/}"; prc=1; }
+    [ "$prc" -eq 0 ] || rc=$prc
+  done
+  [ "$seen" -eq 1 ] || { printf 'graph: the build wrote no log of lane %s in %s\n' "$lane" "$dir"; return 1; }
+  return $rc
+}
+
+run_lane_through_graph() {
+  local lane=$1 out dir
+  out=$(env -u NO_COLOR -u FORCE_COLOR "$BUILDER" build --colors=off "-Dlanes=$lane" "-Dsubject=$CAND" "-DlaneLimit=$LANE_LIMIT" lanes 2>&1) \
+    || { printf '%s\n' "$out" | tail -40; printf 'graph: the build of lane %s failed\n' "$lane"; return 1; }
+  dir=$(printf '%s\n' "$out" | sed -n 's/^.*Built lanes → //p' | tail -1)
+  [ -n "$dir" ] && [ -d "$dir" ] || { printf '%s\n' "$out" | tail -40; printf 'graph: the build of lane %s named no log directory\n' "$lane"; return 1; }
+  graph_lane_log "$dir" "$lane"
+}
+
+graph_lane_self_test() (
+  local d got rc bad=0 GATE_GRAPH_LANES="lsp boundary"
+  d=$(mktemp -d) || return 1
+  through_graph lsp && through_graph boundary && ! through_graph ls && ! through_graph suite \
+    || { printf 'FAIL graph lanes: lsp and boundary are named, ls and suite are not\n'; bad=1; }
+  printf 'one\nEND\nFAIL first: broke\n\nSECS=3\nRC=0\nEND\n' >"$d/boundary.a.log"
+  printf 'two\n\nTIMEOUT after 5s, process tree killed\n\nSECS=5\nRC=137\nEND\n' >"$d/boundary.b.log"
+  printf 'other lane\n\nSECS=1\nRC=1\nEND\n' >"$d/boundaryx.log"
+  got=$(graph_lane_log "$d" boundary); rc=$?
+  [ "$rc" -eq 137 ] && [ "$got" = "$(printf 'one\nEND\nFAIL first: broke\n\ntwo\n\nTIMEOUT after 5s, process tree killed\n')" ] \
+    || { printf 'FAIL graph lanes: two node logs, the second killed: rc=%s out "%s"\n' "$rc" "$got"; bad=1; }
+  printf 'whole\n\nSECS=2\nRC=0\nEND\n' >"$d/lsp.log"
+  got=$(graph_lane_log "$d" lsp); rc=$?
+  [ "$rc" -eq 0 ] && [ "$got" = "$(printf 'whole\n')" ] || { printf 'FAIL graph lanes: one green log: rc=%s out "%s"\n' "$rc" "$got"; bad=1; }
+  printf 'cut short\n' >"$d/fmt.log"
+  got=$(graph_lane_log "$d" fmt); rc=$?
+  [ "$rc" -eq 1 ] && [ "$got" = "$(printf 'cut short\ngraph: fmt.log ends without its SECS, RC and END lines')" ] \
+    || { printf 'FAIL graph lanes: a log without its trailer: rc=%s out "%s"\n' "$rc" "$got"; bad=1; }
+  got=$(graph_lane_log "$d" cache); rc=$?
+  [ "$rc" -eq 1 ] && [ "$got" = "graph: the build wrote no log of lane cache in $d" ] \
+    || { printf 'FAIL graph lanes: no log at all: rc=%s out "%s"\n' "$rc" "$got"; bad=1; }
+  rm -rf "$d"
+  return $bad
+)
+
 runner_self_test() {
   local BUILDER=msc CAND=cand CC_FLAG="" narrow="" raiser_on=0 lane cmd bad=0
   for lane in build boundary cache corpus san tsan fmt lsp; do
@@ -2278,6 +2328,7 @@ CASES
   reread_share_self_test || bad=1
   slow_starts_self_test || bad=1
   runner_self_test || bad=1
+  graph_lane_self_test || bad=1
   copy_vendor_self_test || bad=1
   resume_self_test || bad=1
   stable_emit_self_test || bad=1
@@ -2457,6 +2508,9 @@ fi
 
 promote_builder
 if [ -x "$TOP/msc" ]; then BUILDER="$TOP/msc"; else BUILDER=$(command -v msc) || die "no ./msc and no msc on PATH"; fi
+for graph_lane in ${GATE_GRAPH_LANES:-}; do
+  case "$graph_lane" in boundary|lsp) ;; *) die "GATE_GRAPH_LANES: lane '$graph_lane' has no run through the build graph yet (boundary and lsp have one)" ;; esac
+done
 cand_key=""
 [ -n "$(git status --porcelain -- src std runtime)" ] || cand_key=$(tree_key HEAD)
 CC_FLAG=""
@@ -2859,7 +2913,9 @@ build_lane() {
 lane_body() {
   local lane=$1 log="$OUT/$1.log" rc t0=$SECONDS
   [ "$lane" != build ] || rm -f "$CAND.key" "${CAND}_link.rsp"
-  case "$lane" in
+  local via=$lane; ! through_graph "$lane" || via=graph
+  case "$via" in
+    graph) with_slot bounded run_lane_through_graph "$lane" >"$log" 2>&1; rc=$? ;;
     build) with_slot bounded build_lane >"$log" 2>&1; rc=$? ;;
     tools) bounded run_tools_lane >"$log" 2>&1; rc=$? ;;
     tests|suite) bounded run_test_lane "$lane" >"$log" 2>&1; rc=$? ;;
