@@ -89,10 +89,14 @@ function subjectOf(lane: string, red: string): string {
 	return cell < 0 ? red : red.substring(0, cell);
 }
 
+function rerunsWholeLane(lane: string): boolean {
+	return lane == "lsp";
+}
+
 function rerunJudges(lane: string, red: string, changed: string[]): boolean {
 	if (red.endsWith("no result") || red.includes("no named failure") || red == "timed out" || red.startsWith("setup:") || red.startsWith("self-host: ")) return false;
 	const subject = subjectOf(lane, red);
-	if (subject == "" || subject.includes(",") || subject.includes(";")) return false;
+	if (subject == "" || (!rerunsWholeLane(lane) && (subject.includes(",") || subject.includes(";")))) return false;
 	return !changed.some((path: string): boolean => path.includes(subject));
 }
 
@@ -268,7 +272,7 @@ function planOf(changed: string[]): string {
 	const plan: string[] = [];
 	for (const lane of lanes) {
 		const subjects = rerunSubjects(lane.name, freshOf(lane), changed);
-		if (subjects.length > 0) plan.push(`${lane.name}=${subjects.join(",")}`);
+		if (subjects.length > 0) plan.push(`${lane.name}=${rerunsWholeLane(lane.name) ? lane.name : subjects.join(",")}`);
 	}
 	return plan.join(";");
 }

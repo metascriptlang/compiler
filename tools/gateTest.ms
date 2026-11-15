@@ -135,6 +135,15 @@ record("a rerun does not judge a test the slice edits, a missing result or a tim
 		["tests.reruns.slice", ""],
 	])));
 
+const scenario = "a module sees the import, as in batch checking; the second edit too";
+record("an lsp scenario whose name holds the plan's separators is judged, and the plan asks for the lane",
+	`gate: lsp 3s · 1 red · 0 known · 0 new · 1 not the slice's|not the slice's: ${scenario} (red 1/3 on this candidate, 0/3 on main)|gate: GREEN (lsp)|lsp=lsp`,
+	[false, true].map((plan: boolean): string => verdict("{}", [["lsp", log([`FAIL ${scenario}: checkpoint 1: got nothing`], 1)]], "{}", plan ? [["changed.paths", ""]] : [
+		["changed.paths", ""],
+		["lsp.reruns.main", ""],
+		["lsp.reruns.slice", `${scenario}\n`],
+	], plan ? "plan" : "")).join("|"));
+
 record("reruns with no list of the slice's changed paths are refused",
 	"true",
 	`${verdict("{}", [["hcr", log(["FAIL hcrRun: exit 1"], 1)]], "{}", [["hcr.reruns.main", ""], ["hcr.reruns.slice", ""]]).includes("hcr has reruns and")}`);
