@@ -3,7 +3,7 @@ import { ByteInput } from "std/core/buffer/bytes";
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 import { bytesOf, wipeIfCopied, outputArray, outputBuffer } from "./bytes";
 import {
-	Blake2bState, newBlake2b, updateBlake2b, finishBlake2b, finishBlake2bInto,
+	Blake2bState, newBlake2b, updateBlake2b, finishBlake2bInto, wipeBlake2b,
 } from "./blake2b";
 
 export { CryptoError, CryptoErrorKind } from "../errors";
@@ -95,7 +95,7 @@ export class Blake2b {
 	}
 
 	onDestroy(): void {
-		if (!this._state.finished) finishBlake2b(this._state);
+		wipeBlake2b(this._state);
 	}
 }
 

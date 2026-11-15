@@ -1,4 +1,4 @@
-import { newBlake2b, updateBlake2b, finishBlake2b, blake2bOf } from "./blake2b";
+import { newBlake2b, updateBlake2b, finishBlake2b, blake2bOf, wipeBlake2b } from "./blake2b";
 import { encodeHex, decodeHex } from "../../core/encoding";
 
 function katKey(): uint8[] {
@@ -157,4 +157,13 @@ test "updateBlake2b refuses a negative or out-of-range slice" {
 	assert updateRefused(0, -1);
 	assert updateRefused(2, 2);
 	assert !updateRefused(3, 0);
+}
+
+test "wipeBlake2b zeroes the chaining words and the pending block and marks the state finished" {
+	const s = newBlake2b(64, new Array<uint8>(0));
+	updateBlake2b(s, "616263".decodeHex(), 0, 3);
+	wipeBlake2b(s);
+	assert s.finished;
+	for (const word of s.h) assert word == 0;
+	for (const byte of s.block) assert byte == 0;
 }

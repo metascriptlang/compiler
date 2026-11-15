@@ -1271,6 +1271,12 @@ export function finishBlake2bInto(s: Blake2bState, out: OutputBytes, outOff: int
 	compress(s, s.block, 0, true);
 	s.finished = true;
 	for (let i = 0; i < s.outputSize; i++) out[outOff + i] = ((s.h[i >> 3] >> (((i & 7) * 8) as uint64)) & 255) as uint8;
+	wipeBlake2b(s);
+}
+
+/** Zeroes the chaining words and the pending block and marks the state finished, as a digest leaves it. */
+export function wipeBlake2b(s: Blake2bState): void {
+	s.finished = true;
 	wipeBytes(s.block);
 	wipeWords64(s.h);
 }
