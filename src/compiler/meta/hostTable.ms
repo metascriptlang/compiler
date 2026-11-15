@@ -76,6 +76,7 @@ import { platform, arch, env as machineEnv, envPairs, exec, argv, execFile, exec
 import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
 import { utf8String, findBytesFrom, byteEqAt, asciiWords } from "std/core/string/bytes";
 import { wellFormedPrefix } from "std/core/string/utf8Repair";
+import { rawString } from "std/core/buffer/bytes";
 import { performance } from "std/core/performance";
 import { fromCodePoint } from "std/core/string";
 import { asciiLower, asciiUpper, isSpaceByte, repeat, reverse, equalsIgnoreCase } from "std/core/string/shared";
@@ -177,6 +178,11 @@ function _readForBuild(path: string): string {
 
 function _stdFsReadFile(args: RaiserValue[]): RaiserValue {
 	return _vmStringResult(readFile(_readForBuild(unboxString(args[0]))));
+}
+
+function _stdFsReadRaw(args: RaiserValue[]): RaiserValue {
+	const r = readFileBytes(_readForBuild(unboxString(args[0])));
+	return _toVm(r.ok ? _vmSuccess(hostString(rawString(r.value))) : _vmFailure(r.error));
 }
 
 function _stdFsReadLines(args: RaiserValue[]): RaiserValue {
@@ -1646,7 +1652,7 @@ function _bridgeMsUnionWrapMaybe(vm: RaiserVM): void {
 const SYSTEM_ROUTED: string[] = [
 	"msFsExists", "msFsRealPath", "msFsIsFile", "msFsIsDir", "msFsIsExecutable", "msFsFileSize",
 	"msFsModifiedTime", "msFsReadFile", "msFsLastErrno", "msFsWriteFileMode", "msFsChangedTime",
-	"msFsChangeStamp", "std/fs.readFile", "std/fs.readDir", "std/fs.exists",
+	"msFsChangeStamp", "std/fs.readFile", "std/fs.readRaw", "std/fs.readDir", "std/fs.exists",
 	"std/fs.isFile", "std/fs.isDir", "std/fs.isExecutable", "std/fs.realpath", "std/fs.fileSize",
 	"std/fs.modifiedTime", "std/fs.changedTime", "std/fs.changeStamp", "std/fs.writeFile", "std/fs.appendFile",
 	"std/fs.copyFile", "std/fs.mkdir", "std/fs.ensureDir", "std/fs.rmdir", "std/fs.remove", "std/fs.removeAll",
@@ -1681,6 +1687,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("msFsChangedTime",    _bridgeMsFsChangedTime, HostCapability.FileRead);
 	registerHostFn("msFsChangeStamp",    _bridgeMsFsChangeStamp, HostCapability.FileRead);
 	registerHostFn("std/fs.readFile",    _stdFsReadFile, HostCapability.FileRead);
+	registerHostFn("std/fs.readRaw",     _stdFsReadRaw, HostCapability.FileRead);
 	registerHostFn("std/fs.readLines",   _stdFsReadLines, HostCapability.FileRead);
 	registerHostFn("std/fs.readDir",     _stdFsReadDir, HostCapability.FileRead);
 	registerHostFn("std/fs.exists",      _stdFsExists, HostCapability.FileRead);
