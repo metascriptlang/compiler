@@ -541,8 +541,8 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   `Cannot resolve module 'std/process/native'`, `0/63 steps succeeded`; the same binary copied into
   the tree built the candidate and ran the lane above.
 
-- **`GATE_GRAPH_LANES="boundary cache corpus fmt guard hcr lsp san solana suite tests tsan"` makes
-  `tools/gate.sh` run those lanes as these nodes**: the gate's builder runs `msc build -Dlanes=<lane> -Dsubject=<candidate>
+- **`GATE_GRAPH_LANES="boundary cache corpus fmt guard hcr lsp san solana suite tests tools tsan"`
+  makes `tools/gate.sh` run those lanes as these nodes**: the gate's builder runs `msc build -Dlanes=<lane> -Dsubject=<candidate>
   -DlaneLimit=<limit> lanes`, the node logs one after another are the lane log, and a node's `RC` is
   the lane's. Unset, the gate is unchanged; a lane named there that has no such run stops the gate
   with an error that names it. Each pair below is two fresh checkouts of one tree on rtx, 2026-11-15,
@@ -586,6 +586,30 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   second run (2 red, the same names), the direct first run having `httpServeConcurrentStops [san]`
   red once more. Not run: a corpus lane with the raiser cells through `gate.sh`.
 
+  The tools lane keeps the gate's rule, the checks of the paths a change touches: `gate.sh` names
+  their nodes in `-Dlanes` (`tools_nodes`; a node is `tools.` and the `<path>: <kind>` of its `FAIL`
+  line, `/` and spaces as `_`, `: ` as `.`), and a change that touches no tool path builds nothing.
+  A `.ms` under `src/test/js/declarationBundlers` has its `--target=js` check as a node. Two
+  land-form gates on rtx, 2026-11-15, tree `ee00a5b31b0`, each on two fresh checkouts at once, the
+  scratch commit adding a newline to the files named:
+
+  ```
+  gate.sh, gate.ms, wt.sh, release.sh, managedToolchain/{archiveTest.ms, archiveBatchContractTest.ms, prepareBundle.py}
+  direct   tools 3m48s · 1 red · 1 new: tools/managedToolchain   suite 6213/6213   RED 7m42s
+  graph    tools 2m42s · 1 red · 1 new: tools/managedToolchain   suite 6213/6213   RED 7m41s
+  gate.sh, bundler-plugin/test.mjs, src/test/js/declarationBundlers/fixtures/primary.ms, tests through the graph too
+  direct   tools 1m45s · 1 red · 1 new: tools/bundler-plugin/test.mjs   tests 0m55s · 0 red   RED 8m53s
+  graph    tools 1m08s · 1 red · 1 new: tools/bundler-plugin/test.mjs   tests 0m55s · 0 red   RED 8m53s
+  ```
+
+  Both reds are main's on rtx, each with a card (the managed toolchain's Python test, the
+  `rollup-watch-established` cell), and the `FAIL` lines are the same in both runs of a pair. The
+  second pair also ran the tests lane under the gate's tier selection, 0m55s and 0 red in both with
+  no case total; which tiers the selection kept was not read, so it does not show a tier node run
+  that way. Where a
+  check fails, the direct lane skips the checks after it for that path (`bash -n` before the
+  self-test, `check` before `run`) and the graph runs them all; not measured with such a failure.
+
   The suite and the tests lane keep `gate.sh`'s own driver (`run_test_lane`): it starts another tier
   only while `MemAvailable` holds one more, and runs a part killed with 137 or 143 once again. Through
   the graph each part is one build of one node, which `-Dlanes` names in full
@@ -627,8 +651,8 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   runs then name the same `LOSSY` file. The fmt lane is two nodes, as in `gate.sh`: the candidate
   builds `src/test/fmt/run.ms` into the node's own output (`fmt.runner`), and `fmt` runs that file,
   because `msc run` would link the shared `out/debug/run` beside other lanes (`runner_self_test`).
-  Not run through `gate.sh`: every lane whose selection `gate.sh` passes by environment or path
-  (tools), and the tier selection of a gate without `--lanes` (`tier_select`). A second `gate.sh` run in one checkout,
+  Not run through `gate.sh`: the crypto lane (the build lane stays the gate's own), and a tier the
+  gate's tier selection keeps (`tier_select`). A second `gate.sh` run in one checkout,
   or in a fresh clone at a path where the same tree was built before, went red at build before any
   lane (`self-host: gen1 wrote no link response file and gen2 differs from it`: the candidate's link
   is restored from the cache), so each run of a pair needs a path of its own.
