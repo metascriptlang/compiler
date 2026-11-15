@@ -164,7 +164,8 @@ function replay(name: string, script: string, programs: LazyPath[], prefix: stri
 	const node = laneNode(`solana.${name}`, ["bash", "-c", afterBuilds, "solana", name, "node", `tools/solana/${script}.mjs`], env, replaySources);
 	for (const built of programs) node.addPrefixedFileArg(prefix, built);
 }
-if (wanted("solana")) {
+const solanaReplays = option("solanaReplays", "0 leaves the on-chain programs and their replays out of the solana lane, as a gate does when no path asks for them", 1);
+if (wanted("solana") && solanaReplays != 0) {
 	const onChain = ["--os=solana"];
 	const release = ["--os=solana", "--release"];
 	replay("fields-replay", "accountValues", [program("fields-build", "tools/solana/accountValuesProbe.ms", release, "accountValues.so")]);
