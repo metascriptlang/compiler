@@ -2509,7 +2509,7 @@ fi
 promote_builder
 if [ -x "$TOP/msc" ]; then BUILDER="$TOP/msc"; else BUILDER=$(command -v msc) || die "no ./msc and no msc on PATH"; fi
 for graph_lane in ${GATE_GRAPH_LANES:-}; do
-  case "$graph_lane" in boundary|lsp) ;; *) die "GATE_GRAPH_LANES: lane '$graph_lane' has no run through the build graph yet (boundary and lsp have one)" ;; esac
+  case "$graph_lane" in boundary|cache|fmt|lsp) ;; *) die "GATE_GRAPH_LANES: lane '$graph_lane' has no run through the build graph yet (boundary, cache, fmt and lsp have one)" ;; esac
 done
 cand_key=""
 [ -n "$(git status --porcelain -- src std runtime)" ] || cand_key=$(tree_key HEAD)
