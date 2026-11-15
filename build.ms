@@ -92,9 +92,17 @@ if (wanted("fmt")) lane("fmt", [laneNode("fmt.runner", [candidate, "build", "src
 lane("lsp", raiser.concat(["src/test/lsp/run.ms"]), under);
 lane("cache", raiser.concat(["src/test/cache/run.ms", candidate]));
 for (const name of ["nativeBuildBoundary", "projectConfigCommands", "preludePackKey"]) lane(`boundary.${name}`, raiser.concat([`src/test/${name}.ms`, candidate]));
-lane("corpus", [corpusRunner], { MSC: candidate, MSCORPUS_RAISER: "1" });
-const afterSanWroteTheThreadedList = wanted("san") ? [laneNode("san", [corpusRunner], { MSC: candidate, MSCORPUS_SAN: "1" }).captureStdOut()] : [];
-lane("tsan", [corpusRunner], { MSC: candidate, MSCORPUS_TSAN: "1" }, sources.concat(afterSanWroteTheThreadedList));
+const corpusOnly = option("corpusOnly", "the programs the corpus, san and tsan lanes run, comma-separated; every program when unset", "");
+const corpusRaiser = option("corpusRaiser", "0 leaves the raiser cells out of the corpus lane, as a gate does when no path asks for them", 1);
+function corpusEnv(cells: string): Record<string, Arg> {
+	const env: Record<string, Arg> = { MSC: candidate };
+	if (cells != "") env.set(cells, "1");
+	if (corpusOnly != "") env.set("MSCORPUS_ONLY", corpusOnly);
+	return env;
+}
+lane("corpus", [corpusRunner], corpusEnv(corpusRaiser != 0 ? "MSCORPUS_RAISER" : ""));
+const afterSanWroteTheThreadedList = wanted("san") ? [laneNode("san", [corpusRunner], corpusEnv("MSCORPUS_SAN")).captureStdOut()] : [];
+lane("tsan", [corpusRunner], corpusEnv("MSCORPUS_TSAN"), sources.concat(afterSanWroteTheThreadedList));
 lane("crypto", ["bash", "src/test/crypto/suite.sh"], under);
 
 const rerun = option("rerun", "the new reds a gate runs again, as <lane>=<subject>,<subject>;<lane>=<subject>", "");
