@@ -72,38 +72,6 @@ int32_t msFsLastErrno(void) {
 	return (int32_t)_msFsLastErrno;
 }
 
-/* ===== Read ===== */
-
-msString msFsReadFile(msString path) {
-	_msFsLastErrno = 0;
-	wchar_t* wide = msFsWidePath(path, 0);
-	if (!wide) return MS_EMPTY_STRING;
-	FILE* f = _wfopen(wide, L"rb");
-	int openErrno = errno;
-	msMemFree(wide);
-	errno = openErrno;
-	if (!f) { _msFsLastErrno = errno; return MS_EMPTY_STRING; }
-	if (_fseeki64(f, 0, SEEK_END) != 0) { _msFsLastErrno = errno; fclose(f); return MS_EMPTY_STRING; }
-	__int64 sz = _ftelli64(f);
-	if (sz < 0 || _fseeki64(f, 0, SEEK_SET) != 0) { _msFsLastErrno = errno; fclose(f); return MS_EMPTY_STRING; }
-	if (sz == 0) { fclose(f); return MS_EMPTY_STRING; }
-	if (sz > MS_LEN_MAX) { _msFsLastErrno = EFBIG; fclose(f); return MS_EMPTY_STRING; }
-	msString result = msStringNewUninit((int64_t)sz);
-	errno = 0;
-	size_t nread = fread(msStrWritable(&result), 1, (size_t)sz, f);
-	if (nread != (size_t)sz && ferror(f)) {
-		_msFsLastErrno = errno != 0 ? errno : EIO;
-		msStringDestroy(result);
-		fclose(f);
-		return MS_EMPTY_STRING;
-	}
-	fclose(f);
-	if (nread == 0) { msStringDestroy(result); return MS_EMPTY_STRING; }
-	msStrSetLen(&result, (int64_t)nread);
-	msStrWritable(&result)[nread] = '\0';
-	return result;
-}
-
 msString msFsReadDirEntries(msString path) {
 	_msFsLastErrno = 0;
 	/* Build glob pattern: "path\\*" */

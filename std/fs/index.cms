@@ -12,7 +12,6 @@ import { utf8Text } from "../core/string/bytes";
 import { rawBuffer } from "../core/buffer/bytes";
 
 extern function msFsLastErrno(): int32;
-extern function msFsReadFile(path: string): string;
 // Parked: readdir returns NULL at the end, and `Ptr<Dirent> | null` does not build yet
 // (inbox 2026-10-22-nullable-ptr-to-extern-tag-struct-emits-a-field-copy-hook.md).
 extern function msFsReadDirEntries(path: string): string;
@@ -35,6 +34,20 @@ extern function cFclose(file: Ptr<FILE>): int32 from "fclose";
 extern function cFree(p: Ptr<uint8>): void from "free";
 extern function msStringFromCStr(s: cstring): string;
 extern function msStringNew(data: cstring, length: int64): string;
+extern function newBytes(length: int64): string from "msStringNewUninit";
+extern const stringLengthMax: uint64 from "MS_LEN_MAX";
+extern const EOF: int32;
+extern const EIO: int32;
+extern const EFBIG: int32;
+extern const ENOMEM: int32;
+extern function cFread(data: Ptr<uint8>, size: uint64, count: uint64, file: Ptr<FILE>): uint64 from "fread";
+extern function cFerror(file: Ptr<FILE>): int32 from "ferror";
+extern function cFeof(file: Ptr<FILE>): int32 from "feof";
+extern function cGetc(file: Ptr<FILE>): int32 from "getc";
+extern function cUngetc(c: int32, file: Ptr<FILE>): int32 from "ungetc";
+extern function cMalloc(size: uint64): Ptr<uint8> | null from "malloc";
+extern function cRealloc(p: Ptr<uint8>, size: uint64): Ptr<uint8> | null from "realloc";
+extern function cMemcpy(dst: Ptr<uint8>, src: Readonly<Ptr<uint8>>, size: uint64): Ptr<uint8> from "memcpy";
 
 when (windows) {
 	@include("direct.h");
@@ -53,6 +66,7 @@ when (windows) {
 	extern function cRmdir(path: Ptr<uint16>): int32 from "_wrmdir";
 	extern function cUnlink(path: Ptr<uint16>): int32 from "_wunlink";
 	extern function cWfopen(path: Ptr<uint16>, mode: Ptr<uint16>): Ptr<FILE> | null from "_wfopen";
+	extern function cFileno(file: Ptr<FILE>): int32 from "_fileno";
 	extern function cFullpath(
 		resolved: Ptr<uint16> | null,
 		path: Ptr<uint16>,
@@ -61,6 +75,7 @@ when (windows) {
 	extern function cStricmp(a: cstring, b: cstring): int32 from "_stricmp";
 
 	extern struct Stat from "struct _stat64" { st_mode: uint16; st_size: int64; st_mtime: int64; }
+	extern function cFstat(fd: int32, ref buf: Stat): int32 from "_fstat64";
 	extern const S_IFMT: uint16;
 	extern const S_IFREG: uint16;
 	extern const S_IFDIR: uint16;
@@ -160,6 +175,22 @@ when (windows) {
 		if (err == EACCES && cChmod(wide, 438) == 0 && cUnlink(wide) == 0) err = 0;
 		freeWide(wide);
 		return err;
+	}
+	function openForRead(path: string, ref err: int32): Ptr<FILE> | null {
+		const widePathName = widePath(path);
+		const wideMode = widePath("rb");
+		if (widePathName == null || wideMode == null) {
+			freeWide(widePathName);
+			freeWide(wideMode);
+			err = EINVAL;
+			return null;
+		}
+		const file = cWfopen(widePathName, wideMode);
+		const openErr = errno;
+		freeWide(widePathName);
+		freeWide(wideMode);
+		if (file == null) err = openErr;
+		return file;
 	}
 	function writeFileErrno(path: string, content: Readonly<Span<uint8>>, mode: string): int32 {
 		const widePathName = widePath(path);
@@ -413,7 +444,9 @@ when (windows) {
 		function mtimeOf(st: Stat): Timespec { return st.st_mtim; }
 		function ctimeOf(st: Stat): Timespec { return st.st_ctim; }
 	}
-	extern function cFopen(path: cstring, mode: cstring): Ptr<FILE> from "fopen";
+	extern function cFopen(path: cstring, mode: cstring): Ptr<FILE> | null from "fopen";
+	extern function cFileno(file: Ptr<FILE>): int32 from "fileno";
+	extern function cFstat(fd: int32, ref buf: Stat): int32 from "fstat";
 	extern function cStat(path: cstring, ref buf: Stat): int32 from "stat";
 	extern function cLstat(path: cstring, ref buf: Stat): int32 from "lstat";
 	function statOf(path: string, ref st: Stat): boolean { return cStat(path as cstring, st) == 0; }
@@ -463,6 +496,11 @@ when (windows) {
 	// syscall, before anything else runs.
 	function removeErrno(path: string): int32 {
 		return cUnlink(path as cstring) == 0 ? 0 : errno;
+	}
+	function openForRead(path: string, ref err: int32): Ptr<FILE> | null {
+		const file = cFopen(path as cstring, "rb");
+		if (file == null) err = errno;
+		return file;
 	}
 	function writeFileErrno(path: string, content: Readonly<Span<uint8>>, mode: string): int32 {
 		const file = cFopen(path as cstring, mode as cstring);
@@ -587,10 +625,68 @@ export { dirname, basename, extname, join, resolve, isAbsolute, normalize } from
 
 // The file's bytes in a string that may hold ill-formed UTF-8; never leaves this module.
 function readRaw(path: string): Result<string, IoError> {
-	const raw = msFsReadFile(path);
-	const err = msFsLastErrno();
+	let err: int32 = 0;
+	const file = openForRead(path, err);
+	if (file == null) return Result.err(ioErrorFromErrno(err, path));
+	const raw = readOpened(file, err);
+	cFclose(file);
 	if (err != 0) return Result.err(ioErrorFromErrno(err, path));
 	return Result.ok(raw);
+}
+
+// Reads past the size fstat reports, which a growing file or a /proc file can exceed.
+function readOpened(file: Ptr<FILE>, ref err: int32): string {
+	let st: Stat = {};
+	const size: int64 = cFstat(cFileno(file), st) == 0 ? st.st_size as int64 : 0;
+	let spill = "";
+	let have: uint64 = 0;
+	if (size > 0 && (size as uint64) < stringLengthMax) {
+		const direct = newBytes(size);
+		errno = 0;
+		const got = cFread((direct as cstring) as Ptr<uint8>, 1, size as uint64, file);
+		if (cFerror(file) != 0) {
+			err = errno != 0 ? errno : EIO;
+			return "";
+		}
+		const next = got == (size as uint64) ? cGetc(file) : EOF;
+		if (next == EOF) return got == (size as uint64) ? direct : msStringNew(direct as cstring, got as int64);
+		cUngetc(next, file);
+		spill = direct;
+		have = got;
+	}
+	let cap: uint64 = size > 0 ? (size as uint64) * 2 : 4096;
+	const first = cMalloc(cap);
+	if (first == null) {
+		err = ENOMEM;
+		return "";
+	}
+	let buf: Ptr<uint8> = first;
+	if (have > 0) cMemcpy(buf, (spill as cstring) as Readonly<Ptr<uint8>>, have);
+	let length = have;
+	while (true) {
+		errno = 0;
+		length += cFread(buf + (length as int64), 1, cap - length, file);
+		if (cFerror(file) != 0) {
+			err = errno != 0 ? errno : EIO;
+			break;
+		}
+		if (cFeof(file) != 0) break;
+		if (cap > stringLengthMax) {
+			err = EFBIG;
+			break;
+		}
+		const grown = cRealloc(buf, cap * 2);
+		if (grown == null) {
+			err = ENOMEM;
+			break;
+		}
+		buf = grown;
+		cap = cap * 2;
+	}
+	if (err == 0 && length > stringLengthMax) err = EFBIG;
+	const result = err != 0 || length == 0 ? "" : msStringNew(buf as cstring, length as int64);
+	cFree(buf);
+	return result;
 }
 
 // Each ill-formed UTF-8 sequence reads as U+FFFD; `readFileBytes` returns the bytes untouched.

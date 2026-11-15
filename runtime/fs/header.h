@@ -31,8 +31,6 @@ int32_t msFsLastErrno(void);
 
 /* Read entire file as string. Binary mode, 64 MiB cap.
  * Returns MS_EMPTY_STRING on failure. */
-msString msFsReadFile(msString path);
-
 /* List directory entries as "\n"-joined string.
  * Directories have trailing "/". "." and ".." excluded.
  * Returns MS_EMPTY_STRING on error (check msFsLastErrno). */

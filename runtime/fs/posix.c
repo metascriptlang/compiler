@@ -58,59 +58,6 @@ int32_t msFsLastErrno(void) {
 	return (int32_t)_msFsLastErrno;
 }
 
-/* ===== Read ===== */
-
-msString msFsReadFile(msString path) {
-	_msFsLastErrno = 0;
-	FILE* f = fopen(msStringToCString(path), "rb");
-	if (!f) { _msFsLastErrno = errno; return MS_EMPTY_STRING; }
-	struct stat st;
-	size_t cap = 4096;
-	size_t len = 0;
-	msString direct = MS_EMPTY_STRING;
-	if (fstat(fileno(f), &st) == 0 && st.st_size > 0 && st.st_size < MS_LEN_MAX) {
-		size_t size = (size_t)st.st_size;
-		direct = msStringNewUninit((int64_t)size);
-		errno = 0;
-		len = fread(msStrWritable(&direct), 1, size, f);
-		if (ferror(f)) {
-			_msFsLastErrno = errno != 0 ? errno : EIO;
-			msStringDecref(direct);
-			fclose(f);
-			return MS_EMPTY_STRING;
-		}
-		int next = len == size ? getc(f) : EOF;
-		if (next == EOF) {
-			fclose(f);
-			if (len == 0) { msStringDecref(direct); return MS_EMPTY_STRING; }
-			msStrSetLen(&direct, (int64_t)len);
-			msStrWritable(&direct)[len] = '\0';
-			return direct;
-		}
-		ungetc(next, f);
-		cap = size * 2;
-	}
-	char* buf = (char*)msMemAlloc(cap);
-	if (!buf) { _msFsLastErrno = ENOMEM; fclose(f); if (msStrLen(direct) > 0) msStringDecref(direct); return MS_EMPTY_STRING; }
-	if (len > 0) { memcpy(buf, msStrData(&direct), len); msStringDecref(direct); }
-	for (;;) {
-		errno = 0;
-		len += fread(buf + len, 1, cap - len, f);
-		if (ferror(f)) { _msFsLastErrno = errno != 0 ? errno : EIO; break; }
-		if (feof(f)) break;
-		if (cap > (size_t)MS_LEN_MAX) { _msFsLastErrno = EFBIG; break; }
-		char* grown = (char*)msRealloc(buf, cap, cap * 2);
-		if (!grown) { _msFsLastErrno = ENOMEM; break; }
-		buf = grown;
-		cap = cap * 2;
-	}
-	fclose(f);
-	if (_msFsLastErrno == 0 && len > (size_t)MS_LEN_MAX) _msFsLastErrno = EFBIG;
-	msString result = _msFsLastErrno != 0 || len == 0 ? MS_EMPTY_STRING : msStringNew(buf, (int64_t)len);
-	msMemFree(buf);
-	return result;
-}
-
 /* ===== Directory ===== */
 
 msString msFsReadDirEntries(msString path) {
