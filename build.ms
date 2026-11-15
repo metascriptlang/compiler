@@ -225,6 +225,8 @@ for (const source of toolSources) {
 	else tool(`${source.sub}: run`, [candidate, "run", source], toolSources);
 }
 tool("tools/gateTest.ms: run", [candidate, "run", "tools/gateTest.ms", candidate], toolSources);
+const bundlerFixtures = path("src/test/js/declarationBundlers");
+for (const source of glob("src/test/js/declarationBundlers/**/*.ms")) tool(`${source.sub}: check`, [candidate, "check", "--target=js", source], [bundlerFixtures]);
 
 const installPinned = 'mkdir -p "$1/harness" "$1/vendor" && cp tools/bundler-plugin/harness/package.json tools/bundler-plugin/harness/package-lock.json "$1/harness/" && cp tools/bundler-plugin/vendor/rollup4.tgz "$1/vendor/" && npm ci --prefix "$1/harness" --ignore-scripts --prefer-offline --no-audit --no-fund';
 const pins = [path("tools/bundler-plugin/harness/package.json"), path("tools/bundler-plugin/harness/package-lock.json"), path("tools/bundler-plugin/vendor/rollup4.tgz")];
