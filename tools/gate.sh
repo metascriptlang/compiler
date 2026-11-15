@@ -1966,23 +1966,53 @@ graph_lane_log() {
 }
 
 run_lane_through_graph() {
-  local lane=$1 out dir
+  local lane=$1 run=${2:-$GRAPH_RUN} out dir
   local -a more=()
   case "$lane" in
+    tests.*) more=("-DtestShards=$TEST_SHARDS") ;;
     guard) more=("-DguardShards=${GATE_GUARD_SHARDS:-$PAR}") ;;
     hcr) more=("-DhcrShards=${GATE_HCR_SHARDS:-$PAR}") ;;
     solana) solana_wants_replays || more=("-DsolanaReplays=0") ;;
   esac
-  out=$(env -u NO_COLOR -u FORCE_COLOR "$BUILDER" build --colors=off "-Dlanes=$lane" "-Dsubject=$CAND" "-DlaneLimit=$LANE_LIMIT" "-DlaneRun=$GRAPH_RUN" ${more[@]+"${more[@]}"} lanes 2>&1) \
+  out=$(env -u NO_COLOR -u FORCE_COLOR "$BUILDER" build --colors=off "-Dlanes=$lane" "-Dsubject=$CAND" "-DlaneLimit=$LANE_LIMIT" "-DlaneRun=$run" ${more[@]+"${more[@]}"} lanes 2>&1) \
     || { printf '%s\n' "$out" | tail -40; printf 'graph: the build of lane %s failed\n' "$lane"; return 1; }
   dir=$(printf '%s\n' "$out" | sed -n 's/^.*Built lanes → //p' | tail -1)
   [ -n "$dir" ] && [ -d "$dir" ] || { printf '%s\n' "$out" | tail -40; printf 'graph: the build of lane %s named no log directory\n' "$lane"; return 1; }
   graph_lane_log "$dir" "$lane"
 }
 
+test_node() {
+  local f=$1 shard=${3:-} name
+  [ "$f" != src/index.ms ] || { printf 'suite'; return; }
+  name=${f#src/test/}; name=${name%/index.ms}; name=${name%.ms}
+  shard=${shard#--tests-shard=}
+  printf 'tests.%s%s' "$name" "${shard%/*}"
+}
+
+test_one_through_graph() {
+  local f=$2 part=$3 node run=$GRAPH_RUN rc; shift 3
+  node=$(test_node "$f" "$@")
+  [ ! -e "$part.rc" ] || run=$GRAPH_RUN.again
+  printf 'gate: test job=%s %s node=%s\n' "${part##*/}" "$*" "$node" >"$part"
+  run_lane_through_graph "$node" "$run" >>"$part" 2>&1
+  rc=$?
+  case $rc in 137|143) echo "(exit $rc)" >>"$part" ;; esac
+  echo $rc >"$part.rc"
+}
+
 graph_lane_self_test() (
   local d got rc bad=0 GATE_GRAPH_LANES="lsp boundary"
   d=$(mktemp -d) || return 1
+  got="$(test_node src/index.ms) $(test_node src/test/helpers.ms --tests-in-dir) $(test_node src/test/js/index.ms --tests-in-dir) $(test_node src/test/c/index.ms --tests-in-dir --tests-shard=2/3)"
+  [ "$got" = "suite tests.helpers tests.js tests.c2" ] || { printf 'FAIL graph lanes: the node of a test job: %s\n' "$got"; bad=1; }
+  run_lane_through_graph() { printf 'ran %s as %s\n' "$1" "$2"; return 143; }
+  GRAPH_RUN=7 test_one_through_graph cand src/test/c/index.ms "$d/c.part" --tests-in-dir --tests-shard=0/3
+  got=$(cat "$d/c.part" "$d/c.part.rc" | tr '\n' '|')
+  [ "$got" = "gate: test job=c.part --tests-in-dir --tests-shard=0/3 node=tests.c0|ran tests.c0 as 7|(exit 143)|143|" ] \
+    || { printf 'FAIL graph lanes: a test job killed through the graph: %s\n' "$got"; bad=1; }
+  GRAPH_RUN=7 test_one_through_graph cand src/test/c/index.ms "$d/c.part" --tests-in-dir --tests-shard=0/3
+  grep -qx 'ran tests.c0 as 7.again' "$d/c.part" || { printf 'FAIL graph lanes: the second run of a killed test job reads the log of the first: %s\n' "$(sed -n 2p "$d/c.part")"; bad=1; }
+  rm -f "$d"/c.part*
   through_graph lsp && through_graph boundary && ! through_graph ls && ! through_graph suite \
     || { printf 'FAIL graph lanes: lsp and boundary are named, ls and suite are not\n'; bad=1; }
   printf 'one\nEND\nFAIL first: broke\n\nSECS=3\nRC=0\nEND\n' >"$d/boundary.a.log"
@@ -2528,7 +2558,7 @@ fi
 promote_builder
 if [ -x "$TOP/msc" ]; then BUILDER="$TOP/msc"; else BUILDER=$(command -v msc) || die "no ./msc and no msc on PATH"; fi
 for graph_lane in ${GATE_GRAPH_LANES:-}; do
-  case "$graph_lane" in boundary|cache|fmt|guard|hcr|lsp|solana) ;; *) die "GATE_GRAPH_LANES: lane '$graph_lane' has no run through the build graph yet (boundary, cache, fmt, guard, hcr, lsp and solana have one)" ;; esac
+  case "$graph_lane" in boundary|cache|fmt|guard|hcr|lsp|solana|suite|tests) ;; *) die "GATE_GRAPH_LANES: lane '$graph_lane' has no run through the build graph yet (boundary, cache, fmt, guard, hcr, lsp, solana, suite and tests have one)" ;; esac
 done
 cand_key=""
 [ -n "$(git status --porcelain -- src std runtime)" ] || cand_key=$(tree_key HEAD)
@@ -2705,15 +2735,17 @@ test_ram_room() {
 
 run_test_lane() {
   local rc=0 f shard part jobs="src/index.ms -" noresult=" "
+  local one=test_one
+  ! through_graph "$1" || one=test_one_through_graph
   case "$1" in
     suite)
       part=$(part_of suite src/index.ms)
-      with_test_binary with_slot test_one "$BUILDER" src/index.ms "$part"
+      with_test_binary with_slot "$one" "$BUILDER" src/index.ms "$part"
       case "$(cat "$part.rc" 2>/dev/null)" in
         137|143)
           printf 'gate: %s was killed under host memory pressure; running it again once the RAM holds it\n' "${part##*/}"
           until test_ram_room 0; do sleep 5; done
-          with_test_binary with_slot test_one "$BUILDER" src/index.ms "$part" ;;
+          with_test_binary with_slot "$one" "$BUILDER" src/index.ms "$part" ;;
       esac ;;
     tests)
       jobs=$(test_jobs)
@@ -2732,9 +2764,9 @@ run_test_lane() {
         done
         started+=("$SECONDS")
         if [ "$shard" = - ]; then
-          with_slot test_one "$CAND" "$f" "$(part_of tests "$f")" --tests-in-dir &
+          with_slot "$one" "$CAND" "$f" "$(part_of tests "$f")" --tests-in-dir &
         else
-          with_slot test_one "$CAND" "$f" "$(part_of tests "$f.$shard")" --tests-in-dir "--tests-shard=$shard" &
+          with_slot "$one" "$CAND" "$f" "$(part_of tests "$f.$shard")" --tests-in-dir "--tests-shard=$shard" &
         fi
       done <<<"$jobs"
       wait
@@ -2744,9 +2776,9 @@ run_test_lane() {
         case "$(cat "$part.rc" 2>/dev/null)" in 137|143) ;; *) continue ;; esac
         printf 'gate: %s was killed under host memory pressure; running it again alone\n' "${part##*/}"
         if [ "$shard" = - ]; then
-          with_slot test_one "$CAND" "$f" "$part" --tests-in-dir
+          with_slot "$one" "$CAND" "$f" "$part" --tests-in-dir
         else
-          with_slot test_one "$CAND" "$f" "$part" --tests-in-dir "--tests-shard=$shard"
+          with_slot "$one" "$CAND" "$f" "$part" --tests-in-dir "--tests-shard=$shard"
         fi
       done <<<"$jobs" ;;
   esac
@@ -2934,7 +2966,8 @@ build_lane() {
 lane_body() {
   local lane=$1 log="$OUT/$1.log" rc t0=$SECONDS
   [ "$lane" != build ] || rm -f "$CAND.key" "${CAND}_link.rsp"
-  local via=$lane; ! through_graph "$lane" || via=graph
+  local via=$lane
+  case "$lane" in tests|suite) ;; *) ! through_graph "$lane" || via=graph ;; esac
   case "$via" in
     graph) with_slot bounded run_lane_through_graph "$lane" >"$log" 2>&1; rc=$? ;;
     build) with_slot bounded build_lane >"$log" 2>&1; rc=$? ;;
