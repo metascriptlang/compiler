@@ -541,8 +541,8 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   `Cannot resolve module 'std/process/native'`, `0/63 steps succeeded`; the same binary copied into
   the tree built the candidate and ran the lane above.
 
-- **`GATE_GRAPH_LANES="boundary cache fmt guard hcr lsp solana suite tests"` makes `tools/gate.sh` run those
-  lanes as these nodes**: the gate's builder runs `msc build -Dlanes=<lane> -Dsubject=<candidate>
+- **`GATE_GRAPH_LANES="boundary cache corpus fmt guard hcr lsp san solana suite tests tsan"` makes
+  `tools/gate.sh` run those lanes as these nodes**: the gate's builder runs `msc build -Dlanes=<lane> -Dsubject=<candidate>
   -DlaneLimit=<limit> lanes`, the node logs one after another are the lane log, and a node's `RC` is
   the lane's. Unset, the gate is unchanged; a lane named there that has no such run stops the gate
   with an error that names it. Each pair below is two fresh checkouts of one tree on rtx, 2026-11-15,
@@ -564,7 +564,27 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   636ad6ef5e7, --lanes build,suite,tests, one run after the other, GATE_PAR=8
   direct   suite 6m23s · 0 red · 6213/6213   tests 10m16s · 0 red · 6046/6046   GREEN 12m49s   least RAM available 47 GB
   graph    suite 6m25s · 0 red · 6213/6213   tests 10m22s · 0 red · 6046/6046   GREEN 12m53s   least RAM available 44 GB
+  7c402948632, a land-form gate with --programs naming three programs, both at once
+  direct   corpus on 3 program(s) 0m07s · 0 red · 15/15   san on 3 program(s) 0m05s · 0 red · 3/3   GREEN 7m50s
+  graph    corpus on 3 program(s) 0m11s · 0 red · 15/15   san on 3 program(s) 0m07s · 0 red · 3/3   GREEN 7m52s
+  7c402948632, --lanes build,corpus,san,tsan, both at once: corpus has a new red, so san and tsan are skipped
+  direct   corpus 35m36s · 9 red · 4 known · 5 new · 12513/12522   RED 38m27s
+  graph    corpus 35m39s · 8 red · 4 known · 4 new · 12515/12523   RED 38m27s
+  7c402948632, --lanes build,san,tsan with the gate's triage on, both at once
+  direct   san 16m01s · 2 red · 1 known · 1 not the slice's · 2675/2677   tsan 3m11s · 0 red · 279/279   GREEN 23m18s
+  graph    san 16m10s · 2 red · 1 known · 1 not the slice's · 2675/2677   tsan 3m11s · 0 red · 279/279   GREEN 23m36s
   ```
+
+  The corpus lanes take the gate's narrowing as `-DcorpusOnly=<programs>` (the node's
+  `MSCORPUS_ONLY`) and the corpus lane its raiser cells as `-DcorpusRaiser=<0|1>`; the runner is the
+  graph's own `corpusRunner`, so the gate builds none for a lane named in the variable. The four new
+  corpus reds both runs name are main's (`derivedClassArgumentIsOneInstance [c]` and `[danger]`,
+  `plainObjectTrait [esm]` and `[js]`); the fifth of the direct run is `tlsTransport [c]`, a failed
+  local connect beside the second corpus run (card
+  `2026-11-15-corpus-tlstransport-c-was-red-once-beside-a-second-corpus-run.md`). The tsan lane read
+  the program list the san node wrote in both. An earlier san pair without triage also agreed on the
+  second run (2 red, the same names), the direct first run having `httpServeConcurrentStops [san]`
+  red once more. Not run: a corpus lane with the raiser cells through `gate.sh`.
 
   The suite and the tests lane keep `gate.sh`'s own driver (`run_test_lane`): it starts another tier
   only while `MemAvailable` holds one more, and runs a part killed with 137 or 143 once again. Through
@@ -608,7 +628,7 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   builds `src/test/fmt/run.ms` into the node's own output (`fmt.runner`), and `fmt` runs that file,
   because `msc run` would link the shared `out/debug/run` beside other lanes (`runner_self_test`).
   Not run through `gate.sh`: every lane whose selection `gate.sh` passes by environment or path
-  (corpus, san, tsan, tools), and the tier selection of a gate without `--lanes` (`tier_select`). A second `gate.sh` run in one checkout,
+  (tools), and the tier selection of a gate without `--lanes` (`tier_select`). A second `gate.sh` run in one checkout,
   or in a fresh clone at a path where the same tree was built before, went red at build before any
   lane (`self-host: gen1 wrote no link response file and gen2 differs from it`: the candidate's link
   is restored from the cache), so each run of a pair needs a path of its own.
