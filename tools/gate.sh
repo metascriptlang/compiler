@@ -1945,22 +1945,30 @@ GRAPH_RUN="$(date +%s).$$"
 through_graph() { case " ${GATE_GRAPH_LANES:-} " in *" $1 "*) return 0 ;; esac; return 1; }
 
 graph_lane_log() {
-  local dir=$1 lane=$2 f prc rc=0 seen=0
+  local dir=$1 lane=$2 f prc rc=0 seen=0 shard
   for f in "$dir/$lane.log" "$dir/$lane".*.log; do
     [ -f "$f" ] || continue
-    seen=1
+    seen=$((seen + 1))
+  done
+  for f in "$dir/$lane.log" "$dir/$lane".*.log; do
+    [ -f "$f" ] || continue
     awk '{ l[NR] = $0 } END { n = NR; if (n >= 3 && l[n] == "END" && l[n-1] ~ /^RC=[0-9]+$/ && l[n-2] ~ /^SECS=[0-9]+$/) n -= 3; for (i = 1; i <= n; i++) print l[i] }' "$f"
     prc=$(tail -3 "$f" | sed -n 's/^RC=\([0-9][0-9]*\)$/\1/p')
     [ -n "$prc" ] || { printf 'graph: %s ends without its SECS, RC and END lines\n' "${f##*/}"; prc=1; }
     [ "$prc" -eq 0 ] || rc=$prc
+    shard=${f##*/}; shard=${shard#"$lane".}; shard=${shard%.log}
+    case "$lane" in guard|hcr)
+      [ "$prc" -eq 0 ] || grep -q '^FAIL ' "$f" || printf 'FAIL %s shard %s/%s: exit %s with no named failure\n' "$lane" "$shard" "$seen" "$prc" ;;
+    esac
   done
-  [ "$seen" -eq 1 ] || { printf 'graph: the build wrote no log of lane %s in %s\n' "$lane" "$dir"; return 1; }
+  [ "$seen" -gt 0 ] || { printf 'graph: the build wrote no log of lane %s in %s\n' "$lane" "$dir"; return 1; }
   return $rc
 }
 
 run_lane_through_graph() {
-  local lane=$1 out dir
-  out=$(env -u NO_COLOR -u FORCE_COLOR "$BUILDER" build --colors=off "-Dlanes=$lane" "-Dsubject=$CAND" "-DlaneLimit=$LANE_LIMIT" "-DlaneRun=$GRAPH_RUN" lanes 2>&1) \
+  local lane=$1 out dir shards=1
+  [ "$lane" != hcr ] || shards=${GATE_HCR_SHARDS:-$PAR}
+  out=$(env -u NO_COLOR -u FORCE_COLOR "$BUILDER" build --colors=off "-Dlanes=$lane" "-Dsubject=$CAND" "-DlaneLimit=$LANE_LIMIT" "-DlaneRun=$GRAPH_RUN" "-DhcrShards=$shards" lanes 2>&1) \
     || { printf '%s\n' "$out" | tail -40; printf 'graph: the build of lane %s failed\n' "$lane"; return 1; }
   dir=$(printf '%s\n' "$out" | sed -n 's/^.*Built lanes → //p' | tail -1)
   [ -n "$dir" ] && [ -d "$dir" ] || { printf '%s\n' "$out" | tail -40; printf 'graph: the build of lane %s named no log directory\n' "$lane"; return 1; }
@@ -1985,6 +1993,11 @@ graph_lane_self_test() (
   got=$(graph_lane_log "$d" fmt); rc=$?
   [ "$rc" -eq 1 ] && [ "$got" = "$(printf 'cut short\ngraph: fmt.log ends without its SECS, RC and END lines')" ] \
     || { printf 'FAIL graph lanes: a log without its trailer: rc=%s out "%s"\n' "$rc" "$got"; bad=1; }
+  printf 'FAIL hcrOne: broke\n\nSECS=4\nRC=1\nEND\n' >"$d/hcr.0.log"
+  printf 'crashed without a word\n\nSECS=4\nRC=139\nEND\n' >"$d/hcr.1.log"
+  got=$(graph_lane_log "$d" hcr); rc=$?
+  [ "$rc" -eq 139 ] && [ "$got" = "$(printf 'FAIL hcrOne: broke\n\ncrashed without a word\n\nFAIL hcr shard 1/2: exit 139 with no named failure')" ] \
+    || { printf 'FAIL graph lanes: a shard that dies without naming a failure: rc=%s out "%s"\n' "$rc" "$got"; bad=1; }
   got=$(graph_lane_log "$d" cache); rc=$?
   [ "$rc" -eq 1 ] && [ "$got" = "graph: the build wrote no log of lane cache in $d" ] \
     || { printf 'FAIL graph lanes: no log at all: rc=%s out "%s"\n' "$rc" "$got"; bad=1; }
@@ -2510,7 +2523,7 @@ fi
 promote_builder
 if [ -x "$TOP/msc" ]; then BUILDER="$TOP/msc"; else BUILDER=$(command -v msc) || die "no ./msc and no msc on PATH"; fi
 for graph_lane in ${GATE_GRAPH_LANES:-}; do
-  case "$graph_lane" in boundary|cache|fmt|lsp) ;; *) die "GATE_GRAPH_LANES: lane '$graph_lane' has no run through the build graph yet (boundary, cache, fmt and lsp have one)" ;; esac
+  case "$graph_lane" in boundary|cache|fmt|hcr|lsp) ;; *) die "GATE_GRAPH_LANES: lane '$graph_lane' has no run through the build graph yet (boundary, cache, fmt, hcr and lsp have one)" ;; esac
 done
 cand_key=""
 [ -n "$(git status --porcelain -- src std runtime)" ] || cand_key=$(tree_key HEAD)
