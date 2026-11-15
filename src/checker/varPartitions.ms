@@ -1698,6 +1698,7 @@ function joinRegionOf(u: BorrowUnit, dest: Symbol, src: Node): void {
 }
 
 function markModuleSource(u: BorrowUnit, dests: Symbol[], src: Node | null): void {
+	if (!u.tracksReach) return;
 	const c = moduleSourceOf(u.ctx.dispatchRegistry, src);
 	if (c == null) return;
 	for (const d of dests) {
