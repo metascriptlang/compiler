@@ -313,6 +313,11 @@ function editCases(dir: string): void {
 		edit.after.contains("ConfigFS->filesRead()") &&
 		edit.after.contains("ConfigFiles.push_back(File)")),
 		"the driver reports every expanded config dependency");
+	expect(LLVM_SOURCE_EDITS.some((edit: SourceEdit): boolean =>
+		edit.file == "llvm/lib/Support/CommandLine.cpp" &&
+		edit.after.contains("llvm::sys::path::is_absolute(FileName)") &&
+		edit.after.contains("ResponseFile.append(FileName);")),
+		"absolute included config paths are not rebased");
 }
 
 function run(): void {

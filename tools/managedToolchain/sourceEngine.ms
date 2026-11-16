@@ -193,6 +193,22 @@ bool Driver::loadConfigFiles() {
 		"    if (!llvm::is_contained(ConfigFiles, File))\n" +
 		"      ConfigFiles.push_back(File);\n" +
 		"  return false;\n",
+}, {
+	file: "llvm/lib/Support/CommandLine.cpp",
+	reason: "Keep absolute included config paths absolute after CFGDIR expansion " +
+		"instead of prefixing the including file's directory again.",
+	before: "      ResponseFile.append(FilePath);\n" +
+		"    } else {\n" +
+		"      ResponseFile.append(BasePath);\n" +
+		"      llvm::sys::path::append(ResponseFile, FileName);\n" +
+		"    }\n",
+	after: "      ResponseFile.append(FilePath);\n" +
+		"    } else if (llvm::sys::path::is_absolute(FileName)) {\n" +
+		"      ResponseFile.append(FileName);\n" +
+		"    } else {\n" +
+		"      ResponseFile.append(BasePath);\n" +
+		"      llvm::sys::path::append(ResponseFile, FileName);\n" +
+		"    }\n",
 }];
 
 export function digitsOnly(text: string): boolean {
