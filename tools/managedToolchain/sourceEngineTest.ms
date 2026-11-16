@@ -303,6 +303,16 @@ function editCases(dir: string): void {
 			"      set(${CLANG_STAGE}_LINKER " +
 			"-DCMAKE_LINKER=${LLVM_RUNTIME_OUTPUT_INTDIR}/ld64.lld)\n")),
 		"a Darwin bootstrap passes the selected lld path to the next stage");
+	expect(LLVM_SOURCE_EDITS.some((edit: SourceEdit): boolean =>
+		edit.file == "clang/lib/Driver/Driver.cpp" &&
+		edit.after.contains("class ConfigFileDependencyFS final") &&
+		edit.after.contains("llvm::cl::tokenizeConfigFile, ConfigFS.get()")),
+		"config expansion reads through the dependency-recording VFS");
+	expect(LLVM_SOURCE_EDITS.some((edit: SourceEdit): boolean =>
+		edit.file == "clang/lib/Driver/Driver.cpp" &&
+		edit.after.contains("ConfigFS->filesRead()") &&
+		edit.after.contains("ConfigFiles.push_back(File)")),
+		"the driver reports every expanded config dependency");
 }
 
 function run(): void {

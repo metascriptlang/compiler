@@ -149,6 +149,50 @@ export const LLVM_SOURCE_EDITS: SourceEdit[] = [{
 		"      set(${CLANG_STAGE}_LINKER " +
 		"-DCMAKE_LINKER=${LLVM_RUNTIME_OUTPUT_INTDIR}/ld64.lld)\n" +
 		"    endif()\n",
+}, {
+	file: "clang/lib/Driver/Driver.cpp",
+	reason: "Record every file read while expanding configurations, including " +
+		"nested response and config files, through the expansion's existing VFS.",
+	before: "bool Driver::loadConfigFiles() {\n" +
+		"  llvm::cl::ExpansionContext ExpCtx(Saver.getAllocator(),\n" +
+		"                                    llvm::cl::tokenizeConfigFile, &getVFS());\n",
+	after: `class ConfigFileDependencyFS final : public llvm::vfs::ProxyFileSystem {
+  std::vector<std::string> FilesRead;
+
+public:
+  explicit ConfigFileDependencyFS(
+      llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS)
+      : ProxyFileSystem(std::move(FS)) {}
+
+  llvm::ErrorOr<std::unique_ptr<llvm::vfs::File>>
+  openFileForRead(const llvm::Twine &Path) override {
+    auto File = ProxyFileSystem::openFileForRead(Path);
+    if (File && *File) {
+      llvm::SmallString<128> Name(Path.str());
+      llvm::sys::path::native(Name);
+      FilesRead.push_back(Name.str().str());
+    }
+    return File;
+  }
+
+  llvm::ArrayRef<std::string> filesRead() const { return FilesRead; }
+};
+
+bool Driver::loadConfigFiles() {
+  auto ConfigFS = llvm::makeIntrusiveRefCnt<ConfigFileDependencyFS>(VFS);
+  llvm::cl::ExpansionContext ExpCtx(Saver.getAllocator(),
+                                    llvm::cl::tokenizeConfigFile, ConfigFS.get());
+`,
+}, {
+	file: "clang/lib/Driver/Driver.cpp",
+	reason: "Expose all expanded configuration dependencies through the driver's " +
+		"existing config-file report without adding duplicate paths.",
+	before: "  // No error occurred.\n  return false;\n",
+	after: "  // No error occurred.\n" +
+		"  for (const auto &File : ConfigFS->filesRead())\n" +
+		"    if (!llvm::is_contained(ConfigFiles, File))\n" +
+		"      ConfigFiles.push_back(File);\n" +
+		"  return false;\n",
 }];
 
 export function digitsOnly(text: string): boolean {
