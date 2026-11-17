@@ -60,7 +60,7 @@ export GATE_WAIT_MAX=-1 GATE_PAR=1 GATE_KNOWN_LOCAL="$d/local.json" GATE_GRAPH_L
 export GATE_LEDGER="$d/gate.tsv" GATE_SELECT_LEDGER="$d/select.tsv"
 cd "$w"
 source <(awk '/^base=main release=/{exit} {print}' tools/gate.sh)
-for name in lane_cmd build_lane; do
+for name in lane_cmd emit_rc_scan build_lane; do
   source <(awk -v name="$name" '$0 == name "() {" { on = 1 } on { print } on && /^\}/ { exit }' tools/gate.sh)
   declare -F "$name" >/dev/null
 done
