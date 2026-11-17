@@ -148,6 +148,23 @@ three handle checks and drop the site.
   prints around two `@wasm` functions in `main.ms`, one reading an initializer that prints):
   refused on the previous compiler in the mixed and tree columns, the same output as all-C in
   c, js, mixed and tree on the candidate (m1m, 2026-11-13). A lazily imported module stays refused.
+- **The JS side runs the wasm half's event loop** (2026-11-18). A timer or a promise callback
+  wasm-placed code schedules sits in the Emscripten dispatcher (`runtime/promise/dispatchEmcc.c`),
+  which an emcc program drains itself by sleeping through JSPI; the wasm half is a library whose
+  host is the JS prelude, so it linked JSPI and failed to load on Node 24 (`WebAssembly.Suspending
+  is not a constructor`) as soon as a `@wasm` function called `setTimeout`. The half is now built
+  with `MSOS_HOST_PUMPED` and without JSPI: the dispatcher calls the import `msb_wake` when its
+  callback queue stops being empty (a microtask) or a timer becomes the earliest (a `setTimeout`),
+  and the host calls the export `msb_pump`, which runs callbacks, due timers and callbacks again,
+  the order of the all-C drain, and returns when to come back. This is wasm-bindgen's executor
+  (one `queueMicrotask` per non-empty queue, `crates/js-sys/src/futures/queue.rs`, 706a03dc) with
+  timers added. A synchronous wait that the queue cannot finish in wasm-placed code aborts with
+  `... cannot finish: the JS side runs the event loop only between boundary calls, so await the
+  value instead` (not pinned). Pin `wasmmix/programs/timersInWasm` (a timeout, a zero timeout, an
+  interval cleared after three ticks, a `then`): red on the previous compiler in mixed and tree
+  (the load error), the all-C order in all four columns on the candidate, full `check.sh`
+  `wasmmix: 106/106 pass` (this Mac, 2026-11-18). Not measured: the order of a wasm timer against
+  a JS-side timer with the same deadline, which the all-C program keeps in one heap.
 - **Copies by default; zero copy only through a view.** A writable Span copied back measured
   2680 ns for 1000 floats where a view measured 1090 (table below), so views exist; a view is
   only safe because nothing can grow memory while it is open, which is enforced at runtime by the
