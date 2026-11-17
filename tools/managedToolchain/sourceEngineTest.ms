@@ -318,6 +318,27 @@ function editCases(dir: string): void {
 		edit.after.contains("llvm::sys::path::is_absolute(FileName)") &&
 		edit.after.contains("ResponseFile.append(FileName);")),
 		"absolute included config paths are not rebased");
+	expect(LLVM_SOURCE_EDITS.some((edit: SourceEdit): boolean =>
+		edit.file == "clang/include/clang/Driver/CommonArgs.h" &&
+		edit.after.contains("inline bool assemblerArgumentTakesValue(StringRef Value)") &&
+		edit.after.contains("Value == \"-I\"") &&
+		edit.after.contains("Value == \"-defsym\"") &&
+		edit.after.contains("Value == \"--defsym\"") &&
+		edit.after.contains("Value == \"-fdebug-compilation-dir\"")),
+		"assembler operands share the collector's separate-value grammar");
+	expect(LLVM_SOURCE_EDITS.some((edit: SourceEdit): boolean =>
+		edit.file == "clang/lib/Driver/ToolChains/Clang.cpp" &&
+		edit.after.contains("const StringRef OriginalValue = Value;")) &&
+		LLVM_SOURCE_EDITS.some((edit: SourceEdit): boolean =>
+			edit.file == "clang/lib/Driver/ToolChains/Clang.cpp" &&
+			edit.after.contains("TakeNextArg = assemblerArgumentTakesValue(OriginalValue);")),
+		"the collector uses original spelling after argument translation");
+	expect(LLVM_SOURCE_EDITS.some((edit: SourceEdit): boolean =>
+		edit.file == "clang/lib/Driver/ToolChains/Arch/AArch64.cpp" &&
+		edit.after.contains("if (TakeNextArg) {") &&
+		edit.after.contains("TakeNextArg = false;\n          continue;") &&
+		edit.after.contains("TakeNextArg = assemblerArgumentTakesValue(Value);")),
+		"AArch64 architecture selection skips assembler operands");
 }
 
 function run(): void {

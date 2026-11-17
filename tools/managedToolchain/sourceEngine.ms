@@ -209,6 +209,94 @@ bool Driver::loadConfigFiles() {
 		"      ResponseFile.append(BasePath);\n" +
 		"      llvm::sys::path::append(ResponseFile, FileName);\n" +
 		"    }\n",
+}, {
+	file: "clang/include/clang/Driver/CommonArgs.h",
+	reason: "Share the integrated assembler's separate-value grammar with " +
+		"architecture selection so operands cannot become CPU selectors.",
+	before: "namespace tools {\n\nstruct OffloadJobsOpt {\n",
+	after: `namespace tools {
+
+inline bool assemblerArgumentTakesValue(StringRef Value) {
+  return Value == "-I" || Value == "-defsym" || Value == "--defsym" ||
+         Value == "-fdebug-compilation-dir";
+}
+
+struct OffloadJobsOpt {
+`,
+}, {
+	file: "clang/lib/Driver/ToolChains/Arch/AArch64.cpp",
+	reason: "Keep include directories, symbol definitions and debug paths out " +
+		"of the assembler architecture scan, including operands in later arguments.",
+	before: `  if (ForAS)
+    for (const auto *A :
+         Args.filtered(options::OPT_Wa_COMMA, options::OPT_Xassembler))
+      for (StringRef Value : A->getValues())
+        if (Value.starts_with("-march="))
+          WaMArch = Value.substr(7);
+`,
+	after: `  if (ForAS) {
+    bool TakeNextArg = false;
+    for (const auto *A :
+         Args.filtered(options::OPT_Wa_COMMA, options::OPT_Xassembler))
+      for (StringRef Value : A->getValues()) {
+        if (TakeNextArg) {
+          TakeNextArg = false;
+          continue;
+        }
+        TakeNextArg = assemblerArgumentTakesValue(Value);
+        if (Value.starts_with("-march="))
+          WaMArch = Value.substr(7);
+      }
+  }
+`,
+}, {
+	file: "clang/lib/Driver/ToolChains/Clang.cpp",
+	reason: "Preserve an assembler argument's original spelling before " +
+		"joined debug-directory translation changes its local view.",
+	before: "\n\n      auto Equal = Value.split('=');\n",
+	after: "\n\n      const StringRef OriginalValue = Value;\n" +
+		"      auto Equal = Value.split('=');\n",
+}, {
+	file: "clang/lib/Driver/ToolChains/Clang.cpp",
+	reason: "Consume include-directory operands through the shared " +
+		"assembler rule rather than a separate include-only rule.",
+	before: `        // We need to consume the next argument if the current arg is a plain
+        // -I. The next arg will be the include directory.
+        if (Value == "-I")
+          TakeNextArg = true;
+`,
+	after: "",
+}, {
+	file: "clang/lib/Driver/ToolChains/Clang.cpp",
+	reason: "Consume validated symbol and debug-directory operands through " +
+		"the same rule architecture selection uses.",
+	before: `        CmdArgs.push_back("--defsym");
+        TakeNextArg = true;
+      } else if (Value == "-fdebug-compilation-dir") {
+        CmdArgs.push_back("-fdebug-compilation-dir");
+        TakeNextArg = true;
+`,
+	after: `        CmdArgs.push_back("--defsym");
+      } else if (Value == "-fdebug-compilation-dir") {
+        CmdArgs.push_back("-fdebug-compilation-dir");
+`,
+}, {
+	file: "clang/lib/Driver/ToolChains/Clang.cpp",
+	reason: "Track separate assembler operands from the unmodified argument " +
+		"using the shared grammar after validation and translation.",
+	before: `        D.Diag(diag::err_drv_unsupported_option_argument)
+            << A->getSpelling() << Value;
+      }
+    }
+  }
+  if (ImplicitIt.size())`,
+	after: `        D.Diag(diag::err_drv_unsupported_option_argument)
+            << A->getSpelling() << Value;
+      }
+      TakeNextArg = assemblerArgumentTakesValue(OriginalValue);
+    }
+  }
+  if (ImplicitIt.size())`,
 }];
 
 export function digitsOnly(text: string): boolean {
