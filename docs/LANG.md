@@ -3429,6 +3429,13 @@ half would keep its own copy or the value cannot be copied:
 - a destructuring with a default value or a rest property whose names wasm-placed code reads:
   `declare the value as one variable and read its parts`.
 
+**An `async` `@wasm` function, or one returning `Promise<T>`, is awaited from JS** and resolves
+with the value the all-JS program gets, through the same copy forms as a synchronous result; a
+throw in its body rejects the promise with an `Error` carrying the message. Its body runs in
+wasm up to its first suspension during the call, and the rest on the wasm half's event loop,
+which the JS side runs (timers and promise callbacks in the all-C order). A callback it takes is
+kept until its promise settles.
+
 **Refused at compile time, with the reason and the fix in the message:**
 
 - a `view` kept past `f`;

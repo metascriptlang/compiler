@@ -165,6 +165,28 @@ three handle checks and drop the site.
   (the load error), the all-C order in all four columns on the candidate, full `check.sh`
   `wasmmix: 106/106 pass` (this Mac, 2026-11-18). Not measured: the order of a wasm timer against
   a JS-side timer with the same deadline, which the all-C program keeps in one heap.
+- **An `async` `@wasm` function resolves a JS Promise** (2026-11-18). wasm-bindgen exports an
+  `async fn` as a function returning a `Promise` that resolves as a sync return of the same type
+  would, an `Err` rejecting it (guide `js-promises-and-rust-futures.md`, 706a03dc). Ours: the
+  manifest classifies a `Promise<T>` result by `T`; the wasm entry takes a slot id first, calls the
+  function and hands its promise to a generated `async` helper that awaits it, keeps the value in a
+  `Map` by slot and calls the import `msb_settle(slot, ok)`, a throw passing its message first as a
+  sync throw does; JS then calls a generated synchronous `take` export, so the value crosses through
+  the existing result forms. Settlements are delivered after the wasm call or pump that produced
+  them returns, never from inside an import. A callback parameter is kept until the promise
+  settles; `Span`, `ref` and `out` on an `async` function are already refused by the language on
+  every backend, and a non-async function returning a Promise finishes its body during the call,
+  so they need no boundary rule. On the way, `dispatchEmcc.c` `msAsyncCb` leaked every async frame
+  that suspended (no release of the frame at completion nor of each awaited future) and resumed at
+  once on a finished future; it now follows the native dispatcher. Pins `asyncResults` (int,
+  string, struct, nullable, Vec, rejection, void, a kept callback, `Promise.all`: C and all-JS
+  print the same 15 lines; refused on the previous compiler, same on the candidate),
+  `asyncFrameRelease` (a suspended frame's object destroyed before its promise resolves; the
+  mixed column missed it before the runtime fix), `promiseSyncBody` (Span and ref on a
+  Promise-returning sync function). Full `check.sh` before the last two pins: `wasmmix: 107/108
+  pass`, the one red being the all-JS column of `asyncFrameRelease`, which has no `onDestroy`
+  (inbox card `2026-11-10-js-backend-runs-no-struct-ondestroy-where-nim-js-does.md`), so that pin
+  runs in c and mixed. Not done: wasm awaiting a JS Promise (needs wasm to call JS, item A).
 - **Copies by default; zero copy only through a view.** A writable Span copied back measured
   2680 ns for 1000 floats where a view measured 1090 (table below), so views exist; a view is
   only safe because nothing can grow memory while it is open, which is enforced at runtime by the
