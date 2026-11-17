@@ -566,7 +566,7 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   `Cannot resolve module 'std/process/native'`, `0/63 steps succeeded`; the same binary copied into
   the tree built the candidate and ran the lane above.
 
-- **`GATE_GRAPH_LANES="boundary cache corpus crypto fmt guard hcr lsp san solana suite tests tools tsan"`
+- **`GATE_GRAPH_LANES="boundary build cache corpus crypto fmt guard hcr lsp san solana suite tests tools tsan"`
   makes `tools/gate.sh` run those lanes as these nodes**: the gate's builder runs `msc build -Dlanes=<lane> -Dsubject=<candidate>
   -DlaneLimit=<limit> lanes`, the node logs one after another are the lane log, and a node's `RC` is
   the lane's. On Linux, outside `--release` and `--record`, an unset variable names all of them
@@ -604,6 +604,24 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   direct   crypto 0m53s · 0 red · 680/680, 6/6 cells   GREEN 2m44s
   graph    crypto 0m54s · 0 red · 680/680, 6/6 cells   GREEN 2m45s
   ```
+
+  The build lane through the graph is `msc`, `stage2` and `stage3` linked as the gate's candidate
+  is (`-DcandidateLto=1`: the mode's default LTO, where the edit loop's `msc` links without) and a
+  `build` node that compares them byte for byte, prints the fixed point and hands `stage2` out,
+  which `gate.sh` copies to `out/gate/msc`; the emit rc scan stays `gate.sh`'s. The direct lane
+  accepts generations whose link inputs are equal when their bytes differ; the 54 build logs of
+  the queue's gates of 2026-11-14 to 17 all ended byte-identical (35 at gen2, 18 at gen3, one
+  killed build). Two fresh checkouts of `95f43323b5` on rtx at once, 2026-11-18, `--lanes
+  build,lsp`, then the same again in the same checkouts:
+
+  ```
+  direct   build 2m37s · gen2 differs from gen1 in 2 link inputs, gen3 = gen2   GREEN 3m29s   again: build 1m47s · gen2 = gen1   GREEN 2m24s
+  graph    build 2m40s · gen3 = gen2                                             GREEN 3m33s   again: build 1m12s · gen2 = gen1   GREEN 1m50s
+  ```
+
+  The two candidates are 24166440 and 24166216 bytes and were not compared further. Not run: a
+  fixed point that fails, a generation that does not build, and the emit rc scan after a graph
+  build (no path asked for it); `tools/gateBuildReuseTest.sh` covers the direct lane only.
 
   Under `--release` the crypto node takes `-DcryptoSlow=1`, the suite's `--slow`: with it and
   `-DlaneLimit=20` the log opens `suite: … 11 cells` (6 without). The slow cells were not run to
