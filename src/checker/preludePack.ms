@@ -61,7 +61,7 @@ import { defineIdentity, createDefineTable, defineSymbol } from "../compiler/def
 import { defaultGlobalImports, setExtraGlobalImports } from "./prelude";
 import { readFile, writeFile, exists, remove, removeAll, ensureDir, rename } from "std/fs";
 import { env, argv } from "std/process";
-import { collectStaleEntries, markUsed, nowSeconds } from "../utils/stampDirs";
+import { collectStaleEntries, markUsed, nowSeconds, writeTmp } from "../utils/stampDirs";
 import { hashContent, collectFilesSorted } from "../utils/contentHash";
 
 const PACK_MAGIC = "MSPK13";
@@ -170,10 +170,11 @@ function packDisabled(): boolean {
 }
 
 function atomicWritePack(path: string, content: string): boolean {
-	const tmp = `${path}.tmp.${performance.now()}`;
-	if (!writeFile(tmp, content).ok) {
+	let tmp = writeTmp(path, content);
+	if (tmp == "") {
 		ensureDir(path.slice(0, path.lastIndexOf("/")));
-		if (!writeFile(tmp, content).ok) return false;
+		tmp = writeTmp(path, content);
+		if (tmp == "") return false;
 	}
 	const r = rename(tmp, path);
 	if (r.ok) return true;

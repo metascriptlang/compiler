@@ -24,6 +24,7 @@ import { join, dirname, basename } from "std/fs/path";
 import { writeStderr } from "std/io";
 import { CliOptions, CC_PREPARED, MODE_DEBUG, MODE_DANGER, MODE_RELEASE, DEBUG_UB_CHECKS, debugUbChecks, buildCpu, namesTarget, newCliOptions, applyArgs } from "./options";
 import { renameReplace, atomicWriteFile, stopBuild, setRecoverableBuild, BUILD_STOPPED } from "./io";
+import { writeTmp } from "../utils/stampDirs";
 import { resolveRuntimeDir } from "../utils/path";
 import { cacheRoot } from "./package/cache";
 import { managedZigCompiler } from "./toolchain";
@@ -1403,7 +1404,8 @@ export function buildPch(header: string, pch: string, depFile: string, extraFlag
 	for (const arg of parts.value.lead) args.push(arg);
 	const rtDir = resolveRuntime();
 	if (rtDir != "") args.push(`-iquote${dirname(dirname(rtDir))}`);
-	const tmp = `${pch}.tmp.${performance.now()}`;
+	const tmp = writeTmp(pch, "");
+	if (tmp == "") return false;
 	args.push("-Xclang");
 	args.push("-fno-pch-timestamp");
 	args.push("-x");
@@ -1605,11 +1607,16 @@ function objectCompileArgv(parts: Readonly<ObjectCompileArgs>, cFile: string, oF
 export function compileCFile(cFile: string, oFile: string, dependencyFile: string, parts: Readonly<ObjectCompileArgs>, plan: Readonly<CcPlan>, pch: string = ""): Result<void, ProcessError> {
 	ensureDir(dirname(oFile));
 	const command = parts.command;
-	const tmp = `${oFile}.tmp.${performance.now()}`;
+	const tmp = writeTmp(oFile, "");
+	if (tmp == "") return Result.err(processError(ProcessErrorKind.Unknown, command.path, `cannot create a temp file beside ${oFile}`));
 	let depTmp = "";
 	if (dependencyFile != "") {
 		ensureDir(dirname(dependencyFile));
-		depTmp = `${dependencyFile}.tmp.${performance.now()}`;
+		depTmp = writeTmp(dependencyFile, "");
+		if (depTmp == "") {
+			remove(tmp);
+			return Result.err(processError(ProcessErrorKind.Unknown, command.path, `cannot create a temp file beside ${dependencyFile}`));
+		}
 	}
 	const args = objectCompileArgv(parts, cFile, tmp, depTmp);
 	const objectName = `${withoutExtension(cFile)}.o`;

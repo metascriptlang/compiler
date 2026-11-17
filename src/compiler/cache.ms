@@ -14,11 +14,11 @@
 //   BuildCache                   → project cache file (key=value format)
 
 import { env, platform, argv, cwd, execFileCapture, execFileResult, findOnPath } from "std/process";
-import { exists, isDir, readFile, writeFile, rename, copyFile, fileSize, modifiedTime, changedTime, changeStamp, remove, removeAll, readDir, realpath } from "std/fs";
+import { exists, isDir, readFile, writeFile, rename, fileSize, modifiedTime, changedTime, changeStamp, remove, removeAll, readDir, realpath } from "std/fs";
 import { join, dirname, basename, normalize, isAbsolute } from "std/fs/path";
 import { resolveRuntimeDir, resolveArgv0 } from "../utils/path";
 import { localCacheDir, globalCacheRoot, stampMemoRoot } from "../utils/cachePaths";
-import { collectStaleEntries, collectStaleFlatEntries, markUsed, nowSeconds } from "../utils/stampDirs";
+import { collectStaleEntries, collectStaleFlatEntries, markUsed, nowSeconds, copyTmp } from "../utils/stampDirs";
 import { ensureDir, atomicWriteFile, atomicCopyFile, renameReplace, stopBuild } from "./io";
 import { stepStoreRoot, storedOutput, storeScratch, storePublish, collectStepStore } from "./build/store";
 import { getCompilerName, compilerInvocation, objectCompileKey, objectCompileArgsKey, objectCompileArgs, objectSearchDirs, buildPch, prefixMapsByToken } from "./cc";
@@ -595,8 +595,8 @@ export function publishNativeObject(srcPath: string, compileCmd: string, oFile: 
 		return Result.ok(oFile);
 	}
 	const resolved = stableOFileFp(srcPath, resolvedFp);
-	const tmp = `${resolved}.tmp.${performance.now()}`;
-	if (!copyFile(oFile, tmp).ok || !renameReplace(tmp, resolved)) {
+	const tmp = copyTmp(oFile, resolved);
+	if (tmp == "" || !renameReplace(tmp, resolved)) {
 		tryRemoveFile(tmp);
 		if (!exists(resolved)) return Result.err(`failed to publish object ${resolved}`);
 	}
@@ -1441,8 +1441,8 @@ function copyIntoLocal(object: string, oFile: string): boolean {
 	const size = fileSize(object);
 	if (size < 100) return false;
 	ensureDir(dirname(oFile));
-	const tmp = `${oFile}.tmp.${performance.now()}`;
-	if (!copyFile(object, tmp).ok) return false;
+	const tmp = copyTmp(object, oFile);
+	if (tmp == "") return false;
 	if (fileSize(tmp) != size || !renameReplace(tmp, oFile)) {
 		tryRemoveFile(tmp);
 		return false;
@@ -1494,8 +1494,8 @@ export function publishToStore(key: string, oFile: string, dependencyFile: strin
 	const object = `${dir}/${stem}.o`;
 	if (exists(`${dir}/${stem}.m`) && exists(object)) return;
 	ensureDir(dir);
-	const tmp = `${object}.tmp.${performance.now()}`;
-	if (!copyFile(oFile, tmp).ok) return;
+	const tmp = copyTmp(oFile, object);
+	if (tmp == "") return;
 	if (!renameReplace(tmp, object)) {
 		tryRemoveFile(tmp);
 		return;
@@ -1517,7 +1517,7 @@ export function collectGlobalCache(now: float64 = nowSeconds()): void {
 
 // Remove a file if it exists (reference-aligned: tryRemoveFile).
 function tryRemoveFile(path: string): void {
-	if (exists(path)) {
+	if (path != "" && exists(path)) {
 		remove(path);
 	}
 }
@@ -2014,8 +2014,8 @@ function publishObjectVersion(modPath: string, baseFp: string, cFile: string, oF
 		return oFile;
 	}
 	const resolved = stableOFileFp(modPath, resolvedFp);
-	const tmp = `${resolved}.tmp.${performance.now()}`;
-	if (!copyFile(oFile, tmp).ok || !renameReplace(tmp, resolved)) {
+	const tmp = copyTmp(oFile, resolved);
+	if (tmp == "" || !renameReplace(tmp, resolved)) {
 		tryRemoveFile(tmp);
 		return oFile;
 	}

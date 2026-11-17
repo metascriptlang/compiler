@@ -1,7 +1,8 @@
 // MetaScript Compiler CLI — File I/O and shared error helpers
 
 import { exit, platform } from "std/process";
-import { readFile, writeFile, ensureDir as fsEnsureDir, rename, remove, copyFile, isExecutable, chmod } from "std/fs";
+import { readFile, writeFile, ensureDir as fsEnsureDir, rename, remove, isExecutable, chmod } from "std/fs";
+import { writeTmp, copyTmp } from "../utils/stampDirs";
 import { error, dim } from "../utils/color";
 import { msModuleExtensions, stripMsModuleExtension } from "../module/resolver";
 
@@ -54,9 +55,8 @@ export function renameReplace(src: string, dst: string): boolean {
 // observe a torn or missing file — the previous content stays intact until
 // the swap. Returns false only if the rename never landed (tmp is removed).
 export function atomicWriteFile(path: string, content: string): boolean {
-	const tmp = `${path}.tmp.${performance.now()}`;
-	const w = writeFile(tmp, content);
-	if (!w.ok) return false;
+	const tmp = writeTmp(path, content);
+	if (tmp == "") return false;
 	if (renameReplace(tmp, path)) return true;
 	remove(tmp);
 	return false;
@@ -66,8 +66,8 @@ const EXECUTABLE_MODE: int32 = 493;
 
 // Copy a file the way atomicWriteFile writes one, keeping its exec bit.
 export function atomicCopyFile(from: string, to: string): boolean {
-	const tmp = `${to}.tmp.${performance.now()}`;
-	if (!copyFile(from, tmp).ok) return false;
+	const tmp = copyTmp(from, to);
+	if (tmp == "") return false;
 	if (isExecutable(from)) chmod(tmp, EXECUTABLE_MODE);
 	if (renameReplace(tmp, to)) return true;
 	remove(tmp);

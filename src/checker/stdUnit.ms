@@ -76,9 +76,9 @@ import { getParserDefines } from "../parser/context";
 import { defineIdentity } from "../compiler/defines";
 import { globalCacheRoot } from "../utils/cachePaths";
 import { resolveRuntimeDir } from "../utils/path";
-import { markUsed, nowSeconds } from "../utils/stampDirs";
+import { markUsed, nowSeconds, writeTmp } from "../utils/stampDirs";
 import { hashContent } from "../utils/contentHash";
-import { readFile, writeFile, ensureDir, rename, remove } from "std/fs";
+import { readFile, ensureDir, rename, remove } from "std/fs";
 import { env } from "std/process";
 
 const STD_UNIT_MAGIC = "MSSU2";
@@ -476,10 +476,11 @@ function unitHeader(keyText: string): string {
 
 function publish(path: string, content: string): boolean {
 	const dir = path.slice(0, path.lastIndexOf("/"));
-	const tmp = `${path}.tmp.${performance.now()}.${Math.floor(Math.random() * 1000000000)}`;
-	if (!writeFile(tmp, content).ok) {
+	let tmp = writeTmp(path, content);
+	if (tmp == "") {
 		ensureDir(dir);
-		if (!writeFile(tmp, content).ok) return false;
+		tmp = writeTmp(path, content);
+		if (tmp == "") return false;
 	}
 	if (rename(tmp, path).ok) return true;
 	remove(tmp);

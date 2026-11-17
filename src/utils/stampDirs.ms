@@ -1,12 +1,13 @@
-import { readDir, remove, rmdir, removeAll, writeFile, readFile, modifiedTime, ensureDir, exists, realpath, symlink, rename } from "std/fs";
+import { readDir, remove, rmdir, removeAll, writeFile, writeFileExclusive, copyFileExclusive, readFile, modifiedTime, ensureDir, exists, realpath, symlink, rename } from "std/fs";
 import { writeStderr } from "std/io";
-import { IoErrorKind } from "std/io/errors";
+import { IoError, IoErrorKind } from "std/io/errors";
 import { tmpDir } from "./path";
 
 const STALE_ENTRY_SECONDS = 7 * 24 * 3600;
 const STALE_TMP_SECONDS = 3600;
 const COLLECT_EVERY_SECONDS = 3600;
 const COLLECTED_MARK = ".collected";
+const TMP_CLAIM_TRIES = 10000;
 
 export function nowSeconds(): float64 {
 	return Date.now() / 1000;
@@ -102,13 +103,32 @@ export function collectStaleTrees(root: string, scratchRoot: string, now: float6
 	}
 }
 
+function claimTmp(path: string, stamp: float64, claim: (tmp: string) => Result<void, IoError>): string {
+	let tmp = `${path}.tmp.${stamp}`;
+	for (let i = 0; i < TMP_CLAIM_TRIES; i += 1) {
+		const claimed = claim(tmp);
+		if (claimed.ok) return tmp;
+		if (claimed.error.kind != IoErrorKind.AlreadyExists) return "";
+		tmp = `${path}.tmp.${performance.now()}`;
+	}
+	return "";
+}
+
+export function writeTmp(path: string, content: string, stamp: float64 = performance.now()): string {
+	return claimTmp(path, stamp, (tmp: string): Result<void, IoError> => writeFileExclusive(tmp, content));
+}
+
+export function copyTmp(from: string, path: string, stamp: float64 = performance.now()): string {
+	return claimTmp(path, stamp, (tmp: string): Result<void, IoError> => copyFileExclusive(from, tmp));
+}
+
 export function markUsed(entry: string, now: float64, everySeconds: float64 = COLLECT_EVERY_SECONDS): void {
 	const modified = modifiedTime(entry);
 	if (modified < 0 || now - modified < everySeconds) return;
 	const body = try readFile(entry) catch "";
-	const tmp = `${entry}.tmp.${performance.now()}`;
-	if (body == "" || !writeFile(tmp, body).ok) return;
-	if (!rename(tmp, entry).ok) remove(tmp);
+	if (body == "") return;
+	const tmp = writeTmp(entry, body);
+	if (tmp != "" && !rename(tmp, entry).ok) remove(tmp);
 }
 
 function scratchRoot(label: string): string {
@@ -125,6 +145,36 @@ const PK = [".pk"];
 
 function text(path: string): string {
 	return try readFile(path) catch "missing";
+}
+
+test "two writers of one path at one clock reading get their own temp sibling" {
+	const root = scratchRoot("tmp-write");
+	const a = writeTmp(`${root}/entry.pk`, "first", 7);
+	const b = writeTmp(`${root}/entry.pk`, "second", 7);
+	assert a == `${root}/entry.pk.tmp.7`;
+	assert b != "" && b != a;
+	assert text(a) == "first";
+	assert text(b) == "second";
+	removeAll(root);
+}
+
+test "two copiers to one path at one clock reading get their own temp sibling" {
+	const root = scratchRoot("tmp-copy");
+	const a = copyTmp(`${root}/stampA/entry.pk`, `${root}/entry.pk`, 7);
+	const b = copyTmp(`${root}/stampB/entry.pk`, `${root}/entry.pk`, 7);
+	assert a == `${root}/entry.pk.tmp.7`;
+	assert b != "" && b != a;
+	assert text(a) == "a";
+	assert text(b) == "b";
+	removeAll(root);
+}
+
+test "a temp sibling in a directory that is not there is refused" {
+	const root = scratchRoot("tmp-missing");
+	assert writeTmp(`${root}/none/entry.pk`, "x") == "";
+	assert copyTmp(`${root}/stampA/entry.pk`, `${root}/none/entry.pk`) == "";
+	assert copyTmp(`${root}/none.pk`, `${root}/entry.pk`) == "";
+	removeAll(root);
 }
 
 test "a sibling stamp and its in-flight tmp survive collection" {
