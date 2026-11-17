@@ -549,8 +549,10 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
 - **`GATE_GRAPH_LANES="boundary cache corpus fmt guard hcr lsp san solana suite tests tools tsan"`
   makes `tools/gate.sh` run those lanes as these nodes**: the gate's builder runs `msc build -Dlanes=<lane> -Dsubject=<candidate>
   -DlaneLimit=<limit> lanes`, the node logs one after another are the lane log, and a node's `RC` is
-  the lane's. Unset, the gate is unchanged; a lane named there that has no such run stops the gate
-  with an error that names it. Each pair below is two fresh checkouts of one tree on rtx, 2026-11-15,
+  the lane's. On Linux, outside `--release` and `--record`, an unset variable names all of them
+  (since `094bfb7bdc5`) and the gate prints `gate: lanes run through the build graph`; set empty, and
+  on macOS and Windows, the gate runs its lanes directly. A lane named there that has no such run
+  stops the gate with an error that names it. Each pair below is two fresh checkouts of one tree on rtx, 2026-11-15,
   `GATE_TRIAGE=0`, the second with the variable:
 
   ```
@@ -691,6 +693,23 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   3). Least RAM available: 16, 22 and 13 GB, with no process ended for memory. The build lane and
   the triage reruns are `gate.sh`'s own in both runs of a pair.
 
+  The first land gated by these nodes is the default's own, `094bfb7bdc5`: the queue's gate on rtx,
+  2026-11-17, with every lane the owner can add but fmt (red on main), and no direct gate of the
+  same tree beside it, so its times compare with nothing:
+
+  ```
+  gate: lanes run through the build graph (GATE_GRAPH_LANES= runs them directly): boundary cache corpus fmt guard hcr lsp san solana suite tests tools tsan
+  suite 6213/6213   tests 0 red, 0/8 tiers compile a changed path   lsp 0 red   boundary 0 red   cache 0 red   hcr 0 red   tsan 279/279   solana 0 red
+  guard 10 red · 1 known · 9 not the slice's   corpus 12515/12523 · 8 red · 4 known · 4 not the slice's   san 2675/2677 · 2 red · 1 known · 1 not the slice's
+  gate: shadow verdict: tools/gate.ms counts the same reds in 13 lane(s)
+  gate: GREEN (build, tools, boundary, cache, suite, tests, lsp, guard, hcr, corpus, san, tsan, solana) 56m48s
+  ```
+
+  Of the fourteen reds not the slice's, thirteen were red on main 3 of 3 and `actorChurnReap [drc]`
+  0 of 3 on both. Before it, two checkouts of that commit with `--lanes build,lsp` and
+  `GATE_TRIAGE=0`: unset, the line above and `GREEN (build, lsp) 2m28s`; `GATE_GRAPH_LANES=`, no
+  such line and `GREEN (build, lsp) 2m25s`.
+
 - **`-DlaneRun=<name>` names a run of the lanes, and `tools/gate.sh` gives every gate its own**, so
   a gate never reads the lane log of an earlier one: a log, red or green, is a node that succeeded,
   and the lanes declare only `src`, `std` and `runtime` as inputs. Unset, a log is reused by any
@@ -704,8 +723,9 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
 
 Not verified: every lane as nodes of one build with a verdict that matches `gate.sh` (one run,
 2026-11-15, did not: card `2026-11-13-gate-through-the-build-graph-remaining-steps.md`; the pairs
-above run each lane as a build of its own, from `gate.sh`), every land lane in one gate, macOS, any
-lane but lsp on Windows, and a real land gated by these nodes.
+above run each lane as a build of its own, from `gate.sh`), fmt in a queue gate through these
+nodes, a tier of the tests lane that `tier-select` keeps in such a gate, a gate under `--release`,
+macOS, and any lane but lsp on Windows.
 
 ## Packages
 
