@@ -347,8 +347,8 @@ function genOpCall(sym: Symbol, hook: string, x: Node, y: Node, buf: NodeBuf, lo
 function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: NodeBuf, loc: SourceLocation): void {
 	const increfSym = attachedOpSym(increfFn, AttachedOp.AttachedAsgn);
 	// Reference parity: msStringCopy is 2-arg =copy(&dest, src) — handles destroy-old internally
-	if (isRuntimeProcSym(increfSym, "msStringCopy")) {
-		buf.items.push(makeExprStmt(makeCall(runtimeRef("msStringCopy", loc),
+	if (isRuntimeProcSym(increfSym, "msStringCopy") || isRuntimeProcSym(increfSym, "msBigIntCopy")) {
+		buf.items.push(makeExprStmt(makeCall(makeTypedIdentResolved(increfSym, null, loc),
 			[makeHiddenAddr(clonePath(x, loc), loc), clonePath(y, loc)], loc), loc));
 		return;
 	}
@@ -382,6 +382,11 @@ function stringOp(hook: string, xf: Node, yf: Node, fieldName: string, empties: 
 		"wasMoved" => { genCall("msStringWasMoved", hook, xf, yf, buf, loc); },
 		_ => {},
 	};
+}
+
+function bigIntOp(hook: string, xf: Node, yf: Node, fieldName: string, empties: boolean, heldType: Type, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+	if (hook == "copy") genCopyRef("msBigIntCopy", xf, yf, fieldName, buf, loc);
+	else refOp(hook, xf, yf, empties, heldType, false, false, lctx, buf, loc);
 }
 
 function liftSym(lctx: LiftCtx, kind: SymbolKind, name: string, t: Type | null, mutable: boolean = false): Symbol {
@@ -961,12 +966,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				refOp(hook, xf, yf, empties, fieldType, cyclic, isAtomicRef(fieldType), lctx, buf, loc);
 			}
 		},
-		TypeKind.BigInt => {
-			// msBigInt is a refcounted heap value that can never form a cycle and
-			// carries no atomic count — the plain non-cyclic ref ops, matching the
-			// RcInfo classify.ms hands the analyzer for the same type.
-			refOp(hook, xf, yf, empties, fieldType, false, false, lctx, buf, loc);
-		},
+		TypeKind.BigInt => { bigIntOp(hook, xf, yf, fieldName, empties, fieldType, lctx, buf, loc); },
 		TypeKind.Ptr => {
 			defaultOp(hook, xf, yf, buf, loc);
 		},
@@ -1020,7 +1020,9 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			}
 			const refInner = held != null ? distinctRepr(held) : null;
 			if (refInner != null) {
-				if (refInner.kind == TypeKind.Ptr || refInner.kind == TypeKind.Cursor
+				if (refInner.kind == TypeKind.BigInt) {
+					bigIntOp(hook, xf, yf, fieldName, empties, refInner, lctx, buf, loc);
+				} else if (refInner.kind == TypeKind.Ptr || refInner.kind == TypeKind.Cursor
 					|| (refInner.sym != null && refInner.sym.symbolKind == SymbolKind.Actor)) {
 					defaultOp(hook, xf, yf, buf, loc);
 				} else if (isUnownedRef(refInner)) {

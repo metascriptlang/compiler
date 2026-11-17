@@ -30,7 +30,7 @@ function define(row: int32, names: string[]): void {
 	for (const name of names) rows.set(name, row);
 }
 
-define(ROW_INCREF, ["msIncref", "msIncrefCyclic", "msIncrefRo", "msIncrefCyclicRo", "msAtomicIncref", "msStringIncref", "msClosureCopy", "msClosureCopyRo"]);
+define(ROW_INCREF, ["msIncref", "msIncrefCyclic", "msIncrefRo", "msIncrefCyclicRo", "msAtomicIncref", "msStringIncref", "msBigIntIncref", "msClosureCopy", "msClosureCopyRo"]);
 define(ROW_DECREF, [
 	"msDecref", "msDecrefRo", "msDecrefFuture", "msAtomicDecref", "msStringDecref", "msClosureDestroy", "msClosureDestroyRo", "msStructCellDestroy",
 	"msArrayDestroy", "msArrayStringDestroy", "msArrayUint8Destroy", "msArrayRefDestroy", "msArrayAcyclicRefDestroy", "msArrayRoRefDestroy", "msArrayUnownedRefDestroy", "msArrayUnownedRoRefDestroy", "msArrayAtomicRefDestroy",
@@ -41,12 +41,12 @@ define(ROW_CLEAR, [
 	"msPtrWasMoved", "msPlainWasMoved", "msClosureWasMoved", "msStringWasMoved", "msStructCellWasMoved", "msArrayWasMoved", "msArrayNumberWasMoved", "msArrayUint8WasMoved",
 	"msArrayStringWasMoved", "msArrayRefWasMoved", "msArrayClosureWasMoved",
 ]);
-define(ROW_SINK, ["msStructCellSink", "msArrayClosureSink", "msArrayClosureRoSink", "msClosureSink", "msClosureSinkRo", "msStringSink", "msArrayNumberSink", "msArrayUint8Sink", "msArrayStringSink", "msArrayRefSink", "msArrayAcyclicRefSink", "msArrayRoRefSink", "msArrayUnownedRefSink", "msArrayUnownedRoRefSink"]);
-define(ROW_SHARE, ["msStringCopy"]);
+define(ROW_SINK, ["msStructCellSink", "msArrayClosureSink", "msArrayClosureRoSink", "msClosureSink", "msClosureSinkRo", "msStringSink", "msBigIntSink", "msArrayNumberSink", "msArrayUint8Sink", "msArrayStringSink", "msArrayRefSink", "msArrayAcyclicRefSink", "msArrayRoRefSink", "msArrayUnownedRefSink", "msArrayUnownedRoRefSink"]);
+define(ROW_SHARE, ["msStringCopy", "msBigIntCopy"]);
 define(ROW_HELD, ["msHeldCount"]);
 define(ROW_KEPT, ["msDestroyLeftNoRef"]);
 define(ROW_COPY_VALUE, [
-	"msArrayCopy", "msArrayUint8Copy", "msArrayStringCopy", "msArrayRefCopy", "msArrayAcyclicRefCopy", "msArrayRoRefCopy", "msArrayUnownedRefCopy", "msArrayUnownedRoRefCopy", "msArrayAtomicRefCopy",
+	"msArrayCopy", "msArrayUint8Copy", "msArrayStringCopy", "msArrayRefCopy", "msArrayBigIntCopy", "msArrayAcyclicRefCopy", "msArrayRoRefCopy", "msArrayUnownedRefCopy", "msArrayUnownedRoRefCopy", "msArrayAtomicRefCopy",
 	"msArrayClosureCopy", "msArrayClosureRoCopy", "msStructCellCopy",
 ]);
 

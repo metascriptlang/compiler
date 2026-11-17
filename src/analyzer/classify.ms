@@ -182,6 +182,9 @@ function classifyArray(t: Type, ctx: TransformContext, requireOps: boolean): RcI
 		return makeRcInfo(RcKind.Named, "", "msArrayStringDestroy", "msArrayStringCopy", "msArrayStringWasMoved", "msArrayStringSink", true);
 	}
 	if (elem.kind == TypeKind.Array) return makeOpsInfo(RcKind.Named, arrayCTypeName(t), t, true, requireOps);
+	if (elem.kind == TypeKind.BigInt) {
+		return makeRcInfo(RcKind.Named, "", "msArrayRefDestroy", "msArrayBigIntCopy", "msArrayRefWasMoved", "msArrayRefSink", true);
+	}
 	if (elem.kind == TypeKind.Tuple || elem.kind == TypeKind.SizedArray) {
 		if (!classifyType(elem, ctx, requireOps).needsCleanup) {
 			return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
@@ -436,9 +439,7 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 
 	return match (t.kind) {
 		TypeKind.String => makeRcInfo(RcKind.String, "", "msStringDecref", "msStringCopy", "msStringWasMoved", "msStringSink", false),
-		// msBigInt is an msAllocTyped heap value that cannot reference anything,
-		// so it rides the plain acyclic Ref path — msDecref reaches its destroyFn.
-		TypeKind.BigInt => makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false),
+		TypeKind.BigInt => makeRcInfo(RcKind.String, "", "msDecref", "msBigIntCopy", "msPtrWasMoved", "msBigIntSink", false),
 		TypeKind.Array => classifyArray(t, ctx, requireOps),
 		TypeKind.Ref => {
 			// Actors are exempt from DRC — their lifecycle is managed by the actor
@@ -515,6 +516,7 @@ export function classifyType(t: Type | null, ctx: TransformContext, requireOps: 
 				if (distinctBody(refInner) != null && getOpByKey(refInner as Type, AttachedOp.AttachedDestructor) != null) return makeOpsInfo(RcKind.Named, anonUnionCName(t), t, false, requireOps);
 				refInner = distinctLayerBody(refInner);
 			}
+			if (refInner != null && refInner.kind == TypeKind.BigInt) return classifyType(refInner, ctx, requireOps);
 			if (refInner != null) {
 				// Ptr<T> | null shares the bare-pointer C repr with Ref<T> | null,
 				// but Ptr is UNMANAGED — incref/decref on a raw pointer (e.g. a
@@ -833,7 +835,7 @@ test "isCountedRef agrees with classifyType's Ref arms" {
 	const ctx = createTransformContext();
 	const leaf = declaredTestStruct(createStruct("CountedLeaf", ["x"], [numberType()], false));
 	const samples: Type[] = [
-		createRef(leaf), unknownType(), createPrimitive(TypeKind.BigInt), stringType(), numberType(),
+		createRef(leaf), unknownType(), stringType(), numberType(),
 		createPtr(voidType()), createPtr(createRef(leaf)), createUnion([createRef(leaf), nullType()]),
 		createUnion([createPtr(createRef(leaf)), nullType()]), createFunction([], [], voidType()),
 		liftTestOps(declaredTestStruct(createStruct("CountedToken", ["value"], [stringType()], false)), "CountedToken"), createArray(numberType()),
@@ -841,6 +843,26 @@ test "isCountedRef agrees with classifyType's Ref arms" {
 	for (const t of samples) {
 		assert isCountedRef(t) == (classifyType(t, ctx).rcKind == RcKind.Ref);
 	}
+}
+
+test "a bigint is a counted cell whose copy duplicates it" {
+	const ctx = createTransformContext();
+	const big = createPrimitive(TypeKind.BigInt);
+	for (const t of [big, createUnion([big, nullType()])]) {
+		const info = classifyType(t, ctx);
+		assert isCountedRef(t);
+		assert info.rcKind == RcKind.String;
+		assert (info.copyFn as Symbol).name == "msBigIntCopy";
+		assert (info.sinkFn as Symbol).name == "msBigIntSink";
+		assert (info.destroyFn as Symbol).name == "msDecref";
+	}
+}
+
+test "a bigint array copies each element by duplicating it" {
+	const ctx = createTransformContext();
+	const info = classifyType(createArray(createPrimitive(TypeKind.BigInt)), ctx);
+	assert (info.copyFn as Symbol).name == "msArrayBigIntCopy";
+	assert (info.destroyFn as Symbol).name == "msArrayRefDestroy";
 }
 
 test "call is fresh" { assert isFreshExpr(NodeKind.CallExpr); }

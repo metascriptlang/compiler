@@ -1294,8 +1294,9 @@ function makeCopyAfterInit(destSym: Symbol, rcInfo: RcInfo, loc: SourceLocation,
 		// dest->p == src.p and returns immediately, skipping the incref.
 		// Use msStringIncref(x) directly for proper refcount bump.
 		if (srcSym == null && rcInfo.rcKind == RcKind.String) {
+			const dupInPlace = copySym.name == "msBigIntCopy" ? "msBigIntIncref" : "msStringIncref";
 			return makeExprStmt(
-				makeCall(runtimeRef("msStringIncref", loc), [makeIdentResolved(destSym, loc)], loc), loc);
+				makeCall(runtimeRef(dupInPlace, loc), [makeIdentResolved(destSym, loc)], loc), loc);
 		}
 		// dest: pointer unless runtime macro (seqLike + empty typeName)
 		const destRef = makeIdentResolved(destSym, loc);
