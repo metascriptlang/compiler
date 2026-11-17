@@ -29,6 +29,7 @@ import "./runtimeHeaderClosure";
 import "./int64Literal";
 import "./constFoldOrder";
 import "./bigintChecker";
+import "./bigintCopyDuplicates";
 import "./rangeCheckPolicy";
 import "./nominalFit";
 import "./structFieldDecorators";
