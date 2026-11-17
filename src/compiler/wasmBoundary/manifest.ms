@@ -23,11 +23,13 @@ import { callbackOnlyCalled } from "../../checker/sendable";
 import { hasFlag } from "../../checker/symbol";
 import {
 	PEEL_ALIAS,
+	awaitedType,
 	classParentOf,
 	getAttachedOp,
 	getBuiltinKind,
 	hasGenericParams,
 	isAtomicRef,
+	isAwaitable,
 	isLockedRef,
 	isMaybeType,
 	isOutParam,
@@ -129,6 +131,8 @@ export interface BoundaryFunction {
 	resultEnum: BoundaryEnum | null;
 	member?: BoundaryMember | null;
 	initializes?: boolean;
+	awaits?: boolean;
+	resultStruct?: string | null;
 }
 
 export interface BoundaryRefusal {
@@ -1218,6 +1222,7 @@ function boundaryFunction(
 	const params: BoundaryParam[] = [];
 	let ok = true;
 	const fnDecl = fnDeclOf(sym);
+	const awaits = isAwaitable(ft.typeReturn);
 	for (let i = 0; i < ft.typeChildren.length; i += 1) {
 		const typeExpr = typeExprs != null ? typeExprs[i] : null;
 		c.at = typeExpr != null ? typeExpr.location : nameAt;
@@ -1225,7 +1230,7 @@ function boundaryFunction(
 		if (p == null) {
 			ok = false;
 		} else {
-			if (p.kind == BoundaryKind.Callback && keepsCallback(fnDecl, i)) {
+			if (p.kind == BoundaryKind.Callback && (awaits || keepsCallback(fnDecl, i))) {
 				p.mode = BoundaryMode.Kept;
 				p.keptLabel = keptLabel(c, p.name, name, nameAt);
 			}
@@ -1234,12 +1239,68 @@ function boundaryFunction(
 	}
 	const resultExpr = decl != null ? decl.typeExpr : null;
 	c.at = resultExpr != null ? resultExpr.location : nameAt;
-	const result = resultOf(c, ft.typeReturn);
+	const settled = awaits ? awaitedType(ft.typeReturn) : ft.typeReturn;
+	const result = resultOf(c, settled);
 	if (!ok || result == null) return null;
+	const settledStruct = awaits && result!.kind == BoundaryKind.Struct ? payloadOf(peeled(settled!)) : null;
+	if (settledStruct != null && !isExportedTarget(c, settledStruct!)) {
+		const shown = describe(settledStruct!);
+		cannotCross(
+			c,
+			"struct-unexported",
+			`it returns a Promise of ${shown}, which must be exported by this module `
+				+ `for the value to wait in wasm until JS takes it: export it, or `
+				+ `re-export it with export { ${shown} }`,
+		);
+		return null;
+	}
 	const exportSymbol = inSet
 		? `msb_${key}_${name}_u${overloadIndex}`
 		: `msb_${key}_${name}`;
-	return assembled(c, key, name, overloadIndex, exportSymbol, params, result!, nameAt);
+	const f = assembled(c, key, name, overloadIndex, exportSymbol, params, result!, nameAt);
+	if (f != null && awaits) {
+		f.awaits = true;
+		f.resultStruct = settledStruct != null ? settledStruct!.sym!.name : null;
+	}
+	return f;
+}
+
+export function awaitedTakeOf(f: BoundaryFunction): BoundaryFunction {
+	return {
+		modulePath: f.modulePath,
+		moduleKey: f.moduleKey,
+		name: f.name,
+		overloadIndex: f.overloadIndex,
+		exportSymbol: f.exportSymbol + "_take",
+		params: [plainParam("msbSlot", BoundaryKind.I32, false, BoundaryMode.Copied)],
+		result: f.result,
+		resultNullable: f.resultNullable,
+		resultLeaves: f.resultLeaves,
+		resultElement: f.resultElement,
+		resultHandle: f.resultHandle,
+		resultLabel: f.resultLabel,
+		resultClass: f.resultClass,
+		resultEnum: f.resultEnum,
+	};
+}
+
+export function awaitedStartOf(f: BoundaryFunction): BoundaryFunction {
+	return {
+		modulePath: f.modulePath,
+		moduleKey: f.moduleKey,
+		name: f.name,
+		overloadIndex: f.overloadIndex,
+		exportSymbol: f.exportSymbol,
+		params: [plainParam("msbSlot", BoundaryKind.I32, false, BoundaryMode.Copied), ...f.params],
+		result: BoundaryKind.Void,
+		resultNullable: false,
+		resultLeaves: [],
+		resultElement: BoundaryKind.Void,
+		resultHandle: null,
+		resultLabel: "",
+		resultClass: "",
+		resultEnum: null,
+	};
 }
 
 function assembled(

@@ -14,6 +14,8 @@ import {
 	Manifest,
 	MemberAccess,
 	allocatesInWasm,
+	awaitedStartOf,
+	awaitedTakeOf,
 	fieldInWasmMemory,
 	leafLetters,
 	structResultInSlots,
@@ -839,6 +841,18 @@ function proxyClassLines(
 	return out;
 }
 
+function awaitedOf(fns: BoundaryFunction[], unit: BoundaryFunction): BoundaryFunction | null {
+	for (const f of fns) {
+		if (f.awaits != true || f.modulePath != unit.modulePath) continue;
+		if (unit.exportSymbol == f.exportSymbol || unit.exportSymbol == f.exportSymbol + "_take") return f;
+	}
+	return null;
+}
+
+function awaitedSuffix(awaited: BoundaryFunction, unit: BoundaryFunction): string {
+	return unit.exportSymbol == awaited.exportSymbol ? "$start" : "$take";
+}
+
 export function jsBindings(
 	m: Manifest,
 	wasmModuleUrl: string,
@@ -860,7 +874,18 @@ export function jsBindings(
 	for (const f of m.functions) {
 		if (f.member != null && !proxies.includes(f.member!.classKey)) proxies.push(f.member!.classKey);
 	}
+	const units: BoundaryFunction[] = [];
+	const awaitedNames = new Map<string, string>();
 	for (const f of m.functions) {
+		if (f.awaits != true) {
+			units.push(f);
+			continue;
+		}
+		awaitedNames.set(f.exportSymbol, bundleNameOf(f));
+		units.push(awaitedStartOf(f));
+		if (f.result != BoundaryKind.Void) units.push(awaitedTakeOf(f));
+	}
+	for (const f of units) {
 		if (f.result == BoundaryKind.Handle) handles = true;
 		for (const p of f.params) if (p.kind == BoundaryKind.Handle) handles = true;
 		if (allocatesInWasm(f)) scratch = true;
@@ -879,11 +904,20 @@ export function jsBindings(
 			lines.push([]);
 			at = modules.length - 1;
 		}
-		const bundleName = bundleNameOf(f);
-		const checked = options.checked(bundleName);
+		const awaited = awaitedOf(m.functions, f);
+		const named = awaited == null ? bundleNameOf(f) : awaitedNames.get(awaited!.exportSymbol)!;
+		const bundleName = awaited == null ? named : named + awaitedSuffix(awaited!, f);
+		const checked = options.checked(named);
 		if (checked) anyChecked = true;
 		for (const l of wrapperLines(f, bundleName, checked, dev, keeps, proxies)) {
 			lines[at].push(l);
+		}
+		if (awaited != null && awaitedSuffix(awaited!, f) == "$start") {
+			const name = named;
+			const take = awaited!.result == BoundaryKind.Void ? "null" : `${name}$take`;
+			lines[at].push(`function ${name}(...a) {`);
+			lines[at].push(`\treturn __msb.async((id) => ${name}$start(id, ...a), ${take});`);
+			lines[at].push("}");
 		}
 	}
 	for (let i = 0; i < modules.length; i += 1) {

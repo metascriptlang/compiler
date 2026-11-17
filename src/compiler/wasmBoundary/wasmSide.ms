@@ -14,6 +14,7 @@ import {
 	BoundaryMode,
 	BoundaryParam,
 	MemberAccess,
+	awaitedTakeOf,
 	fieldInWasmMemory,
 	leafLetters,
 	leafLiteral,
@@ -530,6 +531,11 @@ function wrapperLines(
 	const sig = sigs.join(", ");
 	const made = f.resultHandle != null ? handleAliasOf(modules, f, f.resultHandle!) : "";
 	const call = f.member != null ? memberCall(f.member!, argList, made) : `${alias}(${argList.join(", ")})`;
+	if (f.awaits == true) {
+		const slotSig = sig == "" ? "msbSlot: int32" : `msbSlot: int32, ${sig}`;
+		const run = `msbRun_${f.exportSymbol}(msbSlot, ${call});`;
+		return guardedExport(f, slotSig, keeps, "void", [run], "", cells, backs);
+	}
 	return match (f.result) {
 		BoundaryKind.Struct => {
 			const wires: string[] = [];
@@ -596,6 +602,50 @@ function wrapperLines(
 			}
 		},
 	};
+}
+
+function settledTypeOf(f: BoundaryFunction, prefix: string, modules: string[]): string {
+	const t = f.resultStruct != null
+		? prefix + f.resultStruct!
+		: f.resultEnum != null
+		? prefix + f.resultEnum!.name
+		: f.result == BoundaryKind.String
+		? "string"
+		: f.result == BoundaryKind.Vec
+		? `Vec<${valueTypeOf(f.resultElement)}>`
+		: f.result == BoundaryKind.Handle
+		? `Handle<${handleAliasOf(modules, f, f.resultHandle!)}>`
+		: f.result == BoundaryKind.Typed
+		? f.resultClass
+		: valueTypeOf(f.result);
+	return f.resultNullable ? `${t} | null` : t;
+}
+
+function awaitedLines(f: BoundaryFunction, modules: string[]): string[] {
+	const sym = f.exportSymbol;
+	const settles = ["\t\tmsb_settle(msbSlot, 1);", "\t} catch (e) {", "\t\tmsbEscape(e.message);", "\t\tmsb_settle(msbSlot, 0);", "\t}", "}"];
+	if (f.result == BoundaryKind.Void) {
+		return [
+			`async function msbRun_${sym}(msbSlot: int32, msbP: Promise<void>): Promise<void> {`,
+			"\ttry {",
+			"\t\tawait msbP;",
+			...settles,
+		];
+	}
+	const t = settledTypeOf(f, `msbm${modules.indexOf(f.modulePath)}_`, modules);
+	const got = f.resultNullable ? `msbPend_${sym}.get(msbSlot)` : `msbPend_${sym}.get(msbSlot)!`;
+	return [
+		`const msbPend_${sym} = new Map<int32, ${t}>();`,
+		`async function msbRun_${sym}(msbSlot: int32, msbP: Promise<${t}>): Promise<void> {`,
+		"\ttry {",
+		`\t\tmsbPend_${sym}.set(msbSlot, await msbP);`,
+		...settles,
+		`function msbTake_${sym}(msbSlot: int32): ${t} {`,
+		`\tconst v = ${got};`,
+		`\tmsbPend_${sym}.delete(msbSlot);`,
+		"\treturn v;",
+		"}",
+	];
 }
 
 function fieldOffsetEntry(f: BoundaryFunction, target: string): string[] {
@@ -694,6 +744,7 @@ interface EntryUsage {
 	handles: string[];
 	types: string[];
 	viewElements: BoundaryKind[];
+	awaits: boolean;
 }
 
 function addHandle(
@@ -736,6 +787,7 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 		handles: [],
 		types: [],
 		viewElements: [],
+		awaits: false,
 	};
 	let hasVecResult = false;
 	const addResultImport = (name: string): void => {
@@ -768,6 +820,8 @@ function usageOf(fns: BoundaryFunction[]): EntryUsage {
 				usage.typedClasses.push(f.resultClass);
 			}
 		}
+		if (f.awaits == true) usage.awaits = true;
+		if (f.resultStruct != null) addType(usage, f, f.resultStruct!);
 		if (f.resultHandle != null) addHandle(usage, f, f.resultHandle!, f.resultElement);
 		addEnum(usage, f, f.resultEnum);
 		for (const leaf of f.resultLeaves) addEnum(usage, f, leaf.enumOf);
@@ -928,6 +982,7 @@ function jsLibraryOf(usage: EntryUsage): string {
 	const escape = `${REGISTRY}.escape(a0p, a0l)`;
 	entries.push(guardedImportJs("msb_esc", ["a0p", "a0l"], escape));
 	entries.push(guardedImportJs("msb_wake", ["d"], `${REGISTRY}.wake(d)`));
+	if (usage.awaits) entries.push(guardedImportJs("msb_settle", ["id", "ok"], `${REGISTRY}.settle(id, ok)`));
 	const first = signatures.length > 0
 		? "msb_cb_" + signatures[0]
 		: usage.resultImports.length > 0 ? usage.resultImports[0] : "msb_esc";
@@ -979,8 +1034,16 @@ function entryLines(
 	if (usage.typedClasses.length > 0) {
 		for (const l of typedResultLines(usage.typedClasses)) lines.push(l);
 	}
+	if (usage.awaits) for (const l of importLines("msb_settle", "ii", "v", false)) lines.push(l);
 	for (const f of fns) {
 		const alias = aliasOf(f, usage.modules);
+		if (f.awaits == true) {
+			for (const l of awaitedLines(f, usage.modules)) lines.push(l);
+			if (f.result != BoundaryKind.Void) {
+				const take = awaitedTakeOf(f);
+				for (const l of wrapperLines(take, `msbTake_${f.exportSymbol}`, usage.modules)) lines.push(l);
+			}
+		}
 		for (const l of wrapperLines(f, alias, usage.modules)) lines.push(l);
 	}
 	if (usage.handles.length > 0) {
@@ -1003,6 +1066,9 @@ function exportedSymbolsOf(
 	usage: EntryUsage,
 ): string[] {
 	const exported = fns.map((f) => "_" + f.exportSymbol);
+	for (const f of fns) {
+		if (f.awaits == true && f.result != BoundaryKind.Void) exported.push(`_${f.exportSymbol}_take`);
+	}
 	if (usage.hasScalarSome) exported.push("_msb_ret_some");
 	if (usage.handles.length > 0) exported.push("_msb_release");
 	for (const k of usage.viewElements) {
