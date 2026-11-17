@@ -56,7 +56,7 @@ base=$(git -C "$w" rev-parse HEAD)
 printf 'changed test\n' >>"$w/src/test/a.ms"
 git -C "$w" -c user.name=t -c user.email=t@t commit -qam test
 export HOME="$d/home" USERPROFILE="$d/home"
-export GATE_WAIT_MAX=-1 GATE_PAR=1 GATE_KNOWN_LOCAL="$d/local.json"
+export GATE_WAIT_MAX=-1 GATE_PAR=1 GATE_KNOWN_LOCAL="$d/local.json" GATE_GRAPH_LANES=
 export GATE_LEDGER="$d/gate.tsv" GATE_SELECT_LEDGER="$d/select.tsv"
 cd "$w"
 source <(awk '/^base=main release=/{exit} {print}' tools/gate.sh)
