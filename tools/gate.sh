@@ -1942,6 +1942,8 @@ lane_cmd() {
 }
 
 GRAPH_RUN="$(date +%s).$$"
+GRAPH_LANES="boundary cache corpus fmt guard hcr lsp san solana suite tests tools tsan"
+graph_lanes_default() { [ "$1" != Linux ] || [ "$2" -ne 0 ] || [ "$3" -ne 0 ] || printf '%s' "$GRAPH_LANES"; }
 through_graph() { case " ${GATE_GRAPH_LANES:-} " in *" $1 "*) return 0 ;; esac; return 1; }
 
 graph_lane_log() {
@@ -2040,6 +2042,8 @@ graph_lane_self_test() (
   d=$(mktemp -d) || return 1
   got="$(test_node src/index.ms) $(test_node src/test/helpers.ms --tests-in-dir) $(test_node src/test/js/index.ms --tests-in-dir) $(test_node src/test/c/index.ms --tests-in-dir --tests-shard=2/3)"
   [ "$got" = "suite tests.helpers tests.js tests.c2" ] || { printf 'FAIL graph lanes: the node of a test job: %s\n' "$got"; bad=1; }
+  got="$(graph_lanes_default Linux 0 0)|$(graph_lanes_default Darwin 0 0)|$(graph_lanes_default MINGW64_NT-10.0 0 0)|$(graph_lanes_default Linux 1 0)|$(graph_lanes_default Linux 0 1)"
+  [ "$got" = "$GRAPH_LANES||||" ] || { printf 'FAIL graph lanes: the default by platform and mode: %s\n' "$got"; bad=1; }
   OUT=$d
   printf 'tools\ttools/gate.sh\ntools\ttools/gate.ms\nbuild\ttools/release.sh\ntools\ttools/wt.sh\ntools\ttools/managedToolchain/archiveTest.ms\ntools\ttools/managedToolchain/archiveBatchContractTest.ms\ntools\ttools/gone.sh\ntools\tsrc/test/js/declarationBundlers/run.mjs\n' >"$d/why"
   got=$(tools_nodes | tr '\n' ' ')
@@ -2597,8 +2601,10 @@ fi
 
 promote_builder
 if [ -x "$TOP/msc" ]; then BUILDER="$TOP/msc"; else BUILDER=$(command -v msc) || die "no ./msc and no msc on PATH"; fi
+[ -n "${GATE_GRAPH_LANES+set}" ] || GATE_GRAPH_LANES=$(graph_lanes_default "$(uname -s)" "$release" "$record")
+[ -z "$GATE_GRAPH_LANES" ] || say "gate: lanes run through the build graph (GATE_GRAPH_LANES= runs them directly): $GATE_GRAPH_LANES"
 for graph_lane in ${GATE_GRAPH_LANES:-}; do
-  case "$graph_lane" in boundary|cache|corpus|fmt|guard|hcr|lsp|san|solana|suite|tests|tools|tsan) ;; *) die "GATE_GRAPH_LANES: lane '$graph_lane' has no run through the build graph yet (every lane but build and crypto has one)" ;; esac
+  case " $GRAPH_LANES " in *" $graph_lane "*) ;; *) die "GATE_GRAPH_LANES: lane '$graph_lane' has no run through the build graph yet (every lane but build and crypto has one)" ;; esac
 done
 cand_key=""
 [ -n "$(git status --porcelain -- src std runtime)" ] || cand_key=$(tree_key HEAD)
