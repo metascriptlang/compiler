@@ -324,13 +324,19 @@ void msAsyncCb(void* raw) {
     msFutureBase* next = e->stepper.env != NULL
         ? ((msFutureBase*(*)(void*))e->stepper.fn)(e->stepper.env)
         : ((msFutureBase*(*)(void))e->stepper.fn)();
-    while (next != NULL && atomic_load_explicit(&next->finished, memory_order_acquire)) {
+    while (msCallSoonProc == NULL && next != NULL && atomic_load_explicit(&next->finished, memory_order_acquire)) {
+        msFutureDrcDestroy(next);
         next = e->stepper.env != NULL
             ? ((msFutureBase*(*)(void*))e->stepper.fn)(e->stepper.env)
             : ((msFutureBase*(*)(void))e->stepper.fn)();
     }
-    if (next == NULL) { msMemFree(e); return; }
+    if (next == NULL) {
+        if (e->stepper.env != NULL) msDecrefAny(e->stepper.env);
+        msMemFree(e);
+        return;
+    }
     msFutureAddCallback(next, (msClosure){ .fn = (msClosureFn)msAsyncCb, .env = raw });
+    msFutureDrcDestroy(next);
 }
 
 void msEnsureOwnerDispatcher(void) {
