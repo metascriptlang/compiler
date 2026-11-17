@@ -103,7 +103,10 @@ function corpusEnv(cells: string): Record<string, Arg> {
 lane("corpus", [corpusRunner], corpusEnv(corpusRaiser != 0 ? "MSCORPUS_RAISER" : ""));
 const afterSanWroteTheThreadedList = wanted("san") ? [laneNode("san", [corpusRunner], corpusEnv("MSCORPUS_SAN")).captureStdOut()] : [];
 lane("tsan", [corpusRunner], corpusEnv("MSCORPUS_TSAN"), sources.concat(afterSanWroteTheThreadedList));
-lane("crypto", ["bash", "src/test/crypto/suite.sh"], under);
+const cryptoSlow = option("cryptoSlow", "1 adds the crypto suite's slow cells, as a release gate does", 0);
+const cryptoSuite: Arg[] = ["bash", "src/test/crypto/suite.sh"];
+if (cryptoSlow != 0) cryptoSuite.push("--slow");
+lane("crypto", cryptoSuite, under);
 
 const rerun = option("rerun", "the new reds a gate runs again, as <lane>=<subject>,<subject>;<lane>=<subject>", "");
 const rerunCount = option("rerunCount", "how many times each of them runs, one after another", 3);

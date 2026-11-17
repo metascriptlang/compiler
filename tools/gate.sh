@@ -1942,7 +1942,7 @@ lane_cmd() {
 }
 
 GRAPH_RUN="$(date +%s).$$"
-GRAPH_LANES="boundary cache corpus fmt guard hcr lsp san solana suite tests tools tsan"
+GRAPH_LANES="boundary cache corpus crypto fmt guard hcr lsp san solana suite tests tools tsan"
 graph_lanes_default() { [ "$1" != Linux ] || [ "$2" -ne 0 ] || [ "$3" -ne 0 ] || printf '%s' "$GRAPH_LANES"; }
 through_graph() { case " ${GATE_GRAPH_LANES:-} " in *" $1 "*) return 0 ;; esac; return 1; }
 
@@ -2010,6 +2010,7 @@ run_lane_through_graph() {
     guard) more=("-DguardShards=${GATE_GUARD_SHARDS:-$PAR}") ;;
     hcr) more=("-DhcrShards=${GATE_HCR_SHARDS:-$PAR}") ;;
     solana) solana_wants_replays || more=("-DsolanaReplays=0") ;;
+    crypto) [ "$release" -eq 0 ] || more=("-DcryptoSlow=1") ;;
   esac
   out=$(env -u NO_COLOR -u FORCE_COLOR "$BUILDER" build --colors=off "-Dlanes=$nodes" "-Dsubject=$CAND" "-DlaneLimit=$LANE_LIMIT" "-DlaneRun=$run" ${more[@]+"${more[@]}"} lanes 2>&1) \
     || { printf '%s\n' "$out" | tail -40; printf 'graph: the build of lane %s failed\n' "$lane"; return 1; }
@@ -2604,7 +2605,7 @@ if [ -x "$TOP/msc" ]; then BUILDER="$TOP/msc"; else BUILDER=$(command -v msc) ||
 [ -n "${GATE_GRAPH_LANES+set}" ] || GATE_GRAPH_LANES=$(graph_lanes_default "$(uname -s)" "$release" "$record")
 [ -z "$GATE_GRAPH_LANES" ] || say "gate: lanes run through the build graph (GATE_GRAPH_LANES= runs them directly): $GATE_GRAPH_LANES"
 for graph_lane in ${GATE_GRAPH_LANES:-}; do
-  case " $GRAPH_LANES " in *" $graph_lane "*) ;; *) die "GATE_GRAPH_LANES: lane '$graph_lane' has no run through the build graph yet (every lane but build and crypto has one)" ;; esac
+  case " $GRAPH_LANES " in *" $graph_lane "*) ;; *) die "GATE_GRAPH_LANES: lane '$graph_lane' has no run through the build graph yet (every lane but build has one)" ;; esac
 done
 cand_key=""
 [ -n "$(git status --porcelain -- src std runtime)" ] || cand_key=$(tree_key HEAD)
