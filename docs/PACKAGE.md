@@ -488,6 +488,26 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   that runs the same `reruns` build. Rejected: one candidate of main shared by every gate on the host
   under a lock, as `gate.sh` keeps in `~/.metascript/gate-main/<tree>`, because `std/fs` has no file
   lock; the cost is one build of main's candidate per gate that reruns anything.
+- **`tools/gate.sh` runs the new reds of a lane again through `reruns` when the lane ran through the
+  graph, and keeps its shared candidate of main**: `msc build -Drerun=<lane>=<subjects>
+  -Dsubject=<compiler> reruns` once in the gating checkout and once in
+  `~/.metascript/gate-main/<tree>` under that directory's lock, no `-DrerunBase`, then the same
+  judgement over `out/reruns/<lane>.<run>.log`. Each run has a third of `GATE_TRIAGE_LIMIT` (400 s),
+  where the direct reruns share the whole of it. Two fresh checkouts of `d44461f9a` on rtx at once,
+  2026-11-18, `--lanes build,guard,corpus,san`, the host otherwise idle at the start:
+
+  ```
+  direct   guard 4m06s · 11 red · 1 known · 10 not the slice's   corpus 43m09s · 8 red · 4 known · 4 not the slice's · 12530/12538   san 25m55s · 2 red · 1 known · 1 not the slice's · 2678/2680   GREEN 78m25s
+  graph    guard 4m55s · 10 red · 1 known ·  9 not the slice's   corpus 43m18s · 8 red · 4 known · 4 not the slice's · 12530/12538   san 25m22s · 2 red · 1 known · 1 not the slice's · 2678/2680   GREEN 79m29s
+  ```
+
+  Thirteen names (eight guards, four corpus cells, one san cell) read `red on main 3/3` on both
+  sides. The rest differ as flakes do: `actorChurnReap [drc]` is `red 1/3 on this candidate, 0/3 on
+  main` through the graph and `red on main 1/3` direct, and `rcFamilyMismatchAborts [drc]` was red
+  in the direct guard lane only (0 of 3 on both). The graph side's checkout held
+  `out/reruns/{guard,corpus,san}.{1,2,3}.log`, the direct one none. Not run through `gate.sh`: a
+  rerun of tests, suite, hcr, lsp and tsan, a rerun that reaches its limit, and a red that is the
+  slice's (red twice on the candidate, never on main).
 - **The tsan lane takes the san lane's log as an input**, because it reads the `out/corpus/threaded.txt`
   that san run wrote for the same compiler and selection. A checkout of `a5471a26e199` with this
   `build.ms`, `MSCORPUS_ONLY=400-actorHeapStr,401-actorSharedActorField msc build -Dlanes=san,tsan lanes`:
