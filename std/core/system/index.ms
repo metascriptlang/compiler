@@ -1613,6 +1613,18 @@ extern function msActorCopyString(s: string): string;
 extern function msBigIntClone(a: bigint): bigint;
 
 @compilerFunc
+extern function msBigIntCopy(dest: Ptr<void>, src: bigint | null): void;
+
+@compilerFunc
+extern function msBigIntIncref(b: bigint | null): void;
+
+@compilerFunc
+extern function msBigIntSink(d: bigint | null, v: bigint | null): void;
+
+@compilerFunc
+extern function msArrayBigIntCopy(d: Ptr<void>, s: Ptr<void>): void;
+
+@compilerFunc
 extern function msActorPollAll(): boolean;
 
 @compilerFunc

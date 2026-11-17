@@ -35,6 +35,18 @@ msBigInt* msBigIntDiv(const msBigInt* a, const msBigInt* b);
 msBigInt* msBigIntMod(const msBigInt* a, const msBigInt* b);
 msBigInt* msBigIntPow(const msBigInt* a, const msBigInt* b);
 msBigInt* msBigIntClone(const msBigInt* a);
+#define msBigIntCopy(destp, src) do { \
+	__typeof__(destp) msBigIntCopyDest_ = (destp); \
+	const msBigInt* msBigIntCopySrc_ = (src); \
+	if ((const void*)*msBigIntCopyDest_ != (const void*)msBigIntCopySrc_) { \
+		void* msBigIntCopyOld_ = (void*)*msBigIntCopyDest_; \
+		*msBigIntCopyDest_ = msBigIntCopySrc_ != NULL ? msBigIntClone(msBigIntCopySrc_) : NULL; \
+		msDecref(msBigIntCopyOld_); \
+	} \
+} while(0)
+#define msBigIntIncref(b)     do { if ((b) != NULL) (b) = msBigIntClone(b); } while(0)
+#define msBigIntSink(d, ...)  do { msBigInt* msBigIntSinkOld_ = (d); (d) = (__VA_ARGS__); msDecref(msBigIntSinkOld_); } while(0)
+#define msArrayBigIntCopy(d, s) msArrayRefCopyBy(d, s, msBigIntIncref, msRefArrayDestroy)
 msBigInt* msBigIntNeg(const msBigInt* a);
 msBigInt* msBigIntNot(const msBigInt* a);
 msBigInt* msBigIntAnd(const msBigInt* a, const msBigInt* b);
