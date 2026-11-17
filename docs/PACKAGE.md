@@ -546,7 +546,7 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   `Cannot resolve module 'std/process/native'`, `0/63 steps succeeded`; the same binary copied into
   the tree built the candidate and ran the lane above.
 
-- **`GATE_GRAPH_LANES="boundary cache corpus fmt guard hcr lsp san solana suite tests tools tsan"`
+- **`GATE_GRAPH_LANES="boundary cache corpus crypto fmt guard hcr lsp san solana suite tests tools tsan"`
   makes `tools/gate.sh` run those lanes as these nodes**: the gate's builder runs `msc build -Dlanes=<lane> -Dsubject=<candidate>
   -DlaneLimit=<limit> lanes`, the node logs one after another are the lane log, and a node's `RC` is
   the lane's. On Linux, outside `--release` and `--record`, an unset variable names all of them
@@ -580,7 +580,14 @@ still gates every land; these nodes run beside it. What the code cannot say, mea
   7c402948632, --lanes build,san,tsan with the gate's triage on, both at once
   direct   san 16m01s · 2 red · 1 known · 1 not the slice's · 2675/2677   tsan 3m11s · 0 red · 279/279   GREEN 23m18s
   graph    san 16m10s · 2 red · 1 known · 1 not the slice's · 2675/2677   tsan 3m11s · 0 red · 279/279   GREEN 23m36s
+  c485609094, 2026-11-17, --lanes build,crypto, both at once
+  direct   crypto 0m53s · 0 red · 680/680, 6/6 cells   GREEN 2m44s
+  graph    crypto 0m54s · 0 red · 680/680, 6/6 cells   GREEN 2m45s
   ```
+
+  Under `--release` the crypto node takes `-DcryptoSlow=1`, the suite's `--slow`: with it and
+  `-DlaneLimit=20` the log opens `suite: … 11 cells` (6 without). The slow cells were not run to
+  their end through the graph.
 
   The corpus lanes take the gate's narrowing as `-DcorpusOnly=<programs>` (the node's
   `MSCORPUS_ONLY`) and the corpus lane its raiser cells as `-DcorpusRaiser=<0|1>`; the runner is the
