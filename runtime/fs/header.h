@@ -38,7 +38,7 @@ msString msFsReadDirEntries(msString path);
 msString msFsReadDirNames(msString path);
 
 #ifndef _WIN32
-int32_t msFsCloneFile(const char* src, const char* dst);
+int32_t msFsCloneFile(const char* src, const char* dst, int32_t exclusive);
 #endif
 
 #ifdef _WIN32

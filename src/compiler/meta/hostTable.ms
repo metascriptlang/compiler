@@ -71,7 +71,7 @@ import {
 	mkdir, rmdir, remove, rename, symlink, readDir,
 	ensureDir, removeAll, copyFile, cwd, env, execPath,
 } from "../../utils/system";
-import { writeFileBytes, chmod, mkdirExclusive, readLines, writeLines } from "std/fs";
+import { writeFileBytes, writeFileExclusive, copyFileExclusive, chmod, mkdirExclusive, readLines, writeLines } from "std/fs";
 import { platform, arch, env as machineEnv, envPairs, exec, argv, execFile, execFileResult } from "std/process";
 import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
 import { utf8String, findBytesFrom, byteEqAt, asciiWords } from "std/core/string/bytes";
@@ -226,6 +226,14 @@ function _stdFsWriteLines(args: RaiserValue[]): RaiserValue {
 
 function _stdFsCopyFile(args: RaiserValue[]): RaiserValue {
 	return _vmVoidResult(copyFile(_readForBuild(unboxString(args[0])), unboxString(args[1])));
+}
+
+function _stdFsCopyFileExclusive(args: RaiserValue[]): RaiserValue {
+	return _vmVoidResult(copyFileExclusive(_readForBuild(unboxString(args[0])), unboxString(args[1])));
+}
+
+function _stdFsWriteFileExclusive(args: RaiserValue[]): RaiserValue {
+	return _vmVoidResult(writeFileExclusive(unboxString(args[0]), unboxString(args[1])));
 }
 
 function _stdFsChmod(args: RaiserValue[]): RaiserValue {
@@ -410,13 +418,20 @@ function _bridgeMsFsWriteFileMode(args: RaiserValue[]): RaiserValue {
 	const mode = args.length > 2 ? unboxString(args[2]) : "wb";
 	const r = mode.startsWith("a")
 		? appendFile(path, content)
-		: writeFile(path, content);
+		: mode.endsWith("x") ? writeFileExclusive(path, content) : writeFile(path, content);
 	return _fsResultToInt(r.ok, r.ok ? IoErrorKind.NotFound : r.error.kind);
 }
 
 function _bridgeMsFsCopyFile(args: RaiserValue[]): RaiserValue {
 	const src = unboxString(args[0]);
 	const r = copyFile(src, unboxString(args[1]));
+	registerCompileTimeRead(resolve(src, cwd()));
+	return _fsResultToInt(r.ok, r.ok ? IoErrorKind.NotFound : r.error.kind);
+}
+
+function _bridgeMsFsCopyFileExclusive(args: RaiserValue[]): RaiserValue {
+	const src = unboxString(args[0]);
+	const r = copyFileExclusive(src, unboxString(args[1]));
 	registerCompileTimeRead(resolve(src, cwd()));
 	return _fsResultToInt(r.ok, r.ok ? IoErrorKind.NotFound : r.error.kind);
 }
@@ -1704,6 +1719,8 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("std/fs.appendFile",  _stdFsAppendFile);
 	registerHostFn("std/fs.writeLines",  _stdFsWriteLines);
 	registerHostFn("std/fs.copyFile",    _stdFsCopyFile);
+	registerHostFn("std/fs.copyFileExclusive", _stdFsCopyFileExclusive);
+	registerHostFn("std/fs.writeFileExclusive", _stdFsWriteFileExclusive);
 	registerHostFn("std/fs.chmod",       _stdFsChmod);
 	registerHostFn("std/fs.mkdir",       _stdFsMkdir);
 	registerHostFn("std/fs.mkdirExclusive", _stdFsMkdirExclusive);
@@ -1715,6 +1732,7 @@ export function ensureHostTableLoaded(): void {
 	registerHostFn("std/fs.symlink",     _stdFsSymlink);
 	registerHostFn("msFsChmod",          _bridgeMsFsChmod);
 	registerHostFn("msFsCopyFile",       _bridgeMsFsCopyFile);
+	registerHostFn("msFsCopyFileExclusive", _bridgeMsFsCopyFileExclusive);
 	registerHostFn("msFsMkdir",          _bridgeMsFsMkdir);
 	registerHostFn("msFsMkdirExclusive", _bridgeMsFsMkdirExclusive);
 	registerHostFn("msFsRmdir",          _bridgeMsFsRmdir);

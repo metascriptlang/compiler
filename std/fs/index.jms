@@ -25,7 +25,9 @@ import { IoError, IoErrorKind, ioErrorFromErrno, writeFailed } from "../io/error
 extern function readFileSync(path: string, encoding: string): string;
 extern function readBytesSync(path: string): Buffer from "msFsBytes(readFileSync(#))";
 extern function copyFileSync(src: string, dst: string): void;
+extern function copyFileExclusiveSync(src: string, dst: string): void from "copyFileSync(#, #, 1)";
 extern function writeFileSync(path: string, data: string): void;
+extern function writeFileExclusiveSync(path: string, data: string): void from "writeFileSync(#, #, { flag: 'wx' })";
 extern function appendFileSync(path: string, data: string): void;
 extern function existsSync(path: string): boolean;
 extern function realpathSync(path: string): string;
@@ -298,6 +300,17 @@ export function readLines(path: string): Result<string[], IoError> {
 	return Result.ok(content.split("\n"));
 }
 
+export function writeFileExclusive(path: string, content: string): Result<void, IoError> {
+	try {
+		writeFileExclusiveSync(path, content);
+		return Result.ok(null);
+	} catch (e) {
+		const err = errnoOf(e);
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+		return Result.err(writeFailed(path, "write failed"));
+	}
+}
+
 export function writeLines(path: string, lines: string[]): Result<void, IoError> {
 	return writeFile(path, lines.join("\n"));
 }
@@ -309,6 +322,17 @@ export function copyFile(src: string, dst: string): Result<void, IoError> {
 	} catch (e) {
 		const err = errnoOf(e);
 		if (err != 0) return Result.err(ioErrorFromErrno(err, src));
+		return Result.err(writeFailed(src, "copy failed"));
+	}
+}
+
+export function copyFileExclusive(src: string, dst: string): Result<void, IoError> {
+	try {
+		copyFileExclusiveSync(src, dst);
+		return Result.ok(null);
+	} catch (e) {
+		const err = errnoOf(e);
+		if (err != 0) return Result.err(ioErrorFromErrno(err, err == 17 ? dst : src));
 		return Result.err(writeFailed(src, "copy failed"));
 	}
 }

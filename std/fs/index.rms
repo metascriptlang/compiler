@@ -21,6 +21,7 @@ extern function msFsIsExecutable(path: string): number from "msFsIsExecutable";
 extern function msFsFileSize(path: string): number from "msFsFileSize";
 extern function msFsChmod(path: string, mode: int32): number from "msFsChmod";
 extern function msFsCopyFile(src: string, dst: string): number from "msFsCopyFile";
+extern function msFsCopyFileExclusive(src: string, dst: string): number from "msFsCopyFileExclusive";
 extern function msFsMkdir(path: string): number from "msFsMkdir";
 extern function msFsMkdirExclusive(path: string): number from "msFsMkdirExclusive";
 extern function msFsRmdir(path: string): number from "msFsRmdir";
@@ -52,6 +53,16 @@ export function writeFileBytes(path: string, content: Readonly<Span<uint8>>): Re
 
 export function writeFile(path: string, content: string): Result<void, IoError> {
 	const ok = msFsWriteFileMode(path, content, "wb");
+	if (ok != 1) {
+		const err = msFsLastErrno();
+		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
+		return Result.err(writeFailed(path, "write failed"));
+	}
+	return Result.ok(null);
+}
+
+export function writeFileExclusive(path: string, content: string): Result<void, IoError> {
+	const ok = msFsWriteFileMode(path, content, "wbx");
 	if (ok != 1) {
 		const err = msFsLastErrno();
 		if (err != 0) return Result.err(ioErrorFromErrno(err, path));
@@ -168,6 +179,13 @@ export function writeLines(path: string, lines: string[]): Result<void, IoError>
 
 export function copyFile(src: string, dst: string): Result<void, IoError> {
 	if (msFsCopyFile(src, dst) == 1) return Result.ok(null);
+	const err = msFsLastErrno();
+	if (err != 0) return Result.err(ioErrorFromErrno(err, src));
+	return Result.err(writeFailed(src, "copy failed"));
+}
+
+export function copyFileExclusive(src: string, dst: string): Result<void, IoError> {
+	if (msFsCopyFileExclusive(src, dst) == 1) return Result.ok(null);
 	const err = msFsLastErrno();
 	if (err != 0) return Result.err(ioErrorFromErrno(err, src));
 	return Result.err(writeFailed(src, "copy failed"));

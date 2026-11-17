@@ -252,7 +252,7 @@ when (windows) {
 		return made ? 0 : msFsErrnoFromWin32(failure);
 	}
 
-	function cloneErrno(src: string, dst: string): int32 {
+	function cloneErrno(src: string, dst: string, exclusive: boolean): int32 {
 		return ENOTSUP;
 	}
 
@@ -488,9 +488,9 @@ when (windows) {
 	function symlinkErrno(target: string, path: string): int32 {
 		return cSymlink(target as cstring, path as cstring) == 0 ? 0 : errno;
 	}
-	extern function msFsCloneFile(src: cstring, dst: cstring): int32;
-	function cloneErrno(src: string, dst: string): int32 {
-		return msFsCloneFile(src as cstring, dst as cstring);
+	extern function msFsCloneFile(src: cstring, dst: cstring, exclusive: int32): int32;
+	function cloneErrno(src: string, dst: string, exclusive: boolean): int32 {
+		return msFsCloneFile(src as cstring, dst as cstring, exclusive ? 1 : 0);
 	}
 	// Any later libc call (free included) may overwrite errno: read it straight after the
 	// syscall, before anything else runs.
@@ -704,6 +704,10 @@ export function writeFile(path: string, content: string): Result<void, IoError> 
 	return errnoResult(writeFileErrno(path, content.asBytes(), "wb"), path, "write failed");
 }
 
+export function writeFileExclusive(path: string, content: string): Result<void, IoError> {
+	return errnoResult(writeFileErrno(path, content.asBytes(), "wbx"), path, "write failed");
+}
+
 export function writeFileBytes(path: string, content: Readonly<Span<uint8>>): Result<void, IoError> {
 	return errnoResult(writeFileErrno(path, content, "wb"), path, "write failed");
 }
@@ -840,9 +844,17 @@ export function writeLines(path: string, lines: string[]): Result<void, IoError>
 }
 
 export function copyFile(src: string, dst: string): Result<void, IoError> {
-	if (cloneErrno(src, dst) == 0) return Result.ok(null);
+	if (cloneErrno(src, dst, false) == 0) return Result.ok(null);
 	const raw = try readRaw(src);
 	return writeFile(dst, raw);
+}
+
+export function copyFileExclusive(src: string, dst: string): Result<void, IoError> {
+	const cloned = cloneErrno(src, dst, true);
+	if (cloned == 0) return Result.ok(null);
+	if (cloned == EEXIST) return errnoResult(cloned, dst, "copy failed");
+	const raw = try readRaw(src);
+	return writeFileExclusive(dst, raw);
 }
 
 export function ensureDir(path: string): Result<void, IoError> {

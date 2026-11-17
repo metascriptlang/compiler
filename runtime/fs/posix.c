@@ -26,8 +26,9 @@
 
 static _Thread_local int _msFsLastErrno = 0;
 
-int32_t msFsCloneFile(const char* src, const char* dst) {
+int32_t msFsCloneFile(const char* src, const char* dst, int32_t exclusive) {
 #if defined(__APPLE__)
+	(void)exclusive;
 	if (clonefile(src, dst, 0) != 0) return errno;
 	if (utimes(dst, NULL) == 0) return 0;
 	int err = errno;
@@ -36,7 +37,7 @@ int32_t msFsCloneFile(const char* src, const char* dst) {
 #elif defined(__linux__) && defined(FICLONE)
 	int in = open(src, O_RDONLY | O_CLOEXEC);
 	if (in < 0) return errno;
-	int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
+	int out = open(dst, O_WRONLY | O_CREAT | (exclusive ? O_EXCL : O_TRUNC) | O_CLOEXEC, 0666);
 	if (out < 0) {
 		int err = errno;
 		close(in);
@@ -50,6 +51,7 @@ int32_t msFsCloneFile(const char* src, const char* dst) {
 #else
 	(void)src;
 	(void)dst;
+	(void)exclusive;
 	return ENOTSUP;
 #endif
 }
