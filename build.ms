@@ -1,12 +1,19 @@
-import { option, step, executable, runArtifact, systemCommand, updateSourceFiles, writeFiles, path, glob, Optimize, mscExe, LtoMode, Command, BuildNode, Arg, LazyPath } from "std/build";
+import { option, step, executable, runArtifact, systemCommand, updateSourceFiles, writeFiles, path, glob, Optimize, mscExe, LtoMode, Command, BuildNode, Arg, LazyPath, Executable, ExecutableOptions } from "std/build";
 
 const optimize = Optimize.ReleaseFast;
 
-export const msc = executable({ entry: path("src/index.ms"), optimize, lto: LtoMode.None });
+const candidateLto = option("candidateLto", "1 links msc and its stages with the mode's default LTO, as the land gate's candidate is linked; 0 links without", 0);
+function builtBy(compiler: Executable | null): Executable {
+	const o: ExecutableOptions = { entry: path("src/index.ms"), optimize };
+	if (candidateLto == 0) o.lto = LtoMode.None;
+	if (compiler != null) o.compiler = compiler;
+	return executable(o);
+}
+export const msc = builtBy(null);
 export default msc;
 
-export const stage2 = executable({ entry: path("src/index.ms"), optimize, lto: LtoMode.None, compiler: msc });
-export const stage3 = executable({ entry: path("src/index.ms"), optimize, lto: LtoMode.None, compiler: stage2 });
+export const stage2 = builtBy(msc);
+export const stage3 = builtBy(stage2);
 
 export const fixpoint = systemCommand(["cmp", stage2, stage3], { expectExitCode: 0 });
 
@@ -75,6 +82,9 @@ function laneNode(name: string, command: Arg[], env: Record<string, Arg> = {}, i
 function lane(name: string, command: Arg[], env: Record<string, Arg> = {}, inputs: LazyPath[] = sources): void {
 	if (wanted(name)) laneNode(name, command, env, inputs);
 }
+
+const fixedPoint = 'if cmp -s "$1" "$2"; then echo "gate: self-host gen2 = gen1 (byte-identical fixed point)"; elif cmp -s "$2" "$3"; then echo "gate: self-host gen3 = gen2 (byte-identical fixed point)"; else echo "FAIL self-host: no fixed point after 3 generations (gen2 and gen3 differ)"; : >"$4"; exit 1; fi; cp -p "$2" "$4"';
+if (wanted("build")) lanes.addCopyFile(laneNode("build", ["bash", "-c", fixedPoint, "build", msc, stage2, stage3]).addOutputFileArg("msc"), "candidate");
 
 const raiser: Arg[] = [candidate, "run", "--target=raiser"];
 const under: Record<string, Arg> = { MSC: candidate };

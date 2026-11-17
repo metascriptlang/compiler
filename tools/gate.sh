@@ -1961,7 +1961,7 @@ lane_cmd() {
 }
 
 GRAPH_RUN="$(date +%s).$$"
-GRAPH_LANES="boundary cache corpus crypto fmt guard hcr lsp san solana suite tests tools tsan"
+GRAPH_LANES="boundary build cache corpus crypto fmt guard hcr lsp san solana suite tests tools tsan"
 graph_lanes_default() { [ "$1" != Linux ] || [ "$2" -ne 0 ] || [ "$3" -ne 0 ] || printf '%s' "$GRAPH_LANES"; }
 through_graph() { case " ${GATE_GRAPH_LANES:-} " in *" $1 "*) return 0 ;; esac; return 1; }
 
@@ -2019,6 +2019,7 @@ run_lane_through_graph() {
   local lane=$1 run=${2:-$GRAPH_RUN} out dir nodes=$1
   local -a more=()
   case "$lane" in
+    build) more=("-DcandidateLto=1") ;;
     tools)
       nodes=$(tools_nodes | sort -u | paste -sd, -)
       [ -n "$nodes" ] || return 0 ;;
@@ -2035,6 +2036,7 @@ run_lane_through_graph() {
     || { printf '%s\n' "$out" | tail -40; printf 'graph: the build of lane %s failed\n' "$lane"; return 1; }
   dir=$(printf '%s\n' "$out" | sed -n 's/^.*Built lanes → //p' | tail -1)
   [ -n "$dir" ] && [ -d "$dir" ] || { printf '%s\n' "$out" | tail -40; printf 'graph: the build of lane %s named no log directory\n' "$lane"; return 1; }
+  graph_dir=$dir
   graph_lane_log "$dir" "$lane"
 }
 
@@ -2624,7 +2626,7 @@ if [ -x "$TOP/msc" ]; then BUILDER="$TOP/msc"; else BUILDER=$(command -v msc) ||
 [ -n "${GATE_GRAPH_LANES+set}" ] || GATE_GRAPH_LANES=$(graph_lanes_default "$(uname -s)" "$release" "$record")
 [ -z "$GATE_GRAPH_LANES" ] || say "gate: lanes run through the build graph (GATE_GRAPH_LANES= runs them directly): $GATE_GRAPH_LANES"
 for graph_lane in ${GATE_GRAPH_LANES:-}; do
-  case " $GRAPH_LANES " in *" $graph_lane "*) ;; *) die "GATE_GRAPH_LANES: lane '$graph_lane' has no run through the build graph yet (every lane but build has one)" ;; esac
+  case " $GRAPH_LANES " in *" $graph_lane "*) ;; *) die "GATE_GRAPH_LANES: lane '$graph_lane' has no run through the build graph" ;; esac
 done
 cand_key=""
 [ -n "$(git status --porcelain -- src std runtime)" ] || cand_key=$(tree_key HEAD)
@@ -2996,8 +2998,22 @@ run_sharded_lane() {
   return $rc
 }
 
+emit_rc_scan() {
+  local checked current
+  [ "$rcscan_on" -eq 1 ] || return 0
+  checked=$(file_digest "$CAND") || return 1
+  env -u NO_COLOR -u FORCE_COLOR "$CAND" run $CC_FLAG src/test/emitRcScan.ms "$CAND" $CC_FLAG || return $?
+  current=$(file_digest "$CAND") || return 1
+  [ "$current" = "$checked" ] || { say "FAIL self-host: candidate changed during the emit rc scan"; return 1; }
+}
+
 build_lane() {
-  local producer="" current="" candidate="" checked=""
+  local producer="" current="" candidate="" graph_dir=""
+  if through_graph build; then
+    run_lane_through_graph build || return $?
+    rm -f "$CAND" && cp "$graph_dir/candidate" "$CAND" && chmod +x "$CAND" || { say "FAIL self-host: the build graph left no candidate in $graph_dir"; return 1; }
+    emit_rc_scan; return $?
+  fi
   if [ "$release" -eq 0 ] && [ "$record" -eq 0 ] \
     && [ -n "$(printf '%s\n' "$paths" | grep -Ev "$INERT")" ] \
     && ! printf '%s\n' "$paths" | grep -Ev "$INERT|^src/test/" | grep -q . \
@@ -3022,18 +3038,14 @@ build_lane() {
     fi
     self_host_boot "$CAND" "$CC_FLAG" || return $?
   fi
-  [ "$rcscan_on" -eq 1 ] || return 0
-  checked=$(file_digest "$CAND") || return 1
-  env -u NO_COLOR -u FORCE_COLOR "$CAND" run $CC_FLAG src/test/emitRcScan.ms "$CAND" $CC_FLAG || return $?
-  current=$(file_digest "$CAND") || return 1
-  [ "$current" = "$checked" ] || { say "FAIL self-host: candidate changed during the emit rc scan"; return 1; }
+  emit_rc_scan
 }
 
 lane_body() {
   local lane=$1 log="$OUT/$1.log" rc t0=$SECONDS
   [ "$lane" != build ] || rm -f "$CAND.key" "${CAND}_link.rsp"
   local via=$lane
-  case "$lane" in tests|suite) ;; *) ! through_graph "$lane" || via=graph ;; esac
+  case "$lane" in tests|suite|build) ;; *) ! through_graph "$lane" || via=graph ;; esac
   case "$via" in
     graph) with_slot bounded run_lane_through_graph "$lane" >"$log" 2>&1; rc=$? ;;
     build) with_slot bounded build_lane >"$log" 2>&1; rc=$? ;;
