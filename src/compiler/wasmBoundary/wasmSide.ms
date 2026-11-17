@@ -927,6 +927,7 @@ function jsLibraryOf(usage: EntryUsage): string {
 	}
 	const escape = `${REGISTRY}.escape(a0p, a0l)`;
 	entries.push(guardedImportJs("msb_esc", ["a0p", "a0l"], escape));
+	entries.push(guardedImportJs("msb_wake", ["d"], `${REGISTRY}.wake(d)`));
 	const first = signatures.length > 0
 		? "msb_cb_" + signatures[0]
 		: usage.resultImports.length > 0 ? usage.resultImports[0] : "msb_esc";

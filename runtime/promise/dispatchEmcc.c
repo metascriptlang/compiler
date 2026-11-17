@@ -19,9 +19,25 @@ int64_t msMonoTimeMs(void) {
     return (int64_t)(emscripten_get_now());
 }
 
+#ifdef MSOS_HOST_PUMPED
+#include <stdio.h>
+__attribute__((import_module("env"), import_name("msb_wake"))) void msb_wake(int32_t delayMs);
+
+static _Noreturn void msHostWaitRefused(const char* what) {
+    fprintf(stderr, "%s in wasm-placed code cannot finish: the JS side runs the event loop only "
+        "between boundary calls, so await the value instead\n", what);
+    abort();
+}
+
+void msSleepMs(int ms) {
+    (void)ms;
+    msHostWaitRefused("a synchronous sleep");
+}
+#else
 void msSleepMs(int ms) {
     emscripten_sleep(ms);
 }
+#endif
 
 /* ===== Callback Deque ===== */
 
@@ -106,7 +122,25 @@ msDispatcher* msGetDispatcher(void) {
 bool msHasDispatcher(void) { return gDispatcher != NULL; }
 
 static void msDequeAppend_wrapper(msClosure cb) {
+#ifdef MSOS_HOST_PUMPED
+    if (msDequeLen(&gDispatcher->callbacks) == 0) msb_wake(0);
+#endif
     msDequeAppend(&gDispatcher->callbacks, cb);
+}
+
+#ifdef MSOS_HOST_PUMPED
+static int32_t msHostTimerWait(msTimerHeap* h) {
+    int64_t wait = h->data[0].finishAtMs - msMonoTimeMs();
+    return wait > 1 ? (int32_t)wait : 1;
+}
+#endif
+
+static void msPushTimer(msTimer t) {
+    msTimerHeap* h = &msGetDispatcher()->timers;
+    msTimerHeapPush(h, t);
+#ifdef MSOS_HOST_PUMPED
+    if (h->data[0].finishAtMs == t.finishAtMs) msb_wake(msHostTimerWait(h));
+#endif
 }
 
 /* ===== Timer + Callback Processing ===== */
@@ -167,35 +201,56 @@ bool msRunOnce(int timeoutMs) {
     bool didWork = false;
     msProcessTimers(d, &didWork);
     msProcessCallbacks(d, &didWork);
+#ifndef MSOS_HOST_PUMPED
     if (!didWork && timeoutMs > 0) {
         emscripten_sleep(timeoutMs > 5 ? 5 : timeoutMs);
     }
+#else
+    (void)timeoutMs;
+#endif
     return didWork;
 }
 
-void msPoll(int timeoutMs) { (void)msRunOnce(timeoutMs); }
-
-void* msWaitFor(void* fp) {
-    msFutureBase* fut = (msFutureBase*)fp;
-    msGetDispatcher();
-    while (!atomic_load_explicit(&fut->finished, memory_order_acquire)) {
-        msRunOnce(5);
-    }
-    return ((msFuture_ptr*)fp)->value;
+#ifdef MSOS_HOST_PUMPED
+EMSCRIPTEN_KEEPALIVE int32_t msb_pump(void) {
+    msDispatcher* d = msGetDispatcher();
+    bool didWork = false;
+    msProcessCallbacks(d, &didWork);
+    msProcessTimers(d, &didWork);
+    msProcessCallbacks(d, &didWork);
+    if (msDequeLen(&d->callbacks) > 0) return 0;
+    return d->timers.len == 0 ? -1 : msHostTimerWait(&d->timers);
 }
+#endif
+
+void msPoll(int timeoutMs) { (void)msRunOnce(timeoutMs); }
 
 void msWaitForReady(void* fp) {
     msFutureBase* fut = (msFutureBase*)fp;
+    msGetDispatcher();
     while (!atomic_load_explicit(&fut->finished, memory_order_acquire)) {
+#ifdef MSOS_HOST_PUMPED
+        if (!msRunOnce(0)) msHostWaitRefused("a synchronous wait for a pending promise");
+#else
         msRunOnce(5);
+#endif
     }
 }
 
+void* msWaitFor(void* fp) {
+    msWaitForReady(fp);
+    return ((msFuture_ptr*)fp)->value;
+}
+
+#ifdef MSOS_HOST_PUMPED
+void msRunForever(void) { msHostWaitRefused("running the event loop forever"); }
+#else
 void msRunForever(void) { while (1) msRunOnce(100); }
+#endif
 
 msFuture_void* msSleepAsync(int ms) {
     msFuture_void* f = (msFuture_void*)msFutureCreate();
-    msTimerHeapPush(&msGetDispatcher()->timers, (msTimer){ .finishAtMs = msMonoTimeMs() + ms, .fut = f });
+    msPushTimer((msTimer){ .finishAtMs = msMonoTimeMs() + ms, .fut = f });
     return f;
 }
 
@@ -206,7 +261,7 @@ static int64_t msArmTimer(msClosure cb, double ms, int64_t periodMs) {
     int64_t delay = (int64_t)ms;
     if (delay < 0) delay = 0;
     gTimerSeq += 1;
-    msTimerHeapPush(&msGetDispatcher()->timers, (msTimer){
+    msPushTimer((msTimer){
         .finishAtMs = msMonoTimeMs() + delay,
         .cb = cb,
         .id = gTimerSeq,

@@ -136,7 +136,7 @@ test "wasm entry: a shared callback signature is declared once; exports and libr
 	const e = entryFor(["evaluate", "add64"]);
 	assert e.source.split("extern function msb_cb_i_i").length == 2;
 	assert e.exportedFunctions.join(",") == "_msb_calc_evaluate,_msb_calc_add64,_msb_fail,_malloc,_MsMain";
-	assert e.jsLibrary == "addToLibrary({\n\tmsb_cb_i_i: (id, a0) => { try { return Module['msb'].cb(id)(a0); } catch (e) { return Module['msb'].fail(e, 0); } },\n\tmsb_esc: (a0p, a0l) => { try { return Module['msb'].escape(a0p, a0l); } catch (e) { throw Module['msb'].die(e); } },\n\tmsb_cb_i_i__postset: \"if (!Module['msb']) throw new Error('msb registry missing: pass { msb } to the wasm module factory');\",\n});\n";
+	assert e.jsLibrary == "addToLibrary({\n\tmsb_cb_i_i: (id, a0) => { try { return Module['msb'].cb(id)(a0); } catch (e) { return Module['msb'].fail(e, 0); } },\n\tmsb_esc: (a0p, a0l) => { try { return Module['msb'].escape(a0p, a0l); } catch (e) { throw Module['msb'].die(e); } },\n\tmsb_wake: (d) => { try { return Module['msb'].wake(d); } catch (e) { throw Module['msb'].die(e); } },\n\tmsb_cb_i_i__postset: \"if (!Module['msb']) throw new Error('msb registry missing: pass { msb } to the wasm module factory');\",\n});\n";
 	const plain = entryFor(["add64"]).jsLibrary;
 	assert plain.includes("\tmsb_esc: (a0p, a0l) => { try { return Module['msb'].escape(a0p, a0l); } catch (e) { throw Module['msb'].die(e); } },") && plain.includes("\tmsb_esc__postset:");
 	assert !plain.includes("msb_cb_");
@@ -284,8 +284,8 @@ test "wasm entry: each runtime export is used by the js glue of that function an
 
 test "wasm entry: enclosing export wrappers poison result import failures, escape and callback imports keep their own guards" {
 	const e = entryFor(["evaluate", "visit", "report", "sumBy", "edit", "tag", "scale"]);
-	assert e.jsLibrary.split("catch (e) { throw Module['msb'].die(e); } },").length == 2;
-	assert e.jsLibrary.split("\n\tmsb_").length == 10;
+	assert e.jsLibrary.split("catch (e) { throw Module['msb'].die(e); } },").length == 3;
+	assert e.jsLibrary.split("\n\tmsb_").length == 11;
 	const m = manifestOf(["twice", "tag", "scale"]);
 	const code = jsBindings(m, "./app.wasm.mjs", (f) => "bundled_" + f.name, { checked: (name) => false }).modules[0].code;
 	for (const f of m.functions) {

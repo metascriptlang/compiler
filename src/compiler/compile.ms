@@ -1188,6 +1188,7 @@ function initCBuildState(opts: CliOptions): CBuildState {
 	}
 	if (opts.targetOs == "emcc") {
 		allFlags = appendFlag(allFlags, "-DMSOS_EMCC");
+		if (opts.wasmHalf) allFlags = appendFlag(allFlags, "-DMSOS_HOST_PUMPED");
 	}
 	return { allFlags, includePaths };
 }
@@ -4867,7 +4868,7 @@ resetLiftedOps();
 	// Emscripten: a wait from sync code suspends the wasm stack only through a sleep or a
 	// pending timer (spawn runs inline here), so JSPI is linked exactly when one of those
 	// runtime entries is reachable; a JSPI build does not load where the browser lacks JSPI.
-	if (opts.targetOs == "emcc" && aliveSet.computed) {
+	if (opts.targetOs == "emcc" && !opts.wasmHalf && aliveSet.computed) {
 		let suspends = false;
 		for (const entry of ["msSleepMs", "msSleepAsync", "msSetTimeout", "msSetInterval"]) {
 			if (aliveSetImportsC(aliveSet, entry)) suspends = true;
