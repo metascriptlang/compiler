@@ -129,7 +129,7 @@ function rerunEnv(lane: string, subjects: string[], run: number): Record<string,
 	if (lane != "corpus" && lane != "san" && lane != "tsan") return env;
 	env.set("MSCORPUS_ONLY", subjects.join(","));
 	env.set("MSCORPUS_CELL_TIMEOUT_MS", "120000");
-	env.set(lane == "corpus" ? "MSCORPUS_RAISER" : lane == "san" ? "MSCORPUS_SAN" : "MSCORPUS_TSAN", "1");
+	if (lane != "corpus" || corpusRaiser != 0) env.set(lane == "corpus" ? "MSCORPUS_RAISER" : lane == "san" ? "MSCORPUS_SAN" : "MSCORPUS_TSAN", "1");
 	return env;
 }
 const rerunBase = option("rerunBase", "the commit of main that runs the same reruns, in a checkout of it at out/gate-main", "");

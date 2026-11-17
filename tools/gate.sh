@@ -1055,12 +1055,25 @@ triage_main() {
 
 # lane tree compiler builder names runs out: every run's failing names appended to out; fails when a run names nothing it
 # could judge (a harness that did not run is no evidence either way)
+reruns_through_graph() {
+  local lane=$1 tree=$2 csv=$5 out
+  local -a more=()
+  [ "$lane" != lsp ] || csv=lsp
+  [ "$lane" != corpus ] || more=("-DcorpusRaiser=$raiser_on")
+  rm -f "$tree/out/reruns/$lane".*.log
+  out=$(cd "$tree" && env -u NO_COLOR -u FORCE_COLOR "$4" build --colors=off "-Drerun=$lane=$csv" "-DrerunCount=$6" "-Dsubject=$3" \
+    "-DlaneLimit=$((TRIAGE_LIMIT / $6))" "-DlaneRun=$GRAPH_RUN" ${more[@]+"${more[@]}"} reruns 2>&1) \
+    || { printf '%s\n' "$out" | tail -40; printf 'triage: the build of the reruns of %s in %s failed\n' "$lane" "$tree"; return 1; }
+}
+
 triage_side() {
-  local lane=$1 tree=$2 cmp=$3 bld=$4 runs=$6 out=$7 csv i log rc f
+  local lane=$1 tree=$2 cmp=$3 bld=$4 runs=$6 out=$7 csv i log rc f graph=0
   csv=$(while IFS= read -r f; do triage_subject "$lane" "$f"; done <"$5" | sort -u | paste -sd, -)
   : >"$out"
+  ! through_graph "$lane" || { graph=1; reruns_through_graph "$lane" "$tree" "$cmp" "$bld" "$csv" "$runs" || return 1; }
   for ((i = 1; i <= runs; i++)); do
     log="$out.$i"
+    if [ "$graph" -eq 1 ]; then graph_lane_log "$tree/out/reruns" "$lane.$i" >"$log" 2>&1; rc=$?; else
     (
       cd "$tree" || exit 2
       case "$lane" in
@@ -1082,6 +1095,7 @@ triage_side() {
           r=0; for f in ${csv//,/ }; do env -u NO_COLOR -u FORCE_COLOR MSC="$cmp" "$cmp" test --time "$f" --tests-in-dir || r=1; done; exit $r ;;
       esac
     ) >"$log" 2>&1; rc=$?
+    fi
     (TOP=$tree; reds_of "$lane" "$log" "$rc") >"$log.reds"
     if [ "$rc" -ne 0 ] && [ ! -s "$log.reds" ]; then printf 'triage: run %s in %s: exit %s with no named failure\n' "$i" "$tree" "$rc"; return 1; fi
     for f in ${csv//,/ }; do
@@ -1093,17 +1107,18 @@ triage_side() {
 
 # lane: moves the new reds that are not the slice's from $OUT/<lane>.new to $OUT/<lane>.notyours
 triage_lane() {
-  local lane=$1 n d slice main
+  local lane=$1 n d slice main limit=$TRIAGE_LIMIT
   : >"$OUT/$lane.notyours"; rm -f "$OUT/$lane.judged"
   [ "$record" -eq 0 ] && [ "$release" -eq 0 ] && [ "${GATE_TRIAGE:-1}" != 0 ] || return 0
   case "$TRIAGE_LANES" in *" $lane "*) ;; *) return 0 ;; esac
   triage_eligible "$lane" <"$OUT/$lane.new" >"$OUT/$lane.triage"
   n=$(grep -c . "$OUT/$lane.triage" | tr -d ' ')
   [ "$n" -gt 0 ] || return 0
+  ! through_graph "$lane" || limit=$((TRIAGE_LIMIT + 300))
   d=$(triage_main 2>>"$OUT/$lane.triage.log") || { say "  triage: no candidate of main could be built here ($OUT/$lane.triage.log), so the new reds stay the slice's"; return 0; }
-  LANE_LIMIT=$TRIAGE_LIMIT bounded triage_side "$lane" "$TOP" "$CAND" "$BUILDER" "$OUT/$lane.triage" "$TRIAGE_RUNS" "$OUT/$lane.tri.slice" >>"$OUT/$lane.triage.log" 2>&1 &
+  LANE_LIMIT=$limit bounded triage_side "$lane" "$TOP" "$CAND" "$BUILDER" "$OUT/$lane.triage" "$TRIAGE_RUNS" "$OUT/$lane.tri.slice" >>"$OUT/$lane.triage.log" 2>&1 &
   slice=$!
-  LANE_LIMIT=$TRIAGE_LIMIT bounded triage_side "$lane" "$d" "$d/out/gate/msc" "$d/msc" "$OUT/$lane.triage" "$TRIAGE_RUNS" "$OUT/$lane.tri.main" >>"$OUT/$lane.triage.log" 2>&1 &
+  LANE_LIMIT=$limit bounded triage_side "$lane" "$d" "$d/out/gate/msc" "$d/msc" "$OUT/$lane.triage" "$TRIAGE_RUNS" "$OUT/$lane.tri.main" >>"$OUT/$lane.triage.log" 2>&1 &
   main=$!
   wait "$slice"; slice=$?; wait "$main"; main=$?
   rm -rf "$d/out/corpus" "$d/out/hcr" "$d.lock"
@@ -1115,7 +1130,7 @@ triage_lane() {
 }
 
 triage_self_test() (
-  local d bad=0 got
+  local d bad=0 got GATE_GRAPH_LANES=""
   d=$(mktemp -d) || return 1
   trap 'rm -rf "$d"' EXIT
   [ "$(triage_subject corpus 'httpServeBinaryBody [danger]')" = httpServeBinaryBody ] || { echo "FAIL triage: corpus subject"; bad=1; }
@@ -1135,6 +1150,10 @@ triage_self_test() (
   [ "$(cat "$d/tree/out/corpus/threaded.txt")" = 'only=' ] || { echo "FAIL triage: a san rerun left threaded.txt as '$(cat "$d/tree/out/corpus/threaded.txt")', want the lane's 'only='"; bad=1; }
   printf '%s\n' hcrFirst hcrSecond >"$d/hcrNew"
   printf '#!/bin/bash\ncase ",$HCR_ONLY," in *,hcrFirst,*) echo "FAIL hcrFirst: stops the runner"; exit 1 ;; esac\necho "ok   hcrSecond"\n' >"$d/hcr"; chmod +x "$d/hcr"
+  printf '#!/bin/bash\nmkdir -p out/reruns\nprintf "%%s\\n" "$*" >out/reruns/argv\nprintf "  ✗ FAIL p1 [c] exit 1\\n\\nSECS=1\\nRC=1\\nEND\\n" >out/reruns/corpus.1.log\n' >"$d/graph"; chmod +x "$d/graph"
+  got=$(GATE_GRAPH_LANES=corpus GRAPH_RUN=7 TRIAGE_LIMIT=1200 raiser_on=0 triage_side corpus "$d/tree" /cand "$d/graph" "$d/new" 1 "$d/graphTri" 2>&1; echo "rc=$?|$(cat "$d/graphTri")|$(cat "$d/tree/out/reruns/argv")")
+  [ "$got" = 'rc=0|p1 [c]|build --colors=off -Drerun=corpus=p1 -DrerunCount=1 -Dsubject=/cand -DlaneLimit=1200 -DlaneRun=7 -DcorpusRaiser=0 reruns' ] \
+    || { echo "FAIL triage: a corpus rerun through the build graph: $got"; bad=1; }
   triage_side hcr "$d/tree" "$d/hcr" "$d/hcr" "$d/hcrNew" 1 "$d/hcrTri" >/dev/null && [ "$(cat "$d/hcrTri")" = hcrFirst ] \
     || { echo "FAIL triage: an hcr rerun of two names, the first red, judged '$(cat "$d/hcrTri" 2>/dev/null)', want hcrFirst with hcrSecond run"; bad=1; }
   return $bad
