@@ -297,6 +297,57 @@ struct OffloadJobsOpt {
     }
   }
   if (ImplicitIt.size())`,
+}, {
+	file: "llvm/lib/CodeGen/CommandFlags.cpp",
+	reason: "Store the architecture string's required value at its native " +
+		"declaration instead of requiring a virtual default query.",
+	before: "      \"march\", cl::desc(\"Architecture to generate code for " +
+		"(see --version)\"));\n",
+	after: "      \"march\", cl::ValueRequired,\n" +
+		"      cl::desc(\"Architecture to generate code for (see --version)\"));\n",
+}, {
+	file: "llvm/lib/CodeGen/CommandFlags.cpp",
+	reason: "Store the CPU string's existing required-value grammar at " +
+		"its native declaration without invoking its parser.",
+	before: "      \"mcpu\", cl::desc(\"Target a specific cpu type " +
+		"(-mcpu=help for details)\"),\n",
+	after: "      \"mcpu\", cl::ValueRequired,\n" +
+		"      cl::desc(\"Target a specific cpu type " +
+		"(-mcpu=help for details)\"),\n",
+}, {
+	file: "llvm/lib/CodeGen/CommandFlags.cpp",
+	reason: "Store the attribute list's required value while preserving " +
+		"native comma splitting.",
+	before: "      \"mattr\", cl::CommaSeparated,\n",
+	after: "      \"mattr\", cl::ValueRequired, cl::CommaSeparated,\n",
+}, {
+	file: "llvm/lib/CodeGen/CommandFlags.cpp",
+	reason: "Store the named relocation enum's existing required-value " +
+		"grammar rather than calling its virtual default.",
+	before: "      \"relocation-model\", cl::desc(\"Choose relocation model\"),\n",
+	after: "      \"relocation-model\", cl::ValueRequired,\n" +
+		"      cl::desc(\"Choose relocation model\"),\n",
+}, {
+	file: "llvm/lib/CodeGen/CommandFlags.cpp",
+	reason: "Keep a trap function name a required string operand, including " +
+		"names that look like CPU options.",
+	before: "      \"trap-func\", cl::Hidden,\n",
+	after: "      \"trap-func\", cl::ValueRequired, cl::Hidden,\n",
+}, {
+	file: "llvm/lib/CodeGen/CommandFlags.cpp",
+	reason: "Store the tuning string's required value without changing " +
+		"which native tool registers the option.",
+	before: "  static cl::opt<std::string> MTune(\n      \"mtune\",\n",
+	after: "  static cl::opt<std::string> MTune(\n" +
+		"      \"mtune\", cl::ValueRequired,\n",
+}, {
+	file: "llvm/lib/MC/MCTargetOptionsCommandFlags.cpp",
+	reason: "Store the native boolean's optional-value grammar so its " +
+		"alias retains the same parsing behavior.",
+	before: "  static cl::opt<bool> NoWarn(\"no-warn\", " +
+		"cl::desc(\"Suppress all warnings\"));\n",
+	after: "  static cl::opt<bool> NoWarn(\"no-warn\", cl::ValueOptional,\n" +
+		"                              cl::desc(\"Suppress all warnings\"));\n",
 }];
 
 export function digitsOnly(text: string): boolean {

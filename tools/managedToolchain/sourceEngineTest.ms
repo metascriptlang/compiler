@@ -339,6 +339,23 @@ function editCases(dir: string): void {
 		edit.after.contains("TakeNextArg = false;\n          continue;") &&
 		edit.after.contains("TakeNextArg = assemblerArgumentTakesValue(Value);")),
 		"AArch64 architecture selection skips assembler operands");
+	for (const declaration of [
+		"\"march\", cl::ValueRequired",
+		"\"mcpu\", cl::ValueRequired",
+		"\"mattr\", cl::ValueRequired",
+		"\"relocation-model\", cl::ValueRequired",
+		"\"trap-func\", cl::ValueRequired",
+		"\"mtune\", cl::ValueRequired",
+	]) {
+		expect(LLVM_SOURCE_EDITS.some((edit: SourceEdit): boolean =>
+			edit.file == "llvm/lib/CodeGen/CommandFlags.cpp" &&
+			edit.after.contains(declaration)),
+			"native codegen declaration stores arity: " + declaration);
+	}
+	expect(LLVM_SOURCE_EDITS.some((edit: SourceEdit): boolean =>
+		edit.file == "llvm/lib/MC/MCTargetOptionsCommandFlags.cpp" &&
+		edit.after.contains("\"no-warn\", cl::ValueOptional")),
+		"the native boolean declaration stores optional arity");
 }
 
 function run(): void {
