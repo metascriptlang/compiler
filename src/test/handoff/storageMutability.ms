@@ -120,11 +120,11 @@ test "a ref receiver or a value Vec mutated in place must name a place, not a co
 	const refused = [
 		"let f = true; let v: Vec<string> = []; let o: Vec<string> = []; (f ? v : o).grow();",
 		"mk().grow();",
-		"let v: Vec<string> = []; (v as Vec<string>).grow();",
-		"let v: Vec<string> = []; v!.grow();",
+		"mk()!.grow();",
 		"let f = true; let s: Inner = mkI(); let o: Inner = mkI(); (f ? s : o).bump();",
+		"let f = true; let s: Inner = mkI(); let o: Inner = mkI(); (f ? s : o)!.bump();",
 		"mkI().bump();",
-		"let v: Vec<string> = []; v!.push(\"x\");",
+		"(mkI() as Inner).bump();",
 		"let f = true; let v: Vec<string> = []; let o: Vec<string> = []; (f ? v : o).push(\"x\");",
 		"let f = true; let s: Inner = mkI(); let o: Inner = mkI(); (f ? s : o).columns.push(\"x\");",
 		"let s: Inner | null = mkI(); let o: Inner = mkI(); (s ?? o).columns.push(\"x\");",
@@ -146,6 +146,61 @@ test "a ref receiver or a value Vec mutated in place must name a place, not a co
 	assert c.ok, c.ok ? "" : c.error;
 	const js = compileProjectToJSWithStd([{ entryPath: "test/receiver.ms", entrySource: legal }], "test/receiver.ms");
 	assert !js.startsWith("ERROR:"), js;
+}
+
+test "a non-null assertion or a cast to the operand's own type names the operand's place" {
+	const head = "struct Inner { columns: Vec<string>; n: int32; }\nstruct Pair { inner: Inner2; }\nstruct Inner2 { n: int32; }\nclass Cell { n: int32 = 0; }\nclass Sub extends Cell { m: int32 = 0; }\nclass Keep { c: Cell = new Cell(); s: Sub = new Sub(); m: Inner | null = null; }\n"
+		+ "function grow(this ref v: Vec<string>): void { v.push(\"x\"); }\nfunction bump(this ref i: Inner): void { i.n = i.n + 1; }\nfunction bumpArg(ref i: Inner): void { i.n = i.n + 1; }\nfunction heal(this ref i: Inner2): void { i.n = 5; }\nfunction inc(ref x: int32): void { x = x + 1; }\nfunction inc64(ref x: int64): void { x = x + 1; }\nfunction reset(out i: Inner): void { i = { columns: [], n: 7 }; }\nfunction mkI(): Inner { return { columns: [], n: 0 }; }\n";
+	const legal = head + `function run(): void {
+	let v: Vec<string> = []; v!.grow(); (v as Vec<string>).grow(); v!!.grow(); v!.push("x"); (v as Vec<string>).push("x");
+	let s: Inner = mkI(); s!.bump(); (s as Inner).bump(); bumpArg(s!); bumpArg(s as Inner); s.columns!.grow(); s!.n = 5; (s as Inner).n += 1; s!.n++; reset(out s!);
+	let c: int32 = 0; inc(c!); inc(c as int32); c! += 2; c!++;
+	v! = ["a"]; (v as Vec<string>) = ["b"];
+	let n: Vec<string> | null = []; n!.grow(); n!.push("x"); n! = ["c"];
+	let ns: Inner | null = mkI(); ns!.bump(); bumpArg(ns!); ns!.n = 5; ns! = mkI();
+	const k = new Keep(); k.m = mkI(); k.m!.bump(); bumpArg(k.m!);
+	console.log(v.length, s.n, c, n!.length, ns!.n, k.m!.n);
+} run();`;
+	const c = compileToCWithStd(legal);
+	assert c.ok, c.ok ? "" : c.error;
+	const js = compileProjectToJSWithStd([{ entryPath: "test/place.ms", entrySource: legal }], "test/place.ms");
+	assert !js.startsWith("ERROR:"), js;
+	const refused: string[][] = [
+		["const k: Vec<string> = []; k!.grow();", "'k' is const"],
+		["const k: Vec<string> = []; (k as Vec<string>).push(\"x\");", "'k' is const"],
+		["const k: Inner = mkI(); bumpArg(k!);", "'k' is const"],
+		["const k: Inner = mkI(); (k as Inner).n = 2;", "'k' is const"],
+		["let c: int32 = 0; inc64(c as int64);", "parameter requires a variable"],
+		["let c: int32 = 0; (c as int64) += 1;", "cannot be assigned to"],
+		["let n: Vec<string> | null = []; n! = null;", ""],
+		["mkI().n++;", "cannot be assigned to"],
+		["let c: int32 = 0; (c as int64)++;", "cannot be assigned to"],
+		["const h: Arc<Pair> = new Arc({ inner: { n: 2 } }); (h.inner as Inner2).n = 3;", "SHARE is immutable"],
+		["const h: Arc<Pair> = new Arc({ inner: { n: 2 } }); h.inner!.heal();", "SHARE is immutable"],
+		["let cs: Inner[] = [mkI()]; for (const e of cs) { e!.bump(); }", "value-type loop variable"],
+	];
+	for (const row of refused) {
+		const source = head + `function run(): void { ${row[0]} } run();`;
+		const rc = compileToCWithStd(source);
+		const rjs = compileProjectToJSWithStd([{ entryPath: "test/place.ms", entrySource: source }], "test/place.ms");
+		assert !rc.ok && rc.error.contains(row[1]), row[0] + " -> " + (rc.ok ? "accepted" : rc.error);
+		assert rjs.startsWith("ERROR:") && rjs.contains(row[1]), row[0];
+	}
+	const views: string[][] = [
+		["function f(b: Borrow<Keep>): void { b.c!.n = 1; }", "read-only Borrow<T> view"],
+		["function f(b: Borrow<Keep>): void { (b.s as Cell).n = 1; }", "read-only Borrow<T> view"],
+		["function f(b: Borrow<Keep>): void { b.m!.bump(); }", "read-only Borrow<T> view"],
+		["function f(r: Readonly<Keep>): void { r.m!.bump(); }", "a read-only view never converts back"],
+		["function f(p: Inner): void { p!.bump(); }", "value-type parameter"],
+		["function f(p: Inner): void { bumpArg(p as Inner); }", "value-type parameter"],
+	];
+	for (const row of views) {
+		const source = head + row[0];
+		const rc = compileToCWithStd(source);
+		const rjs = compileProjectToJSWithStd([{ entryPath: "test/place.ms", entrySource: source }], "test/place.ms");
+		assert !rc.ok && rc.error.contains(row[1]), row[0] + " -> " + (rc.ok ? "accepted" : rc.error);
+		assert rjs.startsWith("ERROR:") && rjs.contains(row[1]), row[0];
+	}
 }
 
 test "a read-only array view refuses a receiver declared T[] or Span<T>" {
