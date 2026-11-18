@@ -666,6 +666,9 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Readonl
 	// Hoist to a temp local so we can take its address.
 	if (p != null && exprNode != null && !isLvalueNode(exprNode)) {
 		if (isResultSlot(g, snippet, exprNode)) return `&${snippet}`;
+		if (paramType != null && paramType.kind == TypeKind.Var) {
+			addCGenError(g, `internal: a ref or out argument reached C as a temporary (node kind ${exprNode.kind}) in '${p.name}' at ${exprNode.location.line}:${exprNode.location.column}`, exprNode.location.line, exprNode.location.column);
+		}
 		// When paramType (from implementation) resolves to a Union but exprNode.nodeType
 		// is a Struct variant (from overload), wrap in the full tagged union.
 		const resolvedParam = resolveSinkLent(paramType);
