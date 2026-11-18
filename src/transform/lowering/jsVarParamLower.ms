@@ -11,6 +11,8 @@ import { mapChildren } from "../walker";
 import { makeIdentResolved, makeVarDecl, makeNumber, makeString, makeArrayAccess, makeAssign, makeExprStmt, makeCall, runtimeRef, makeBlock, makeReturn } from "../util";
 import { isRoutineNode } from "../../ast/shape";
 import { indexedType } from "../coercion/accessJS";
+import { isMaybeType, peelTransparentInstance } from "../../checker/types";
+import { nullAccessHead } from "../maybeCarrier";
 
 interface Prologue {
 	routine: Node;
@@ -78,7 +80,14 @@ function unwrapAddr(n: Node): Node {
 	if (n == null) return n;
 	if (n.kind == NodeKind.OutExpr) return unwrapAddr((n.data as OutExprData).outArg);
 	if (n.kind == NodeKind.HiddenAddr) return unwrapAddr((n.data as HiddenDerefData).expr);
+	if (isCarrierRead(n)) return unwrapAddr((n.data as MemberExprData).object);
 	return n;
+}
+
+function isCarrierRead(n: Node): boolean {
+	if (n.kind != NodeKind.MemberExpr) return false;
+	const d = n.data as MemberExprData;
+	return d.property == "value" && d.object != null && d.object.nodeType != null && isMaybeType(peelTransparentInstance(d.object.nodeType));
 }
 
 function innermostOwner(s: Symbol, run: VarParamRun): Node | null {
@@ -155,8 +164,22 @@ function isRangeAccess(n: Node): boolean {
 	return op == ".." || op == "...";
 }
 
+function checkedCarrierOf(n: Node): Type | null {
+	if (n.kind == NodeKind.OutExpr) return checkedCarrierOf((n.data as OutExprData).outArg);
+	if (n.kind == NodeKind.HiddenAddr) return checkedCarrierOf((n.data as HiddenDerefData).expr);
+	if (!isCarrierRead(n) || !n.flags.has(NodeFlag.ConvCheck)) return null;
+	return peelTransparentInstance((n.data as MemberExprData).object.nodeType!);
+}
+
 function pairize(arg: Node, run: VarParamRun): Node {
 	if (arg == null) return arg;
+	const carrier = checkedCarrierOf(arg);
+	const cell = cellOfPlace(arg, run);
+	if (carrier == null || cell == arg) return cell;
+	return makeCall(runtimeRef("msMaybeCell", arg.location), [cell, makeString(nullAccessHead(carrier), arg.location), makeString("null", arg.location)], arg.location);
+}
+
+function cellOfPlace(arg: Node, run: VarParamRun): Node {
 	const inner = unwrapAddr(arg);
 	if (inner.kind == NodeKind.Identifier) {
 		const s = inner.resolvedSym;

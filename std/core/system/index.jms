@@ -566,6 +566,12 @@ function msArrayCell(a: unknown, i: int64): unknown {
 }
 
 @compilerFunc
+function msMaybeCell(cell: unknown, head: string, labels: string): unknown {
+	@emit(`if (${cell}[0][${cell}[1]] == null) ${msDefect}(${head} + ${labels} + "'"); return ${cell};`);
+	unreachable;
+}
+
+@compilerFunc
 function msSpanOf(a: unknown): unknown {
 	@emit(`return { base: ${a}, off: 0, len: ${a}.length };`);
 	unreachable;
