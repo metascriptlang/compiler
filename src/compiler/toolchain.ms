@@ -455,11 +455,23 @@ function bundleSeal(root: string, identity: string, lines: string[]): string {
 
 // The seal of the files one build reads: a warm resolve stats these and not the whole payload.
 function sealNames(listed: string[], scope: string[]): string[] {
-	const names = ["IDENTITY", "FILES.sha256"];
+	const names = ["HOST", "VERSION", "IDENTITY", "FILES.sha256"];
 	for (const name of listed) {
 		if (scopeCovers(scope, name)) names.push(name);
 	}
 	return names;
+}
+
+test "a scoped seal covers selection metadata without other runtimes" {
+	const names = sealNames(
+		["HOST", "VERSION", "bin/clang", "runtime/other.cfg"],
+		ENGINE_SCOPE,
+	);
+	for (const name of ["HOST", "VERSION", "IDENTITY", "FILES.sha256"]) {
+		assert names.includes(name);
+	}
+	assert names.includes("bin/clang");
+	assert !names.includes("runtime/other.cfg");
 }
 
 function sealOf(root: string, identity: string, names: string[]): string {
