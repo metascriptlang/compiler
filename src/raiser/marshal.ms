@@ -21,6 +21,7 @@ import {
 	heapAllocObject, heapObjectSetField, heapObjectGetField,
 	heapAllocArray, heapArrayPush, heapArrayLen, heapArrayGet, heapArrayRc,
 	heapAllocString, heapStringText, heapAllocBigInt, heapBigIntText, handleIndex, handleHeapKind, handleKind, RaiserHeapKind, stringHandleRc, rcDecrefHandle, heapStringHandles,
+	rcIncref, rcCountOf, OWNED_BY_RECEIVER_RC,
 } from "./value";
 import { activeHostArrayHeap, setActiveHostHeaps } from "./hostRegistry";
 
@@ -221,6 +222,18 @@ export function copyToVm(
 	return crossHeaps(v.root, v.arrayHeap, v.objectHeap, arrayHeap, objectHeap);
 }
 
+// A host routine's result is owned by the register that receives it, as every fresh VM value is;
+// copyToVm leaves the root uncounted for a caller such as vmCallHeld that takes its own count.
+export function returnToVm(
+	arrayHeap: RaiserArrayHeap,
+	objectHeap: RaiserObjectHeap,
+	v: RaiserHostValue,
+): RaiserValue {
+	const placed = copyToVm(arrayHeap, objectHeap, v);
+	rcIncref(arrayHeap, objectHeap, placed);
+	return placed;
+}
+
 // --- Tests ---
 
 test "unboxString from string value" {
@@ -342,4 +355,13 @@ test "a host string is built on its own heap and never on the heap of a running 
 	const back = copyToHost(vmArrays, vmObjects, placed);
 	assert back.at(0).field("code").text() == "KeyA";
 	assert back.at(1).text() == "日本";
+}
+
+test "a record, an array and a string a host routine returns are each owned by the register that receives them" {
+	const vmArrays = createArrayHeap();
+	const vmObjects = createStructHeap();
+	for (const v of [hostObject(["output"], [hostString("cold")]), hostArray([hostString("cold")]), hostString("cold")]) {
+		const placed = returnToVm(vmArrays, vmObjects, v);
+		assert rcCountOf(vmArrays, vmObjects, placed.intVal) == OWNED_BY_RECEIVER_RC, `${placed.kind}`;
+	}
 }

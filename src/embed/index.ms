@@ -6,7 +6,7 @@ import { ModuleError, ErrorSeverity } from "../module/graph";
 import { RaiserModule } from "../raiser/module";
 import { RaiserContext } from "../raiser/context";
 import { RaiserValue, RaiserValueKind } from "../raiser/value";
-import { RaiserHostFn, RaiserHostValue, boxVoid, copyToHost, copyToVm } from "../raiser/marshal";
+import { RaiserHostFn, RaiserHostValue, boxVoid, copyToHost, copyToVm, returnToVm } from "../raiser/marshal";
 import { registerHostFn, routeHostFnThroughSystem, raiseFromHost, activeHostArrayHeap, activeHostObjectHeap, setActiveHostHeaps } from "../raiser/hostRegistry";
 import { RaiserVM, RaiserInPlaceHostFn, registerInPlaceHostFn, vmCallHeld, vmDumpStack, vmReleaseRun, vmRunDueTimers, vmNextTimerDelayMs, vmDropPendingWork } from "../raiser/vm";
 import { liveCellBlocks } from "../raiser/memory";
@@ -315,7 +315,7 @@ export function boxValue(v: RaiserHostValue): RaiserValue {
 	const arrays = activeHostArrayHeap();
 	const objects = activeHostObjectHeap();
 	if (arrays == null || objects == null) throw new Error("boxValue builds the result of a host routine, and no script has called one");
-	return copyToVm(arrays, objects, v);
+	return returnToVm(arrays, objects, v);
 }
 
 function scratchDir(): string {

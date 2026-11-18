@@ -56,7 +56,7 @@ import {
 import {
 	unboxString, unboxInt, unboxFloat, unboxBool,
 	boxString, boxInt, boxFloat, boxBool,
-	RaiserHostValue, hostValue, hostString, hostObject, hostArray, copyToVm, copyToHost,
+	RaiserHostValue, hostValue, hostString, hostObject, hostArray, returnToVm, copyToHost,
 } from "../../raiser/marshal";
 import { isNodeWireMetaField, allocWireObject, wireGet, wireSet, WIRE_UNION } from "./wire";
 import { registerBigIntKernels } from "./bigintHost";
@@ -130,7 +130,7 @@ function _toVm(v: RaiserHostValue): RaiserValue {
 	const arrays = activeHostArrayHeap();
 	const objects = activeHostObjectHeap();
 	if (arrays == null || objects == null) throw new Error("internal: a std routine callback ran with no active VM heaps");
-	return copyToVm(arrays, objects, v);
+	return returnToVm(arrays, objects, v);
 }
 
 function _vmFailure(e: IoError): RaiserHostValue {
@@ -202,7 +202,7 @@ function _stdFsWriteFileBytes(vm: RaiserVM): void {
 	const bytes = hostArgBytes(vm, 1);
 	const content = Buffer.allocUnsafe(bytes.len as number);
 	copyBytes(bufferData(content) as int64, bytes.at, bytes.len);
-	hostReturn(vm, copyToVm(vm.arrayHeap, vm.objectHeap, _vmVoidValue(writeFileBytes(path, content))));
+	hostReturn(vm, returnToVm(vm.arrayHeap, vm.objectHeap, _vmVoidValue(writeFileBytes(path, content))));
 }
 
 @include("runtime/core/buffer.h");
