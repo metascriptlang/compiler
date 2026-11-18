@@ -18,7 +18,7 @@ import {
 import { checkArcPointeeSendable } from "./sendable";
 import { keyedProxyAccess, readIndexThroughProxy, refuseProxyOperator, updateThroughProxy, writeThroughProxy } from "./proxy";
 import { viewTypeArgumentFault, distinctNumericBase, PEEL_MAX_DEPTH, isArrayType, typedArrayElement, isKeyConstraint, indexedAccessOf, createStringLiteral, createBooleanLiteral, numberLiteralTypeOf, enumMemberLiteralOf, evictionNeedsElementHook } from "./types";
-import { isLocation, lvalueText, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, WriteSite } from "./assignable";
+import { isLocation, placeBehindAssertions, lvalueText, writeRefusal, readonlyPrefixType, readonlyRootType, writeThroughArc, WriteSite } from "./assignable";
 import { annotatedType, resolveReturnAnnotation, predicateReturnOf, operandAt, builtinTypeNamed, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, refuseUsedSuspendingViewParams, wrapModifierTypes, refuseViewField } from "./resolvePass";
 import { mangleMonoName } from "../monomorphize/registry";
 import { cloneNodeForCheck, cloneNodeKeepSem } from "../monomorphize/clone";
@@ -187,6 +187,7 @@ function markAssignedTargets(ctx: CheckerContext, target: Node): void {
 	else if (target.kind == NodeKind.ArrayLiteral) for (const el of (target.data as ArrayLiteralData).elements) markAssignedTargets(ctx, el);
 }
 
+const NOT_A_LOCATION = "this expression cannot be assigned to — it is not a variable, nor a field or element reached from one or through a reference";
 export const REST_NOT_LAST = "A rest element must be last in a destructuring pattern.";
 
 function checkAssignTarget(ctx: CheckerContext, target: Node): void {
@@ -280,7 +281,7 @@ function refuseTargetWrite(ctx: CheckerContext, target: Node, operator: string, 
 	}
 	if (!refuseImportWrite(ctx, target)) reportSharedWrite(ctx, target);
 	if (!isLocation(target) && target.nodeType != null && target.nodeType.kind != TypeKind.Error) {
-		addError(ctx, "this expression cannot be assigned to — it is not a variable, nor a field or element reached from one or through a reference", target.location.line, target.location.column);
+		addError(ctx, NOT_A_LOCATION, target.location.line, target.location.column);
 	}
 	if (target.kind != NodeKind.MemberExpr) return ctx.errors.length > errorsBefore;
 	const md = target.data as MemberExprData;
@@ -1140,6 +1141,10 @@ function checkUpdateExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		if (updateThroughProxy(ctx, node)) return;
 	}
 	checkExpr(ctx, d.updateArg, null);
+	if (!isLocation(d.updateArg) && d.updateArg.nodeType != null && d.updateArg.nodeType.kind != TypeKind.Error) {
+		addError(ctx, NOT_A_LOCATION, d.updateArg.location.line, d.updateArg.location.column);
+	}
+	d.updateArg = placeBehindAssertions(d.updateArg);
 	if (!refuseImportWrite(ctx, d.updateArg)) reportSharedWrite(ctx, d.updateArg);
 	if (d.updateArg.kind == NodeKind.MemberExpr) {
 		const umd = d.updateArg.data as MemberExprData;
@@ -1708,6 +1713,12 @@ function lowerLengthAssignment(ctx: CheckerContext, node: Node, arr: Node, n: No
 	return true;
 }
 
+function underNonNullAssertions(node: Node): Node {
+	let cur = node;
+	while (cur.kind == NodeKind.TypeAssertion && (cur.data as TypeAssertionData).asType == "!") cur = (cur.data as TypeAssertionData).asExpr;
+	return cur;
+}
+
 function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | null): void {
 	const d = node.data as BinaryExprData;
 	// Ref parity: leftPartOfAsgn
@@ -1751,9 +1762,10 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		checkInTypeSlot(ctx, (d.left.data as MemberExprData).object);
 		if (writeThroughProxy(ctx, node)) { ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1; return; }
 	}
-	if (d.operator == "=" && d.left.kind == NodeKind.Identifier) ctx.initTracker.assignTarget = d.left;
+	const storedInto = isAsgn ? underNonNullAssertions(d.left) : d.left;
+	if (d.operator == "=" && storedInto.kind == NodeKind.Identifier) ctx.initTracker.assignTarget = storedInto;
 	const savedDefinite = ctx.initTracker.definiteTarget;
-	if (storesRight) ctx.initTracker.definiteTarget = d.left;
+	if (storesRight) ctx.initTracker.definiteTarget = storedInto;
 	if (isAsgn && d.left.kind == NodeKind.ArrayLiteral) {
 		if (d.operator != "=") addError(ctx, "a destructuring pattern can only be assigned with '='", d.left.location.line, d.left.location.column);
 		checkAssignTarget(ctx, d.left);
@@ -1773,6 +1785,7 @@ function checkBinaryExpr(ctx: CheckerContext, node: Node, expectedType: Type | n
 		ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1;
 	}
 	const refused = isAsgn && d.left.kind != NodeKind.ArrayLiteral && refuseTargetWrite(ctx, d.left, d.operator, d.right);
+	if (isAsgn && d.left.kind != NodeKind.ArrayLiteral) d.left = placeBehindAssertions(d.left);
 	if (!refused && d.operator == "=" && d.left.kind == NodeKind.MemberExpr) {
 		const md = d.left.data as MemberExprData;
 		if (md.property == "length" && md.object.nodeType != null && md.object.nodeType.kind == TypeKind.Array

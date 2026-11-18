@@ -8,11 +8,11 @@
 // caller's storage. Rebinding a parameter (CK-18) or a loop binding (CK-30)
 // stays legal. A Borrow<T> root refuses every write, through a reference too.
 
-import { Node, NodeKind, IdentifierData, MemberExprData, ArrayAccessData, BinaryExprData, HiddenDerefData, HiddenStdConvData, OutExprData, TypeAssertionData, Type, TypeKind, TypeFlag, Symbol, SymbolKind } from "../ast/node";
+import { Node, NodeKind, NodeFlag, IdentifierData, MemberExprData, ArrayAccessData, BinaryExprData, HiddenDerefData, HiddenStdConvData, OutExprData, TypeAssertionData, Type, TypeKind, TypeFlag, Symbol, SymbolKind } from "../ast/node";
 import { SymbolFlag, hasFlag } from "./symbol";
 import { isReadonlyView, isReadonlyArray, isAtomicRef, isStringLike, isNumeric, isSendableFunction, isMaybeType } from "./types";
 import { isValueAggregateParam } from "./paramMutationAnalysis";
-import { nonNullMemberOfNullable } from "./compat";
+import { nonNullMemberOfNullable, sameType } from "./compat";
 
 export enum WriteVerdict {
 	Writable,
@@ -122,6 +122,7 @@ function borrowRoot(target: Node): Symbol | null {
 		if (cur.kind == NodeKind.MemberExpr) cur = (cur.data as MemberExprData).object;
 		else if (cur.kind == NodeKind.ArrayAccess) cur = (cur.data as ArrayAccessData).array;
 		else if (cur.kind == NodeKind.HiddenDeref) cur = (cur.data as HiddenDerefData).expr;
+		else if (cur.kind == NodeKind.TypeAssertion) cur = (cur.data as TypeAssertionData).asExpr;
 		else return null;
 	}
 	const sym = cur.resolvedSym;
@@ -192,14 +193,45 @@ export function checkWrite(target: Node, site: WriteSite): WriteCheck {
 	return { verdict: WriteVerdict.Writable, root: sym };
 }
 
+export function placeUnderAssertion(node: Node): Node | null {
+	if (node.kind != NodeKind.TypeAssertion) return null;
+	const d = node.data as TypeAssertionData;
+	if (d.asExpr == null) return null;
+	if (d.asType == "!") return d.asExpr;
+	if (node.flags.has(NodeFlag.ObjCheck) || node.flags.has(NodeFlag.ConvCheck)) return null;
+	return sameType(d.asExpr.nodeType, node.nodeType) ? d.asExpr : null;
+}
+
 export function isLocation(node: Node): boolean {
 	if (node.kind == NodeKind.Identifier || node.kind == NodeKind.HiddenDeref) return true;
 	if (node.kind == NodeKind.OutExpr) return isLocation((node.data as OutExprData).outArg);
+	const asserted = placeUnderAssertion(node);
+	if (asserted != null) return isLocation(asserted);
 	let base: Node | null = null;
 	if (node.kind == NodeKind.MemberExpr) base = (node.data as MemberExprData).object;
 	else if (node.kind == NodeKind.ArrayAccess) base = (node.data as ArrayAccessData).array;
 	if (base == null) return false;
 	return !holdsInlineValue(base.nodeType) || isLocation(base);
+}
+
+export function placeBehindAssertions(node: Node): Node {
+	if (node.kind == NodeKind.TypeAssertion) {
+		if (!isLocation(node)) return node;
+		const place = placeBehindAssertions((node.data as TypeAssertionData).asExpr);
+		place.nodeType = node.nodeType;
+		return place;
+	}
+	if (node.kind == NodeKind.OutExpr) {
+		const d = node.data as OutExprData;
+		d.outArg = placeBehindAssertions(d.outArg);
+	} else if (node.kind == NodeKind.MemberExpr) {
+		const d = node.data as MemberExprData;
+		if (holdsInlineValue(d.object.nodeType)) d.object = placeBehindAssertions(d.object);
+	} else if (node.kind == NodeKind.ArrayAccess) {
+		const d = node.data as ArrayAccessData;
+		if (holdsInlineValue(d.array.nodeType)) d.array = placeBehindAssertions(d.array);
+	}
+	return node;
 }
 
 // PARALOCK Amendment I — SHARE is immutable: no write may reach through an
@@ -226,6 +258,10 @@ export function writeThroughArc(target: Node): boolean {
 			const e = (cur.data as HiddenDerefData).expr;
 			if (e != null && e.nodeType != null && isAtomicRef(e.nodeType)) return true;
 			cur = e;
+		} else if (cur.kind == NodeKind.TypeAssertion) {
+			const e = (cur.data as TypeAssertionData).asExpr;
+			if (e != null && e.nodeType != null && isAtomicRef(e.nodeType)) return true;
+			cur = e;
 		} else {
 			break;
 		}
@@ -241,6 +277,7 @@ export function readonlyPrefixType(target: Node): Type | null {
 		if (cur.kind == NodeKind.MemberExpr) base = (cur.data as MemberExprData).object;
 		else if (cur.kind == NodeKind.ArrayAccess) base = (cur.data as ArrayAccessData).array;
 		else if (cur.kind == NodeKind.HiddenDeref) base = (cur.data as HiddenDerefData).expr;
+		else if (cur.kind == NodeKind.TypeAssertion) base = (cur.data as TypeAssertionData).asExpr;
 		else break;
 		if (base != null && base.nodeType != null) {
 			if (isReadonlyView(base.nodeType)) return base.nodeType;
@@ -265,6 +302,7 @@ export function lvalueText(node: Node): string {
 	}
 	if (node.kind == NodeKind.ArrayAccess) return lvalueText((node.data as ArrayAccessData).array) + "[…]";
 	if (node.kind == NodeKind.HiddenDeref) return lvalueText((node.data as HiddenDerefData).expr);
+	if (node.kind == NodeKind.TypeAssertion) return lvalueText((node.data as TypeAssertionData).asExpr);
 	return "…";
 }
 
