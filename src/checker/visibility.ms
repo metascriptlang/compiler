@@ -261,6 +261,12 @@ export function refuseMemberAccess(ctx: CheckerContext, typeSym: Symbol | null, 
 	return true;
 }
 
+export function refuseActorAsObject(ctx: CheckerContext, typeSym: Symbol | null, verb: string, line: int32, column: int32): boolean {
+	if (typeSym == null || originOf(typeSym).symbolKind != SymbolKind.Actor) return false;
+	addError(ctx, `cannot ${verb} an actor: a reference to '${typeSym.name}' is its pid — read its state as 'this.field' inside its own methods, a @nonisolated field as 'ref.field', or call a method`, line, column);
+	return true;
+}
+
 export function hiddenPrivateField(ctx: CheckerContext, typeSym: Symbol | null, fields: string[]): string {
 	for (const f of fields) {
 		const owner = privateFieldOwner(typeSym, f);

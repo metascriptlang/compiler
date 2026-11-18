@@ -1317,7 +1317,12 @@ function writableFieldHint(source: Type | null, target: Type | null): string {
 	return "";
 }
 
+function isActorDecl(t: Type): boolean {
+	return t.sym != null && t.sym.symbolKind == SymbolKind.Actor;
+}
+
 function objectLayoutFits(source: Type, target: Type, readonlyTarget: boolean, readThroughView: boolean): boolean {
+	if (isActorDecl(source) || isActorDecl(target)) return false;
 	// Exact-field anon→named pairs are assignable; fitNode materializes the
 	// member-wise re-construction. Every other anon→named pair stays rejected:
 	// no lowering exists, so C emits two distinct types (clang error) while js

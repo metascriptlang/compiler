@@ -2,7 +2,7 @@
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
 import { iterateThroughProxy } from "./proxy";
-import { isSuperReceiver, requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionFriendsOf, expansionOf, markExpansion, methodOwnerClass } from "./visibility";
+import { isSuperReceiver, requiresInit, noDefaultReason, hiddenHolder, refusePrivateField, refuseActorAsObject, hiddenPrivateField, declaringSymOf, befriend, unfriend, expansionFriendsOf, expansionOf, markExpansion, methodOwnerClass } from "./visibility";
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, UnaryExprData, ArrayAccessData, VariableDeclData, TypeAssertionData, SizeofExprData, TypeAnnotationData, FunctionDeclData, FunctionExprData, ArrowFunctionData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, MacroDeclData, SpliceManyData, StringLiteralData, CallExprData, AwaitExprData, TestDeclData, AssertStmtData, HiddenStdConvData, TypeAliasDeclData, Type, TypeKind, Symbol, SymbolKind, SymbolState, SpreadExprData, BooleanLiteralData, BuiltinKind } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
@@ -2615,6 +2615,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 		}
 		const sourceStruct = destructuredStruct(iterType);
 		const sourceOwner = declaringSymOf(iterType);
+		refuseActorAsObject(ctx, sourceOwner, "destructure", pattern.location.line, pattern.location.column);
 		for (const prop of opd.patternProps) {
 			if (sourceStruct == null) break;
 			if (prop.kind == NodeKind.ObjectPatternProp) {
