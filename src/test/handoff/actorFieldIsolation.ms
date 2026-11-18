@@ -196,3 +196,75 @@ console.log(make().peek());
 	const messages = checkProjectDiagnostics(entries, "src/main.ms");
 	assert occurrences(messages, refusal) == 1, messages.join("\n");
 }
+
+const actorHead = `actor Srv {
+	name: string = "srv";
+	n: int32 = 1;
+	bump(): void { this.n = this.n + 1; }
+	get(): int32 { return this.n; }
+	mine(): int32 { const me = this; return me.n + this.n; }
+}
+actor Other { name: string = "o"; n: int32 = 2; other(): int32 { return this.n; } }
+actor Empty { ping(): void {} }
+class Plain { name: string = "p"; n: int32 = 2; }
+type Shape = { name: string; n: int32 };
+type Nothing = {};
+interface Named { name: string; }
+function show(o: Shape): void { console.log(o.name, o.n); }
+function nameOf<T extends Named>(x: T): string { return x.name; }
+`;
+
+function actorRefDiagnostics(body: string): string[] {
+	const all = checkProjectDiagnostics([{ entryPath: "src/main.ms", entrySource: actorHead + body }], "src/main.ms");
+	return all.filter((m: string): boolean => !m.contains("is declared but never used"));
+}
+
+test "actorFieldIsolation: an actor reference converts to no type but its own" {
+	const refused: string[][] = [
+		["const s = new Srv(); const o: Shape = s;", "Type 'Srv' is not assignable to type"],
+		["const s = new Srv(); show(s);", "got Srv, expected"],
+		["const s = new Srv(); show(s as Shape);", ""],
+		["const s = new Srv(); const o: Named = s;", "Type 'Srv' is not assignable to type 'Named'"],
+		["const s = new Srv(); const o: Shape | null = s;", "Type 'Srv' is not assignable to type"],
+		["const s = new Srv(); const xs: Shape[] = [s];", "Type 'Srv' is not assignable to type"],
+		["function mk(): Shape { return new Srv(); }", "Type 'Srv' is not assignable to type"],
+		["const s = new Srv(); let o: Shape = { name: \"a\", n: 0 }; o = s;", "Type 'Srv' is not assignable to type"],
+		["class Holder { o: Shape = new Srv(); }", "Type 'Srv' is not assignable to type"],
+		["const e = new Empty(); const o: Nothing = e;", "Type 'Empty' is not assignable to type '{}'"],
+		["const s = new Srv(); console.log(nameOf(s));", "does not satisfy constraint 'Named'"],
+		["const o: Other = new Srv();", "Type 'Srv' is not assignable to type 'Other'"],
+		["const s: Srv = new Plain();", "Type 'Plain' is not assignable to type 'Srv'"],
+		["actor In { name: string = \"x\"; n: int32 = 1; mine(): int32 { const o: Shape = this; return o.n; } }", "Type 'In' is not assignable to type"],
+		["actor In { name: string = \"x\"; n: int32 = 1; peer(p: In): int32 { const o: Shape = p; return o.n; } }", "Type 'In' is not assignable to type"],
+	];
+	for (const row of refused) {
+		const messages = actorRefDiagnostics(row[0]);
+		assert messages.length > 0 && occurrences(messages, row[1]) >= 1, row[0] + " -> " + messages.join(" | ");
+	}
+	const legal = actorRefDiagnostics(`const s = new Srv(); const t: Srv = s; const xs: Srv[] = [s, t]; const ys = [...xs];
+function pass(a: Srv): Srv { return a; }
+class Keep { a: Srv = new Srv(); b: Srv | null = null; }
+const k = new Keep(); k.b = k.a;
+const u = pass(ys[1]); u.bump();
+console.log(await u.get(), await s.mine(), s == t, s.pid == t.pid);
+`);
+	assert legal.length == 0, legal.join("\n");
+}
+
+test "actorFieldIsolation: an actor reference is neither destructured nor spread" {
+	const refused: string[][] = [
+		["const s = new Srv(); const { name, n } = s;", "cannot destructure an actor"],
+		["const s = new Srv(); const { name, ...rest } = s;", "cannot destructure an actor"],
+		["const s = new Srv(); const o = { ...s };", "cannot spread an actor"],
+		["const s = new Srv(); const o: Shape = { ...s };", "cannot spread an actor"],
+		["actor In { n: int32 = 1; own(): int32 { const { n } = this; return n; } }", "cannot destructure an actor"],
+		["actor In { n: int32 = 1; own(): int32 { const me = this; const o = { ...me }; return o.n; } }", "cannot spread an actor"],
+		["actor In { n: int32 = 1; peer(p: In): int32 { const { n } = p; return n; } }", "cannot destructure an actor"],
+	];
+	for (const row of refused) {
+		const messages = actorRefDiagnostics(row[0]);
+		assert occurrences(messages, row[1]) == 1, row[0] + " -> " + messages.join(" | ");
+	}
+	const legal = actorRefDiagnostics(`const p = new Plain(); const { name, n } = p; const c = { ...p }; const o: Shape = p; console.log(name, n, c.n, o.n);`);
+	assert legal.length == 0, legal.join("\n");
+}
